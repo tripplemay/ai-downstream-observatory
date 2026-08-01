@@ -1,6 +1,0 @@
-{% macro status_badge(status) %}
-  {% if status in ('已验证',) %}<span class="badge badge-green">{{ status }}</span>
-  {% elif status in ('验证中',) %}<span class="badge badge-yellow">{{ status }}</span>
-  {% elif status in ('反向', '已触发') %}<span class="badge badge-red">{{ status }}</span>
-  {% else %}<span class="badge badge-gray">{{ status }}</span>{% endif %}
-{% endmacro %}

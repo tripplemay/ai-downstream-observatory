@@ -21,15 +21,18 @@ launchd(本地) 或 scheduler(容器)
    → worker/fetch_data.py   公开数据源采集（EDGAR / yfinance / TWSE）
    → worker/analyze.py      AIGC 网关模型分析（OpenAI 兼容接口）
    → SQLite (data/observatory.db)
-   → Flask + Gunicorn       Web 呈现（Caddy 反代 + 自动 HTTPS）
+   → Next.js (standalone)   Web 呈现（宿主 nginx 反代 + certbot TLS）
 ```
 
 ## 本地开发
 
 ```bash
-cp config/gateway.example.json config/gateway.json  # 填入你的网关信息
-./run.sh                                            # http://127.0.0.1:5051
+cp config/gateway.example.json config/gateway.json  # 填入你的网关信息（worker 用）
+cd web && npm ci && npm run dev                      # http://localhost:3000
 ```
+
+技术栈：Next.js 15（App Router）+ React + TypeScript + shadcn/ui + Tailwind + better-sqlite3（web/ 目录）；
+采集与分析 worker 为 Python（worker/ 目录，db.py 为其共享数据层）。
 
 ## Docker 部署（VPS）
 
