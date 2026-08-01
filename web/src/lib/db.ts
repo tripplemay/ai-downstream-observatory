@@ -19,10 +19,19 @@ export function getDb(): Database.Database {
     const db = new Database(DB_PATH);
     db.pragma("journal_mode = WAL");
     db.exec(SCHEMA);
+    ensureColumn(db, "overview", "action", "action TEXT DEFAULT ''");
     seedIfEmpty(db);
     globalThis.__obsDb = db;
   }
   return globalThis.__obsDb;
+}
+
+/** 给已存在的库补列（幂等），与 db.py ensure_column 保持同步。 */
+function ensureColumn(db: Database.Database, table: string, column: string, ddl: string) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
 }
 
 export function nowStr(): string {

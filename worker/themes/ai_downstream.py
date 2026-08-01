@@ -14,6 +14,8 @@ EDGAR_COMPANIES = [
     ("NVDA", 1045810, "英伟达"),
     ("MU", 723125, "美光"),
     ("BABA", 1577552, "阿里巴巴"),
+    ("PLTR", 1321655, "Palantir"),   # C10 应用层毛利率
+    ("CRM", 1108524, "Salesforce"),  # C6 AI 提价能力（ARPU 代理）
 ]
 EDGAR_METRIC_NAMES = [("capex", "资本开支(单季)"), ("revenue", "营业收入(单季)"), ("gross_profit", "毛利(单季)")]
 
@@ -26,6 +28,25 @@ YF_PRICE_TICKERS = [
     ("159852.SZ", "软件ETF(159852) 收盘价"),
     ("159516.SZ", "半导体材料设备ETF(159516) 收盘价"),
     ("588200.SS", "科创芯片ETF(588200) 收盘价"),
+]
+
+# yfinance 季度财报（EDGAR 覆盖不到的公司）：(ticker, cname, 是否取 capex)
+# capex 在现金流量表（quarterly_cashflow 的 Capital Expenditure 行，负值，入库取绝对值）
+YF_FINANCIAL_COMPANIES = [
+    ("0700.HK", "腾讯", False),      # C8/C9；Yahoo 不给腾讯季度现金流
+    ("005930.KS", "三星电子", True),  # C1/C3
+    ("000660.KS", "SK海力士", True),  # C1/C3
+]
+
+# EDGAR 10-Q 分部收入（C4 云厂商剪刀差的精确口径）：解析 FilingSummary.xml 定位 R 文件
+EDGAR_SEGMENTS = [
+    # (ticker, CIK, 分部中文名, LongName 正则, 分部标题行, 指标行标签)
+    ("MSFT", 789019, "微软智能云", r"Segment Revenue.*Operating Income \(Detail\)",
+     "Intelligent Cloud", "Revenue"),
+    ("GOOGL", 1652044, "谷歌云", r"Revenue by Segment \(Details?\)",
+     "Google Cloud", "Revenue from contract with customers"),
+    ("AMZN", 1018724, "AWS", r"Reportable Segments and Reconciliation.*\(Details\)",
+     "AWS", "Net sales"),
 ]
 
 
@@ -41,13 +62,27 @@ def build_metrics():
             ))
     for ticker, label in YF_PRICE_TICKERS:
         rows.append(("px:%s" % ticker, label, "local_ccy", "yf_price", {"ticker": ticker}))
-    # yfinance 季度财报（EDGAR 覆盖不到的公司，如腾讯）
-    rows.append(("yf:0700.HK:revenue", "腾讯(0700.HK) 营业收入(单季)", "HKD", "yf_financials",
-                 {"ticker": "0700.HK", "cname": "腾讯",
-                  "rows": {"Total Revenue": "revenue", "Gross Profit": "gross_profit"}}))
-    rows.append(("yf:0700.HK:gross_profit", "腾讯(0700.HK) 毛利(单季)", "HKD", "yf_financials",
-                 {"ticker": "0700.HK", "cname": "腾讯",
-                  "rows": {"Total Revenue": "revenue", "Gross Profit": "gross_profit"}}))
+    # yfinance 季度财报（EDGAR 覆盖不到的公司）
+    for ticker, cname, with_capex in YF_FINANCIAL_COMPANIES:
+        unit = "HKD" if ticker.endswith(".HK") else "KRW"
+        fin_rows = {"Total Revenue": "revenue", "Gross Profit": "gross_profit"}
+        cf_rows = {"Capital Expenditure": "capex"} if with_capex else {}
+        params = {"ticker": ticker, "cname": cname, "rows": fin_rows, "cf_rows": cf_rows}
+        for suffix, mname in (("revenue", "营业收入(单季)"), ("gross_profit", "毛利(单季)")):
+            rows.append(("yf:%s:%s" % (ticker, suffix), "%s(%s) %s" % (cname, ticker, mname),
+                         unit, "yf_financials", params))
+        if with_capex:
+            rows.append(("yf:%s:capex" % ticker, "%s(%s) 资本开支(单季,现金流口径)" % (cname, ticker),
+                         unit, "yf_financials", params))
+    # EDGAR 10-Q 云分部收入（C4 精确口径）
+    for ticker, cik, seg_name, report_re, segment, metric_label in EDGAR_SEGMENTS:
+        rows.append((
+            "seg:%s:cloud_revenue" % ticker,
+            "%s 分部收入(单季)" % seg_name,
+            "USD(百万)", "edgar_segment",
+            {"ticker": ticker, "cik": cik, "report_re": report_re,
+             "segment": segment, "metric_label": metric_label},
+        ))
     # TWSE OpenAPI 月营收
     rows.append(("twse:2330:monthly_revenue", "台积电(2330) 月营收", "TWD(千元)", "twse_monthly",
                  {"code": "2330", "cname": "台积电"}))

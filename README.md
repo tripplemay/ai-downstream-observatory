@@ -9,18 +9,22 @@
 ## 功能
 
 - **多主题**：主题为独立判断体系（信号、thesis、标的池、报告各自隔离）；跨主题首页 + 侧栏切换
-- **总览**：红黄绿信号灯 + 三层判断状态 + 最近自动运行
+- **总览**：红黄绿信号灯 + 三层判断状态 + 操作建议 + 最近自动运行
 - **信号管理**：证实/证伪信号的状态维护，变更留痕
-- **数据快照**：全局指标仓库（SEC EDGAR 美股季报、Yahoo Finance 行情、TWSE 月营收），按主题订阅 + 趋势图
-- **AI 报告**：月度纪要、季度深度分析（信号判定 + 建仓触发条件检查 + 人工核查清单），由 AIGC 网关模型生成
+- **数据快照**：全局指标仓库（SEC EDGAR 季报与 10-Q 分部数据、Yahoo Finance 行情与财报、TWSE 月营收），按主题订阅 + 趋势图
+- **规则引擎**：可量化信号（C4 剪刀差、C7 相对强弱、F1 压制等）按定量规则确定性判定，数据落库即评估
+- **AI 报告**：月度纪要、季度深度分析（复核规则判定 + 定性信号判定 + 操作建议 + 人工核查清单）
+- **邮件告警**：灯号变化、信号状态变化时推送（`config/alerts.json`，参考 `config/alerts.example.json`）
 - **观测记录 / 判断与规则 / 标的池**：全在线编辑
 
 ## 架构
 
 ```
-launchd(本地) 或 scheduler(容器)
+scheduler(容器内)
    → worker/fetch_data.py   数据采集（按全部启用主题的指标订阅并集，写入全局 snapshots 仓库）
+   → worker/rules.py        规则引擎（定量信号确定性判定）
    → worker/analyze.py      AIGC 网关模型逐主题分析（OpenAI 兼容接口，prompt 注入主题 thesis/rules）
+   → worker/notify.py       邮件告警（灯号/信号变化）
    → SQLite (data/observatory.db)
    → Next.js (standalone)   Web 呈现（宿主 nginx 反代 + certbot TLS）
 ```
@@ -70,8 +74,11 @@ VPS 上无 .venv 时可先在本地按同版本代码迁移好库文件再上传
 
 ## 定时任务
 
-- 容器内 `worker/scheduler.py`：每月 11 日月度快照，2/5/8/11 月 15 日季度核对
-- 手动执行：`./jobs/run_job.sh monthly|quarterly`，日志 `data/jobs.log`
+- 容器内 `worker/scheduler.py`：每日 16:35 行情采集 + 规则引擎（daily）；每月 11 日月度快照；
+  2/5/8/11 月 15 日季度核对
+- 手动执行：`./jobs/run_job.sh daily|monthly|quarterly`，日志 `data/jobs.log`
+- 邮件告警：复制 `config/alerts.example.json` 为 `config/alerts.json` 填入 SMTP 信息并置
+  `enabled: true`（已 gitignore）；`python worker/notify.py --test` 验证
 
 ## CI/CD
 
@@ -80,4 +87,4 @@ push 到 `main` → GitHub Actions 语法检查 → SSH 到 VPS `git reset --har
 
 ## 安全说明
 
-`config/gateway.json`（AI 网关密钥）与 `data/`（个人数据）均已 gitignore，不会进入仓库与镜像层。
+`config/gateway.json`（AI 网关密钥）、`config/alerts.json`（SMTP 密钥）与 `data/`（个人数据）均已 gitignore，不会进入仓库与镜像层。

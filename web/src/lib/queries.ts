@@ -37,6 +37,7 @@ export interface Overview {
   sentiment_evidence: string;
   light: string;
   conclusion: string;
+  action: string;
 }
 
 export interface Observation {

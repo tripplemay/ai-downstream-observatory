@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS overview (
     layer2_status TEXT, layer2_evidence TEXT,
     layer3_status TEXT, layer3_evidence TEXT,
     sentiment TEXT, sentiment_evidence TEXT,
-    light TEXT, conclusion TEXT
+    light TEXT, conclusion TEXT,
+    action TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS pool (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -16,6 +16,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import db  # noqa: E402
+from worker import notify  # noqa: E402
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GATEWAY_CONF = os.path.join(BASE_DIR, "config", "gateway.json")
@@ -129,19 +130,28 @@ def run_quarterly(conn, conf, theme):
         % (s["id"], s["name"], s["status"], s["current_value"], s["trigger_cond"]) for s in signals)
     thesis = get_page(conn, tid, "thesis")
     rules = get_page(conn, tid, "rules")
+    pool_rows = conn.execute("SELECT name, code, channel, position, note FROM pool WHERE theme_id = ?",
+                             (tid,)).fetchall()
+    pool_text = "\n".join("- %s（%s，%s）：%s%s" % (p["name"], p["code"], p["channel"], p["position"],
+                                                  "；备注:" + p["note"] if p["note"] else "")
+                          for p in pool_rows) or "（标的池为空）"
     statuses_hint = "确认信号(C开头)取值: %s；证伪信号(F开头)取值: %s" % (
         "/".join(db.CONFIRM_STATUSES), "/".join(db.FALSIFY_STATUSES))
     prompt = (
         "你是投资观测助手。「%s」观测台跟踪的判断是：\n%s\n请基于以下信息做季度核对。\n\n"
         "【信号灯规则】\n%s\n\n【信号当前状态】（%s）\n%s\n\n【最近自动抓取的公开数据】\n%s\n\n"
+        "【标的池】\n%s\n\n"
         "请只输出一个 JSON 对象，字段如下：\n"
         '{"light":"red|yellow|green",'
         '"conclusion":"<一句话当前结论>",'
+        '"action":"<当前灯号下的明确操作建议：做什么（等待/小额试探/开始建仓/暂停或修正判断）、'
+        '涉及标的池中的具体标的、执行节奏；无动作则写 继续等待，不操作>",'
         '"signal_updates":[{"code":"C4","status":"<合法状态值>","current_value":"<简短当前值>","reason":"<依据>"}...],'
         '"manual_checklist":["<需要人工核实的事项>"...],'
         '"narrative":"<完整中文 Markdown 分析，含各层判断各自的论证>"}\n'
-        "只更新证据有实质变化的信号，无把握的不要改；不要输出 JSON 以外的任何文字。"
-    ) % (theme["name"], thesis or "（未填写）", rules, statuses_hint, sig_text, data_text)
+        "说明：部分信号（如 C4/C7/F1）已由规则引擎按定量规则先行判定，请复核其判定是否合理，"
+        "不合理才改；只更新证据有实质变化的信号，无把握的不要改；不要输出 JSON 以外的任何文字。"
+    ) % (theme["name"], thesis or "（未填写）", rules, statuses_hint, sig_text, data_text, pool_text)
     raw = call_gateway(conf, conf["quarterly_model"],
                        [{"role": "user", "content": prompt}], json_mode=True,
                        max_tokens=conf.get("quarterly_max_tokens", 16000))
@@ -158,6 +168,7 @@ def run_quarterly(conn, conf, theme):
     checklist = result.get("manual_checklist") or []
     narrative = (result.get("narrative") or "").strip()
     conclusion = (result.get("conclusion") or "").strip() or narrative.replace("\n", " ")[:120]
+    action = (result.get("action") or "").strip()
     if not narrative:
         fail("quarterly", "narrative 为空")
 
@@ -181,11 +192,19 @@ def run_quarterly(conn, conf, theme):
     ts = now_str()
     run_date = datetime.now().strftime("%Y-%m-%d")
     full_narrative = narrative
+    if action:
+        full_narrative += "\n\n## 操作建议\n" + action
     if checklist:
         full_narrative += "\n\n## 人工核对清单\n" + "\n".join("- " + str(c) for c in checklist)
+    old_overview = conn.execute("SELECT light FROM overview WHERE theme_id = ?", (tid,)).fetchone()
+    changes = []
+    if old_overview and old_overview["light"] and old_overview["light"] != light:
+        changes.append("[%s] 信号灯：%s → %s（%s）" % (tid, old_overview["light"], light, conclusion))
     with conn:  # 单事务落库
         for code, st, val, reason in plan:
             old = old_map[code]
+            if old["status"] != st:
+                changes.append("[%s] %s %s：%s → %s（%s）" % (tid, code, old["name"], old["status"], st, reason))
             conn.execute(
                 "UPDATE signals SET status = ?, current_value = ?, note = ?, updated_at = ?"
                 " WHERE theme_id = ? AND id = ?",
@@ -201,14 +220,15 @@ def run_quarterly(conn, conf, theme):
         conn.execute(
             "INSERT INTO observations (theme_id, date, light, snapshot, note, created_at) VALUES (?,?,?,?,?,?)",
             (tid, run_date, light, json.dumps(snap, ensure_ascii=False), "季度自动分析（AI）", ts))
-        conn.execute("UPDATE overview SET light = ?, conclusion = ? WHERE theme_id = ?",
-                     (light, conclusion, tid))
+        conn.execute("UPDATE overview SET light = ?, conclusion = ?, action = ? WHERE theme_id = ?",
+                     (light, conclusion, action, tid))
         conn.execute(
             "INSERT INTO ai_reports (theme_id, run_date, run_type, light, narrative, created_at)"
             " VALUES (?,?,?,?,?,?)",
             (tid, run_date, "quarterly", light, full_narrative, ts))
     print("[%s] [%s] quarterly 完成: light=%s, 信号更新 %d 条, 核对清单 %d 项"
           % (ts, tid, light, len(plan), len(checklist)), flush=True)
+    notify.notify_changes("观测台季度分析：%s" % theme["name"], changes)
 
 
 def main():

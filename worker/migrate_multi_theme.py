@@ -7,7 +7,6 @@
 - 用法: python worker/migrate_multi_theme.py [--db 路径]（默认 data/observatory.db）"""
 import argparse
 import os
-import shutil
 import sqlite3
 import sys
 from datetime import datetime
@@ -33,7 +32,12 @@ def migrate(path):
             return
         backup = "%s.bak-%s" % (path, datetime.now().strftime("%Y%m%d-%H%M%S"))
         conn.close()
-        shutil.copy2(path, backup)
+        # 用 SQLite backup API 备份：直接文件拷贝会漏掉 WAL 里未 checkpoint 的数据
+        bconn = sqlite3.connect(path)
+        dest = sqlite3.connect(backup)
+        bconn.backup(dest)
+        dest.close()
+        bconn.close()
         print("已备份: %s" % backup)
         conn = sqlite3.connect(path)
         conn.row_factory = sqlite3.Row

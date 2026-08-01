@@ -90,7 +90,8 @@ CREATE TABLE IF NOT EXISTS overview (
     layer2_status TEXT, layer2_evidence TEXT,
     layer3_status TEXT, layer3_evidence TEXT,
     sentiment TEXT, sentiment_evidence TEXT,
-    light TEXT, conclusion TEXT
+    light TEXT, conclusion TEXT,
+    action TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS pool (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -185,6 +186,13 @@ def seed_theme(conn, theme):
         )
 
 
+def ensure_column(conn, table, column, ddl):
+    """给已存在的库补列（幂等），用于 schema 小步演进。"""
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(%s)" % table)]
+    if column not in cols:
+        conn.execute("ALTER TABLE %s ADD COLUMN %s" % (table, ddl))
+
+
 def init_db():
     """建表；把 worker/themes 注册表里的主题灌入（幂等）。
 
@@ -193,6 +201,7 @@ def init_db():
     conn = get_db()
     try:
         conn.executescript(SCHEMA)
+        ensure_column(conn, "overview", "action", "action TEXT DEFAULT ''")
         if BASE_DIR not in sys.path:
             sys.path.insert(0, BASE_DIR)
         from worker.themes import ALL_THEMES

@@ -37,6 +37,12 @@ def http_get_json(url, timeout=TIMEOUT):
         return json.loads(resp.read().decode("utf-8"))
 
 
+def http_get_text(url, timeout=TIMEOUT):
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8", errors="replace")
+
+
 def days_between(start, end):
     try:
         d1 = datetime.strptime(start, "%Y-%m-%d")
@@ -73,8 +79,8 @@ def extract_quarters(entries):
             end_cur, val_cur = lst[i]
             if 70 <= days_between(end_prev, end_cur) <= 110 and (start, end_cur) not in periods:
                 periods[(end_prev, end_cur)] = val_cur - val_prev
-    # 最近 8 个季度，按结束日排序
-    items = sorted(periods.items(), key=lambda kv: kv[0][1])[-8:]
+    # 最近 12 个季度，按结束日排序（F1 规则需要 4 个季度同比，即至少 8 个点）
+    items = sorted(periods.items(), key=lambda kv: kv[0][1])[-12:]
     return items
 
 
@@ -151,38 +157,163 @@ def fetch_yf_price(conn, now, rows):
 
 
 def fetch_yf_financials(conn, now, rows):
-    """rows: yf_financials 类指标行；params = {ticker, cname, rows:{财报行名: metric后缀}}。
-    同一 ticker 的多个指标共享一次 quarterly_financials 拉取。"""
+    """rows: yf_financials 类指标行；params = {ticker, cname, rows:{利润表行名: 后缀},
+    cf_rows:{现金流量表行名: 后缀}}。同一 ticker 的多个指标共享一次拉取。
+    capex 取 Capital Expenditure（负值），入库取绝对值以与 EDGAR 口径一致。"""
     import yfinance as yf
     by_ticker = {}
     for r in rows:
         p = json.loads(r["params"])
-        by_ticker.setdefault(p["ticker"], {"cname": p.get("cname", p["ticker"]),
-                                           "rows": p.get("rows", {}), "items": []})
-        by_ticker[p["ticker"]]["items"].append((r, p))
+        by_ticker.setdefault(p["ticker"], []).append((r, p))
     total = 0
-    for ticker, grp in by_ticker.items():
+    for ticker, items in by_ticker.items():
         try:
             fin = yf.Ticker(ticker).quarterly_financials
-            if fin is None or fin.empty:
-                log("%s 季度财报: 无数据" % ticker)
-                continue
-            for r, p in grp["items"]:
-                # 财报行名 → 本指标对应的后缀，反查行名
+            cashflow = None
+            if any(p.get("cf_rows") for _, p in items):
+                cashflow = yf.Ticker(ticker).quarterly_cashflow
+            for r, p in items:
                 suffix = r["metric_key"].rsplit(":", 1)[-1]
-                row_names = [name for name, sfx in grp["rows"].items() if sfx == suffix]
-                if not row_names or row_names[0] not in fin.index:
-                    continue
-                for col, val in fin.loc[row_names[0]].items():
-                    if val != val:  # NaN
+                found = False
+                for stmt, row_map in ((fin, p.get("rows") or {}), (cashflow, p.get("cf_rows") or {})):
+                    if stmt is None:
                         continue
-                    upsert(conn, r["metric_key"], r["label"],
-                           col.strftime("%Y-%m-%d") if hasattr(col, "strftime") else str(col)[:10],
-                           float(val), r["unit"], "yfinance", now)
-                    total += 1
+                    row_names = [name for name, sfx in row_map.items() if sfx == suffix]
+                    if not row_names or row_names[0] not in stmt.index:
+                        continue
+                    for col, val in stmt.loc[row_names[0]].items():
+                        if val != val:  # NaN
+                            continue
+                        if suffix == "capex":
+                            val = abs(val)
+                        upsert(conn, r["metric_key"], r["label"],
+                               col.strftime("%Y-%m-%d") if hasattr(col, "strftime") else str(col)[:10],
+                               float(val), r["unit"], "yfinance", now)
+                        total += 1
+                    found = True
+                    break
+                if not found:
+                    log("%s %s: 无数据行" % (ticker, suffix))
         except Exception as ex:
             log("%s 季度财报失败: %s" % (ticker, ex))
     log("yfinance 季度财报完成，写入 %d 条" % total)
+
+
+def _parse_number(text):
+    """解析 R 文件数值单元格：去 $、逗号、空白；括号表示负数。"""
+    t = text.replace("$", "").replace(",", "").strip()
+    if not t or t in ("—", "-"):
+        return None
+    neg = t.startswith("(") and t.endswith(")")
+    t = t.strip("()")
+    try:
+        v = float(t)
+    except ValueError:
+        return None
+    return -v if neg else v
+
+
+class _TableParser:
+    """把 R 文件 HTML 解析成行列表（每行 = 文本单元格列表），丢弃 XBRL 元数据行。"""
+
+    @staticmethod
+    def parse(html_text):
+        from html.parser import HTMLParser
+
+        class P(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.rows, self.cur_row, self.cur_cell = [], None, None
+
+            def handle_starttag(self, tag, attrs):
+                if tag == "tr":
+                    self.cur_row = []
+                elif tag in ("td", "th") and self.cur_row is not None:
+                    self.cur_cell = []
+
+            def handle_data(self, data):
+                if self.cur_cell is not None:
+                    self.cur_cell.append(data)
+
+            def handle_endtag(self, tag):
+                if tag in ("td", "th") and self.cur_cell is not None:
+                    self.cur_row.append("".join(self.cur_cell).strip())
+                    self.cur_cell = None
+                elif tag == "tr" and self.cur_row is not None:
+                    row = [c for c in self.cur_row if c]
+                    if row and not row[0].startswith(("X", "Name:")):
+                        self.rows.append(row)
+                    self.cur_row = None
+
+        p = P()
+        p.feed(html_text)
+        return p.rows
+
+
+def fetch_edgar_segment(conn, now, rows):
+    """rows: edgar_segment 类指标行；params = {ticker, cik, report_re, segment, metric_label}。
+    链路：submissions → 最新 10-Q → FilingSummary.xml 按 LongName 正则定位 R 文件 →
+    解析表格：分部标题行独占一行，其后第一个匹配 metric_label 的行的首个数值格 = 本季单季值。"""
+    import re
+    import xml.etree.ElementTree as ET
+    total = 0
+    for r in rows:
+        p = json.loads(r["params"])
+        ticker, cik = p["ticker"], int(p["cik"])
+        try:
+            subs = http_get_json("https://data.sec.gov/submissions/CIK%010d.json" % cik)
+            recent = subs["filings"]["recent"]
+            accession = None
+            for form, acc in zip(recent["form"], recent["accessionNumber"]):
+                if form == "10-Q":
+                    accession = acc
+                    break
+            if not accession:
+                log("EDGAR seg %s: 无 10-Q" % ticker)
+                continue
+            base = "https://www.sec.gov/Archives/edgar/data/%d/%s/" % (cik, accession.replace("-", ""))
+            fs_root = ET.fromstring(http_get_text(base + "FilingSummary.xml"))
+            report_re = re.compile(p["report_re"])
+            htm = None
+            for rep in fs_root.iter("Report"):
+                long_name = (rep.findtext("LongName") or "")
+                html_name = (rep.findtext("HtmlFileName") or "").strip()
+                if html_name and report_re.search(long_name):
+                    htm = html_name
+                    break
+            if not htm:
+                log("EDGAR seg %s: FilingSummary 中找不到分部报告" % ticker)
+                continue
+            html_text = http_get_text(base + htm)
+            rows_parsed = _TableParser.parse(html_text)
+            values = []
+            for i, row in enumerate(rows_parsed):
+                if row[0].strip() == p["segment"]:
+                    for nxt in rows_parsed[i + 1:i + 6]:
+                        if p["metric_label"].lower() in nxt[0].lower():
+                            for cell in nxt[1:]:
+                                v = _parse_number(cell)
+                                if v is not None:
+                                    values.append(v)
+                                if len(values) == 2:  # 本季 + 去年同期（列序恒定）
+                                    break
+                            break
+                    break
+            if not values:
+                log("EDGAR seg %s: 表中找不到 %s/%s" % (ticker, p["segment"], p["metric_label"]))
+                continue
+            # period 取 10-Q 报告期；去年同期值一并入库（便于即刻算同比）
+            period = recent["reportDate"][recent["accessionNumber"].index(accession)]
+            upsert(conn, r["metric_key"], r["label"], period, values[0], r["unit"], "SEC EDGAR 10-Q", now)
+            if len(values) == 2:
+                prior_period = "%04d%s" % (int(period[:4]) - 1, period[4:])
+                upsert(conn, r["metric_key"], r["label"], prior_period, values[1], r["unit"],
+                       "SEC EDGAR 10-Q(去年同期列)", now)
+            total += 1
+            time.sleep(0.5)
+        except Exception as ex:
+            log("EDGAR seg %s 失败: %s" % (ticker, ex))
+    log("EDGAR 分部收入完成，写入 %d 条" % total)
 
 
 def fetch_twse_monthly(conn, now, rows):
@@ -216,6 +347,7 @@ def fetch_twse_monthly(conn, now, rows):
 # kind -> fetcher(conn, now, rows)。新数据源在这里登记。
 FETCHERS = {
     "edgar": fetch_edgar,
+    "edgar_segment": fetch_edgar_segment,
     "yf_price": fetch_yf_price,
     "yf_financials": fetch_yf_financials,
     "twse_monthly": fetch_twse_monthly,
@@ -250,12 +382,18 @@ def subscribed_metrics(conn):
 
 
 def main():
+    # 用法: python worker/fetch_data.py [--only kind1,kind2]（--only 只抓指定类型，如 daily 任务的 yf_price）
+    only = None
+    if "--only" in sys.argv:
+        only = set(sys.argv[sys.argv.index("--only") + 1].split(","))
     db.init_db()
     conn = db.get_db()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         by_kind = subscribed_metrics(conn)
         for kind, rows in by_kind.items():
+            if only is not None and kind not in only:
+                continue
             fn = FETCHERS.get(kind)
             if fn is None:
                 log("未知指标类型 %r（%d 个指标，跳过）" % (kind, len(rows)))

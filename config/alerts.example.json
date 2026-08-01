@@ -1,0 +1,9 @@
+{
+  "enabled": false,
+  "smtp_host": "smtp.example.com",
+  "smtp_port": 465,
+  "smtp_user": "you@example.com",
+  "smtp_pass": "邮箱授权码或密码",
+  "from": "you@example.com",
+  "to": ["you@example.com"]
+}

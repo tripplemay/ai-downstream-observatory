@@ -5,6 +5,7 @@ __pycache__/
 
 # 敏感配置与数据（绝不入库）
 config/gateway.json
+config/alerts.json
 data/
 
 # 系统

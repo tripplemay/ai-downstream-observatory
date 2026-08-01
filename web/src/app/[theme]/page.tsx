@@ -56,6 +56,14 @@ export default async function ThemeDashboardPage({
         </div>
       </div>
 
+      {/* 操作建议（AI 季度分析输出） */}
+      {overview?.action && (
+        <div className="rounded-xl border bg-card p-5 shadow-sm">
+          <div className="text-sm font-semibold">操作建议</div>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{overview.action}</p>
+        </div>
+      )}
+
       {/* 三层判断 + 最近自动运行 */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {LAYER_CARDS.map(({ key, title, badge }) => {
