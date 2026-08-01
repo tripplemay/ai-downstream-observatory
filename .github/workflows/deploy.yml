@@ -17,6 +17,11 @@ jobs:
         run: pip install -r requirements.txt
       - name: syntax check
         run: python -m compileall app.py db.py worker/
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: web build
+        run: cd web && npm ci && npm run build
 
   deploy:
     needs: test
