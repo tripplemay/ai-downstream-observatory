@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}报告详情 · AI 下游投资观测台{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('reports') }}">← 返回报告列表</a></p>
+<div class="panel">
+  <div class="obs-head">
+    {% if report['light'] %}<span class="dot dot-{{ report['light'] }}"></span>
+    <span class="badge badge-{{ report['light'] }}">{{ report['light']|light_name }}</span>{% endif %}
+    <strong>{{ report['run_date'] }}</strong>
+    <span class="badge badge-gray">{{ '季度核对' if report['run_type'] == 'quarterly' else '月度纪要' }}</span>
+    <span class="hint">生成于 {{ report['created_at'] }}</span>
+  </div>
+  <div id="md" class="md-body"></div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+document.getElementById('md').innerHTML = marked.parse({{ report['narrative']|tojson }});
+</script>
+{% endblock %}

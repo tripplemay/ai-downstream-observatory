@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 敏感配置与数据（绝不入库）
+config/gateway.json
+data/
+
+# 系统
+.DS_Store
+*.log

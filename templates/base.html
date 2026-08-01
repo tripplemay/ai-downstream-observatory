@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}AI 下游投资观测台{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <span class="brand">AI 下游投资观测台</span>
+      <nav class="nav">
+        <a href="{{ url_for('dashboard') }}" class="{{ 'on' if active == 'dashboard' }}">总览</a>
+        <a href="{{ url_for('signals') }}" class="{{ 'on' if active == 'signals' }}">信号</a>
+        <a href="{{ url_for('observations') }}" class="{{ 'on' if active == 'observations' }}">观测记录</a>
+        <a href="{{ url_for('thesis') }}" class="{{ 'on' if active == 'thesis' }}">判断与规则</a>
+        <a href="{{ url_for('pool') }}" class="{{ 'on' if active == 'pool' }}">标的池</a>
+        <a href="{{ url_for('snapshots') }}" class="{{ 'on' if active == 'snapshots' }}">数据快照</a>
+        <a href="{{ url_for('reports') }}" class="{{ 'on' if active == 'reports' }}">AI 报告</a>
+        <!-- 未来模块在此加 -->
+      </nav>
+    </div>
+  </header>
+  <main class="wrap">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="wrap footer">个人研究框架，不构成投资建议。数据以 Wind 与公司季报为准。</footer>
+</body>
+</html>

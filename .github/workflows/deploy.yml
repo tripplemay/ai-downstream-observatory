@@ -1,0 +1,34 @@
+name: ci-cd
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: install deps
+        run: pip install -r requirements.txt
+      - name: syntax check
+        run: python -m compileall app.py db.py worker/
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+      - name: pull and rebuild on VPS
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
+            "cd ${{ secrets.VPS_PATH }} \
+             && git fetch origin main \
+             && git reset --hard origin/main \
+             && docker compose up -d --build"

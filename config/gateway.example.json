@@ -1,0 +1,9 @@
+{
+  "base_url": "https://your-gateway.example.com/v1",
+  "api_key": "replace-with-your-key",
+  "monthly_model": "deepseek-v4-flash",
+  "quarterly_model": "deepseek-v4-pro",
+  "monthly_max_tokens": 2000,
+  "quarterly_max_tokens": 16000,
+  "temperature": 0.3
+}

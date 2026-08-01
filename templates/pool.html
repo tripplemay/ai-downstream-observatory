@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}标的池 · AI 下游投资观测台{% endblock %}
+{% block content %}
+<h1>候选标的池</h1>
+
+<table class="tbl">
+  <thead>
+    <tr><th>标的</th><th>代码</th><th>通道</th><th>定位</th><th>备注</th><th class="c-act"></th></tr>
+  </thead>
+  <tbody>
+    {% for p in items %}
+    <tr>
+      <form method="post" action="{{ url_for('pool_update', pid=p['id']) }}">
+        <td><input class="in-sm" type="text" name="name" value="{{ p['name'] }}" required></td>
+        <td><input class="in-sm" type="text" name="code" value="{{ p['code'] }}"></td>
+        <td><input class="in-sm" type="text" name="channel" value="{{ p['channel'] }}"></td>
+        <td><input class="in-sm" type="text" name="position" value="{{ p['position'] }}"></td>
+        <td><input class="in-sm" type="text" name="note" value="{{ p['note'] }}"></td>
+        <td class="c-act">
+          <button type="submit" class="btn">保存</button>
+          <button type="submit" form="del-{{ p['id'] }}" class="btn btn-danger"
+                  onclick="return confirm('确认删除该标的？')">删除</button>
+        </td>
+      </form>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% for p in items %}
+<form id="del-{{ p['id'] }}" method="post" action="{{ url_for('pool_delete', pid=p['id']) }}"></form>
+{% endfor %}
+
+<div class="panel">
+  <h2>新增标的</h2>
+  <form method="post" action="{{ url_for('pool_add') }}">
+    <div class="form-row">
+      <label>标的 <input type="text" name="name" required></label>
+      <label>代码 <input type="text" name="code"></label>
+      <label>通道 <input type="text" name="channel"></label>
+    </div>
+    <div class="form-row">
+      <label class="grow">定位 <input type="text" name="position"></label>
+      <label class="grow">备注 <input type="text" name="note"></label>
+    </div>
+    <button type="submit" class="btn btn-primary">添加</button>
+  </form>
+</div>
+{% endblock %}

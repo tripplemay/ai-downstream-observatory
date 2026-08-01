@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}数据快照 · AI 下游投资观测台{% endblock %}
+{% block content %}
+<h1>数据快照</h1>
+<p class="hint">由 worker/fetch_data.py 自动抓取的公开数据（SEC EDGAR / yfinance / TWSE），同一指标同一期重复抓取幂等覆盖。</p>
+
+{% for m in groups %}
+<div class="panel">
+  <h2>{{ m.label }} <span class="hint">({{ m.unit }} · {{ m.source }})</span></h2>
+  <div class="chart-box"><canvas id="chart-{{ loop.index }}"></canvas></div>
+  <table class="tbl tbl-sm">
+    <thead><tr><th>期间</th><th>数值</th><th>抓取时间</th></tr></thead>
+    <tbody>
+      {% for d, v, ts in m.rows %}<tr><td>{{ d }}</td><td>{{ v }}</td><td>{{ ts }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="hint">暂无快照数据，先运行 <code>./jobs/run_job.sh monthly</code> 抓取。</p>
+{% endfor %}
+
+{% if groups %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+const GROUPS = {{ groups|tojson }};
+GROUPS.forEach((m, i) => {
+  const ctx = document.getElementById('chart-' + (i + 1));
+  if (!ctx) return;
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: m.points.map(p => p.d),
+      datasets: [{ label: m.label, data: m.points.map(p => p.v),
+                   borderColor: '#2563eb', backgroundColor: '#2563eb',
+                   borderWidth: 1.5, pointRadius: 1.5, tension: 0.2 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { ticks: { maxTicksLimit: 10 } }, y: { beginAtZero: false } }
+    }
+  });
+});
+</script>
+{% endif %}
+{% endblock %}
