@@ -49,6 +49,28 @@ EDGAR_SEGMENTS = [
      "AWS", "Net sales"),
 ]
 
+# 主流模型 API 价格监控（C5/F2，OpenRouter 牌价）：档位 × 阵营 二维清单
+# 混合价 = (输入×3 + 输出)/4，每百万 token 美元
+MODEL_PRICE_WATCH = [
+    # (OpenRouter model_id, 展示名, tier, camp)
+    ("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro", "flagship", "cn"),
+    ("qwen/qwen3.7-max", "Qwen3.7 Max", "flagship", "cn"),
+    ("openai/gpt-5.6-sol", "GPT-5.6 Sol", "flagship", "us"),
+    ("google/gemini-3.1-pro-preview", "Gemini 3.1 Pro", "flagship", "us"),
+    ("deepseek/deepseek-v4-flash-0731", "DeepSeek V4 Flash", "volume", "cn"),
+    ("minimax/minimax-m3", "MiniMax M3", "volume", "cn"),
+    ("openai/gpt-5.6-luna", "GPT-5.6 Luna", "volume", "us"),
+    ("deepseek/deepseek-r1", "DeepSeek R1", "reasoning", "cn"),
+    ("anthropic/claude-opus-4.1", "Claude Opus 4.1", "reasoning", "us"),
+    ("openai/gpt-5.5-pro", "GPT-5.5 Pro", "reasoning", "us"),
+]
+# 背离比率衍生指标：tier -> 展示名（美国阵营中位价 ÷ 中国阵营中位价）
+MODEL_PRICE_RATIOS = [
+    ("flagship", "旗舰档中美价格比"),
+    ("volume", "走量档中美价格比"),
+    ("reasoning", "推理档中美价格比"),
+]
+
 
 def build_metrics():
     rows = []
@@ -86,6 +108,20 @@ def build_metrics():
     # TWSE OpenAPI 月营收
     rows.append(("twse:2330:monthly_revenue", "台积电(2330) 月营收", "TWD(千元)", "twse_monthly",
                  {"code": "2330", "cname": "台积电"}))
+    # 主流模型 API 价格（C5/F2）+ 中美背离比率衍生指标
+    for model_id, label, tier, camp in MODEL_PRICE_WATCH:
+        rows.append((
+            "price:%s:blended" % model_id,
+            "%s API混合价(3:1)" % label,
+            "USD/M tokens", "model_price",
+            {"model_id": model_id, "tier": tier, "camp": camp},
+        ))
+    for tier, label in MODEL_PRICE_RATIOS:
+        rows.append((
+            "price:ratio:%s" % tier, label,
+            "倍", "model_price",
+            {"ratio": True, "tier": tier},
+        ))
     return rows
 
 

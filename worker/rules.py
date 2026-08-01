@@ -152,6 +152,101 @@ def eval_ai_downstream(conn, theme_id):
         apply(conn, theme_id, "F1", "已触发" if triggered else "未触发", "；".join(details),
               "capex同比-收入同比 连续4季为正且未收敛" if triggered else "未满足连续4季压制或无收敛")
 
+    # ---- C5/F2 推理成本（模型 API 牌价）----
+    eval_model_prices(conn, theme_id)
+
+
+def chg_since(pts, days):
+    """最新值 vs 约 days 天前最近点的变化率 %（基准点容差 ±max(10, days*20%) 天），无则 None。"""
+    if len(pts) < 2:
+        return None
+    try:
+        end_date = datetime.strptime(pts[-1][0], "%Y-%m-%d")
+    except ValueError:
+        return None
+    target = end_date - timedelta(days=days)
+    tolerance = max(10, int(days * 0.2))
+    best, best_dist = None, tolerance + 1
+    for d_s, v in pts[:-1]:
+        try:
+            d = datetime.strptime(d_s, "%Y-%m-%d")
+        except ValueError:
+            continue
+        dist = abs((d - target).days)
+        if dist < best_dist and v:
+            best, best_dist = v, dist
+    if best is None or not pts[-1][1]:
+        return None
+    return (pts[-1][1] - best) / best * 100
+
+
+def current_status(conn, theme_id, signal_id):
+    row = conn.execute("SELECT status FROM signals WHERE theme_id = ? AND id = ?",
+                       (theme_id, signal_id)).fetchone()
+    return row["status"] if row else ""
+
+
+def eval_model_prices(conn, theme_id):
+    """C5 推理成本 / F2 推理成本停滞：基于 OpenRouter 牌价序列（price: 类指标）。
+
+    C5：近 180 天有任一监控模型降价 ≥10% → 验证中；365 天无任何降价 → 反向；
+        介于两者之间或数据不足 → 维持原状态（价格规则只管"盯"，拐点判断留给 AI）。
+    F2（保守触发）：有充分历史的模型近 180 天全部零变化（|涨跌|<2%）→ 已触发；
+        或中国阵营旗舰+走量中位价近 90 天上涨 >10%（集体提价预警）→ 已触发。"""
+    rows = conn.execute(
+        "SELECT m.metric_key, m.label, m.params FROM metrics m"
+        " JOIN theme_metrics tm ON tm.metric_key = m.metric_key AND tm.theme_id = ?"
+        " WHERE m.kind = 'model_price'", (theme_id,)).fetchall()
+    models, ratios = [], {}
+    import json as _json
+    for r in rows:
+        p = _json.loads(r["params"])
+        pts = series(conn, r["metric_key"])
+        if p.get("ratio"):
+            if pts:
+                ratios[p["tier"]] = pts[-1][1]
+        elif pts:
+            models.append({"label": r["label"].replace(" API混合价(3:1)", ""),
+                           "tier": p["tier"], "camp": p["camp"], "pts": pts})
+    if not models:
+        return
+    latest = {m["label"]: m["pts"][-1][1] for m in models}
+    ratio_text = "；".join("%s背离 %.1f×" % ({"flagship": "旗舰", "volume": "走量", "reasoning": "推理"}.get(t, t), v)
+                          for t, v in ratios.items())
+    price_text = "；".join("%s $%.2f" % kv for kv in sorted(latest.items()))
+
+    # ---- C5 ----
+    declines_180 = [m["label"] for m in models
+                    if (c := chg_since(m["pts"], 180)) is not None and c <= -10]
+    chgs_365 = [chg_since(m["pts"], 365) for m in models]
+    have_365 = [c for c in chgs_365 if c is not None]
+    if declines_180:
+        apply(conn, theme_id, "C5", "验证中",
+              "%s｜%s" % (price_text, ratio_text),
+              "近180天 %d 个模型降价≥10%%：%s" % (len(declines_180), "、".join(declines_180)))
+    elif have_365 and all(c > -10 for c in have_365):
+        apply(conn, theme_id, "C5", "反向",
+              "%s｜%s" % (price_text, ratio_text),
+              "近365天无任何监控模型降价≥10%，下降曲线停止")
+    else:
+        apply(conn, theme_id, "C5", current_status(conn, theme_id, "C5"),
+              "%s｜%s" % (price_text, ratio_text), "")
+
+    # ---- F2 ----
+    chgs_180 = [(m["label"], chg_since(m["pts"], 180)) for m in models]
+    have_180 = [(lb, c) for lb, c in chgs_180 if c is not None]
+    cn_core = [m for m in models if m["camp"] == "cn" and m["tier"] in ("flagship", "volume")]
+    cn_chg90 = [c for c in (chg_since(m["pts"], 90) for m in cn_core) if c is not None]
+    cn_median_up = (len(cn_chg90) >= 2 and sorted(cn_chg90)[len(cn_chg90) // 2] > 10)
+    if len(have_180) >= 3 and all(abs(c) < 2 for _, c in have_180):
+        apply(conn, theme_id, "F2", "已触发", price_text,
+              "%d 个有历史的模型近180天价格全部零变化" % len(have_180))
+    elif cn_median_up:
+        apply(conn, theme_id, "F2", "已触发", price_text,
+              "中国阵营旗舰+走量中位价近90天上涨超10%（集体提价预警）")
+    else:
+        apply(conn, theme_id, "F2", "未触发", price_text, "")
+
 
 RULES = {
     "ai-downstream": eval_ai_downstream,

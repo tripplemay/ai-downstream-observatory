@@ -316,6 +316,60 @@ def fetch_edgar_segment(conn, now, rows):
     log("EDGAR 分部收入完成，写入 %d 条" % total)
 
 
+def fetch_model_price(conn, now, rows):
+    """rows: model_price 类指标行。拉 OpenRouter models API 一次，
+    对监控模型写 blended 价（输入×3+输出)/4，每百万 token 美元；
+    然后按档位计算中美阵营中位价比率（衍生指标，params.ratio=true 的行）。"""
+    try:
+        data = http_get_json("https://openrouter.ai/api/v1/models")["data"]
+    except Exception as ex:
+        log("OpenRouter models API 失败(跳过): %s" % ex)
+        return
+    price_by_id = {}
+    for m in data:
+        p = m.get("pricing") or {}
+        try:
+            i, o = float(p.get("prompt", 0)), float(p.get("completion", 0))
+        except (TypeError, ValueError):
+            continue
+        if i > 0 or o > 0:
+            price_by_id[m["id"]] = (i * 3 + o) / 4 * 1e6
+    today = now[:10]
+    total = 0
+    tier_prices = {}  # tier -> {"cn": [prices], "us": [prices]}
+    ratio_rows = []
+    for r in rows:
+        p = json.loads(r["params"])
+        if p.get("ratio"):
+            ratio_rows.append((r, p))
+            continue
+        model_id = p["model_id"]
+        blended = price_by_id.get(model_id)
+        if blended is None:
+            log("OpenRouter 无模型 %r（可能已下架/改名，跳过）" % model_id)
+            continue
+        upsert(conn, r["metric_key"], r["label"], today, round(blended, 4),
+               r["unit"], "OpenRouter", now)
+        tier_prices.setdefault(p["tier"], {}).setdefault(p["camp"], []).append(blended)
+        total += 1
+    for r, p in ratio_rows:
+        tier = tier_prices.get(p["tier"], {})
+        cn, us = tier.get("cn"), tier.get("us")
+        if not cn or not us:
+            log("背离比率 %s: 阵营数据不足（cn=%d, us=%d）"
+                % (p["tier"], len(cn or []), len(us or [])))
+            continue
+        def median(xs):
+            s = sorted(xs)
+            n = len(s)
+            return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+        ratio = median(us) / median(cn)
+        upsert(conn, r["metric_key"], r["label"], today, round(ratio, 2),
+               r["unit"], "OpenRouter 计算值", now)
+        total += 1
+    log("模型价格完成，写入 %d 条" % total)
+
+
 def fetch_twse_monthly(conn, now, rows):
     """rows: twse_monthly 类指标行；params = {code, cname}。TWSE OpenAPI 上市公司每月营收。"""
     try:
@@ -351,6 +405,7 @@ FETCHERS = {
     "yf_price": fetch_yf_price,
     "yf_financials": fetch_yf_financials,
     "twse_monthly": fetch_twse_monthly,
+    "model_price": fetch_model_price,
 }
 
 
