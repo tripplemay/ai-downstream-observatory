@@ -23,26 +23,27 @@ export async function updateSignal(input: SignalUpdateInput): Promise<ActionResu
   if (!parsed.success) {
     return { ok: false, message: parsed.error.issues[0]?.message ?? "参数非法" };
   }
+  const { themeId } = parsed.data;
   const db = getDb();
-  const old = db.prepare("SELECT * FROM signals WHERE id = ?").get(parsed.data.id) as
-    | Signal
-    | undefined;
+  const old = db
+    .prepare("SELECT * FROM signals WHERE theme_id = ? AND id = ?")
+    .get(themeId, parsed.data.id) as Signal | undefined;
   if (!old) return { ok: false, message: "信号不存在" };
   const valid = validStatuses(old.layer);
   const status = valid.includes(parsed.data.status) ? parsed.data.status : old.status;
   const ts = nowStr();
   const tx = db.transaction(() => {
     db.prepare(
-      "UPDATE signals SET status = ?, current_value = ?, note = ?, updated_at = ? WHERE id = ?"
-    ).run(status, parsed.data.current_value, parsed.data.note, ts, old.id);
+      "UPDATE signals SET status = ?, current_value = ?, note = ?, updated_at = ? WHERE theme_id = ? AND id = ?"
+    ).run(status, parsed.data.current_value, parsed.data.note, ts, themeId, old.id);
     db.prepare(
-      "INSERT INTO signal_history (signal_id, old_status, new_status, old_value, new_value, note, changed_at)" +
-        " VALUES (?,?,?,?,?,?,?)"
-    ).run(old.id, old.status, status, old.current_value, parsed.data.current_value, parsed.data.note, ts);
+      "INSERT INTO signal_history (theme_id, signal_id, old_status, new_status, old_value, new_value, note, changed_at)" +
+        " VALUES (?,?,?,?,?,?,?,?)"
+    ).run(themeId, old.id, old.status, status, old.current_value, parsed.data.current_value, parsed.data.note, ts);
   });
   tx();
-  revalidatePath("/signals");
-  revalidatePath("/");
+  revalidatePath(`/${themeId}/signals`);
+  revalidatePath(`/${themeId}`);
   return { ok: true, message: `信号 ${old.id} 已更新` };
 }
 
@@ -52,24 +53,28 @@ export async function addObservation(input: ObservationInput): Promise<ActionRes
   if (!parsed.success) {
     return { ok: false, message: parsed.error.issues[0]?.message ?? "参数非法" };
   }
+  const { themeId } = parsed.data;
   const db = getDb();
-  const rows = db.prepare("SELECT id, current_value FROM signals ORDER BY rowid").all() as Array<{
+  const rows = db
+    .prepare("SELECT id, current_value FROM signals WHERE theme_id = ? ORDER BY rowid")
+    .all(themeId) as Array<{
     id: string;
     current_value: string;
   }>;
   const snapshot: Record<string, string> = {};
   for (const r of rows) snapshot[r.id] = r.current_value;
   db.prepare(
-    "INSERT INTO observations (date, light, snapshot, note, created_at) VALUES (?,?,?,?,?)"
+    "INSERT INTO observations (theme_id, date, light, snapshot, note, created_at) VALUES (?,?,?,?,?,?)"
   ).run(
+    themeId,
     parsed.data.date || todayStr(),
     parsed.data.light,
     JSON.stringify(snapshot),
     parsed.data.note,
     nowStr()
   );
-  revalidatePath("/observations");
-  revalidatePath("/");
+  revalidatePath(`/${themeId}/observations`);
+  revalidatePath(`/${themeId}`);
   return { ok: true, message: "观测记录已保存" };
 }
 
@@ -77,16 +82,18 @@ export async function addObservation(input: ObservationInput): Promise<ActionRes
 export async function saveThesis(input: ThesisInput): Promise<ActionResult> {
   const parsed = thesisSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: "内容过长或非法" };
+  const { themeId } = parsed.data;
   const db = getDb();
   const upsert = db.prepare(
-    "INSERT INTO pages (key, content) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET content = excluded.content"
+    "INSERT INTO pages (theme_id, key, content) VALUES (?, ?, ?)" +
+      " ON CONFLICT(theme_id, key) DO UPDATE SET content = excluded.content"
   );
   const tx = db.transaction(() => {
-    upsert.run("thesis", parsed.data.thesis);
-    upsert.run("rules", parsed.data.rules);
+    upsert.run(themeId, "thesis", parsed.data.thesis);
+    upsert.run(themeId, "rules", parsed.data.rules);
   });
   tx();
-  revalidatePath("/thesis");
+  revalidatePath(`/${themeId}/thesis`);
   return { ok: true, message: "已保存" };
 }
 
@@ -95,10 +102,11 @@ export async function addPoolItem(input: PoolItemInput): Promise<ActionResult> {
   if (!parsed.success) {
     return { ok: false, message: parsed.error.issues[0]?.message ?? "参数非法" };
   }
+  const { themeId } = parsed.data;
   getDb()
-    .prepare("INSERT INTO pool (name, code, channel, position, note) VALUES (?,?,?,?,?)")
-    .run(parsed.data.name, parsed.data.code, parsed.data.channel, parsed.data.position, parsed.data.note);
-  revalidatePath("/pool");
+    .prepare("INSERT INTO pool (theme_id, name, code, channel, position, note) VALUES (?,?,?,?,?,?)")
+    .run(themeId, parsed.data.name, parsed.data.code, parsed.data.channel, parsed.data.position, parsed.data.note);
+  revalidatePath(`/${themeId}/pool`);
   return { ok: true, message: "已添加标的" };
 }
 
@@ -107,16 +115,17 @@ export async function updatePoolItem(input: PoolItemInput): Promise<ActionResult
   if (!parsed.success || !parsed.data.id) {
     return { ok: false, message: parsed.success ? "缺少 id" : parsed.error.issues[0]?.message ?? "参数非法" };
   }
+  const { themeId } = parsed.data;
   getDb()
-    .prepare("UPDATE pool SET name = ?, code = ?, channel = ?, position = ?, note = ? WHERE id = ?")
-    .run(parsed.data.name, parsed.data.code, parsed.data.channel, parsed.data.position, parsed.data.note, parsed.data.id);
-  revalidatePath("/pool");
+    .prepare("UPDATE pool SET name = ?, code = ?, channel = ?, position = ?, note = ? WHERE theme_id = ? AND id = ?")
+    .run(parsed.data.name, parsed.data.code, parsed.data.channel, parsed.data.position, parsed.data.note, themeId, parsed.data.id);
+  revalidatePath(`/${themeId}/pool`);
   return { ok: true, message: "已保存修改" };
 }
 
-export async function deletePoolItem(id: number): Promise<ActionResult> {
-  if (!Number.isInteger(id) || id <= 0) return { ok: false, message: "id 非法" };
-  getDb().prepare("DELETE FROM pool WHERE id = ?").run(id);
-  revalidatePath("/pool");
+export async function deletePoolItem(themeId: string, id: number): Promise<ActionResult> {
+  if (!themeId || !Number.isInteger(id) || id <= 0) return { ok: false, message: "参数非法" };
+  getDb().prepare("DELETE FROM pool WHERE theme_id = ? AND id = ?").run(themeId, id);
+  revalidatePath(`/${themeId}/pool`);
   return { ok: true, message: "已删除" };
 }

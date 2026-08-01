@@ -30,10 +30,12 @@ import type { Signal } from "@/lib/queries";
 
 export function EditSignalDialog({
   signal,
+  themeId,
   open,
   onOpenChange,
 }: {
   signal: Signal | null;
+  themeId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -42,6 +44,7 @@ export function EditSignalDialog({
     resolver: zodResolver(signalUpdateSchema),
     values: signal
       ? {
+          themeId,
           id: signal.id,
           status: signal.status,
           current_value: signal.current_value,
@@ -75,6 +78,7 @@ export function EditSignalDialog({
           <DialogDescription>{signal.trigger_cond}</DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} className="space-y-4">
+          <input type="hidden" {...form.register("themeId")} />
           <input type="hidden" {...form.register("id")} />
           <div className="space-y-2">
             <Label>状态</Label>

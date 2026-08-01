@@ -1,5 +1,5 @@
 /** better-sqlite3 单例连接（WAL 模式），直连 ../data/observatory.db。
- * 首次连接时建表并按 db.py 逻辑灌种子（仅 signals 为空时）。 */
+ * 首次连接时建表并按 db.py 逻辑灌种子（仅 themes 为空时）。 */
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";

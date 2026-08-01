@@ -57,7 +57,7 @@ const COL_CLASS: Record<string, string | undefined> = {
   actions: "hidden sm:table-cell",
 };
 
-export function SignalsTabs({ groups }: { groups: Group[] }) {
+export function SignalsTabs({ groups, themeId }: { groups: Group[]; themeId: string }) {
   const [editing, setEditing] = React.useState<Signal | null>(null);
 
   const columns: ColumnDef<Signal>[] = [
@@ -144,7 +144,7 @@ export function SignalsTabs({ groups }: { groups: Group[] }) {
           </TabsContent>
         ))}
       </Tabs>
-      <EditSignalDialog signal={editing} open={editing !== null} onOpenChange={(o) => !o && setEditing(null)} />
+      <EditSignalDialog signal={editing} themeId={themeId} open={editing !== null} onOpenChange={(o) => !o && setEditing(null)} />
     </>
   );
 }

@@ -7,23 +7,24 @@ import { ArrowLeft } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { LightBadge } from "@/components/light";
-import { getReport } from "@/lib/queries";
+import { getReport, getTheme } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "报告详情" };
 
 export default async function ReportDetailPage({
   params,
 }: {
-  params: Promise<{ id: string }>;
+  params: Promise<{ theme: string; id: string }>;
 }) {
-  const { id } = await params;
-  const report = getReport(Number(id));
+  const { theme, id } = await params;
+  if (!getTheme(theme)) notFound();
+  const report = getReport(theme, Number(id));
   if (!report) notFound();
 
   return (
     <div className="space-y-4">
       <Link
-        href="/reports"
+        href={`/${theme}/reports`}
         className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
       >
         <ArrowLeft className="h-4 w-4" /> 返回报告列表

@@ -1,18 +1,25 @@
 import type { Metadata } from "next";
 export const dynamic = "force-dynamic";
+import { notFound } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { MetricChart } from "@/components/snapshots/metric-chart";
 import { fmtNum } from "@/lib/format";
-import { getMetricGroups } from "@/lib/queries";
+import { getMetricGroups, getTheme } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "数据快照" };
 
 const CHART_COLORS = ["#2563eb", "#7c3aed", "#0d9488", "#dc2626", "#d97706", "#059669", "#db2777"];
 
-export default function SnapshotsPage() {
-  const groups = getMetricGroups();
+export default async function SnapshotsPage({
+  params,
+}: {
+  params: Promise<{ theme: string }>;
+}) {
+  const { theme } = await params;
+  if (!getTheme(theme)) notFound();
+  const groups = getMetricGroups(theme);
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">

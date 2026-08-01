@@ -1,16 +1,23 @@
 import type { Metadata } from "next";
 export const dynamic = "force-dynamic";
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { LightBadge } from "@/components/light";
-import { getReports } from "@/lib/queries";
+import { getReports, getTheme } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "AI 报告" };
 
-export default function ReportsPage() {
-  const reports = getReports();
+export default async function ReportsPage({
+  params,
+}: {
+  params: Promise<{ theme: string }>;
+}) {
+  const { theme } = await params;
+  if (!getTheme(theme)) notFound();
+  const reports = getReports(theme);
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
@@ -46,7 +53,7 @@ export default function ReportsPage() {
                 </TableCell>
                 <TableCell>
                   <Button asChild variant="outline" size="sm">
-                    <Link href={`/reports/${r.id}`}>查看</Link>
+                    <Link href={`/${theme}/reports/${r.id}`}>查看</Link>
                   </Button>
                 </TableCell>
               </TableRow>

@@ -1,0 +1,5 @@
+# -*- coding: utf-8 -*-
+"""主题注册表：新主题加一个同级模块并在此登记。"""
+from . import ai_downstream
+
+ALL_THEMES = [ai_downstream.THEME]

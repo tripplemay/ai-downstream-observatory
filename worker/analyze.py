@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
-"""AI 分析：调 AIGC 网关生成月度纪要 / 季度结构化分析。
-用法: python worker/analyze.py [monthly|quarterly]
-失败（网关不通 / JSON 解析失败）只写 data/jobs.log，不动业务表，退出码非 0。
+"""AI 分析：调 AIGC 网关为每个启用主题生成月度纪要 / 季度结构化分析。
+
+主题化：prompt 中的判断框架取自该主题 pages 表的 thesis/rules，数据摘要只含该主题
+订阅的指标；signals/overview/observations/ai_reports 读写均带 theme_id。
+用法: python worker/analyze.py [monthly|quarterly] [--theme <slug>]
+单主题失败只记 data/jobs.log 并继续其余主题，全部完成后有失败则退出码非 0。
 成功时先算后写，单事务落库。"""
+import argparse
 import json
 import os
 import sys
@@ -46,11 +50,14 @@ def call_gateway(conf, model, messages, json_mode=False, max_tokens=2000):
     return data["choices"][0]["message"]["content"]
 
 
-def snapshot_summary(conn, quarters_only=False):
-    """汇总 snapshots：EDGAR 类每指标最近 8 季度序列；价格类给最近值与 3 个月涨跌幅。"""
+def snapshot_summary(conn, theme_id, quarters_only=False):
+    """汇总该主题订阅的 snapshots：EDGAR 类每指标最近 8 季度序列；价格类给最近值与 3 个月涨跌幅。"""
     lines = []
     metrics = conn.execute(
-        "SELECT metric_key, label, unit FROM snapshots GROUP BY metric_key ORDER BY metric_key"
+        "SELECT s.metric_key, s.label, s.unit FROM snapshots s"
+        " JOIN theme_metrics tm ON tm.metric_key = s.metric_key AND tm.theme_id = ?"
+        " GROUP BY s.metric_key ORDER BY s.metric_key",
+        (theme_id,),
     ).fetchall()
     for m in metrics:
         key = m["metric_key"]
@@ -83,13 +90,22 @@ def format_num(v):
     return "%.2f" % v
 
 
-def run_monthly(conn, conf):
-    data_text = snapshot_summary(conn)
+def get_page(conn, theme_id, key):
+    row = conn.execute("SELECT content FROM pages WHERE theme_id = ? AND key = ?",
+                       (theme_id, key)).fetchone()
+    return row["content"] if row else ""
+
+
+def run_monthly(conn, conf, theme):
+    tid = theme["id"]
+    data_text = snapshot_summary(conn, tid)
+    thesis = get_page(conn, tid, "thesis")
     prompt = (
-        "你是投资观测助手。以下是 AI 产业链观测台最新自动抓取的公开数据快照。\n"
-        "请写一段不超过 300 字的中文月度纪要：概括上游(存储/算力/半导体)、下游(软件/中概)与平台公司的最新变化，"
+        "你是投资观测助手。以下是「%s」观测台最新自动抓取的公开数据快照。\n"
+        "该主题的跟踪框架：\n%s\n\n"
+        "请写一段不超过 300 字的中文月度纪要：概括与上述框架相关的最新变化，"
         "指出哪些信号值得人工进一步核对。只输出纪要正文，不要标题、不要列表。\n\n"
-        "数据快照:\n" + data_text
+        "数据快照:\n" % (theme["name"], thesis or "（未填写）") + data_text
     )
     text = call_gateway(conf, conf["monthly_model"],
                         [{"role": "user", "content": prompt}],
@@ -97,34 +113,35 @@ def run_monthly(conn, conf):
     ts = now_str()
     with conn:  # 单事务
         conn.execute(
-            "INSERT INTO ai_reports (run_date, run_type, light, narrative, created_at) VALUES (?,?,?,?,?)",
-            (datetime.now().strftime("%Y-%m-%d"), "monthly", "", text, ts),
+            "INSERT INTO ai_reports (theme_id, run_date, run_type, light, narrative, created_at)"
+            " VALUES (?,?,?,?,?,?)",
+            (tid, datetime.now().strftime("%Y-%m-%d"), "monthly", "", text, ts),
         )
-    print("[%s] monthly 纪要已写入 ai_reports（%d 字）" % (ts, len(text)), flush=True)
+    print("[%s] [%s] monthly 纪要已写入 ai_reports（%d 字）" % (ts, tid, len(text)), flush=True)
 
 
-def run_quarterly(conn, conf):
-    data_text = snapshot_summary(conn, quarters_only=True)
-    signals = conn.execute("SELECT * FROM signals ORDER BY rowid").fetchall()
+def run_quarterly(conn, conf, theme):
+    tid = theme["id"]
+    data_text = snapshot_summary(conn, tid, quarters_only=True)
+    signals = conn.execute("SELECT * FROM signals WHERE theme_id = ? ORDER BY rowid", (tid,)).fetchall()
     sig_text = "\n".join(
         "%s %s｜状态:%s｜当前值:%s｜触发条件:%s"
         % (s["id"], s["name"], s["status"], s["current_value"], s["trigger_cond"]) for s in signals)
-    rules_row = conn.execute("SELECT content FROM pages WHERE key = 'rules'").fetchone()
-    rules = rules_row["content"] if rules_row else ""
+    thesis = get_page(conn, tid, "thesis")
+    rules = get_page(conn, tid, "rules")
     statuses_hint = "确认信号(C开头)取值: %s；证伪信号(F开头)取值: %s" % (
         "/".join(db.CONFIRM_STATUSES), "/".join(db.FALSIFY_STATUSES))
     prompt = (
-        "你是投资观测助手。本观测台跟踪的判断是：上游算力/存储超额利润终将趋同，下游 AI 应用会产生利润，"
-        "且利润主要归属有分发/数据/工作流壁垒的平台公司。请基于以下信息做季度核对。\n\n"
+        "你是投资观测助手。「%s」观测台跟踪的判断是：\n%s\n请基于以下信息做季度核对。\n\n"
         "【信号灯规则】\n%s\n\n【信号当前状态】（%s）\n%s\n\n【最近自动抓取的公开数据】\n%s\n\n"
         "请只输出一个 JSON 对象，字段如下：\n"
         '{"light":"red|yellow|green",'
         '"conclusion":"<一句话当前结论>",'
         '"signal_updates":[{"code":"C4","status":"<合法状态值>","current_value":"<简短当前值>","reason":"<依据>"}...],'
         '"manual_checklist":["<需要人工核实的事项>"...],'
-        '"narrative":"<完整中文 Markdown 分析，含三层判断各自的论证>"}\n'
+        '"narrative":"<完整中文 Markdown 分析，含各层判断各自的论证>"}\n'
         "只更新证据有实质变化的信号，无把握的不要改；不要输出 JSON 以外的任何文字。"
-    ) % (rules, statuses_hint, sig_text, data_text)
+    ) % (theme["name"], thesis or "（未填写）", rules, statuses_hint, sig_text, data_text)
     raw = call_gateway(conf, conf["quarterly_model"],
                        [{"role": "user", "content": prompt}], json_mode=True,
                        max_tokens=conf.get("quarterly_max_tokens", 16000))
@@ -153,10 +170,10 @@ def run_quarterly(conn, conf):
         code = str(u.get("code", "")).strip()
         st = str(u.get("status", "")).strip()
         if code not in valid_status:
-            print("跳过未知信号 %r" % code, flush=True)
+            print("[%s] 跳过未知信号 %r" % (tid, code), flush=True)
             continue
         if st not in valid_status[code]:
-            print("跳过 %s 的非法状态 %r" % (code, st), flush=True)
+            print("[%s] 跳过 %s 的非法状态 %r" % (tid, code, st), flush=True)
             continue
         plan.append((code, st, str(u.get("current_value", "")).strip(),
                      str(u.get("reason", "")).strip()))
@@ -170,30 +187,36 @@ def run_quarterly(conn, conf):
         for code, st, val, reason in plan:
             old = old_map[code]
             conn.execute(
-                "UPDATE signals SET status = ?, current_value = ?, note = ?, updated_at = ? WHERE id = ?",
-                (st, val or old["current_value"], reason, ts, code))
+                "UPDATE signals SET status = ?, current_value = ?, note = ?, updated_at = ?"
+                " WHERE theme_id = ? AND id = ?",
+                (st, val or old["current_value"], reason, ts, tid, code))
             conn.execute(
-                "INSERT INTO signal_history (signal_id, old_status, new_status, old_value, new_value, note, changed_at)"
-                " VALUES (?,?,?,?,?,?,?)",
-                (code, old["status"], st, old["current_value"], val or old["current_value"],
+                "INSERT INTO signal_history (theme_id, signal_id, old_status, new_status, old_value, new_value, note, changed_at)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (tid, code, old["status"], st, old["current_value"], val or old["current_value"],
                  "AI季度分析: " + reason, ts))
         snap = {r["id"]: r["current_value"] for r in
-                conn.execute("SELECT id, current_value FROM signals ORDER BY rowid").fetchall()}
+                conn.execute("SELECT id, current_value FROM signals WHERE theme_id = ? ORDER BY rowid",
+                             (tid,)).fetchall()}
         conn.execute(
-            "INSERT INTO observations (date, light, snapshot, note, created_at) VALUES (?,?,?,?,?)",
-            (run_date, light, json.dumps(snap, ensure_ascii=False), "季度自动分析（AI）", ts))
-        conn.execute("UPDATE overview SET light = ?, conclusion = ? WHERE id = 1", (light, conclusion))
+            "INSERT INTO observations (theme_id, date, light, snapshot, note, created_at) VALUES (?,?,?,?,?,?)",
+            (tid, run_date, light, json.dumps(snap, ensure_ascii=False), "季度自动分析（AI）", ts))
+        conn.execute("UPDATE overview SET light = ?, conclusion = ? WHERE theme_id = ?",
+                     (light, conclusion, tid))
         conn.execute(
-            "INSERT INTO ai_reports (run_date, run_type, light, narrative, created_at) VALUES (?,?,?,?,?)",
-            (run_date, "quarterly", light, full_narrative, ts))
-    print("[%s] quarterly 完成: light=%s, 信号更新 %d 条, 核对清单 %d 项"
-          % (ts, light, len(plan), len(checklist)), flush=True)
+            "INSERT INTO ai_reports (theme_id, run_date, run_type, light, narrative, created_at)"
+            " VALUES (?,?,?,?,?,?)",
+            (tid, run_date, "quarterly", light, full_narrative, ts))
+    print("[%s] [%s] quarterly 完成: light=%s, 信号更新 %d 条, 核对清单 %d 项"
+          % (ts, tid, light, len(plan), len(checklist)), flush=True)
 
 
 def main():
-    run_type = sys.argv[1] if len(sys.argv) > 1 else "monthly"
-    if run_type not in ("monthly", "quarterly"):
-        fail(run_type, "未知运行类型（应为 monthly|quarterly）")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("run_type", nargs="?", default="monthly", choices=["monthly", "quarterly"])
+    ap.add_argument("--theme", help="只跑指定主题（默认全部启用主题）")
+    args = ap.parse_args()
+    run_type = args.run_type
     try:
         with open(GATEWAY_CONF, encoding="utf-8") as f:
             conf = json.load(f)
@@ -201,18 +224,33 @@ def main():
         fail(run_type, "读取 gateway.json 失败: %s" % ex)
     db.init_db()
     conn = db.get_db()
+    failures = 0
     try:
-        if run_type == "monthly":
-            run_monthly(conn, conf)
+        if args.theme:
+            themes = conn.execute("SELECT * FROM themes WHERE id = ? AND enabled = 1",
+                                  (args.theme,)).fetchall()
+            if not themes:
+                fail(run_type, "主题不存在或未启用: %s" % args.theme)
         else:
-            run_quarterly(conn, conf)
-    except SystemExit:
-        raise
-    except Exception as ex:
-        traceback.print_exc()
-        fail(run_type, "%s: %s" % (type(ex).__name__, ex))
+            themes = conn.execute("SELECT * FROM themes WHERE enabled = 1 ORDER BY rowid").fetchall()
+        for theme in themes:
+            try:
+                if run_type == "monthly":
+                    run_monthly(conn, conf, theme)
+                else:
+                    run_quarterly(conn, conf, theme)
+            except SystemExit:
+                failures += 1  # fail() 已记日志，继续其余主题
+            except Exception as ex:
+                traceback.print_exc()
+                with open(JOBS_LOG, "a", encoding="utf-8") as f:
+                    f.write("[%s] [STATUS] %s FAILED [%s] %s: %s\n"
+                            % (now_str(), run_type, theme["id"], type(ex).__name__, ex))
+                failures += 1
     finally:
         conn.close()
+    if failures:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

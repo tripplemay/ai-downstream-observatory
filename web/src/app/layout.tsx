@@ -6,8 +6,8 @@ import { SiteHeader } from "@/components/site-header";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: { default: "AI 下游投资观测台", template: "%s · AI 下游投资观测台" },
-  description: "个人研究框架：上游趋同 → 下游利润 → 利润归属平台。不构成投资建议。",
+  title: { default: "投资观测台", template: "%s · 投资观测台" },
+  description: "个人研究框架：按主题跟踪证实/证伪信号。不构成投资建议。",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

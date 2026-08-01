@@ -1,6 +1,7 @@
 #!/bin/bash
 # 用法: ./jobs/run_job.sh <monthly|quarterly>
-# launchd 定时触发：先抓公开数据（fetch_data.py），再调 AIGC 网关分析（analyze.py）
+# launchd/scheduler 定时触发：先抓公开数据（fetch_data.py，按全部启用主题的订阅并集），
+# 再调 AIGC 网关逐主题分析（analyze.py）
 set -uo pipefail
 cd "$(dirname "$0")/.."
 source .venv/bin/activate

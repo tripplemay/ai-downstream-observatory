@@ -20,7 +20,7 @@ import { addPoolItem, deletePoolItem, updatePoolItem } from "@/lib/actions";
 import { poolItemSchema, type PoolItemInput } from "@/lib/schemas";
 import type { PoolItem } from "@/lib/queries";
 
-export function PoolManager({ items }: { items: PoolItem[] }) {
+export function PoolManager({ items, themeId }: { items: PoolItem[]; themeId: string }) {
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<PoolItem | null>(null);
   const [pending, startTransition] = React.useTransition();
@@ -28,7 +28,7 @@ export function PoolManager({ items }: { items: PoolItem[] }) {
   const onDelete = (item: PoolItem) => {
     if (!window.confirm(`确认删除「${item.name}」？`)) return;
     startTransition(async () => {
-      const res = await deletePoolItem(item.id);
+      const res = await deletePoolItem(themeId, item.id);
       if (res.ok) toast.success(res.message);
       else toast.error(res.message);
     });
@@ -101,17 +101,19 @@ export function PoolManager({ items }: { items: PoolItem[] }) {
           </TableBody>
         </Table>
       </div>
-      <PoolDialog item={editing} open={dialogOpen} onOpenChange={setDialogOpen} />
+      <PoolDialog item={editing} themeId={themeId} open={dialogOpen} onOpenChange={setDialogOpen} />
     </div>
   );
 }
 
 function PoolDialog({
   item,
+  themeId,
   open,
   onOpenChange,
 }: {
   item: PoolItem | null;
+  themeId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -120,6 +122,7 @@ function PoolDialog({
     resolver: zodResolver(poolItemSchema),
     values: item
       ? {
+          themeId,
           id: item.id,
           name: item.name,
           code: item.code,
@@ -127,7 +130,7 @@ function PoolDialog({
           position: item.position,
           note: item.note,
         }
-      : { name: "", code: "", channel: "", position: "", note: "" },
+      : { themeId, name: "", code: "", channel: "", position: "", note: "" },
   });
 
   const onSubmit = form.handleSubmit((values) => {
@@ -149,6 +152,7 @@ function PoolDialog({
           <DialogTitle>{item ? "编辑标的" : "添加标的"}</DialogTitle>
         </DialogHeader>
         <form onSubmit={onSubmit} className="space-y-3">
+          <input type="hidden" {...form.register("themeId")} />
           {(["name", "code", "channel", "position", "note"] as const).map((field) => {
             const labels: Record<string, string> = {
               name: "名称 *",

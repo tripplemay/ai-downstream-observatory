@@ -13,11 +13,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { addObservation } from "@/lib/actions";
 import { observationSchema, type ObservationInput } from "@/lib/schemas";
 
-export function ObservationForm({ today }: { today: string }) {
+export function ObservationForm({ today, themeId }: { today: string; themeId: string }) {
   const [pending, startTransition] = React.useTransition();
   const form = useForm<ObservationInput>({
     resolver: zodResolver(observationSchema),
-    defaultValues: { date: today, light: "red", note: "" },
+    defaultValues: { themeId, date: today, light: "red", note: "" },
   });
 
   const onSubmit = form.handleSubmit((values) => {
@@ -25,7 +25,7 @@ export function ObservationForm({ today }: { today: string }) {
       const res = await addObservation(values);
       if (res.ok) {
         toast.success(res.message);
-        form.reset({ date: today, light: values.light, note: "" });
+        form.reset({ themeId, date: today, light: values.light, note: "" });
       } else {
         toast.error(res.message);
       }
@@ -40,6 +40,7 @@ export function ObservationForm({ today }: { today: string }) {
       </CardHeader>
       <CardContent>
         <form onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-[1fr_1fr_2fr_auto] sm:items-end">
+          <input type="hidden" {...form.register("themeId")} />
           <div className="space-y-2">
             <Label htmlFor="obs-date">日期</Label>
             <Input id="obs-date" type="date" {...form.register("date")} />

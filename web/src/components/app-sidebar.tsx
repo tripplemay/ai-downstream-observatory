@@ -1,5 +1,7 @@
+import { Suspense } from "react";
 import { Separator } from "@/components/ui/separator";
 import { Brand, NavLinks } from "@/components/nav";
+import { ThemeNav } from "@/components/theme-nav";
 
 export function AppSidebar() {
   return (
@@ -7,6 +9,9 @@ export function AppSidebar() {
       <Brand />
       <Separator className="bg-sidebar-border" />
       <div className="flex-1 overflow-y-auto py-3">
+        <Suspense fallback={null}>
+          <ThemeNav />
+        </Suspense>
         <NavLinks />
       </div>
       <div className="px-5 py-4 text-xs text-muted-foreground">

@@ -1,8 +1,16 @@
-/** 只读数据访问（Server Components 用） */
+/** 只读数据访问（Server Components 用）。除 snapshots 全局共享外，均按 theme_id 过滤。 */
 import fs from "node:fs";
 import path from "node:path";
 import { getDb } from "./db";
 import { LAYERS } from "./seed";
+
+export interface Theme {
+  id: string;
+  name: string;
+  description: string;
+  enabled: number;
+  created_at: string;
+}
 
 export interface Signal {
   id: string;
@@ -18,7 +26,7 @@ export interface Signal {
 }
 
 export interface Overview {
-  id: number;
+  theme_id: string;
   layer1_status: string;
   layer1_evidence: string;
   layer2_status: string;
@@ -77,12 +85,24 @@ export interface MetricGroup {
   rows: Array<{ d: string; v: number; ts: string }>;
 }
 
-export function getSignals(): Signal[] {
-  return getDb().prepare("SELECT * FROM signals ORDER BY rowid").all() as Signal[];
+export function getThemes(): Theme[] {
+  return getDb()
+    .prepare("SELECT * FROM themes WHERE enabled = 1 ORDER BY rowid")
+    .all() as Theme[];
 }
 
-export function getSignalGroups() {
-  const rows = getSignals();
+export function getTheme(slug: string): Theme | null {
+  return (getDb().prepare("SELECT * FROM themes WHERE id = ?").get(slug) as Theme) ?? null;
+}
+
+export function getSignals(themeId: string): Signal[] {
+  return getDb()
+    .prepare("SELECT * FROM signals WHERE theme_id = ? ORDER BY rowid")
+    .all(themeId) as Signal[];
+}
+
+export function getSignalGroups(themeId: string) {
+  const rows = getSignals(themeId);
   return LAYERS.map(([key, label]) => ({
     key,
     label,
@@ -90,39 +110,44 @@ export function getSignalGroups() {
   }));
 }
 
-export function getOverview(): Overview | null {
-  return (getDb().prepare("SELECT * FROM overview WHERE id = 1").get() as Overview) ?? null;
-}
-
-export function getObservations(): Observation[] {
-  return getDb()
-    .prepare("SELECT * FROM observations ORDER BY date DESC, id DESC")
-    .all() as Observation[];
-}
-
-export function getLastObservation(): Observation | null {
+export function getOverview(themeId: string): Overview | null {
   return (
-    (getDb()
-      .prepare("SELECT * FROM observations ORDER BY date DESC, id DESC LIMIT 1")
-      .get() as Observation) ?? null
+    (getDb().prepare("SELECT * FROM overview WHERE theme_id = ?").get(themeId) as Overview) ??
+    null
   );
 }
 
-export function getStatusCounts(): Record<string, number> {
+export function getObservations(themeId: string): Observation[] {
+  return getDb()
+    .prepare("SELECT * FROM observations WHERE theme_id = ? ORDER BY date DESC, id DESC")
+    .all(themeId) as Observation[];
+}
+
+export function getLastObservation(themeId: string): Observation | null {
+  return (
+    (getDb()
+      .prepare("SELECT * FROM observations WHERE theme_id = ? ORDER BY date DESC, id DESC LIMIT 1")
+      .get(themeId) as Observation) ?? null
+  );
+}
+
+export function getStatusCounts(themeId: string): Record<string, number> {
   const rows = getDb()
-    .prepare("SELECT status, COUNT(*) AS c FROM signals GROUP BY status")
-    .all() as Array<{ status: string; c: number }>;
+    .prepare("SELECT status, COUNT(*) AS c FROM signals WHERE theme_id = ? GROUP BY status")
+    .all(themeId) as Array<{ status: string; c: number }>;
   const counts: Record<string, number> = {};
   for (const r of rows) counts[r.status] = r.c;
   return counts;
 }
 
-export function getPool(): PoolItem[] {
-  return getDb().prepare("SELECT * FROM pool ORDER BY id").all() as PoolItem[];
+export function getPool(themeId: string): PoolItem[] {
+  return getDb()
+    .prepare("SELECT * FROM pool WHERE theme_id = ? ORDER BY id")
+    .all(themeId) as PoolItem[];
 }
 
-export function getPages(): Record<string, string> {
-  const rows = getDb().prepare("SELECT * FROM pages").all() as Array<{
+export function getPages(themeId: string): Record<string, string> {
+  const rows = getDb().prepare("SELECT * FROM pages WHERE theme_id = ?").all(themeId) as Array<{
     key: string;
     content: string;
   }>;
@@ -131,27 +156,37 @@ export function getPages(): Record<string, string> {
   return pages;
 }
 
-export function getReports(): AiReport[] {
-  return getDb().prepare("SELECT * FROM ai_reports ORDER BY id DESC").all() as AiReport[];
-}
-
-export function getReport(id: number): AiReport | null {
-  return (
-    (getDb().prepare("SELECT * FROM ai_reports WHERE id = ?").get(id) as AiReport) ?? null
-  );
-}
-
-export function getLastReport(): AiReport | null {
-  return (
-    (getDb().prepare("SELECT * FROM ai_reports ORDER BY id DESC LIMIT 1").get() as AiReport) ??
-    null
-  );
-}
-
-export function getSnapshots(): SnapshotRow[] {
+export function getReports(themeId: string): AiReport[] {
   return getDb()
-    .prepare("SELECT * FROM snapshots ORDER BY metric_key, period_date")
-    .all() as SnapshotRow[];
+    .prepare("SELECT * FROM ai_reports WHERE theme_id = ? ORDER BY id DESC")
+    .all(themeId) as AiReport[];
+}
+
+export function getReport(themeId: string, id: number): AiReport | null {
+  return (
+    (getDb()
+      .prepare("SELECT * FROM ai_reports WHERE theme_id = ? AND id = ?")
+      .get(themeId, id) as AiReport) ?? null
+  );
+}
+
+export function getLastReport(themeId: string): AiReport | null {
+  return (
+    (getDb()
+      .prepare("SELECT * FROM ai_reports WHERE theme_id = ? ORDER BY id DESC LIMIT 1")
+      .get(themeId) as AiReport) ?? null
+  );
+}
+
+/** 该主题订阅的指标快照（snapshots 全局共享，经 theme_metrics 关联过滤） */
+function getSnapshots(themeId: string): SnapshotRow[] {
+  return getDb()
+    .prepare(
+      "SELECT s.* FROM snapshots s" +
+        " JOIN theme_metrics tm ON tm.metric_key = s.metric_key" +
+        " WHERE tm.theme_id = ? ORDER BY s.metric_key, s.period_date"
+    )
+    .all(themeId) as SnapshotRow[];
 }
 
 function metricRank(key: string): [number, string] {
@@ -160,8 +195,8 @@ function metricRank(key: string): [number, string] {
   return [2, key];
 }
 
-export function getMetricGroups(): MetricGroup[] {
-  const rows = getSnapshots();
+export function getMetricGroups(themeId: string): MetricGroup[] {
+  const rows = getSnapshots(themeId);
   const map = new Map<string, MetricGroup>();
   for (const r of rows) {
     let m = map.get(r.metric_key);
@@ -195,8 +230,9 @@ export function getSeries(metricKey: string): Array<{ d: string; v: number }> {
   return rows.map((r) => ({ d: r.period_date, v: r.value }));
 }
 
-/** 云厂商剪刀差：最近季 capex/收入 同比增速（需要 5 个季度数据） */
-export function getScissorData() {
+/** 云厂商剪刀差：最近季 capex/收入 同比增速（需要 5 个季度数据）。主题一专属图表。 */
+export function getScissorData(themeId: string) {
+  if (themeId !== "ai-downstream") return null;
   const companies: Array<[string, string]> = [
     ["MSFT", "微软"],
     ["GOOGL", "谷歌"],
@@ -231,8 +267,9 @@ export function getScissorData() {
   return out;
 }
 
-/** 上下游强弱：下游 ETF vs 上游/平台 ETF 近 3 个月涨跌 */
-export function getStrengthData() {
+/** 上下游强弱：下游 ETF vs 上游/平台 ETF 近 3 个月涨跌。主题一专属图表。 */
+export function getStrengthData(themeId: string) {
+  if (themeId !== "ai-downstream") return null;
   const tickers: Array<[string, string, string]> = [
     ["px:159852.SZ", "软件ETF(159852)", "down"],
     ["px:513050.SS", "中概互联网ETF(513050)", "down"],

@@ -1,19 +1,26 @@
 import type { Metadata } from "next";
 export const dynamic = "force-dynamic";
+import { notFound } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { LightBadge } from "@/components/light";
 import { ObservationForm } from "@/components/observations/observation-form";
-import { getObservations } from "@/lib/queries";
+import { getObservations, getTheme } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "观测记录" };
 
-export default function ObservationsPage() {
-  const observations = getObservations();
+export default async function ObservationsPage({
+  params,
+}: {
+  params: Promise<{ theme: string }>;
+}) {
+  const { theme } = await params;
+  if (!getTheme(theme)) notFound();
+  const observations = getObservations(theme);
   const today = new Date().toISOString().slice(0, 10);
   return (
     <div className="space-y-4">
-      <ObservationForm today={today} />
+      <ObservationForm today={today} themeId={theme} />
       <div className="space-y-3">
         {observations.map((o) => {
           let snapshot: Record<string, string> = {};

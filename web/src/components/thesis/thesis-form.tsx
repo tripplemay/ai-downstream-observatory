@@ -8,14 +8,14 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { saveThesis } from "@/lib/actions";
 
-export function ThesisForm({ thesis, rules }: { thesis: string; rules: string }) {
+export function ThesisForm({ thesis, rules, themeId }: { thesis: string; rules: string; themeId: string }) {
   const [pending, startTransition] = React.useTransition();
   const [thesisVal, setThesisVal] = React.useState(thesis);
   const [rulesVal, setRulesVal] = React.useState(rules);
 
   const onSave = () => {
     startTransition(async () => {
-      const res = await saveThesis({ thesis: thesisVal, rules: rulesVal });
+      const res = await saveThesis({ themeId, thesis: thesisVal, rules: rulesVal });
       if (res.ok) toast.success(res.message);
       else toast.error(res.message);
     });

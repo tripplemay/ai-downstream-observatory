@@ -1,5 +1,5 @@
-/** 建表与种子数据 — 逐条移植自根目录 db.py（基线 2026-07-29）。
- * 仅当 signals 表为空时灌入种子；与 worker 端 db.init_db() 行为一致。 */
+/** 建表与种子数据 — 逐条移植自根目录 db.py（多主题基线 2026-08-01）。
+ * 仅当 themes 表为空时灌入种子；与 worker 端 db.init_db() 行为一致。 */
 import type Database from "better-sqlite3";
 
 export const LAYERS: Array<[string, string]> = [
@@ -17,8 +17,29 @@ export function validStatuses(layer: string): string[] {
 }
 
 export const SCHEMA = `
-CREATE TABLE IF NOT EXISTS signals (
+CREATE TABLE IF NOT EXISTS themes (
     id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    enabled INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS metrics (
+    metric_key TEXT PRIMARY KEY,
+    label TEXT DEFAULT '',
+    unit TEXT DEFAULT '',
+    kind TEXT NOT NULL,
+    params TEXT DEFAULT '{}',
+    enabled INTEGER DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS theme_metrics (
+    theme_id TEXT NOT NULL,
+    metric_key TEXT NOT NULL,
+    PRIMARY KEY (theme_id, metric_key)
+);
+CREATE TABLE IF NOT EXISTS signals (
+    theme_id TEXT NOT NULL,
+    id TEXT NOT NULL,
     layer TEXT NOT NULL,
     name TEXT NOT NULL,
     watch TEXT DEFAULT '',
@@ -27,10 +48,12 @@ CREATE TABLE IF NOT EXISTS signals (
     current_value TEXT DEFAULT '',
     status TEXT DEFAULT '',
     updated_at TEXT DEFAULT '',
-    note TEXT DEFAULT ''
+    note TEXT DEFAULT '',
+    PRIMARY KEY (theme_id, id)
 );
 CREATE TABLE IF NOT EXISTS signal_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    theme_id TEXT NOT NULL,
     signal_id TEXT NOT NULL,
     old_status TEXT,
     new_status TEXT,
@@ -41,6 +64,7 @@ CREATE TABLE IF NOT EXISTS signal_history (
 );
 CREATE TABLE IF NOT EXISTS observations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    theme_id TEXT NOT NULL,
     date TEXT NOT NULL,
     light TEXT NOT NULL,
     snapshot TEXT NOT NULL,
@@ -48,7 +72,7 @@ CREATE TABLE IF NOT EXISTS observations (
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS overview (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
+    theme_id TEXT PRIMARY KEY,
     layer1_status TEXT, layer1_evidence TEXT,
     layer2_status TEXT, layer2_evidence TEXT,
     layer3_status TEXT, layer3_evidence TEXT,
@@ -57,6 +81,7 @@ CREATE TABLE IF NOT EXISTS overview (
 );
 CREATE TABLE IF NOT EXISTS pool (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    theme_id TEXT NOT NULL,
     name TEXT NOT NULL,
     code TEXT DEFAULT '',
     channel TEXT DEFAULT '',
@@ -64,8 +89,10 @@ CREATE TABLE IF NOT EXISTS pool (
     note TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS pages (
-    key TEXT PRIMARY KEY,
-    content TEXT DEFAULT ''
+    theme_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    content TEXT DEFAULT '',
+    PRIMARY KEY (theme_id, key)
 );
 CREATE TABLE IF NOT EXISTS snapshots (
     metric_key TEXT NOT NULL,
@@ -79,6 +106,7 @@ CREATE TABLE IF NOT EXISTS snapshots (
 );
 CREATE TABLE IF NOT EXISTS ai_reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    theme_id TEXT NOT NULL,
     run_date TEXT NOT NULL,
     run_type TEXT NOT NULL,
     light TEXT DEFAULT '',
@@ -86,6 +114,17 @@ CREATE TABLE IF NOT EXISTS ai_reports (
     created_at TEXT NOT NULL
 );
 `;
+
+const THEME_ID = "ai-downstream";
+
+// (id, name, description, enabled, created_at)
+const SEED_THEME = [
+  THEME_ID,
+  "AI 下游应用",
+  "AI 应用终将产生利润、利润归属平台：跟踪证实/证伪信号，辅助长期建仓决策",
+  1,
+  "2026-07-29 00:00:00",
+] as const;
 
 // (id, layer, name, watch, source, trigger_cond, current_value, status, updated_at, note)
 const SEED_SIGNALS: string[][] = [
@@ -137,7 +176,7 @@ const SEED_SIGNALS: string[][] = [
 ];
 
 const SEED_OVERVIEW = [
-  1,
+  THEME_ID,
   "未开始", "存储上行周期延续（长协锁价、HBM 产能偏紧）；半导体材料设备ETF 159516 今年 +73%",
   "未兑现", "下游指数全线下跌：软件 159852 今年 -17.6%、游戏 159869 -22.6%、中概互联 513050 -22.7%；唯一例外消费电子 +15.9%",
   "部分验证", "平台型强于纯应用：纳指科技 +10.0% vs A股软件 -17.6%；标普500 +4.9% vs 软件/游戏 -20% 上下",
@@ -181,31 +220,34 @@ const SEED_SNAPSHOT: Record<string, string> = {
   F1: "无", F2: "无", F3: "无", F4: "无", F5: "无",
 };
 
-/** 仅当 signals 为空时灌入种子数据（与 db.init_db 一致） */
+/** 仅当 themes 为空时灌入种子数据（与 db.init_db 一致） */
 export function seedIfEmpty(db: Database.Database) {
-  const row = db.prepare("SELECT COUNT(*) AS c FROM signals").get() as { c: number };
+  const row = db.prepare("SELECT COUNT(*) AS c FROM themes").get() as { c: number };
   if (row.c > 0) return;
   const insertSignal = db.prepare(
-    "INSERT INTO signals (id, layer, name, watch, source, trigger_cond, current_value, status, updated_at, note)" +
-      " VALUES (?,?,?,?,?,?,?,?,?,?)"
+    "INSERT INTO signals (theme_id, id, layer, name, watch, source, trigger_cond, current_value, status, updated_at, note)" +
+      " VALUES (?,?,?,?,?,?,?,?,?,?,?)"
   );
   const insertPool = db.prepare(
-    "INSERT INTO pool (name, code, channel, position, note) VALUES (?,?,?,?,?)"
+    "INSERT INTO pool (theme_id, name, code, channel, position, note) VALUES (?,?,?,?,?,?)"
   );
-  const insertPage = db.prepare("INSERT INTO pages (key, content) VALUES (?,?)");
+  const insertPage = db.prepare("INSERT INTO pages (theme_id, key, content) VALUES (?,?,?)");
   const tx = db.transaction(() => {
-    for (const s of SEED_SIGNALS) insertSignal.run(...s);
     db.prepare(
-      "INSERT INTO overview (id, layer1_status, layer1_evidence, layer2_status, layer2_evidence," +
+      "INSERT INTO themes (id, name, description, enabled, created_at) VALUES (?,?,?,?,?)"
+    ).run(...SEED_THEME);
+    for (const s of SEED_SIGNALS) insertSignal.run(THEME_ID, ...s);
+    db.prepare(
+      "INSERT INTO overview (theme_id, layer1_status, layer1_evidence, layer2_status, layer2_evidence," +
         " layer3_status, layer3_evidence, sentiment, sentiment_evidence, light, conclusion)" +
         " VALUES (?,?,?,?,?,?,?,?,?,?,?)"
     ).run(...SEED_OVERVIEW);
-    for (const p of SEED_POOL) insertPool.run(...p);
-    insertPage.run("thesis", SEED_THESIS);
-    insertPage.run("rules", SEED_RULES);
+    for (const p of SEED_POOL) insertPool.run(THEME_ID, ...p);
+    insertPage.run(THEME_ID, "thesis", SEED_THESIS);
+    insertPage.run(THEME_ID, "rules", SEED_RULES);
     db.prepare(
-      "INSERT INTO observations (date, light, snapshot, note, created_at) VALUES (?,?,?,?,?)"
-    ).run("2026-07-29", "red", JSON.stringify(SEED_SNAPSHOT), "基线建立", "2026-07-29 00:00:00");
+      "INSERT INTO observations (theme_id, date, light, snapshot, note, created_at) VALUES (?,?,?,?,?,?)"
+    ).run(THEME_ID, "2026-07-29", "red", JSON.stringify(SEED_SNAPSHOT), "基线建立", "2026-07-29 00:00:00");
   });
   tx();
 }
