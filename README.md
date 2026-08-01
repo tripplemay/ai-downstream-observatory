@@ -38,7 +38,7 @@ cp config/gateway.example.json config/gateway.json  # 填入网关信息
 docker compose up -d --build
 ```
 
-域名与证书：`Caddyfile` 中配置域名后，Caddy 自动签发 HTTPS 证书（需 DNS 指向 VPS 且 80/443 放行）。
+域名与 TLS：VPS 宿主 nginx 反代（模板 `deploy/nginx/etf.vpanel.cc.conf`，含安装步骤注释），certbot 签发证书。web 容器只监听 127.0.0.1:5051。
 
 ## 定时任务
 

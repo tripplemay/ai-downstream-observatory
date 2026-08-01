@@ -1,3 +1,0 @@
-etf.vpanel.cc {
-	reverse_proxy web:5051
-}
