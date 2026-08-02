@@ -297,7 +297,8 @@ def fetch_edgar_segment(conn, now, rows):
                                     values.append(v)
                                 if len(values) == 2:  # 本季 + 去年同期（列序恒定）
                                     break
-                            break
+                            if values:  # 标签行可能是无数值的分节头（如 NVDA），跳过继续找
+                                break
                     break
             if not values:
                 log("EDGAR seg %s: 表中找不到 %s/%s" % (ticker, p["segment"], p["metric_label"]))

@@ -155,6 +155,141 @@ def eval_ai_downstream(conn, theme_id):
     # ---- C5/F2 推理成本（模型 API 牌价）----
     eval_model_prices(conn, theme_id)
 
+    # ---- C1/C2/C3/C8/C10/F4 基本面定量信号 ----
+    eval_fundamentals(conn, theme_id)
+
+
+def margin_series(conn, gross_key, rev_key):
+    """毛利率序列：[(period_date, 毛利率%)]，按同一 period_date 配对。"""
+    gross = dict(series(conn, gross_key))
+    rev = dict(series(conn, rev_key))
+    pts = []
+    for d in sorted(set(gross) & set(rev)):
+        if rev[d]:
+            pts.append((d, gross[d] / rev[d] * 100))
+    return pts
+
+
+def median_val(xs):
+    s = sorted(xs)
+    n = len(s)
+    if n == 0:
+        return None
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def eval_fundamentals(conn, theme_id):
+    """C1/C2/C3/C8/C10/F4：基本面定量信号（月频数据，每月采集后评估）。"""
+
+    # ---- C1 存储合约价（代理：美光/三星/海力士综合毛利率环比趋势）----
+    # 合约价本身无免费源；上游毛利率连续 2 个季度环比下滑视为趋同开始（代理）
+    proxies = [("美光", margin_series(conn, "edgar:MU:gross_profit", "edgar:MU:revenue")),
+               ("三星", margin_series(conn, "yf:005930.KS:gross_profit", "yf:005930.KS:revenue")),
+               ("海力士", margin_series(conn, "yf:000660.KS:gross_profit", "yf:000660.KS:revenue"))]
+    c1_details, c1_votes = [], []
+    for name, pts in proxies:
+        if len(pts) < 3:
+            c1_details.append("%s 数据不足" % name)
+            continue
+        d1 = pts[-1][1] - pts[-2][1]  # 最近季环比 pp
+        d2 = pts[-2][1] - pts[-3][1]  # 前一季环比 pp
+        c1_details.append("%s %.1f%%（环比 %+.1f/%+.1fpp）" % (name, pts[-1][1], d1, d2))
+        c1_votes.append(1 if (d1 < 0 and d2 < 0) else (-1 if (d1 > 0 and d2 > 0) else 0))
+    if c1_votes:
+        mu_vote = c1_votes[0]  # 以美光（纯存储）为准，韩系为综合毛利率仅参考
+        status = "已验证" if mu_vote == 1 else ("反向" if mu_vote == -1 else "验证中")
+        apply(conn, theme_id, "C1", status, "；".join(c1_details),
+              "代理规则：美光毛利率连续2季环比%s" % {1: "下滑→趋同开始", -1: "上升→上行延续"}.get(mu_vote, "方向不一"))
+
+    # ---- C2 算力供需：NVDA 毛利率环比明显下滑 → 松动确认 ----
+    nvda_margin = margin_series(conn, "edgar:NVDA:gross_profit", "edgar:NVDA:revenue")
+    if len(nvda_margin) >= 2:
+        d = nvda_margin[-1][1] - nvda_margin[-2][1]
+        dc = series(conn, "seg:NVDA:datacenter_revenue")
+        dc_text = ""
+        if len(dc) >= 1:
+            dc_yoy = yoy(dc)
+            dc_text = "；数据中心收入 %s" % ("同比 %+.1f%%" % dc_yoy if dc_yoy is not None else "%.0fM" % dc[-1][1])
+        status = "已验证" if d <= -3 else ("反向" if d >= 1 else "验证中")
+        apply(conn, theme_id, "C2", status,
+              "NVDA 毛利率 %.1f%%（环比 %+.1fpp）%s" % (nvda_margin[-1][1], d, dc_text),
+              "环比 %+.1fpp：%s" % (d, {1: "明显下滑→供需松动", -1: "回升→供需偏紧"}.get(
+                  1 if d <= -3 else (-1 if d >= 1 else 0), "窄幅波动")))
+
+    # ---- C3 上游 Capex：capex 同比 >50% 视为大幅上修 ----
+    c3 = [("美光", "edgar:MU:capex"), ("三星", "yf:005930.KS:capex"), ("海力士", "yf:000660.KS:capex")]
+    c3_details, hikes = [], 0
+    for name, key in c3:
+        c = yoy(series(conn, key))
+        if c is None:
+            c3_details.append("%s 数据不足" % name)
+            continue
+        hikes += 1 if c > 50 else 0
+        c3_details.append("%s capex 同比 %+d%%" % (name, round(c)))
+    computable3 = sum(1 for x in c3_details if "数据不足" not in x)
+    if computable3:
+        status = "已验证" if hikes >= 2 else ("验证中" if hikes == 1 else "未验证")
+        apply(conn, theme_id, "C3", status, "；".join(c3_details),
+              "%d/%d 家 capex 同比超 50%%（大幅上修）" % (hikes, computable3))
+
+    # ---- C8 平台 vs 应用增速差：平台营收同比中位数 ≥ 应用侧 → 已验证 ----
+    platforms = [("Meta", "edgar:META:revenue"), ("谷歌", "edgar:GOOGL:revenue"), ("腾讯", "yf:0700.HK:revenue")]
+    apps = [("Palantir", "edgar:PLTR:revenue"), ("Salesforce", "edgar:CRM:revenue")]
+    p_yoys = [yoy(series(conn, k)) for _, k in platforms]
+    a_yoys = [yoy(series(conn, k)) for _, k in apps]
+    p_yoys = [c for c in p_yoys if c is not None]
+    a_yoys = [c for c in a_yoys if c is not None]
+    if p_yoys and a_yoys:
+        pm, am = median_val(p_yoys), median_val(a_yoys)
+        status = "已验证" if pm >= am else ("验证中" if am - pm <= 5 else "反向")
+        apply(conn, theme_id, "C8", status,
+              "平台中位 %+.1f%%（%s）vs 应用中位 %+.1f%%（%s）"
+              % (pm, "/".join("%+d%%" % round(c) for c in p_yoys), am,
+                 "/".join("%+d%%" % round(c) for c in a_yoys)),
+              "平台-应用增速差 %+.1fpp" % (pm - am))
+
+    # ---- C10 应用层毛利率：PLTR/CRM 毛利率同比被压缩 → 归属逻辑成立 ----
+    c10 = [("PLTR", margin_series(conn, "edgar:PLTR:gross_profit", "edgar:PLTR:revenue")),
+           ("CRM", margin_series(conn, "edgar:CRM:gross_profit", "edgar:CRM:revenue"))]
+    c10_details, compressed = [], 0
+    for name, pts in c10:
+        if len(pts) < 5:
+            c10_details.append("%s 数据不足" % name)
+            continue
+        delta = pts[-1][1] - pts[-5][1]  # 同比 pp
+        compressed += 1 if delta < -1 else 0  # 压缩阈值 1pp，排除走平噪声
+        c10_details.append("%s 毛利率 %.1f%%（同比 %+.1fpp）" % (name, pts[-1][1], delta))
+    computable10 = sum(1 for x in c10_details if "数据不足" not in x)
+    if computable10:
+        status = "已验证" if compressed == computable10 else ("验证中" if compressed else "反向")
+        apply(conn, theme_id, "C10", status, "；".join(c10_details),
+              "%d/%d 家毛利率同比压缩" % (compressed, computable10))
+
+    # ---- F4 上游紧张超预期：C1-C3 全反向且 C1 反向持续 ≥12 个月 → 已触发 ----
+    st = {sid: current_status(conn, theme_id, sid) for sid in ("C1", "C2", "C3")}
+    if all(s == "反向" for s in st.values()):
+        row = conn.execute(
+            "SELECT changed_at FROM signal_history WHERE theme_id = ? AND signal_id = 'C1'"
+            " AND new_status = '反向' ORDER BY id DESC LIMIT 1", (theme_id,)).fetchone()
+        if row:
+            anchor = row["changed_at"][:10]
+        else:  # 无变更记录：自基线（最早观测）起就处于反向
+            obs = conn.execute("SELECT MIN(date) AS d FROM observations WHERE theme_id = ?",
+                               (theme_id,)).fetchone()
+            anchor = obs["d"] if obs and obs["d"] else None
+        months = 0
+        if anchor:
+            try:
+                months = (datetime.now() - datetime.strptime(anchor, "%Y-%m-%d")).days // 30
+            except ValueError:
+                pass
+        apply(conn, theme_id, "F4", "已触发" if months >= 12 else "未触发",
+              "C1-C3 全反向，C1 反向已持续约 %d 个月" % months,
+              "全反向且持续 %d 个月（阈值 12）" % months)
+    else:
+        apply(conn, theme_id, "F4", "未触发",
+              "C1=%s C2=%s C3=%s" % (st["C1"], st["C2"], st["C3"]), "C1-C3 未全部反向")
+
 
 def chg_since(pts, days):
     """最新值 vs 约 days 天前最近点的变化率 %（基准点容差 ±max(10, days*20%) 天），无则 None。"""

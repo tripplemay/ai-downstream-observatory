@@ -19,6 +19,14 @@ EDGAR_COMPANIES = [
 ]
 EDGAR_METRIC_NAMES = [("capex", "资本开支(单季)"), ("revenue", "营业收入(单季)"), ("gross_profit", "毛利(单季)")]
 
+# 部分公司在 EDGAR 没有（或已停更）某些 us-gaap 标签，按公司裁剪订阅，避免陈旧/空指标
+EDGAR_METRIC_OVERRIDES = {
+    "AMZN": ("capex", "revenue"),   # 毛利标签停更于 2009（报表格式变更）
+    "GOOGL": ("capex", "revenue"),  # 无毛利标签
+    "META": ("capex", "revenue"),   # 无毛利标签
+    "BABA": ("revenue",),           # capex/毛利均无标签
+}
+
 # yfinance 日线收盘价（近 3 个月，C7 相对强弱用）
 YF_PRICE_TICKERS = [
     ("^SOX", "费城半导体指数 收盘价"),
@@ -38,15 +46,17 @@ YF_FINANCIAL_COMPANIES = [
     ("000660.KS", "SK海力士", True),  # C1/C3
 ]
 
-# EDGAR 10-Q 分部收入（C4 云厂商剪刀差的精确口径）：解析 FilingSummary.xml 定位 R 文件
+# EDGAR 10-Q 分部收入（C4 云厂商剪刀差/C2 算力供需的精确口径）：解析 FilingSummary.xml 定位 R 文件
 EDGAR_SEGMENTS = [
-    # (ticker, CIK, 分部中文名, LongName 正则, 分部标题行, 指标行标签)
-    ("MSFT", 789019, "微软智能云", r"Segment Revenue.*Operating Income \(Detail\)",
+    # (ticker, CIK, 指标后缀, 分部中文名, LongName 正则, 分部标题行, 指标行标签)
+    ("MSFT", 789019, "cloud_revenue", "微软智能云", r"Segment Revenue.*Operating Income \(Detail\)",
      "Intelligent Cloud", "Revenue"),
-    ("GOOGL", 1652044, "谷歌云", r"Revenue by Segment \(Details?\)",
+    ("GOOGL", 1652044, "cloud_revenue", "谷歌云", r"Revenue by Segment \(Details?\)",
      "Google Cloud", "Revenue from contract with customers"),
-    ("AMZN", 1018724, "AWS", r"Reportable Segments and Reconciliation.*\(Details\)",
+    ("AMZN", 1018724, "cloud_revenue", "AWS", r"Reportable Segments and Reconciliation.*\(Details\)",
      "AWS", "Net sales"),
+    ("NVDA", 1045810, "datacenter_revenue", "英伟达数据中心", r"Revenue by Market Platform \(Details?\)",
+     "Data Center", "Revenue"),
 ]
 
 # 主流模型 API 价格监控（C5/F2，OpenRouter 牌价）：档位 × 阵营 二维清单
@@ -74,11 +84,12 @@ MODEL_PRICE_RATIOS = [
 
 def build_metrics():
     rows = []
+    metric_names = dict(EDGAR_METRIC_NAMES)
     for ticker, cik, cname in EDGAR_COMPANIES:
-        for suffix, mname in EDGAR_METRIC_NAMES:
+        for suffix in EDGAR_METRIC_OVERRIDES.get(ticker, tuple(metric_names)):
             rows.append((
                 "edgar:%s:%s" % (ticker, suffix),
-                "%s(%s) %s" % (cname, ticker, mname),
+                "%s(%s) %s" % (cname, ticker, metric_names[suffix]),
                 "USD", "edgar",
                 {"ticker": ticker, "cik": cik, "cname": cname, "metric": suffix},
             ))
@@ -96,10 +107,10 @@ def build_metrics():
         if with_capex:
             rows.append(("yf:%s:capex" % ticker, "%s(%s) 资本开支(单季,现金流口径)" % (cname, ticker),
                          unit, "yf_financials", params))
-    # EDGAR 10-Q 云分部收入（C4 精确口径）
-    for ticker, cik, seg_name, report_re, segment, metric_label in EDGAR_SEGMENTS:
+    # EDGAR 10-Q 分部收入（C4/C2 精确口径）
+    for ticker, cik, suffix, seg_name, report_re, segment, metric_label in EDGAR_SEGMENTS:
         rows.append((
-            "seg:%s:cloud_revenue" % ticker,
+            "seg:%s:%s" % (ticker, suffix),
             "%s 分部收入(单季)" % seg_name,
             "USD(百万)", "edgar_segment",
             {"ticker": ticker, "cik": cik, "report_re": report_re,
