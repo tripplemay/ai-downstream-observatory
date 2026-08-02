@@ -17,7 +17,7 @@ export default async function SignalsPage({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        跟踪 C1–C10 证实信号与 F1–F5 证伪信号；编辑会同步写入 signal_history。
+        跟踪 C1–C11 证实信号与 F1–F5 证伪信号；编辑会同步写入 signal_history。
       </p>
       <SignalsTabs groups={groups} themeId={theme} />
     </div>

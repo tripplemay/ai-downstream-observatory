@@ -156,13 +156,18 @@ def seed_theme(conn, theme):
             (key, label, unit, kind, json.dumps(params, ensure_ascii=False)))
         conn.execute("INSERT OR IGNORE INTO theme_metrics (theme_id, metric_key) VALUES (?,?)", (tid, key))
     count = conn.execute("SELECT COUNT(*) AS c FROM signals WHERE theme_id = ?", (tid,)).fetchone()["c"]
-    if count > 0:
-        return
+    # 信号/pages 逐条 OR IGNORE：已有内容（含用户线上编辑）不被覆盖，新增定义自动下发
     conn.executemany(
-        "INSERT INTO signals (theme_id, id, layer, name, watch, source, trigger_cond, current_value, status, updated_at, note)"
+        "INSERT OR IGNORE INTO signals (theme_id, id, layer, name, watch, source, trigger_cond, current_value, status, updated_at, note)"
         " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         [(tid,) + tuple(s) for s in theme["signals"]],
     )
+    conn.executemany(
+        "INSERT OR IGNORE INTO pages (theme_id, key, content) VALUES (?,?,?)",
+        [(tid, k, v) for k, v in theme.get("pages", {}).items()],
+    )
+    if count > 0:
+        return
     conn.execute(
         "INSERT INTO overview (theme_id, layer1_status, layer1_evidence, layer2_status, layer2_evidence,"
         " layer3_status, layer3_evidence, sentiment, sentiment_evidence, light, conclusion)"
@@ -172,10 +177,6 @@ def seed_theme(conn, theme):
     conn.executemany(
         "INSERT INTO pool (theme_id, name, code, channel, position, note) VALUES (?,?,?,?,?,?)",
         [(tid,) + tuple(p) for p in theme.get("pool", [])],
-    )
-    conn.executemany(
-        "INSERT INTO pages (theme_id, key, content) VALUES (?,?,?)",
-        [(tid, k, v) for k, v in theme.get("pages", {}).items()],
     )
     obs = theme.get("initial_observation")
     if obs:

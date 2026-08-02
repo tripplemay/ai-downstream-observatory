@@ -98,27 +98,65 @@ def get_page(conn, theme_id, key):
 
 
 def run_monthly(conn, conf, theme):
+    """月度核对：轻量 JSON 判定（light/conclusion/action/narrative），消除季度间的信号灯空窗。
+    灯号变化时写观测记录并告警；纪要始终入 ai_reports。"""
     tid = theme["id"]
     data_text = snapshot_summary(conn, tid)
     thesis = get_page(conn, tid, "thesis")
+    rules = get_page(conn, tid, "rules")
+    signals = conn.execute("SELECT id, name, status, current_value FROM signals"
+                           " WHERE theme_id = ? ORDER BY rowid", (tid,)).fetchall()
+    sig_text = "\n".join("%s %s｜%s｜%s" % (s["id"], s["name"], s["status"], s["current_value"])
+                         for s in signals)
     prompt = (
-        "你是投资观测助手。以下是「%s」观测台最新自动抓取的公开数据快照。\n"
-        "该主题的跟踪框架：\n%s\n\n"
-        "请写一段不超过 300 字的中文月度纪要：概括与上述框架相关的最新变化，"
-        "指出哪些信号值得人工进一步核对。只输出纪要正文，不要标题、不要列表。\n\n"
-        "数据快照:\n" % (theme["name"], thesis or "（未填写）") + data_text
-    )
-    text = call_gateway(conf, conf["monthly_model"],
-                        [{"role": "user", "content": prompt}],
-                        max_tokens=conf.get("monthly_max_tokens", 2000)).strip()
+        "你是投资观测助手。「%s」观测台跟踪的判断是：\n%s\n\n【信号灯规则】\n%s\n\n"
+        "【信号当前状态】（部分由规则引擎每日/每月定量判定）\n%s\n\n"
+        "【最近自动抓取的公开数据】\n%s\n\n"
+        "请做月度核对，只输出一个 JSON 对象：\n"
+        '{"light":"red|yellow|green",'
+        '"conclusion":"<一句话当前结论>",'
+        '"action":"<当前灯号下的明确操作建议；无动作则写 继续等待，不操作>",'
+        '"narrative":"<不超过 300 字的中文月度纪要：概括最新变化，指出值得人工核对的信号>"}\n'
+        "信号状态维持概率很高时灯号不要轻易变动；不要输出 JSON 以外的任何文字。"
+    ) % (theme["name"], thesis or "（未填写）", rules, sig_text, data_text)
+    raw = call_gateway(conf, conf["monthly_model"],
+                       [{"role": "user", "content": prompt}], json_mode=True,
+                       max_tokens=conf.get("monthly_max_tokens", 4000))
+    try:
+        start, end = raw.index("{"), raw.rindex("}")
+        result = json.loads(raw[start:end + 1])
+    except (ValueError, json.JSONDecodeError) as ex:
+        fail("monthly", "JSON 解析失败: %s" % ex)
+    light = result.get("light", "")
+    if light not in ("red", "yellow", "green"):
+        fail("monthly", "light 字段非法: %r" % light)
+    narrative = (result.get("narrative") or "").strip()
+    if not narrative:
+        fail("monthly", "narrative 为空")
+    conclusion = (result.get("conclusion") or "").strip() or narrative.replace("\n", " ")[:120]
+    action = (result.get("action") or "").strip()
+
     ts = now_str()
+    run_date = datetime.now().strftime("%Y-%m-%d")
+    old = conn.execute("SELECT light FROM overview WHERE theme_id = ?", (tid,)).fetchone()
+    old_light = old["light"] if old else ""
+    changes = []
     with conn:  # 单事务
         conn.execute(
             "INSERT INTO ai_reports (theme_id, run_date, run_type, light, narrative, created_at)"
             " VALUES (?,?,?,?,?,?)",
-            (tid, datetime.now().strftime("%Y-%m-%d"), "monthly", "", text, ts),
-        )
-    print("[%s] [%s] monthly 纪要已写入 ai_reports（%d 字）" % (ts, tid, len(text)), flush=True)
+            (tid, run_date, "monthly", light, narrative, ts))
+        conn.execute("UPDATE overview SET light = ?, conclusion = ?, action = ? WHERE theme_id = ?",
+                     (light, conclusion, action, tid))
+        if old_light and old_light != light:
+            snap = {s["id"]: s["current_value"] for s in signals}
+            conn.execute(
+                "INSERT INTO observations (theme_id, date, light, snapshot, note, created_at)"
+                " VALUES (?,?,?,?,?,?)",
+                (tid, run_date, light, json.dumps(snap, ensure_ascii=False), "月度核对灯号变化（AI）", ts))
+            changes.append("[%s] 信号灯：%s → %s（%s）" % (tid, old_light, light, conclusion))
+    print("[%s] [%s] monthly 完成: light=%s（%d 字）" % (ts, tid, light, len(narrative)), flush=True)
+    notify.notify_changes("观测台月度核对：%s" % theme["name"], changes)
 
 
 def run_quarterly(conn, conf, theme):
