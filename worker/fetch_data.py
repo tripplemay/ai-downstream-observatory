@@ -371,6 +371,56 @@ def fetch_model_price(conn, now, rows):
     log("模型价格完成，写入 %d 条" % total)
 
 
+def fetch_fund_info(conn, now, rows):
+    """rows: fund_info 类指标行；params = {code, field(nav|scale)}。
+    数据源：天天基金 pingzhongdata（每代码一次请求，解析净值序列与规模变动）。
+    nav → 最新净值；scale → 最新规模（亿元，季度更新）。"""
+    import re
+    by_code = {}
+    for r in rows:
+        p = json.loads(r["params"])
+        by_code.setdefault(p["code"], []).append((r, p))
+    total = 0
+    for code, items in by_code.items():
+        try:
+            req = urllib.request.Request(
+                "http://fund.eastmoney.com/pingzhongdata/%s.js" % code,
+                headers={"User-Agent": "Mozilla/5.0"})
+            js = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", errors="replace")
+            name_m = re.search(r'fS_name\s*=\s*"(.*?)"', js)
+            fund_name = name_m.group(1) if name_m else code
+            for r, p in items:
+                if p["field"] == "nav":
+                    m = re.search(r"Data_netWorthTrend\s*=\s*(\[.*?\]);", js)
+                    if not m:
+                        continue
+                    nw = json.loads(m.group(1))
+                    if not nw:
+                        continue
+                    last = nw[-1]
+                    from datetime import datetime as _dt
+                    day = _dt.utcfromtimestamp(last["x"] / 1000).strftime("%Y-%m-%d")
+                    label = "%s(%s) 净值" % (fund_name, code)
+                    upsert(conn, r["metric_key"], label, day, float(last["y"]),
+                           r["unit"], "天天基金", now)
+                    total += 1
+                elif p["field"] == "scale":
+                    m = re.search(r"Data_fluctuationScale\s*=\s*(\{.*?\});", js)
+                    if not m:
+                        continue
+                    fs = json.loads(m.group(1))
+                    cats, ser = fs.get("categories") or [], fs.get("series") or []
+                    if not cats or not ser:
+                        continue
+                    label = "%s(%s) 规模" % (fund_name, code)
+                    upsert(conn, r["metric_key"], label, cats[-1], float(ser[-1]["y"]),
+                           r["unit"], "天天基金", now)
+                    total += 1
+        except Exception as ex:
+            log("基金 %s 数据失败(跳过): %s" % (code, ex))
+    log("基金净值/规模完成，写入 %d 条" % total)
+
+
 def fetch_twse_monthly(conn, now, rows):
     """rows: twse_monthly 类指标行；params = {code, cname}。TWSE OpenAPI 上市公司每月营收。"""
     try:
@@ -407,6 +457,7 @@ FETCHERS = {
     "yf_financials": fetch_yf_financials,
     "twse_monthly": fetch_twse_monthly,
     "model_price": fetch_model_price,
+    "fund_info": fetch_fund_info,
 }
 
 

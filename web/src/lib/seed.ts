@@ -87,7 +87,8 @@ CREATE TABLE IF NOT EXISTS pool (
     code TEXT DEFAULT '',
     channel TEXT DEFAULT '',
     position TEXT DEFAULT '',
-    note TEXT DEFAULT ''
+    note TEXT DEFAULT '',
+    health TEXT DEFAULT '正常'
 );
 CREATE TABLE IF NOT EXISTS pages (
     theme_id TEXT NOT NULL,

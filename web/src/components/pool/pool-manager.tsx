@@ -58,6 +58,7 @@ export function PoolManager({ items, themeId }: { items: PoolItem[]; themeId: st
               <TableHead>代码</TableHead>
               <TableHead className="hidden md:table-cell">渠道</TableHead>
               <TableHead className="hidden md:table-cell">定位</TableHead>
+              <TableHead className="hidden md:table-cell">健康</TableHead>
               <TableHead className="hidden md:table-cell">备注</TableHead>
               <TableHead className="w-28"></TableHead>
             </TableRow>
@@ -69,6 +70,13 @@ export function PoolManager({ items, themeId }: { items: PoolItem[]; themeId: st
                 <TableCell className="text-xs">{item.code || "—"}</TableCell>
                 <TableCell className="hidden text-xs md:table-cell">{item.channel || "—"}</TableCell>
                 <TableCell className="hidden text-xs md:table-cell">{item.position || "—"}</TableCell>
+                <TableCell className="hidden text-xs md:table-cell">
+                  {item.health && item.health !== "正常" ? (
+                    <span className="text-amber-600 dark:text-amber-400">{item.health}</span>
+                  ) : (
+                    <span className="text-muted-foreground">正常</span>
+                  )}
+                </TableCell>
                 <TableCell className="hidden max-w-56 md:table-cell">
                   <span className="line-clamp-2 text-xs text-muted-foreground">{item.note || "—"}</span>
                 </TableCell>

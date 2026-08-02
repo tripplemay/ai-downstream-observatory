@@ -27,7 +27,7 @@ EDGAR_METRIC_OVERRIDES = {
     "BABA": ("revenue",),           # capex/毛利均无标签
 }
 
-# yfinance 日线收盘价（近 3 个月，C7 相对强弱用）
+# yfinance 日线收盘价（近 3 个月，C7 相对强弱 + 标的池溢价监控用）
 YF_PRICE_TICKERS = [
     ("^SOX", "费城半导体指数 收盘价"),
     ("MU", "美光(MU) 收盘价"),
@@ -36,7 +36,24 @@ YF_PRICE_TICKERS = [
     ("159852.SZ", "软件ETF(159852) 收盘价"),
     ("159516.SZ", "半导体材料设备ETF(159516) 收盘价"),
     ("588200.SS", "科创芯片ETF(588200) 收盘价"),
+    ("513100.SS", "纳指100ETF(513100) 收盘价"),
+    ("513500.SS", "标普500ETF(513500) 收盘价"),
+    ("513180.SS", "恒生科技ETF(513180) 收盘价"),
+    ("513330.SS", "恒生互联网ETF(513330) 收盘价"),
 ]
+
+# 标的池体检配置：代码 -> 检查项与阈值
+# premium: QDII 场内溢价预警阈值 %（价格为估算口径，净值滞后 1-2 天）；
+# scale: 基金规模预警阈值（亿元）；511880 货基为等待期停泊，不体检
+POOL_HEALTH = {
+    "513050": {"premium": 5.0, "scale": 2.0},
+    "159509": {"premium": 5.0, "scale": 2.0},
+    "513100": {"premium": 5.0, "scale": 2.0},
+    "513500": {"premium": 5.0, "scale": 2.0},
+    "513180": {"premium": 5.0, "scale": 2.0},
+    "513330": {"premium": 5.0, "scale": 2.0},
+    "009225": {"scale": 1.0},  # 场外基金无溢价检查；规模小，阈值更宽
+}
 
 # yfinance 季度财报（EDGAR 覆盖不到的公司）：(ticker, cname, 是否取 capex)
 # capex 在现金流量表（quarterly_cashflow 的 Capital Expenditure 行，负值，入库取绝对值）
@@ -133,6 +150,13 @@ def build_metrics():
             "倍", "model_price",
             {"ratio": True, "tier": tier},
         ))
+    # 标的池体检：基金净值（QDII 溢价的 NAV 基准）+ 基金规模
+    for code, checks in POOL_HEALTH.items():
+        rows.append(("nav:%s" % code, "基金(%s) 净值" % code, "local_ccy", "fund_info",
+                     {"code": code, "field": "nav"}))
+        if "scale" in checks:
+            rows.append(("scale:%s" % code, "基金(%s) 规模" % code, "亿元", "fund_info",
+                         {"code": code, "field": "scale"}))
     return rows
 
 

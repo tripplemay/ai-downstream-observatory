@@ -12,7 +12,7 @@ TYPE="${1:-monthly}"
   echo "===== $(date '+%Y-%m-%d %H:%M:%S') run_job $TYPE ====="
   RC=0
   if [ "$TYPE" = "daily" ]; then
-    python worker/fetch_data.py --only yf_price,model_price || RC=$?
+    python worker/fetch_data.py --only yf_price,model_price,fund_info || RC=$?
     python worker/rules.py || RC=$?
   elif [ "$TYPE" = "monthly" ] || [ "$TYPE" = "quarterly" ]; then
     python worker/fetch_data.py || RC=$?

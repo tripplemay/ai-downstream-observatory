@@ -56,6 +56,7 @@ export interface PoolItem {
   channel: string;
   position: string;
   note: string;
+  health: string;
 }
 
 export interface AiReport {

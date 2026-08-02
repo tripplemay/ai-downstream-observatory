@@ -186,6 +186,10 @@ def run_quarterly(conn, conf, theme):
         '涉及标的池中的具体标的、执行节奏；无动作则写 继续等待，不操作>",'
         '"signal_updates":[{"code":"C4","status":"<合法状态值>","current_value":"<简短当前值>","reason":"<依据>"}...],'
         '"manual_checklist":["<需要人工核实的事项>"...],'
+        '"pool_review":"<标的池复核：逐个评估现有标的是否仍符合主题（持仓纯度/规模/溢价/流动性），'
+        '指出需要关注的标的；无问题写 无异常>",'
+        '"pool_candidates":["<新发现的候选标的：名称+代码+纳入理由（如纯度更高的平台ETF、'
+        '新成立的 AI 应用ETF）；无则空数组>"...],'
         '"narrative":"<完整中文 Markdown 分析，含各层判断各自的论证>"}\n'
         "说明：部分信号（如 C4/C7/F1）已由规则引擎按定量规则先行判定，请复核其判定是否合理，"
         "不合理才改；只更新证据有实质变化的信号，无把握的不要改；不要输出 JSON 以外的任何文字。"
@@ -204,6 +208,8 @@ def run_quarterly(conn, conf, theme):
         fail("quarterly", "light 字段非法: %r" % light)
     updates = result.get("signal_updates") or []
     checklist = result.get("manual_checklist") or []
+    pool_review = (result.get("pool_review") or "").strip()
+    pool_candidates = [str(c).strip() for c in (result.get("pool_candidates") or []) if str(c).strip()]
     narrative = (result.get("narrative") or "").strip()
     conclusion = (result.get("conclusion") or "").strip() or narrative.replace("\n", " ")[:120]
     action = (result.get("action") or "").strip()
@@ -232,6 +238,10 @@ def run_quarterly(conn, conf, theme):
     full_narrative = narrative
     if action:
         full_narrative += "\n\n## 操作建议\n" + action
+    if pool_review:
+        full_narrative += "\n\n## 标的池复核\n" + pool_review
+    if pool_candidates:
+        full_narrative += "\n\n## 新标的候选\n" + "\n".join("- " + c for c in pool_candidates)
     if checklist:
         full_narrative += "\n\n## 人工核对清单\n" + "\n".join("- " + str(c) for c in checklist)
     old_overview = conn.execute("SELECT light FROM overview WHERE theme_id = ?", (tid,)).fetchone()

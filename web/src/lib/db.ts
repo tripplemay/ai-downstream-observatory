@@ -20,6 +20,7 @@ export function getDb(): Database.Database {
     db.pragma("journal_mode = WAL");
     db.exec(SCHEMA);
     ensureColumn(db, "overview", "action", "action TEXT DEFAULT ''");
+    ensureColumn(db, "pool", "health", "health TEXT DEFAULT '正常'");
     seedIfEmpty(db);
     globalThis.__obsDb = db;
   }

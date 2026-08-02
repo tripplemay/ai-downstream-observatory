@@ -100,7 +100,8 @@ CREATE TABLE IF NOT EXISTS pool (
     code TEXT DEFAULT '',
     channel TEXT DEFAULT '',
     position TEXT DEFAULT '',
-    note TEXT DEFAULT ''
+    note TEXT DEFAULT '',
+    health TEXT DEFAULT '正常'
 );
 CREATE TABLE IF NOT EXISTS pages (
     theme_id TEXT NOT NULL,
@@ -203,6 +204,7 @@ def init_db():
     try:
         conn.executescript(SCHEMA)
         ensure_column(conn, "overview", "action", "action TEXT DEFAULT ''")
+        ensure_column(conn, "pool", "health", "health TEXT DEFAULT '正常'")
         if BASE_DIR not in sys.path:
             sys.path.insert(0, BASE_DIR)
         from worker.themes import ALL_THEMES

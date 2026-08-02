@@ -158,6 +158,9 @@ def eval_ai_downstream(conn, theme_id):
     # ---- C1/C2/C3/C8/C10/F4 基本面定量信号 ----
     eval_fundamentals(conn, theme_id)
 
+    # ---- 标的池体检（溢价/规模）----
+    eval_pool_health(conn, theme_id)
+
 
 def margin_series(conn, gross_key, rev_key):
     """毛利率序列：[(period_date, 毛利率%)]，按同一 period_date 配对。"""
@@ -289,6 +292,36 @@ def eval_fundamentals(conn, theme_id):
     else:
         apply(conn, theme_id, "F4", "未触发",
               "C1=%s C2=%s C3=%s" % (st["C1"], st["C2"], st["C3"]), "C1-C3 未全部反向")
+
+
+def eval_pool_health(conn, theme_id):
+    """标的池体检：QDII 溢价（价格 vs 净值，估算口径）+ 基金规模。
+    结果写入 pool.health（正常/预警：…），状态翻转时告警。阈值在主题文件 POOL_HEALTH。"""
+    from worker.themes.ai_downstream import POOL_HEALTH
+    for code, checks in POOL_HEALTH.items():
+        problems = []
+        if "premium" in checks:
+            suffix = ".SZ" if code.startswith("15") else ".SS"
+            px, nav = series(conn, "px:%s%s" % (code, suffix)), series(conn, "nav:%s" % code)
+            if px and nav and nav[-1][1]:
+                premium = (px[-1][1] / nav[-1][1] - 1) * 100
+                if premium > checks["premium"]:
+                    problems.append("溢价 +%.1f%%（估算，净值滞后）" % premium)
+        if "scale" in checks:
+            s = series(conn, "scale:%s" % code)
+            if s and s[-1][1] < checks["scale"]:
+                problems.append("规模 %.1f 亿（低于 %.0f 亿）" % (s[-1][1], checks["scale"]))
+        health = "正常" if not problems else "预警：" + "、".join(problems)
+        row = conn.execute(
+            "SELECT id, name, health FROM pool WHERE theme_id = ? AND code LIKE ?",
+            (theme_id, code + "%")).fetchone()
+        if row is None:
+            continue
+        if (row["health"] or "正常") != health:
+            conn.execute("UPDATE pool SET health = ? WHERE id = ?", (health, row["id"]))
+            direction = "出现预警" if health != "正常" else "恢复正常"
+            CHANGES.append("[%s] 标的 %s（%s）%s：%s" % (theme_id, row["name"], code, direction, health))
+            log("[%s] 标的 %s %s → %s" % (theme_id, code, row["health"] or "正常", health))
 
 
 def chg_since(pts, days):
