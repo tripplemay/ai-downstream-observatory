@@ -44,15 +44,24 @@ YF_PRICE_TICKERS = [
 
 # 标的池体检配置：代码 -> 检查项与阈值
 # premium: QDII 场内溢价预警阈值 %（价格为估算口径，净值滞后 1-2 天）；
-# scale: 基金规模预警阈值（亿元）；511880 货基为等待期停泊，不体检
+# scale: 基金规模预警阈值（亿元）；
+# anchors + purity_floor: thesis 相关持仓（名称关键词）占净值比例下限 %（top10 口径，
+#   按 2026Q2 实际持仓留约 8-10pp 缓冲设定，覆盖指数权重正常波动）；511880 货基为等待期停泊，不体检
 POOL_HEALTH = {
-    "513050": {"premium": 5.0, "scale": 2.0},
-    "159509": {"premium": 5.0, "scale": 2.0},
-    "513100": {"premium": 5.0, "scale": 2.0},
-    "513500": {"premium": 5.0, "scale": 2.0},
-    "513180": {"premium": 5.0, "scale": 2.0},
-    "513330": {"premium": 5.0, "scale": 2.0},
-    "009225": {"scale": 1.0},  # 场外基金无溢价检查；规模小，阈值更宽
+    "513050": {"premium": 5.0, "scale": 2.0,
+               "anchors": ["腾讯", "阿里"], "purity_floor": 45.0},      # 现值 57.1%
+    "159509": {"premium": 5.0, "scale": 2.0,
+               "anchors": ["微软", "谷歌", "亚马逊", "Meta"], "purity_floor": 18.0},  # 现值 27.8%
+    "513100": {"premium": 5.0, "scale": 2.0,
+               "anchors": ["微软", "谷歌", "亚马逊", "Meta"], "purity_floor": 7.0},   # 现值 13.3%
+    "513500": {"premium": 5.0, "scale": 2.0,
+               "anchors": ["微软", "谷歌", "亚马逊", "Meta"], "purity_floor": 8.0},   # 现值 ~15%
+    "513180": {"premium": 5.0, "scale": 2.0,
+               "anchors": ["腾讯", "阿里"], "purity_floor": 8.0},       # 现值 16.3%
+    "513330": {"premium": 5.0, "scale": 2.0,
+               "anchors": ["腾讯", "阿里"], "purity_floor": 18.0},      # 现值 28.5%
+    "009225": {"scale": 1.0,
+               "anchors": ["腾讯", "阿里", "亚马逊", "Meta", "谷歌"], "purity_floor": 35.0},  # 现值 47.2%
 }
 
 # yfinance 季度财报（EDGAR 覆盖不到的公司）：(ticker, cname, 是否取 capex)
@@ -150,13 +159,16 @@ def build_metrics():
             "倍", "model_price",
             {"ratio": True, "tier": tier},
         ))
-    # 标的池体检：基金净值（QDII 溢价的 NAV 基准）+ 基金规模
+    # 标的池体检：基金净值（QDII 溢价的 NAV 基准）+ 基金规模 + 持仓纯度
     for code, checks in POOL_HEALTH.items():
         rows.append(("nav:%s" % code, "基金(%s) 净值" % code, "local_ccy", "fund_info",
                      {"code": code, "field": "nav"}))
         if "scale" in checks:
             rows.append(("scale:%s" % code, "基金(%s) 规模" % code, "亿元", "fund_info",
                          {"code": code, "field": "scale"}))
+        if "anchors" in checks:
+            rows.append(("purity:%s" % code, "基金(%s) thesis纯度(top10)" % code, "%",
+                         "fund_holdings", {"code": code, "anchors": checks["anchors"]}))
     return rows
 
 

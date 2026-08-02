@@ -421,6 +421,77 @@ def fetch_fund_info(conn, now, rows):
     log("基金净值/规模完成，写入 %d 条" % total)
 
 
+def fetch_fund_holdings(conn, now, rows):
+    """rows: fund_holdings 类指标行；params = {code, anchors:[名称关键词]}。
+    天天基金 FundArchivesDatas(jjcc) 抓最新季度 top10 持仓，计算锚定持仓占净值比例合计（纯度）。
+    接口要求 Referer 头；季度披露，月频抓取即可。"""
+    import re
+    total = 0
+    for r in rows:
+        p = json.loads(r["params"])
+        code, anchors = p["code"], p["anchors"]
+        html = None
+        for attempt in range(3):  # 东财偶发限流：重试 + 退避
+            try:
+                for year in (datetime.now().year, datetime.now().year - 1):
+                    url = ("https://fundf10.eastmoney.com/FundArchivesDatas.aspx"
+                           "?type=jjcc&code=%s&topline=10&year=%d&month=&rt=0.5" % (code, year))
+                    req = urllib.request.Request(url, headers={
+                        "User-Agent": "Mozilla/5.0",
+                        "Referer": "https://fundf10.eastmoney.com/ccmx_%s.html" % code})
+                    raw = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", errors="replace")
+                    m = re.search(r'content:"((?:[^"\\]|\\.)*)"', raw, re.S)
+                    if m and "股票投资明细" in m.group(1):
+                        html = m.group(1).replace('\\"', '"').replace("\\/", "/")
+                        break
+                break
+            except Exception as ex:
+                if attempt == 2:
+                    log("持仓 %s 失败(跳过): %s" % (code, ex))
+                time.sleep(3 * (attempt + 1))
+        if html is None:
+            continue
+        try:
+            blocks = re.split(r"\d{4}年\d季度股票投资明细", html)
+            qm = re.search(r"(\d{4})年(\d)季度", html)
+            quarter_end = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}
+            period = "%s-%s" % (qm.group(1), quarter_end[int(qm.group(2))]) if qm else None
+            # 列位置随年份不同（当年表多"最新价/涨跌幅"列），从表头定位"占净值比例"
+            head_m = re.search(r"<thead>(.*?)</thead>", blocks[1], re.S)
+            headers = [re.sub(r"<[^>]+>", "", c).strip()
+                       for c in re.findall(r"<th[^>]*>(.*?)</th>", head_m.group(1), re.S)] if head_m else []
+            try:
+                pct_col = headers.index("占净值比例")
+            except ValueError:
+                log("持仓 %s: 表头找不到占净值比例列（%s）" % (code, headers))
+                continue
+            purity = 0.0
+            matched = []
+            for row in re.findall(r"<tr>(.*?)</tr>", blocks[1], re.S):
+                cells = [re.sub(r"<[^>]+>", "", c).strip()
+                         for c in re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)]
+                if len(cells) > pct_col and cells[0].isdigit():
+                    try:
+                        pct = float(cells[pct_col].replace("%", ""))
+                    except ValueError:
+                        continue
+                    if any(a in cells[2] for a in anchors):
+                        purity += pct
+                        matched.append("%s %.1f%%" % (cells[2], pct))
+            if period is None or purity == 0.0:
+                # 0% 几乎必是解析问题而非真实漂移，宁可本轮不写也不污染序列
+                log("持仓 %s 数据异常（period=%s, purity=%.1f），本轮跳过" % (code, period, purity))
+                continue
+            upsert(conn, r["metric_key"], r["label"], period, round(purity, 2),
+                   r["unit"], "天天基金", now)
+            total += 1
+            log("持仓 %s 纯度 %.1f%%（%s）" % (code, purity, "、".join(matched[:4])))
+        except Exception as ex:
+            log("持仓 %s 解析失败(跳过): %s" % (code, ex))
+        time.sleep(0.5)
+    log("持仓纯度完成，写入 %d 条" % total)
+
+
 def fetch_twse_monthly(conn, now, rows):
     """rows: twse_monthly 类指标行；params = {code, cname}。TWSE OpenAPI 上市公司每月营收。"""
     try:
@@ -458,6 +529,7 @@ FETCHERS = {
     "twse_monthly": fetch_twse_monthly,
     "model_price": fetch_model_price,
     "fund_info": fetch_fund_info,
+    "fund_holdings": fetch_fund_holdings,
 }
 
 

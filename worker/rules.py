@@ -311,6 +311,11 @@ def eval_pool_health(conn, theme_id):
             s = series(conn, "scale:%s" % code)
             if s and s[-1][1] < checks["scale"]:
                 problems.append("规模 %.1f 亿（低于 %.0f 亿）" % (s[-1][1], checks["scale"]))
+        if "purity_floor" in checks:
+            s = series(conn, "purity:%s" % code)
+            if s and s[-1][1] < checks["purity_floor"]:
+                problems.append("thesis纯度 %.1f%%（锚定 %.0f%%，%s）"
+                                % (s[-1][1], checks["purity_floor"], s[-1][0]))
         health = "正常" if not problems else "预警：" + "、".join(problems)
         row = conn.execute(
             "SELECT id, name, health FROM pool WHERE theme_id = ? AND code LIKE ?",
