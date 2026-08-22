@@ -1,16 +1,45 @@
 # -*- coding: utf-8 -*-
-"""宇宙历史价格一次性回填：yfinance 5 年日线（auto_adjust=False，与 clist 日频口径一致），
-写入 snapshots 的 px:{code}。幂等可重跑；带重试退避。
-用法: python worker/backfill_etf_prices.py [--limit N] [--sleep 0.3]"""
+"""宇宙历史价格一次性回填：东财 kline 接口（前复权日线，单请求全历史），
+写入 snapshots 的 px:{code}（先清后写，覆盖旧来源数据，保证复权口径一致）。
+幂等可重跑；带重试退避。
+用法: python worker/backfill_etf_prices.py [--limit N] [--sleep 0.3] [--codes a.SS,b.SZ]"""
 import argparse
+import json
 import os
 import sys
 import time
+import urllib.request
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import db  # noqa: E402
 from worker.fetch_data import upsert, log  # noqa: E402
+
+UA = "Mozilla/5.0"
+
+
+def fetch_kline(code):
+    """东财日 k（前复权）：code 形如 512800.SS / 159995.SZ。返回 [(date, close)]。"""
+    secid = ("1." if code.endswith(".SS") else "0.") + code.split(".")[0]
+    url = ("https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=%s"
+           "&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f53&klt=101&fqt=1"
+           "&beg=20200101&end=20500101" % secid)
+    for host in ("https://push2his.eastmoney.com", "https://push2hisdelay.eastmoney.com"):
+        try:
+            req = urllib.request.Request(url.replace("push2his.eastmoney.com", host.split("//")[1]),
+                                         headers={"User-Agent": UA})
+            data = json.loads(urllib.request.urlopen(req, timeout=20).read().decode("utf-8"))
+            klines = (data.get("data") or {}).get("klines") or []
+            out = []
+            for line in klines:
+                parts = line.split(",")
+                if len(parts) >= 2 and parts[1] not in ("", "-"):
+                    out.append((parts[0], float(parts[1])))
+            if out:
+                return out
+        except Exception:
+            continue
+    return None
 
 
 def main():
@@ -19,17 +48,14 @@ def main():
     ap.add_argument("--sleep", type=float, default=0.3)
     ap.add_argument("--codes", help="只回填指定代码（逗号分隔，如 510300.SS,512880.SS）")
     args = ap.parse_args()
-    import yfinance as yf
     db.init_db()
     conn = db.get_db()
     try:
         if args.codes:
             todo = args.codes.split(",")
-            codes = todo
         else:
             codes = [r["code"] for r in conn.execute(
                 "SELECT code FROM etf_universe WHERE active = 1 ORDER BY code").fetchall()]
-            # 跳过已有足够历史的（可重跑续传）
             todo = []
             for c in codes:
                 n = conn.execute("SELECT COUNT(*) AS c FROM snapshots WHERE metric_key = ?",
@@ -38,28 +64,22 @@ def main():
                     todo.append(c)
             if args.limit:
                 todo = todo[:args.limit]
-        log("回填计划：%d 只（宇宙 active %d 只）" % (len(todo), len(codes)))
+        log("回填计划：%d 只" % len(todo))
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         done = 0
         for code in todo:
             try:
-                hist = yf.Ticker(code).history(period="5y", auto_adjust=False)
-                if hist is None or hist.empty:
+                pts = fetch_kline(code)
+                if not pts:
                     log("%s 无数据" % code)
                     continue
                 key = "px:" + code
-                conn.execute("DELETE FROM snapshots WHERE metric_key = ? AND source = 'yfinance-5y'", (key,))
-                n = 0
-                for idx, row in hist.iterrows():
-                    close = row.get("Close")
-                    if close is None or close != close:
-                        continue
-                    upsert(conn, key, code, idx.strftime("%Y-%m-%d"),
-                           round(float(close), 4), "local_ccy", "yfinance-5y", now)
-                    n += 1
+                conn.execute("DELETE FROM snapshots WHERE metric_key = ?", (key,))
+                for d, close in pts:
+                    upsert(conn, key, code, d, round(close, 4), "local_ccy", "东财kline前复权", now)
                 conn.commit()
                 done += 1
-                if done % 50 == 0:
+                if done % 100 == 0:
                     log("回填进度 %d/%d" % (done, len(todo)))
                 time.sleep(args.sleep)
             except Exception as ex:
