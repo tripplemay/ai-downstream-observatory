@@ -18,6 +18,7 @@ export function getDb(): Database.Database {
     fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
     const db = new Database(DB_PATH);
     db.pragma("journal_mode = WAL");
+    db.pragma("busy_timeout = 30000"); // 与 worker 并发写时等待而非立即报错
     db.exec(SCHEMA);
     ensureColumn(db, "overview", "action", "action TEXT DEFAULT ''");
     ensureColumn(db, "pool", "health", "health TEXT DEFAULT '正常'");

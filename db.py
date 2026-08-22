@@ -153,8 +153,9 @@ CREATE TABLE IF NOT EXISTS advice (
 
 def get_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")  # 多进程并发写时等待而非立即报错
     return conn
 
 
