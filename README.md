@@ -2,7 +2,8 @@
 
 多主题的投资信号观测工作台：每个主题以一套判断框架（thesis）为前提，持续跟踪证实/证伪信号，
 由 AI 定时自动拉取公开数据、更新信号状态、生成分析报告，辅助长期建仓决策。
-当前主题：AI 下游应用（AI 下游应用终将产生利润、利润归属平台；C1–C10 / F1–F5）。
+当前主题：AI 下游应用（AI 下游应用终将产生利润、利润归属平台；C1–C11 / F1–F5）、
+全行业 ETF 轮动（规则驱动：全市场权益 ETF 监测 + 20 日动量/200 日线轮动建议）。
 
 > 个人研究工具，所有内容不构成投资建议。
 
@@ -17,6 +18,9 @@
 - **邮件告警**：灯号变化、信号状态变化时推送（`config/alerts.json`，参考 `config/alerts.example.json`）
 - **观测记录 / 判断与规则 / 标的池**：全在线编辑
 - **标的池体检**：QDII 溢价、基金规模、持仓纯度（主题相关持仓占比）自动监控，预警邮件；季度 AI 复核纯度并扫描新标的候选
+- **全行业 ETF 轮动**（etf-universe 主题）：约 800 只权益 ETF 每日监测（动量/均线/估值分位/规模），
+  轮动建议（MOM20 + MA200 过滤前 3 等权、月末调仓、回测验证）留痕并跟踪建议净值，
+  每周六 AI 行业周报；监测与建议页在主题内「监测」「建议」
 
 ## 架构
 
@@ -75,11 +79,12 @@ VPS 上无 .venv 时可先在本地按同版本代码迁移好库文件再上传
 
 ## 定时任务
 
-- 容器内 `worker/scheduler.py`：每日 16:35 行情采集 + 规则引擎（daily）；每月 11 日月度快照；
-  2/5/8/11 月 15 日季度核对
-- 手动执行：`./jobs/run_job.sh daily|monthly|quarterly`，日志 `data/jobs.log`
+- 容器内 `worker/scheduler.py`：每日 16:35 日频采集 + 规则引擎（daily）；每周六 10:05 估值采集 +
+  全行业周报（weekly）；每月 11 日月度快照；2/5/8/11 月 15 日季度核对
+- 手动执行：`./jobs/run_job.sh daily|weekly|monthly|quarterly`，日志 `data/jobs.log`
 - 邮件告警：复制 `config/alerts.example.json` 为 `config/alerts.json` 填入 SMTP 信息并置
   `enabled: true`（已 gitignore）；`python worker/notify.py --test` 验证
+- 宇宙价格历史回填（首次部署或新增大量标的时）：`python worker/backfill_etf_prices.py`（幂等续传）
 
 ## CI/CD
 
