@@ -19,27 +19,29 @@ UA = "Mozilla/5.0"
 
 
 def fetch_kline(code):
-    """东财日 k（前复权）：code 形如 512800.SS / 159995.SZ。返回 [(date, close)]。"""
-    secid = ("1." if code.endswith(".SS") else "0.") + code.split(".")[0]
-    url = ("https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=%s"
-           "&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f53&klt=101&fqt=1"
-           "&beg=20200101&end=20500101" % secid)
-    for host in ("https://push2his.eastmoney.com", "https://push2hisdelay.eastmoney.com"):
+    """腾讯 ifzq 日 k（前复权）：code 形如 512800.SS / 159995.SZ。返回 [(date, close)]，升序。
+    单页最多 800 根，向前翻页直到 2020 年或取尽。"""
+    symbol = ("sh" if code.endswith(".SS") else "sz") + code.split(".")[0]
+    out = []
+    end = "2050-01-01"
+    for _ in range(3):  # 3 页 × 800 ≈ 2400 个交易日 ≈ 9.8 年
+        url = ("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+               "?param=%s,day,2020-01-01,%s,800,qfq" % (symbol, end))
         try:
-            req = urllib.request.Request(url.replace("push2his.eastmoney.com", host.split("//")[1]),
-                                         headers={"User-Agent": UA})
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
             data = json.loads(urllib.request.urlopen(req, timeout=20).read().decode("utf-8"))
-            klines = (data.get("data") or {}).get("klines") or []
-            out = []
-            for line in klines:
-                parts = line.split(",")
-                if len(parts) >= 2 and parts[1] not in ("", "-"):
-                    out.append((parts[0], float(parts[1])))
-            if out:
-                return out
+            d = (data.get("data") or {}).get(symbol) or {}
+            rows = d.get("qfqday") or d.get("day") or []
         except Exception:
-            continue
-    return None
+            rows = []
+        if not rows:
+            break
+        page = [(r[0], float(r[2])) for r in rows if len(r) >= 3 and r[2] not in ("", "-")]
+        out = page + out
+        if len(rows) < 800:
+            break
+        end = rows[0][0]  # 向更早翻页
+    return out or None
 
 
 def main():
@@ -76,7 +78,7 @@ def main():
                 key = "px:" + code
                 conn.execute("DELETE FROM snapshots WHERE metric_key = ?", (key,))
                 for d, close in pts:
-                    upsert(conn, key, code, d, round(close, 4), "local_ccy", "东财kline前复权", now)
+                    upsert(conn, key, code, d, round(close, 4), "local_ccy", "腾讯kline前复权", now)
                 conn.commit()
                 done += 1
                 if done % 100 == 0:
