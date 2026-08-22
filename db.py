@@ -128,6 +128,26 @@ CREATE TABLE IF NOT EXISTS ai_reports (
     narrative TEXT DEFAULT '',
     created_at TEXT NOT NULL
 );
+-- 全行业 ETF 宇宙（数据层，主题无感知）：每日从东财刷新，active=流动性过滤结果
+CREATE TABLE IF NOT EXISTS etf_universe (
+    code TEXT PRIMARY KEY,
+    name TEXT DEFAULT '',
+    cat TEXT DEFAULT '',
+    turnover REAL,
+    mktcap REAL,
+    active INTEGER DEFAULT 1,
+    index_code TEXT DEFAULT '',
+    index_name TEXT DEFAULT '',
+    updated_at TEXT DEFAULT ''
+);
+-- 轮动建议留痕：basket_json = [{"code","name","weight"}...]，空仓为 []
+CREATE TABLE IF NOT EXISTS advice (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,
+    basket_json TEXT NOT NULL,
+    reason TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -170,7 +190,7 @@ def seed_theme(conn, theme):
     if count > 0:
         return
     conn.execute(
-        "INSERT INTO overview (theme_id, layer1_status, layer1_evidence, layer2_status, layer2_evidence,"
+        "INSERT OR IGNORE INTO overview (theme_id, layer1_status, layer1_evidence, layer2_status, layer2_evidence,"
         " layer3_status, layer3_evidence, sentiment, sentiment_evidence, light, conclusion)"
         " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (tid,) + tuple(theme["overview"]),

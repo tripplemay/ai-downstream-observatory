@@ -8,6 +8,7 @@
 
 用法: python worker/rules.py [--theme <slug>]，退出码恒为 0（数据库错误除外）。"""
 import argparse
+import json
 import os
 import sys
 from datetime import datetime, timedelta
@@ -329,6 +330,120 @@ def eval_pool_health(conn, theme_id):
             log("[%s] 标的 %s %s → %s" % (theme_id, code, row["health"] or "正常", health))
 
 
+def _ma(pts, n):
+    if len(pts) < n:
+        return None
+    return sum(v for _, v in pts[-n:]) / n
+
+
+def eval_universe(conn):
+    """全行业 ETF 轮动：MOM20 + MA200 过滤，月末调仓；建议留痕 + 建议净值跟踪。
+
+    - 建议组合：20 日动量前 3 且收盘价 > 200 日均线，等权（不足 3 只则空余为现金）；
+    - 跨月时若组合变化则写 advice 记录（触发邮件）；月中成员跌破 MA200 → 预警不换仓；
+    - 建议净值 adv:nav / 基准 bm:nav（沪深300ETF）每日续算；
+    - 指数 PE 5 年分位写入 pe_pct:{index}（供 Web 展示与周报引用）。
+    """
+    codes = conn.execute("SELECT code, name FROM etf_universe WHERE active = 1").fetchall()
+    latest_day = conn.execute("SELECT MAX(period_date) AS d FROM snapshots WHERE metric_key LIKE 'px:%'"
+                              ).fetchone()["d"]
+    if not latest_day:
+        return
+    ranked = []
+    px_cache = {}
+    for r in codes:
+        pts = series(conn, "px:" + r["code"])
+        if len(pts) < 21 or pts[-1][0] != latest_day:
+            continue  # 停牌/无当日数据的跳过
+        px_cache[r["code"]] = pts
+        mom20 = pts[-1][1] / pts[-21][1] - 1
+        ma200 = _ma(pts, 200)
+        ranked.append({"code": r["code"], "name": r["name"], "mom20": mom20,
+                       "above": ma200 is not None and pts[-1][1] > ma200})
+    if not ranked:
+        return
+    ranked.sort(key=lambda x: -x["mom20"])
+    basket = [x for x in ranked if x["above"]][:3]
+
+    # ---- 建议留痕：月初首个评估日对比当前持仓 ----
+    last_adv = conn.execute("SELECT * FROM advice ORDER BY id DESC LIMIT 1").fetchone()
+    cur_basket = json.loads(last_adv["basket_json"]) if last_adv else []
+    cur_codes = [b["code"] for b in cur_basket]
+    new_codes = [b["code"] for b in basket]
+    month_changed = (not last_adv) or last_adv["date"][:7] != latest_day[:7]
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if not last_adv:
+        reason = "初始化建仓信号"
+        changed = True
+    elif month_changed and new_codes != cur_codes:
+        reason = "月末调仓：20日动量前3且站上200日线"
+        changed = True
+    else:
+        changed = False
+    if changed:
+        new_basket_json = json.dumps(
+            [{"code": b["code"], "name": b["name"], "weight": 1 / 3} for b in basket],
+            ensure_ascii=False)
+        detail = "；".join("%s 动量%+.1f%%" % (b["name"], b["mom20"] * 100) for b in basket) or "无合格标的，全部持币"
+        conn.execute("INSERT INTO advice (date, basket_json, reason, created_at) VALUES (?,?,?,?)",
+                     (latest_day, new_basket_json, "%s（%s）" % (reason, detail), ts))
+        CHANGES.append("[etf-universe] 轮动建议变更：%s → %s（%s）"
+                       % ("、".join(cur_codes) or "空仓", "、".join(new_codes) or "空仓", reason))
+        cur_basket = json.loads(new_basket_json)
+        log("[etf-universe] 建议变更：%s" % detail)
+    elif month_changed:
+        log("[etf-universe] 月初评估：组合维持 %s" % ("、".join(cur_codes) or "空仓"))
+
+    # ---- 月中破位预警 ----
+    for b in cur_basket:
+        pts = px_cache.get(b["code"]) or series(conn, "px:" + b["code"])
+        ma200 = _ma(pts, 200)
+        if ma200 is not None and pts and pts[-1][1] < ma200:
+            CHANGES.append("[etf-universe] 破位预警：%s（%s）收于 200 日线下方（月中不换仓，月末处理）"
+                           % (b["name"], b["code"]))
+
+    # ---- 建议净值 / 基准净值 续算 ----
+    def nav_step(metric_key, daily_ret):
+        pts = series(conn, metric_key)
+        if pts and pts[-1][0] >= latest_day:
+            return  # 今日已算
+        prev = pts[-1][1] if pts else 1.0
+        upsert_nav(conn, metric_key, latest_day, prev * (1 + daily_ret), ts)
+
+    if cur_basket:
+        rets = []
+        for b in cur_basket:
+            pts = px_cache.get(b["code"]) or series(conn, "px:" + b["code"])
+            if len(pts) >= 2 and pts[-1][0] == latest_day and pts[-2][1]:
+                rets.append(pts[-1][1] / pts[-2][1] - 1)
+        daily_ret = sum(rets) / 3 if rets else 0.0  # 每只占 1/3，空缺为现金
+        nav_step("adv:nav", daily_ret)
+    bm = px_cache.get("510300.SS") or series(conn, "px:510300.SS")
+    if len(bm) >= 2 and bm[-2][1]:
+        nav_step("bm:nav", bm[-1][1] / bm[-2][1] - 1)
+
+    # ---- 指数 PE 5 年分位 ----
+    for r in conn.execute(
+            "SELECT DISTINCT index_code FROM etf_universe WHERE active = 1"
+            " AND index_code != '' AND index_code != 'NONE'").fetchall():
+        pts = series(conn, "pe:" + r["index_code"])
+        if len(pts) < 250:
+            continue
+        window = [v for _, v in pts[-1250:]]  # 约 5 年
+        cur = pts[-1][1]
+        pct = sum(1 for v in window if v <= cur) / len(window) * 100
+        upsert_nav(conn, "pe_pct:%s" % r["index_code"], pts[-1][0], round(pct, 1), ts)
+
+
+def upsert_nav(conn, metric_key, date, value, ts):
+    conn.execute(
+        "INSERT INTO snapshots (metric_key, label, period_date, value, unit, source, fetched_at)"
+        " VALUES (?,?,?,?,?,?,?)"
+        " ON CONFLICT(metric_key, period_date) DO UPDATE SET value = excluded.value,"
+        " fetched_at = excluded.fetched_at",
+        (metric_key, metric_key, date, round(value, 4), "", "规则引擎", ts))
+
+
 def chg_since(pts, days):
     """最新值 vs 约 days 天前最近点的变化率 %（基准点容差 ±max(10, days*20%) 天），无则 None。"""
     if len(pts) < 2:
@@ -447,6 +562,11 @@ def main():
             except Exception as ex:
                 log("[%s] 规则评估失败(跳过): %s: %s" % (tid, type(ex).__name__, ex))
         log("规则引擎完成")
+        try:
+            with conn:
+                eval_universe(conn)
+        except Exception as ex:
+            log("[etf-universe] 轮动评估失败(跳过): %s: %s" % (type(ex).__name__, ex))
         notify.notify_changes("观测台信号状态变化（规则引擎）", CHANGES)
     finally:
         conn.close()

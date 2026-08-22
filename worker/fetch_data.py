@@ -520,6 +520,229 @@ def fetch_twse_monthly(conn, now, rows):
     log("TWSE 月营收完成，写入 %d 条" % total)
 
 
+def refresh_universe(conn, now):
+    """全行业 ETF 宇宙每日刷新（东财 clist，MK0021-24 权益板块）。
+    active = 规模>2亿 且 非货币/债券/商品类。新上市自动入、萎缩自动出。"""
+    rows = []
+    for pn in range(1, 16):
+        data = None
+        for host in ("https://push2.eastmoney.com", "https://push2delay.eastmoney.com"):
+            try:
+                data = http_get_json(
+                    "%s/api/qt/clist/get?pn=%d&pz=100&po=1&np=1&fltt=2&invt=2&fid=f3"
+                    "&fs=b:MK0021,b:MK0022,b:MK0023,b:MK0024&fields=f12,f13,f14,f2,f6,f20" % (host, pn))
+                break
+            except Exception:
+                continue
+        if not data or not data.get("data") or not data["data"].get("diff"):
+            break
+        rows.extend(data["data"]["diff"])
+        if len(data["data"]["diff"]) < 100:
+            break
+        time.sleep(0.3)
+    EXCLUDE = ("货币", "债", "黄金", "白银", "豆粕", "原油", "上海金", "大宗", "现金", "国开", "添益")
+    CROSS = ("纳指", "纳斯达克", "标普", "道琼", "日经", "德国", "法国", "沙特", "东南亚", "恒生",
+             "港股", "H股", "中概", "海外", "全球", "美国", "亚太", "新兴市场", "中韩")
+    BROAD = ("300", "500", "800", "1000", "2000", "50", "100", "A50", "A100", "A500", "创业板",
+             "科创", "综指", "成指", "宽基", "红利", "低波", "基本面", "现金流", "MSCI", "增强")
+    n = 0
+    seen = set()
+    for r in rows:
+        code, name = r.get("f12"), r.get("f14") or ""
+        mktcap, turnover = r.get("f20"), r.get("f6")
+        if not code or any(k in name for k in EXCLUDE):
+            continue
+        if any(k in name for k in CROSS):
+            cat = "跨境"
+        elif any(k in name for k in BROAD):
+            cat = "宽基/策略"
+        else:
+            cat = "行业主题"
+        active = 1 if (mktcap and mktcap > 2e8) else 0
+        suffix = ".SS" if r.get("f13") == 1 else ".SZ"
+        key = code + suffix
+        seen.add(key)
+        conn.execute(
+            "INSERT INTO etf_universe (code, name, cat, turnover, mktcap, active, updated_at)"
+            " VALUES (?,?,?,?,?,?,?)"
+            " ON CONFLICT(code) DO UPDATE SET name=excluded.name, cat=excluded.cat,"
+            " turnover=excluded.turnover, mktcap=excluded.mktcap, active=excluded.active,"
+            " updated_at=excluded.updated_at",
+            (key, name, cat, turnover, mktcap, active, now))
+        n += 1
+    # 退出市场的标的停用
+    for r in conn.execute("SELECT code FROM etf_universe WHERE active = 1").fetchall():
+        if r["code"] not in seen:
+            conn.execute("UPDATE etf_universe SET active = 0, updated_at = ? WHERE code = ?",
+                         (now, r["code"]))
+    log("宇宙刷新：%d 只（active %d 只）"
+        % (n, conn.execute("SELECT COUNT(*) AS c FROM etf_universe WHERE active=1").fetchone()["c"]))
+
+
+def fetch_etf_px(conn, now):
+    """全宇宙日频收盘价（clist 批量，pz=100 分页）。写入 px:{code}。"""
+    codes = {r["code"] for r in
+             conn.execute("SELECT code FROM etf_universe WHERE active = 1").fetchall()}
+    if not codes:
+        log("宇宙为空，跳过批量行情")
+        return
+    total = 0
+    for pn in range(1, 16):
+        data = None
+        for host in ("https://push2.eastmoney.com", "https://push2delay.eastmoney.com"):
+            try:
+                data = http_get_json(
+                    "%s/api/qt/clist/get?pn=%d&pz=100&po=1&np=1&fltt=2&invt=2&fid=f12"
+                    "&fs=b:MK0021,b:MK0022,b:MK0023,b:MK0024&fields=f12,f13,f2,f14,f124" % (host, pn))
+                break
+            except Exception:
+                continue
+        if not data or not data.get("data") or not data["data"].get("diff"):
+            break
+        for r in data["data"]["diff"]:
+            suffix = ".SS" if r.get("f13") == 1 else ".SZ"
+            key = r.get("f12", "") + suffix
+            price = r.get("f2")
+            ts = r.get("f124")  # 行情时间戳（周末/假日取到的是上一交易日）
+            day = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else now[:10]
+            if key in codes and price and price > 0:
+                upsert(conn, "px:%s" % key, r.get("f14") or key, day, float(price),
+                       "local_ccy", "东财clist", now)
+                total += 1
+        if len(data["data"]["diff"]) < 100:
+            break
+        time.sleep(0.3)
+    log("宇宙批量行情完成，写入 %d 条" % total)
+
+
+def fill_index_mapping(conn, now):
+    """给宇宙里没有 index_code 的 ETF 抓跟踪标的（fundf10 jbgk 页），并匹配中证指数代码。
+    周频调用；每只对一次请求，带限速。"""
+    import re
+    rows = conn.execute("SELECT code, name FROM etf_universe WHERE active = 1 AND index_code = ''"
+                        " LIMIT 60").fetchall()  # 每次最多 60 只，防限流
+    filled = 0
+    for r in rows:
+        code = r["code"].split(".")[0]
+        try:
+            req = urllib.request.Request(
+                "https://fundf10.eastmoney.com/jbgk_%s.html" % code,
+                headers={"User-Agent": "Mozilla/5.0",
+                         "Referer": "https://fundf10.eastmoney.com/ccmx_%s.html" % code})
+            html = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", errors="replace")
+            m = re.search(r"跟踪标的</th><td[^>]*>(.*?)</td>", html, re.S)
+            target = re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else ""
+            index_code, index_name = "", ""
+            if target and target != "—":
+                idx = match_csindex(target)
+                if idx:
+                    index_code, index_name = idx
+            conn.execute("UPDATE etf_universe SET index_code = ?, index_name = ? WHERE code = ?",
+                         (index_code or "NONE", index_name or target, r["code"]))
+            filled += 1
+            time.sleep(0.5)
+        except Exception as ex:
+            log("指数映射 %s 失败(跳过): %s" % (code, ex))
+    log("指数映射完成，处理 %d 只" % filled)
+
+
+def match_csindex(index_name):
+    """指数名称 → 代码：东财搜索 API（type=14）取候选，名称相似度过滤（difflib ≥0.8），
+    再用中证 index-perf 验证是否中证系（PE 数据源只覆盖中证）。失败返回 None。"""
+    import difflib
+    import re as _re
+    import urllib.parse
+
+    def core(s):
+        return _re.sub(r"(中证|国证|申万|中华交易服务|有限责任|有限公司|指数|主题|行业)", "", s)
+
+    def valid_csi(code):
+        try:
+            data = http_get_json_with_referer(
+                "https://www.csindex.com.cn/csindex-home/perf/index-perf"
+                "?indexCode=%s&startDate=20260101&endDate=20261231" % code)
+            items = data if isinstance(data, list) else (data.get("data") or [])
+            return len(items) > 0
+        except Exception:
+            return False
+
+    target_core = core(index_name)
+    for kw in dict.fromkeys([index_name, target_core]):  # 原名 → 清洗名
+        if not kw:
+            continue
+        try:
+            url = ("https://searchapi.eastmoney.com/api/suggest/get?input=%s&type=14"
+                   "&token=D43BF722C8E33BDC906FB84D85E326E8&count=10" % urllib.parse.quote(kw))
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            data = json.loads(urllib.request.urlopen(req, timeout=15).read().decode("utf-8", errors="replace"))
+            items = (data.get("QuotationCodeTable") or {}).get("Data") or []
+        except Exception:
+            continue
+        best, best_ratio = None, 0.0
+        for it in items:
+            code, name = it.get("Code") or "", it.get("Name") or ""
+            if not _re.fullmatch(r"(\d{6}|H\d{5})", code):  # 排除 BK 板块与基金
+                continue
+            ratio = difflib.SequenceMatcher(None, core(name), target_core).ratio()
+            if ratio >= 0.85 and ratio > best_ratio and valid_csi(code):
+                best, best_ratio = (code, name), ratio
+        if best:
+            return best
+        time.sleep(0.3)
+    return None
+
+
+def http_get_json_with_referer(url, timeout=TIMEOUT):
+    req = urllib.request.Request(url, headers={
+        "User-Agent": UA, "Accept": "application/json",
+        "Referer": "https://www.csindex.com.cn/"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def fetch_index_pe(conn, now):
+    """中证指数 PE 日频（index-perf 接口，字段 peg 实为 PE）。增量：从库里最新日期续抓。
+    首次自动拉全历史（2005 起），供 5 年分位计算。"""
+    rows = conn.execute(
+        "SELECT DISTINCT index_code, index_name FROM etf_universe"
+        " WHERE active = 1 AND index_code != '' AND index_code != 'NONE'").fetchall()
+    total = 0
+    for r in rows:
+        code = r["index_code"]
+        metric_key = "pe:%s" % code
+        try:
+            last = conn.execute("SELECT MAX(period_date) AS d FROM snapshots WHERE metric_key = ?",
+                                (metric_key,)).fetchone()["d"]
+            start = "20050101" if not last else last.replace("-", "")
+            data = http_get_json_with_referer(
+                "https://www.csindex.com.cn/csindex-home/perf/index-perf"
+                "?indexCode=%s&startDate=%s&endDate=%s"
+                % (code, start, now[:10].replace("-", "")))
+            items = data if isinstance(data, list) else (data.get("data") or [])
+            for it in items:
+                d = str(it.get("tradeDate") or it.get("tradingDate") or "")
+                if len(d) == 8:  # 20260801 → 2026-08-01
+                    d = "%s-%s-%s" % (d[:4], d[4:6], d[6:8])
+                d = d[:10]
+                pe = it.get("peg")
+                if d and pe:
+                    upsert(conn, metric_key, "%s PE" % (r["index_name"] or code), d,
+                           float(pe), "倍", "中证指数", now)
+                    total += 1
+            time.sleep(0.3)
+        except Exception as ex:
+            log("指数PE %s 失败(跳过): %s" % (code, ex))
+    log("指数PE完成，写入 %d 条（%d 个指数）" % (total, len(rows)))
+
+
+# 全局采集任务（不经主题订阅，直接驱动）：daily 刷宇宙+行情，weekly 补映射+估值
+GLOBAL_FETCHERS = {
+    "universe": refresh_universe,
+    "etf_px": fetch_etf_px,
+    "index_data": lambda conn, now: (fill_index_mapping(conn, now), fetch_index_pe(conn, now)),
+}
+
+
 # kind -> fetcher(conn, now, rows)。新数据源在这里登记。
 FETCHERS = {
     "edgar": fetch_edgar,
@@ -569,6 +792,16 @@ def main():
     conn = db.get_db()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
+        # 全局采集（宇宙/批量行情/估值，不经主题订阅）
+        for name, fn in GLOBAL_FETCHERS.items():
+            if only is not None and name not in only:
+                continue
+            try:
+                fn(conn, now)
+                conn.commit()
+            except Exception as ex:
+                conn.rollback()
+                log("全局采集 %s 失败(跳过): %s" % (name, ex))
         by_kind = subscribed_metrics(conn)
         for kind, rows in by_kind.items():
             if only is not None and kind not in only:

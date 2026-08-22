@@ -301,3 +301,163 @@ export function lastJobStatus(): string | null {
   }
   return null;
 }
+
+/* ---------- 全行业 ETF 轮动（etf-universe 主题） ---------- */
+
+export interface UniverseMonitorRow {
+  code: string;
+  name: string;
+  cat: string;
+  mktcap: number | null;
+  lastPx: number | null;
+  lastPxDate: string;
+  mom20: number | null;
+  aboveMa200: boolean | null;
+  pePct: number | null;
+  held: boolean;
+  heldWeight: number | null;
+}
+
+export interface AdviceBasketItem {
+  code: string;
+  name: string;
+  weight: number;
+}
+
+export interface Advice {
+  id: number;
+  date: string;
+  basket: AdviceBasketItem[];
+  reason: string;
+  created_at: string;
+}
+
+interface AdviceRow {
+  id: number;
+  date: string;
+  basket_json: string;
+  reason: string;
+  created_at: string;
+}
+
+function parseAdvice(r: AdviceRow): Advice {
+  let basket: AdviceBasketItem[] = [];
+  try {
+    const raw = JSON.parse(r.basket_json) as AdviceBasketItem[];
+    if (Array.isArray(raw)) basket = raw;
+  } catch {
+    /* 坏 JSON 视为空仓 */
+  }
+  return { id: r.id, date: r.date, basket, reason: r.reason, created_at: r.created_at };
+}
+
+export function getAdviceCurrent(): Advice | null {
+  const r = getDb()
+    .prepare("SELECT * FROM advice ORDER BY id DESC LIMIT 1")
+    .get() as AdviceRow | undefined;
+  return r ? parseAdvice(r) : null;
+}
+
+export function getAdviceHistory(limit = 50): Advice[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM advice ORDER BY id DESC LIMIT ?")
+    .all(limit) as AdviceRow[];
+  return rows.map(parseAdvice);
+}
+
+/** 每只 active ETF 最近 210 个交易日的收盘价（窗口函数截取），在 TS 里算动量与 MA200 */
+export function getUniverseMonitor(): UniverseMonitorRow[] {
+  const db = getDb();
+  const universe = db
+    .prepare("SELECT * FROM etf_universe WHERE active = 1 ORDER BY code")
+    .all() as Array<{
+    code: string;
+    name: string;
+    cat: string;
+    mktcap: number | null;
+    index_code: string;
+  }>;
+
+  const held = new Map<string, number>();
+  const current = getAdviceCurrent();
+  if (current) for (const b of current.basket) held.set(b.code, b.weight);
+
+  // 各指数 PE 分位最新值（index_code -> pe_pct）
+  const pePct = new Map<string, number>();
+  const peRows = db
+    .prepare(
+      "SELECT metric_key, value FROM (" +
+        " SELECT metric_key, value, ROW_NUMBER() OVER (PARTITION BY metric_key ORDER BY period_date DESC) rn" +
+        " FROM snapshots WHERE metric_key LIKE 'pe_pct:%'" +
+        ") WHERE rn = 1"
+    )
+    .all() as Array<{ metric_key: string; value: number }>;
+  for (const r of peRows) pePct.set(r.metric_key.slice("pe_pct:".length), r.value);
+
+  // 收盘价：active 代码每只最近 210 根
+  const pxByCode = new Map<string, Array<{ d: string; v: number }>>();
+  if (universe.length > 0) {
+    const keys = universe.map((u) => `px:${u.code}`);
+    const placeholders = keys.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        "SELECT metric_key, period_date, value FROM (" +
+          " SELECT metric_key, period_date, value," +
+          " ROW_NUMBER() OVER (PARTITION BY metric_key ORDER BY period_date DESC) rn" +
+          ` FROM snapshots WHERE metric_key IN (${placeholders})` +
+          ") WHERE rn <= 210 ORDER BY metric_key, rn"
+      )
+      .all(...keys) as Array<{ metric_key: string; period_date: string; value: number }>;
+    for (const r of rows) {
+      const code = r.metric_key.slice(3);
+      let arr = pxByCode.get(code);
+      if (!arr) {
+        arr = [];
+        pxByCode.set(code, arr);
+      }
+      arr.push({ d: r.period_date, v: r.value }); // 已按日期倒序
+    }
+  }
+
+  const out: UniverseMonitorRow[] = universe.map((u) => {
+    const px = pxByCode.get(u.code) ?? [];
+    const last = px[0] ?? null;
+    const mom20 = px.length >= 21 && px[20].v !== 0 ? last!.v / px[20].v - 1 : null;
+    let aboveMa200: boolean | null = null;
+    if (px.length >= 200 && last) {
+      let sum = 0;
+      for (let i = 0; i < 200; i++) sum += px[i].v;
+      aboveMa200 = last.v >= sum / 200;
+    }
+    const idx = u.index_code && u.index_code !== "NONE" ? u.index_code : "";
+    return {
+      code: u.code,
+      name: u.name,
+      cat: u.cat,
+      mktcap: u.mktcap,
+      lastPx: last?.v ?? null,
+      lastPxDate: last?.d ?? "",
+      mom20,
+      aboveMa200,
+      pePct: idx ? (pePct.get(idx) ?? null) : null,
+      held: held.has(u.code),
+      heldWeight: held.get(u.code) ?? null,
+    };
+  });
+  out.sort((a, b) => (b.mom20 ?? -Infinity) - (a.mom20 ?? -Infinity));
+  return out;
+}
+
+/** 建议组合净值 vs 沪深300ETF 基准净值（按日期合并，供对照折线图） */
+export function getAdviceNavSeries(): Array<{ d: string; adv: number | null; bm: number | null }> {
+  const adv = getSeries("adv:nav");
+  const bm = getSeries("bm:nav");
+  const map = new Map<string, { d: string; adv: number | null; bm: number | null }>();
+  for (const p of adv) map.set(p.d, { d: p.d, adv: p.v, bm: null });
+  for (const p of bm) {
+    const row = map.get(p.d);
+    if (row) row.bm = p.v;
+    else map.set(p.d, { d: p.d, adv: null, bm: p.v });
+  }
+  return [...map.values()].sort((a, b) => (a.d < b.d ? -1 : 1));
+}

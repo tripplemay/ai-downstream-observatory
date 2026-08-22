@@ -10,7 +10,9 @@ import {
   FileText,
   Home,
   LayoutDashboard,
+  Lightbulb,
   LineChart,
+  Radar,
   TrafficCone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -24,6 +26,12 @@ export const NAV_ITEMS = [
   { path: "/observations", label: "观测记录", icon: ClipboardList },
   { path: "/thesis", label: "判断与规则", icon: BookOpen },
   { path: "/pool", label: "标的池", icon: Briefcase },
+];
+
+/** etf-universe 主题专属页面 */
+const ETF_UNIVERSE_ITEMS = [
+  { path: "/universe", label: "监测", icon: Radar },
+  { path: "/advice", label: "建议", icon: Lightbulb },
 ];
 
 /** 当前路径的第一段即主题 slug；根路径视为不在主题内 */
@@ -40,7 +48,10 @@ export function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const slug = themeSlugFromPath(pathname);
   const items = slug
-    ? NAV_ITEMS.map((item) => ({ ...item, href: navHref(slug, item.path) }))
+    ? [...NAV_ITEMS, ...(slug === "etf-universe" ? ETF_UNIVERSE_ITEMS : [])].map((item) => ({
+        ...item,
+        href: navHref(slug, item.path),
+      }))
     : [{ href: "/", label: "首页", icon: Home }];
   return (
     <nav className="flex flex-col gap-1 px-3">

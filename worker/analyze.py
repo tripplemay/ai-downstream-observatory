@@ -279,10 +279,74 @@ def run_quarterly(conn, conf, theme):
     notify.notify_changes("观测台季度分析：%s" % theme["name"], changes)
 
 
+def run_weekly(conn, conf):
+    """全行业 ETF 周报：汇聚轮动规则数据，AI 写行业综述 + 建议组合点评。
+    写入 ai_reports(theme_id='etf-universe', run_type='weekly')。"""
+    from worker.rules import series, _ma
+    tid = "etf-universe"
+    theme = conn.execute("SELECT * FROM themes WHERE id = ?", (tid,)).fetchone()
+    if theme is None:
+        fail("weekly", "主题 etf-universe 不存在")
+    latest_day = conn.execute("SELECT MAX(period_date) AS d FROM snapshots"
+                              " WHERE metric_key LIKE 'px:%'").fetchone()["d"]
+    # 动量排名（与规则引擎同口径）
+    ranked = []
+    for r in conn.execute("SELECT code, name FROM etf_universe WHERE active = 1").fetchall():
+        pts = series(conn, "px:" + r["code"])
+        if len(pts) < 21 or pts[-1][0] != latest_day:
+            continue
+        mom20 = pts[-1][1] / pts[-21][1] - 1
+        ma200 = _ma(pts, 200)
+        ranked.append((r["name"], r["code"], mom20, ma200 is not None and pts[-1][1] > ma200))
+    ranked.sort(key=lambda x: -x[2])
+    top10 = "\n".join("%s（%s）20日动量 %+.1f%%，%s200日线"
+                      % (n, c, m * 100, "站上" if a else "跌破") for n, c, m, a in ranked[:10])
+    bottom5 = "\n".join("%s（%s）20日动量 %+.1f%%" % (n, c, m * 100) for n, c, m, a in ranked[-5:])
+    # 当前建议组合
+    adv = conn.execute("SELECT * FROM advice ORDER BY id DESC LIMIT 1").fetchone()
+    basket = json.loads(adv["basket_json"]) if adv else []
+    basket_text = "、".join("%s（%s）" % (b["name"], b["code"]) for b in basket) or "空仓（无合格标的）"
+    # 建议净值 vs 基准
+    nav, bm = series(conn, "adv:nav"), series(conn, "bm:nav")
+    nav_text = ""
+    if nav and bm:
+        nav_text = "建议组合净值 %.3f，同期沪深300ETF基准 %.3f（自 %s 起）" % (nav[-1][1], bm[-1][1], nav[0][0])
+    # PE 极值
+    extremes = []
+    for r in conn.execute("SELECT DISTINCT index_code, index_name FROM etf_universe"
+                          " WHERE active=1 AND index_code NOT IN ('', 'NONE')").fetchall():
+        pts = series(conn, "pe_pct:" + r["index_code"])
+        if pts and (pts[-1][1] < 10 or pts[-1][1] > 90):
+            extremes.append("%s PE分位 %.0f%%" % (r["index_name"], pts[-1][1]))
+    extremes_text = "；".join(extremes[:15]) or "无"
+    rules = get_page(conn, tid, "rules")
+    prompt = (
+        "你是 ETF 投资分析助手。这是一个全行业 ETF 轮动监测系统（规则见下）。"
+        "请基于最新数据写一份中文周报（Markdown，600 字内）：\n"
+        "1) 行业/板块动量格局综述（谁在走强、谁在走弱）；\n"
+        "2) 对当前建议组合的点评（动量与估值是否支持继续持有）；\n"
+        "3) 估值极值与风险提示；\n"
+        "4) 下周值得关注的方向（只列观察，不构成交易指令）。\n\n"
+        "【轮动规则】\n%s\n\n【当前建议组合】%s\n%s\n\n"
+        "【动量前 10（截至 %s）】\n%s\n\n【动量末 5】\n%s\n\n【PE 分位极值（5年）】%s\n"
+    ) % (rules, basket_text, nav_text, latest_day, top10, bottom5, extremes_text)
+    text = call_gateway(conf, conf.get("weekly_model") or conf["monthly_model"],
+                        [{"role": "user", "content": prompt}],
+                        max_tokens=conf.get("weekly_max_tokens", 4000)).strip()
+    ts = now_str()
+    with conn:
+        conn.execute(
+            "INSERT INTO ai_reports (theme_id, run_date, run_type, light, narrative, created_at)"
+            " VALUES (?,?,?,?,?,?)",
+            (tid, datetime.now().strftime("%Y-%m-%d"), "weekly", "", text, ts))
+    print("[%s] weekly 周报已写入（%d 字）" % (ts, len(text)), flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("run_type", nargs="?", default="monthly", choices=["monthly", "quarterly"])
-    ap.add_argument("--theme", help="只跑指定主题（默认全部启用主题）")
+    ap.add_argument("run_type", nargs="?", default="monthly",
+                    choices=["monthly", "quarterly", "weekly"])
+    ap.add_argument("--theme", help="只跑指定主题（默认全部启用主题；weekly 为全行业报告，忽略主题）")
     args = ap.parse_args()
     run_type = args.run_type
     try:
@@ -294,27 +358,37 @@ def main():
     conn = db.get_db()
     failures = 0
     try:
-        if args.theme:
-            themes = conn.execute("SELECT * FROM themes WHERE id = ? AND enabled = 1",
-                                  (args.theme,)).fetchall()
-            if not themes:
-                fail(run_type, "主题不存在或未启用: %s" % args.theme)
-        else:
-            themes = conn.execute("SELECT * FROM themes WHERE enabled = 1 ORDER BY rowid").fetchall()
-        for theme in themes:
+        if run_type == "weekly":
             try:
-                if run_type == "monthly":
-                    run_monthly(conn, conf, theme)
-                else:
-                    run_quarterly(conn, conf, theme)
+                run_weekly(conn, conf)
             except SystemExit:
-                failures += 1  # fail() 已记日志，继续其余主题
+                failures += 1
             except Exception as ex:
                 traceback.print_exc()
-                with open(JOBS_LOG, "a", encoding="utf-8") as f:
-                    f.write("[%s] [STATUS] %s FAILED [%s] %s: %s\n"
-                            % (now_str(), run_type, theme["id"], type(ex).__name__, ex))
-                failures += 1
+                fail(run_type, "%s: %s" % (type(ex).__name__, ex))
+        else:
+            if args.theme:
+                themes = conn.execute("SELECT * FROM themes WHERE id = ? AND enabled = 1",
+                                      (args.theme,)).fetchall()
+                if not themes:
+                    fail(run_type, "主题不存在或未启用: %s" % args.theme)
+            else:
+                themes = conn.execute("SELECT * FROM themes WHERE enabled = 1"
+                                      " AND id != 'etf-universe' ORDER BY rowid").fetchall()
+            for theme in themes:
+                try:
+                    if run_type == "monthly":
+                        run_monthly(conn, conf, theme)
+                    else:
+                        run_quarterly(conn, conf, theme)
+                except SystemExit:
+                    failures += 1  # fail() 已记日志，继续其余主题
+                except Exception as ex:
+                    traceback.print_exc()
+                    with open(JOBS_LOG, "a", encoding="utf-8") as f:
+                        f.write("[%s] [STATUS] %s FAILED [%s] %s: %s\n"
+                                % (now_str(), run_type, theme["id"], type(ex).__name__, ex))
+                    failures += 1
     finally:
         conn.close()
     if failures:

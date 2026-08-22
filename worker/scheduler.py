@@ -16,10 +16,11 @@ STATE_FILE = os.path.join(BASE, "data", ".scheduler_state")
 RUN_JOB = os.path.join(BASE, "jobs", "run_job.sh")
 
 SCHEDULE = [
-    # (job_type, month_set(None=每月), day(None=每天), hour, minute)
-    ("daily", None, None, 16, 35),
-    ("monthly", None, 11, 9, 20),
-    ("quarterly", {2, 5, 8, 11}, 15, 9, 45),
+    # (job_type, month_set(None=每月), day(None=不按日), hour, minute, weekday(None=不限,0=周一))
+    ("daily", None, None, 16, 35, None),
+    ("weekly", None, None, 10, 5, 5),   # 每周六 10:05：估值采集 + 全行业周报
+    ("monthly", None, 11, 9, 20, None),
+    ("quarterly", {2, 5, 8, 11}, 15, 9, 45, None),
 ]
 
 
@@ -38,8 +39,10 @@ def save_state(state):
 
 
 def due_jobs(now):
-    for job_type, months, day, hour, minute in SCHEDULE:
+    for job_type, months, day, hour, minute, weekday in SCHEDULE:
         if months is not None and now.month not in months:
+            continue
+        if weekday is not None and now.weekday() != weekday:
             continue
         if day is not None and now.day != day:
             continue

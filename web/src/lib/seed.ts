@@ -115,6 +115,23 @@ CREATE TABLE IF NOT EXISTS ai_reports (
     narrative TEXT DEFAULT '',
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS etf_universe (
+    code TEXT PRIMARY KEY,
+    name TEXT DEFAULT '',
+    cat TEXT DEFAULT '',
+    turnover REAL, mktcap REAL,
+    active INTEGER DEFAULT 1,
+    index_code TEXT DEFAULT '',
+    index_name TEXT DEFAULT '',
+    updated_at TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS advice (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,
+    basket_json TEXT NOT NULL,
+    reason TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+);
 `;
 
 const THEME_ID = "ai-downstream";
