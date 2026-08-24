@@ -464,6 +464,10 @@ def eval_universe(conn):
                      (light, conclusion))
         if old and old["light"] and old["light"] != light:
             CHANGES.append("[etf-universe] 策略状态灯：%s → %s（%s）" % (old["light"], light, conclusion))
+    else:
+        # 实盘数据不足 60 个交易日：失效监控未启用，黄灯中性占位（避免种子红灯误导）
+        conn.execute("UPDATE overview SET light = 'yellow', conclusion = ? WHERE theme_id = 'etf-universe'",
+                     ("实盘建议净值数据积累中（失效监控需 60 个交易日）；回测模拟净值见下方对照曲线。",))
 
     # ---- 指数 PE 5 年分位 ----
     for r in conn.execute(

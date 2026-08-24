@@ -41,7 +41,7 @@ THEME = {
     "metrics": [],
     "signals": [],
     "overview": ("—", "规则驱动，无三层判断", "—", "", "—", "", "—", "",
-                 "red", "本主题为规则驱动，无信号灯；建议见「建议」页。"),
+                 "yellow", "策略型主题：规则驱动轮动建议；失效监控在实盘数据积累 60 个交易日后启用。"),
     "pool": [],
     "pages": {"thesis": THESIS, "rules": RULES},
     "initial_observation": None,
