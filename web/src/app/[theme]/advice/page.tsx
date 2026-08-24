@@ -87,7 +87,13 @@ export default async function AdvicePage({
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <NavCompareChart data={navSeries} />
+          <NavCompareChart
+            data={navSeries}
+            lines={[
+              { key: "adv", label: "建议组合", color: "#dc2626" },
+              { key: "bm", label: "沪深300ETF", color: "#2563eb" },
+            ]}
+          />
         </CardContent>
       </Card>
 

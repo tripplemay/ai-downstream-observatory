@@ -12,6 +12,7 @@ export default async function PoolPage({
   params: Promise<{ theme: string }>;
 }) {
   const { theme } = await params;
-  if (!getTheme(theme)) notFound();
+  const t = getTheme(theme);
+  if (!t || t.type === "strategy") notFound();
   return <PoolManager items={getPool(theme)} themeId={theme} />;
 }

@@ -10,6 +10,7 @@ export interface Theme {
   description: string;
   enabled: number;
   created_at: string;
+  type: string; // observation | strategy
 }
 
 export interface Signal {
@@ -460,4 +461,88 @@ export function getAdviceNavSeries(): Array<{ d: string; adv: number | null; bm:
     else map.set(p.d, { d: p.d, adv: null, bm: p.v });
   }
   return [...map.values()].sort((a, b) => (a.d < b.d ? -1 : 1));
+}
+
+/* ---------- 策略型主题（type = strategy） ---------- */
+
+export interface StrategyParams {
+  id: number;
+  params: Record<string, unknown>;
+  note: string;
+  created_at: string;
+}
+
+interface StrategyParamsRow {
+  id: number;
+  params_json: string;
+  note: string;
+  created_at: string;
+}
+
+function parseStrategyParams(r: StrategyParamsRow): StrategyParams {
+  let params: Record<string, unknown> = {};
+  try {
+    const raw = JSON.parse(r.params_json) as Record<string, unknown>;
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) params = raw;
+  } catch {
+    /* 坏 JSON 视为空参数 */
+  }
+  return { id: r.id, params, note: r.note, created_at: r.created_at };
+}
+
+/** 最新一版策略参数（追加式，最新一条生效） */
+export function getStrategyParams(themeId: string): StrategyParams | null {
+  const r = getDb()
+    .prepare("SELECT * FROM strategy_params WHERE theme_id = ? ORDER BY id DESC LIMIT 1")
+    .get(themeId) as StrategyParamsRow | undefined;
+  return r ? parseStrategyParams(r) : null;
+}
+
+export function getStrategyParamsHistory(themeId: string, limit = 20): StrategyParams[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM strategy_params WHERE theme_id = ? ORDER BY id DESC LIMIT ?")
+    .all(themeId, limit) as StrategyParamsRow[];
+  return rows.map(parseStrategyParams);
+}
+
+/** 四序列净值对照：实盘建议/基准（近期）+ 回测模拟/回测基准（2020 起全历史），按日期合并 */
+export function getNavCompareFull(): Array<{
+  d: string;
+  adv: number | null;
+  bm: number | null;
+  sim: number | null;
+  simBm: number | null;
+}> {
+  const keys = [
+    ["adv:nav", "adv"],
+    ["bm:nav", "bm"],
+    ["sim:nav", "sim"],
+    ["sim_bm:nav", "simBm"],
+  ] as const;
+  type Row = { d: string; adv: number | null; bm: number | null; sim: number | null; simBm: number | null };
+  const map = new Map<string, Row>();
+  const blank = (d: string): Row => ({ d, adv: null, bm: null, sim: null, simBm: null });
+  for (const [metric, field] of keys) {
+    for (const p of getSeries(metric)) {
+      let row = map.get(p.d);
+      if (!row) {
+        row = blank(p.d);
+        map.set(p.d, row);
+      }
+      row[field] = p.v;
+    }
+  }
+  return [...map.values()].sort((a, b) => (a.d < b.d ? -1 : 1));
+}
+
+/** 全市场宽度：站上 200 日线 ETF 占比（最新值 + 近 60 点序列） */
+export function getMarketWidth(): {
+  latest: { d: string; v: number } | null;
+  series: Array<{ d: string; v: number }>;
+} {
+  const series = getSeries("mkt:width");
+  return {
+    latest: series.length ? series[series.length - 1] : null,
+    series: series.slice(-60),
+  };
 }

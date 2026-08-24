@@ -27,6 +27,17 @@ THEME = {
     "id": "etf-universe",
     "name": "全行业 ETF 轮动",
     "description": "全市场权益 ETF 每日监测：20 日动量 + 200 日线过滤的轮动建议、估值极值与拥挤度预警",
+    "type": "strategy",
+    # 策略参数（进库版本化，规则引擎读取最新版本；改参数必须留痕写理由）
+    "strategy_params": {
+        "mom_days": 20,        # 动量周期（交易日）
+        "ma_days": 200,        # 绝对动量过滤均线
+        "top_n": 3,            # 持仓只数（等权）
+        "rebalance": "monthly",  # 调仓频率
+        "benchmark": "510300.SS",  # 基准
+        "decay_warn": -5.0,    # 失效预警（黄灯）：滚动6个月超额收益 % 
+        "decay_fail": -10.0,   # 失效预警（红灯）：滚动6个月超额收益 %
+    },
     "metrics": [],
     "signals": [],
     "overview": ("—", "规则驱动，无三层判断", "—", "", "—", "", "—", "",

@@ -15,7 +15,8 @@ export default async function ObservationsPage({
   params: Promise<{ theme: string }>;
 }) {
   const { theme } = await params;
-  if (!getTheme(theme)) notFound();
+  const t = getTheme(theme);
+  if (!t || t.type === "strategy") notFound();
   const observations = getObservations(theme);
   const today = new Date().toISOString().slice(0, 10);
   return (

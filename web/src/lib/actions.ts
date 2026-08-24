@@ -7,10 +7,12 @@ import {
   observationSchema,
   poolItemSchema,
   signalUpdateSchema,
+  strategyParamsSchema,
   thesisSchema,
   type ObservationInput,
   type PoolItemInput,
   type SignalUpdateInput,
+  type StrategyParamsInput,
   type ThesisInput,
 } from "./schemas";
 import type { Signal } from "./queries";
@@ -128,4 +130,33 @@ export async function deletePoolItem(themeId: string, id: number): Promise<Actio
   getDb().prepare("DELETE FROM pool WHERE theme_id = ? AND id = ?").run(themeId, id);
   revalidatePath(`/${themeId}/pool`);
   return { ok: true, message: "已删除" };
+}
+
+/** 追加一版策略参数（不改旧版本）；paramsJson 必须含 mom_days/ma_days/top_n 三个数字键 */
+export async function saveStrategyParams(input: StrategyParamsInput): Promise<ActionResult> {
+  const parsed = strategyParamsSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, message: parsed.error.issues[0]?.message ?? "参数非法" };
+  }
+  const { themeId, paramsJson, note } = parsed.data;
+  let params: unknown;
+  try {
+    params = JSON.parse(paramsJson);
+  } catch {
+    return { ok: false, message: "paramsJson 不是合法 JSON" };
+  }
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return { ok: false, message: "参数必须是 JSON 对象" };
+  }
+  for (const key of ["mom_days", "ma_days", "top_n"] as const) {
+    const v = (params as Record<string, unknown>)[key];
+    if (typeof v !== "number" || !Number.isFinite(v)) {
+      return { ok: false, message: `参数缺少数字键 ${key}` };
+    }
+  }
+  getDb()
+    .prepare("INSERT INTO strategy_params (theme_id, params_json, note, created_at) VALUES (?,?,?,?)")
+    .run(themeId, paramsJson, note, nowStr());
+  revalidatePath(`/${themeId}`);
+  return { ok: true, message: "参数新版本已保存" };
 }

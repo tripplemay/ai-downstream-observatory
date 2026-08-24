@@ -17,6 +17,7 @@ TYPE="${1:-monthly}"
     python worker/rules.py || RC=$?
   elif [ "$TYPE" = "weekly" ]; then
     python worker/fetch_data.py --only index_data || RC=$?
+    python worker/backtest_rotation.py || RC=$?
     python worker/analyze.py weekly || RC=$?
   elif [ "$TYPE" = "monthly" ] || [ "$TYPE" = "quarterly" ]; then
     python worker/fetch_data.py || RC=$?

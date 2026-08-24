@@ -336,14 +336,30 @@ def _ma(pts, n):
     return sum(v for _, v in pts[-n:]) / n
 
 
-def eval_universe(conn):
-    """全行业 ETF 轮动：MOM20 + MA200 过滤，月末调仓；建议留痕 + 建议净值跟踪。
+def get_strategy_params(conn, theme_id):
+    """策略参数：取最新版本；无记录则用主题文件默认值。"""
+    row = conn.execute("SELECT params_json FROM strategy_params WHERE theme_id = ?"
+                       " ORDER BY id DESC LIMIT 1", (theme_id,)).fetchone()
+    if row:
+        try:
+            return json.loads(row["params_json"])
+        except json.JSONDecodeError:
+            pass
+    from worker.themes.etf_universe import THEME
+    return dict(THEME["strategy_params"])
 
-    - 建议组合：20 日动量前 3 且收盘价 > 200 日均线，等权（不足 3 只则空余为现金）；
-    - 跨月时若组合变化则写 advice 记录（触发邮件）；月中成员跌破 MA200 → 预警不换仓；
-    - 建议净值 adv:nav / 基准 bm:nav（沪深300ETF）每日续算；
-    - 指数 PE 5 年分位写入 pe_pct:{index}（供 Web 展示与周报引用）。
-    """
+
+def eval_universe(conn):
+    """全行业 ETF 轮动（策略型主题）：参数化 MOM + MA 过滤，月末调仓；建议留痕 + 净值跟踪；
+    市场宽度（mkt:width）每日落库；策略失效预警复用信号灯（overview.light）。"""
+    params = get_strategy_params(conn, "etf-universe")
+    mom_n = int(params.get("mom_days", 20))
+    ma_n = int(params.get("ma_days", 200))
+    top_n = int(params.get("top_n", 3))
+    benchmark = params.get("benchmark", "510300.SS")
+    decay_warn = float(params.get("decay_warn", -5.0))
+    decay_fail = float(params.get("decay_fail", -10.0))
+
     codes = conn.execute("SELECT code, name FROM etf_universe WHERE active = 1").fetchall()
     latest_day = conn.execute("SELECT MAX(period_date) AS d FROM snapshots WHERE metric_key LIKE 'px:%'"
                               ).fetchone()["d"]
@@ -353,17 +369,24 @@ def eval_universe(conn):
     px_cache = {}
     for r in codes:
         pts = series(conn, "px:" + r["code"])
-        if len(pts) < 21 or pts[-1][0] != latest_day:
+        if len(pts) < mom_n + 1 or pts[-1][0] != latest_day:
             continue  # 停牌/无当日数据的跳过
         px_cache[r["code"]] = pts
-        mom20 = pts[-1][1] / pts[-21][1] - 1
-        ma200 = _ma(pts, 200)
-        ranked.append({"code": r["code"], "name": r["name"], "mom20": mom20,
-                       "above": ma200 is not None and pts[-1][1] > ma200})
+        mom = pts[-1][1] / pts[-1 - mom_n][1] - 1
+        ma = _ma(pts, ma_n)
+        ranked.append({"code": r["code"], "name": r["name"], "mom20": mom,
+                       "above": ma is not None and pts[-1][1] > ma})
     if not ranked:
         return
     ranked.sort(key=lambda x: -x["mom20"])
-    basket = [x for x in ranked if x["above"]][:3]
+    basket = [x for x in ranked if x["above"]][:top_n]
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # ---- 市场宽度（regime 温度计）：站上 MA 的比例 ----
+    with_ma = [x for x in ranked if _ma(px_cache[x["code"]], ma_n) is not None]
+    if with_ma:
+        width = sum(1 for x in with_ma if x["above"]) / len(with_ma) * 100
+        upsert_nav(conn, "mkt:width", latest_day, round(width, 1), ts)
 
     # ---- 建议留痕：月初首个评估日对比当前持仓 ----
     last_adv = conn.execute("SELECT * FROM advice ORDER BY id DESC LIMIT 1").fetchone()
@@ -371,18 +394,18 @@ def eval_universe(conn):
     cur_codes = [b["code"] for b in cur_basket]
     new_codes = [b["code"] for b in basket]
     month_changed = (not last_adv) or last_adv["date"][:7] != latest_day[:7]
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if not last_adv:
         reason = "初始化建仓信号"
         changed = True
     elif month_changed and new_codes != cur_codes:
-        reason = "月末调仓：20日动量前3且站上200日线"
+        reason = "月末调仓：%d日动量前%d且站上%d日线" % (mom_n, top_n, ma_n)
         changed = True
     else:
         changed = False
     if changed:
+        w = 1.0 / top_n
         new_basket_json = json.dumps(
-            [{"code": b["code"], "name": b["name"], "weight": 1 / 3} for b in basket],
+            [{"code": b["code"], "name": b["name"], "weight": w} for b in basket],
             ensure_ascii=False)
         detail = "；".join("%s 动量%+.1f%%" % (b["name"], b["mom20"] * 100) for b in basket) or "无合格标的，全部持币"
         conn.execute("INSERT INTO advice (date, basket_json, reason, created_at) VALUES (?,?,?,?)",
@@ -397,10 +420,10 @@ def eval_universe(conn):
     # ---- 月中破位预警 ----
     for b in cur_basket:
         pts = px_cache.get(b["code"]) or series(conn, "px:" + b["code"])
-        ma200 = _ma(pts, 200)
-        if ma200 is not None and pts and pts[-1][1] < ma200:
-            CHANGES.append("[etf-universe] 破位预警：%s（%s）收于 200 日线下方（月中不换仓，月末处理）"
-                           % (b["name"], b["code"]))
+        ma = _ma(pts, ma_n)
+        if ma is not None and pts and pts[-1][1] < ma:
+            CHANGES.append("[etf-universe] 破位预警：%s（%s）收于 %d 日线下方（月中不换仓，月末处理）"
+                           % (b["name"], b["code"], ma_n))
 
     # ---- 建议净值 / 基准净值 续算 ----
     def nav_step(metric_key, daily_ret):
@@ -416,11 +439,31 @@ def eval_universe(conn):
             pts = px_cache.get(b["code"]) or series(conn, "px:" + b["code"])
             if len(pts) >= 2 and pts[-1][0] == latest_day and pts[-2][1]:
                 rets.append(pts[-1][1] / pts[-2][1] - 1)
-        daily_ret = sum(rets) / 3 if rets else 0.0  # 每只占 1/3，空缺为现金
+        daily_ret = sum(rets) / top_n if rets else 0.0  # 每只占 1/top_n，空缺为现金
         nav_step("adv:nav", daily_ret)
-    bm = px_cache.get("510300.SS") or series(conn, "px:510300.SS")
+    bm = px_cache.get(benchmark) or series(conn, "px:" + benchmark)
     if len(bm) >= 2 and bm[-2][1]:
         nav_step("bm:nav", bm[-1][1] / bm[-2][1] - 1)
+
+    # ---- 策略失效预警（信号灯复用）：滚动约 6 个月（120 交易日）超额收益 ----
+    adv_pts, bm_pts = series(conn, "adv:nav"), series(conn, "bm:nav")
+    if len(adv_pts) >= 60 and len(bm_pts) >= 60:
+        n = min(120, len(adv_pts) - 1, len(bm_pts) - 1)
+        excess = (adv_pts[-1][1] / adv_pts[-1 - n][1] - 1) - (bm_pts[-1][1] / bm_pts[-1 - n][1] - 1)
+        excess_pct = excess * 100
+        light = "red" if excess_pct < decay_fail else ("yellow" if excess_pct < decay_warn else "green")
+        conclusion = ("近 %d 个交易日建议组合相对基准超额 %+.1f%%。" % (n, excess_pct))
+        if light == "red":
+            conclusion += "策略失效预警：超额低于 %.0f%% 阈值，应停用或复审参数。" % decay_fail
+        elif light == "yellow":
+            conclusion += "超额走弱（预警线 %.0f%%），持续观察。" % decay_warn
+        else:
+            conclusion += "策略运行正常。"
+        old = conn.execute("SELECT light, conclusion FROM overview WHERE theme_id = 'etf-universe'").fetchone()
+        conn.execute("UPDATE overview SET light = ?, conclusion = ? WHERE theme_id = 'etf-universe'",
+                     (light, conclusion))
+        if old and old["light"] and old["light"] != light:
+            CHANGES.append("[etf-universe] 策略状态灯：%s → %s（%s）" % (old["light"], light, conclusion))
 
     # ---- 指数 PE 5 年分位 ----
     for r in conn.execute(

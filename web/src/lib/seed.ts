@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS themes (
     name TEXT NOT NULL,
     description TEXT DEFAULT '',
     enabled INTEGER DEFAULT 1,
-    created_at TEXT DEFAULT ''
+    created_at TEXT DEFAULT '',
+    type TEXT DEFAULT 'observation'
 );
 CREATE TABLE IF NOT EXISTS metrics (
     metric_key TEXT PRIMARY KEY,
@@ -132,18 +133,65 @@ CREATE TABLE IF NOT EXISTS advice (
     reason TEXT DEFAULT '',
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS strategy_params (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    theme_id TEXT NOT NULL,
+    params_json TEXT NOT NULL,
+    note TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+);
 `;
 
 const THEME_ID = "ai-downstream";
 
-// (id, name, description, enabled, created_at)
+// (id, name, description, enabled, created_at, type)
 const SEED_THEME = [
   THEME_ID,
   "AI 下游应用",
   "AI 应用终将产生利润、利润归属平台：跟踪证实/证伪信号，辅助长期建仓决策",
   1,
   "2026-07-29 00:00:00",
+  "observation",
 ] as const;
+
+// 策略型主题：全行业 ETF 轮动（对齐 worker/themes/etf_universe.py）
+const SEED_THEME_STRATEGY = [
+  "etf-universe",
+  "全行业 ETF 轮动",
+  "全市场权益 ETF 每日监测：20 日动量 + 200 日线过滤的轮动建议、估值极值与拥挤度预警",
+  1,
+  "2026-08-22 00:00:00",
+  "strategy",
+] as const;
+
+const SEED_STRATEGY_THESIS = `全行业 ETF 轮动策略说明
+
+1. 数据基础：全市场权益类 ETF（行业/主题/宽基/跨境，约 700 只，规模>2亿且成交活跃），
+   日频行情 + 中证指数 PE 估值（5 年分位）+ 规模/溢价监控。
+2. 回测结论（2021-2026，30 只代表性 ETF）：20 日动量前 3 等权 + 200 日均线过滤为最优规则族
+   （CAGR 19.6%、夏普 0.79 vs 沪深300 的 1.0%/0.14）；60 日动量在 A 股行业轮动中为负收益。
+3. 定位：规则给出的是"有回测证据的行业轮动参考"，不是圣杯；回测窗口仅 5 年，
+   最大回撤 -35% 是真实风险，震荡市动量可能持续失效。执行与否与仓位由人决定。`;
+
+const SEED_STRATEGY_RULES = `轮动规则（每日收盘后评估）
+
+- 建议组合：全宇宙按 20 日动量（涨幅）排名，取前 3 名且收盘价站上 200 日均线者等权；
+  不合格名额持币（可为 0-3 只）。月末调仓，月中不换仓。
+- 破位预警：建议组合成员月中跌破 200 日均线 → 邮件预警（不自动换仓，月末统一处理）。
+- 估值极值：跟踪指数 PE 5 年分位 <10%（极低估）或 >90%（极高估）→ 提示，不直接构成建议。
+- 拥挤度：QDII 溢价 >5% 或规模异动 → 预警（复用标的体检逻辑）。
+- 建议留痕：每次组合变更写入 advice 表并跟踪建议净值（adv:nav），与沪深300 对照。`;
+
+// 策略参数初始版本（追加式，最新一条生效）
+const SEED_STRATEGY_PARAMS = JSON.stringify({
+  mom_days: 20,
+  ma_days: 200,
+  top_n: 3,
+  rebalance: "monthly",
+  benchmark: "510300.SS",
+  decay_warn: -5.0,
+  decay_fail: -10.0,
+});
 
 // (id, layer, name, watch, source, trigger_cond, current_value, status, updated_at, note)
 const SEED_SIGNALS: string[][] = [
@@ -253,8 +301,25 @@ export function seedIfEmpty(db: Database.Database) {
   const insertPage = db.prepare("INSERT INTO pages (theme_id, key, content) VALUES (?,?,?)");
   const tx = db.transaction(() => {
     db.prepare(
-      "INSERT INTO themes (id, name, description, enabled, created_at) VALUES (?,?,?,?,?)"
+      "INSERT INTO themes (id, name, description, enabled, created_at, type) VALUES (?,?,?,?,?,?)"
     ).run(...SEED_THEME);
+    db.prepare(
+      "INSERT INTO themes (id, name, description, enabled, created_at, type) VALUES (?,?,?,?,?,?)"
+    ).run(...SEED_THEME_STRATEGY);
+    insertPage.run(SEED_THEME_STRATEGY[0], "thesis", SEED_STRATEGY_THESIS);
+    insertPage.run(SEED_THEME_STRATEGY[0], "rules", SEED_STRATEGY_RULES);
+    db.prepare(
+      "INSERT INTO overview (theme_id, layer1_status, layer1_evidence, layer2_status, layer2_evidence," +
+        " layer3_status, layer3_evidence, sentiment, sentiment_evidence, light, conclusion)" +
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+    ).run(
+      SEED_THEME_STRATEGY[0],
+      "—", "规则驱动，无三层判断", "—", "", "—", "", "—", "",
+      "red", "本主题为规则驱动，无信号灯；建议见「建议」页。"
+    );
+    db.prepare(
+      "INSERT INTO strategy_params (theme_id, params_json, note, created_at) VALUES (?,?,?,?)"
+    ).run(SEED_THEME_STRATEGY[0], SEED_STRATEGY_PARAMS, "初始默认参数", "2026-08-22 00:00:00");
     for (const s of SEED_SIGNALS) insertSignal.run(THEME_ID, ...s);
     db.prepare(
       "INSERT INTO overview (theme_id, layer1_status, layer1_evidence, layer2_status, layer2_evidence," +

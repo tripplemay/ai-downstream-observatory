@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { Separator } from "@/components/ui/separator";
-import { Brand, NavLinks } from "@/components/nav";
+import { Brand } from "@/components/nav";
+import { NavLinksLoader } from "@/components/nav-links-loader";
 import { ThemeNav } from "@/components/theme-nav";
 
 export function AppSidebar() {
@@ -12,7 +13,9 @@ export function AppSidebar() {
         <Suspense fallback={null}>
           <ThemeNav />
         </Suspense>
-        <NavLinks />
+        <Suspense fallback={null}>
+          <NavLinksLoader />
+        </Suspense>
       </div>
       <div className="px-5 py-4 text-xs text-muted-foreground">
         个人研究框架，不构成投资建议

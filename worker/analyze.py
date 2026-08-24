@@ -342,6 +342,65 @@ def run_weekly(conn, conf):
     print("[%s] weekly 周报已写入（%d 字）" % (ts, len(text)), flush=True)
 
 
+def run_monthly_strategy(conn, conf, theme):
+    """策略型主题月度复盘：调仓归因 + 失效检查 + 参数复核建议（纯叙述，不改灯号）。"""
+    tid = theme["id"]
+    from worker.rules import series, get_strategy_params
+    params = get_strategy_params(conn, tid)
+    # 近一个月（21 交易日）净值表现
+    def ret_n(key, n=21):
+        pts = series(conn, key)
+        if len(pts) < n + 1:
+            return None
+        return (pts[-1][1] / pts[-1 - n][1] - 1) * 100
+    adv_r, bm_r, sim_r = ret_n("adv:nav"), ret_n("bm:nav"), ret_n("sim:nav")
+    adv_all = series(conn, "adv:nav")
+    adv_since = (adv_all[-1][1] - 1) * 100 if adv_all else None
+    # 当月调仓记录与成员表现
+    advices = conn.execute("SELECT * FROM advice ORDER BY id DESC LIMIT 3").fetchall()
+    adv_text = "\n".join("- %s：%s（%s）" % (a["date"], a["reason"],
+                         "、".join(b["name"] for b in json.loads(a["basket_json"])) or "空仓")
+                         for a in advices) or "无"
+    # 当前组合成员近月收益（归因素材）
+    cur = json.loads(advices[0]["basket_json"]) if advices else []
+    member_perf = []
+    for b in cur:
+        pts = series(conn, "px:" + b["code"])
+        if len(pts) >= 22:
+            member_perf.append("%s 近月 %+.1f%%" % (b["name"], (pts[-1][1] / pts[-22][1] - 1) * 100))
+    ov = conn.execute("SELECT light, conclusion FROM overview WHERE theme_id = ?", (tid,)).fetchone()
+    width = series(conn, "mkt:width")
+    width_text = "当前全市场宽度 %.0f%%（站上200日线比例）" % width[-1][1] if width else ""
+    prompt = (
+        "你是 ETF 策略复盘助手。「%s」是一个规则驱动的行业轮动策略（参数：%s）。"
+        "请写一份中文月度复盘（Markdown，500 字内）：\n"
+        "1) 当月调仓归因：各持仓对组合的贡献与拖累；\n"
+        "2) 失效检查：实盘建议净值 vs 基准 vs 回测模拟的对照解读（实盘时间很短时注意区分噪声与失效）；\n"
+        "3) 当前市场宽度与策略环境评估；\n"
+        "4) 参数复核建议：当前参数是否仍适用，如需调整说明方向（最终由人决定）。\n\n"
+        "【策略状态】灯号 %s：%s\n【宽度】%s\n"
+        "【近月收益】建议 %s｜基准 %s｜回测模拟 %s｜建议净值累计 %s\n"
+        "【近期调仓】\n%s\n【当前组合成员近月表现】%s\n"
+    ) % (theme["name"], json.dumps(params, ensure_ascii=False),
+         ov["light"] if ov else "—", ov["conclusion"] if ov else "—", width_text,
+         "%+.1f%%" % adv_r if adv_r is not None else "数据积累中",
+         "%+.1f%%" % bm_r if bm_r is not None else "—",
+         "%+.1f%%" % sim_r if sim_r is not None else "—",
+         "%+.1f%%" % adv_since if adv_since is not None else "—",
+         adv_text, "、".join(member_perf) or "—")
+    text = call_gateway(conf, conf.get("weekly_model") or conf["monthly_model"],
+                        [{"role": "user", "content": prompt}],
+                        max_tokens=conf.get("weekly_max_tokens", 4000)).strip()
+    ts = now_str()
+    with conn:
+        conn.execute(
+            "INSERT INTO ai_reports (theme_id, run_date, run_type, light, narrative, created_at)"
+            " VALUES (?,?,?,?,?,?)",
+            (tid, datetime.now().strftime("%Y-%m-%d"), "monthly",
+             ov["light"] if ov else "", text, ts))
+    print("[%s] [%s] 策略月度复盘已写入（%d 字）" % (ts, tid, len(text)), flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("run_type", nargs="?", default="monthly",
@@ -373,11 +432,15 @@ def main():
                 if not themes:
                     fail(run_type, "主题不存在或未启用: %s" % args.theme)
             else:
-                themes = conn.execute("SELECT * FROM themes WHERE enabled = 1"
-                                      " AND id != 'etf-universe' ORDER BY rowid").fetchall()
+                themes = conn.execute("SELECT * FROM themes WHERE enabled = 1 ORDER BY rowid").fetchall()
             for theme in themes:
+                is_strategy = (theme["type"] if "type" in theme.keys() else "observation") == "strategy"
+                if is_strategy and run_type == "quarterly":
+                    continue  # 策略型主题无季度信号核对（周报复盘 + 在线回测覆盖）
                 try:
-                    if run_type == "monthly":
+                    if is_strategy:
+                        run_monthly_strategy(conn, conf, theme)
+                    elif run_type == "monthly":
                         run_monthly(conn, conf, theme)
                     else:
                         run_quarterly(conn, conf, theme)

@@ -36,4 +36,11 @@ export const poolItemSchema = z.object({
 });
 export type PoolItemInput = z.infer<typeof poolItemSchema>;
 
+export const strategyParamsSchema = z.object({
+  themeId: z.string().min(1),
+  paramsJson: z.string().min(2, "参数 JSON 必填").max(4000),
+  note: z.string().max(500).default(""),
+});
+export type StrategyParamsInput = z.infer<typeof strategyParamsSchema>;
+
 export const ALL_STATUSES = [...CONFIRM_STATUSES, ...FALSIFY_STATUSES];

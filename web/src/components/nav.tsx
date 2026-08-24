@@ -28,11 +28,21 @@ export const NAV_ITEMS = [
   { path: "/pool", label: "标的池", icon: Briefcase },
 ];
 
-/** etf-universe 主题专属页面 */
-const ETF_UNIVERSE_ITEMS = [
+/** 策略型主题（type=strategy）菜单 */
+export const STRATEGY_NAV_ITEMS = [
+  { path: "/", label: "总览", icon: LayoutDashboard },
   { path: "/universe", label: "监测", icon: Radar },
   { path: "/advice", label: "建议", icon: Lightbulb },
+  { path: "/thesis", label: "规则", icon: BookOpen },
+  { path: "/reports", label: "报告", icon: FileText },
 ];
+
+/** 供标题查找用的合并列表（两型路径互不冲突，除共用项外） */
+export const ALL_NAV_ITEMS = [...NAV_ITEMS, ...STRATEGY_NAV_ITEMS];
+
+export function navItemsFor(themeType: string | undefined) {
+  return themeType === "strategy" ? STRATEGY_NAV_ITEMS : NAV_ITEMS;
+}
 
 /** 当前路径的第一段即主题 slug；根路径视为不在主题内 */
 export function themeSlugFromPath(pathname: string): string | null {
@@ -44,14 +54,19 @@ export function navHref(slug: string, path: string): string {
   return `/${slug}${path === "/" ? "" : path}`;
 }
 
-export function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
+/** themeTypes：slug → themes.type，由 server 侧（NavLinksLoader）注入 */
+export function NavLinks({
+  onNavigate,
+  themeTypes = {},
+}: {
+  onNavigate?: () => void;
+  themeTypes?: Record<string, string>;
+}) {
   const pathname = usePathname();
   const slug = themeSlugFromPath(pathname);
+  const navItems = navItemsFor(slug ? themeTypes[slug] : undefined);
   const items = slug
-    ? [...NAV_ITEMS, ...(slug === "etf-universe" ? ETF_UNIVERSE_ITEMS : [])].map((item) => ({
-        ...item,
-        href: navHref(slug, item.path),
-      }))
+    ? navItems.map((item) => ({ ...item, href: navHref(slug, item.path) }))
     : [{ href: "/", label: "首页", icon: Home }];
   return (
     <nav className="flex flex-col gap-1 px-3">

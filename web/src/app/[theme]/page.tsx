@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { LightDot, lightBlockClass } from "@/components/light";
 import { Sparkline } from "@/components/sparkline";
+import { StrategyDashboard } from "@/components/strategy/strategy-dashboard";
 import { lightName, pct } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
@@ -31,7 +32,9 @@ export default async function ThemeDashboardPage({
   params: Promise<{ theme: string }>;
 }) {
   const { theme } = await params;
-  if (!getTheme(theme)) notFound();
+  const themeRow = getTheme(theme);
+  if (!themeRow) notFound();
+  if (themeRow.type === "strategy") return <StrategyDashboard themeId={theme} />;
   const overview = getOverview(theme);
   const lastObs = getLastObservation(theme);
   const counts = getStatusCounts(theme);

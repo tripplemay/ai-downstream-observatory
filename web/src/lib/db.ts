@@ -20,6 +20,7 @@ export function getDb(): Database.Database {
     db.pragma("journal_mode = WAL");
     db.pragma("busy_timeout = 30000"); // 与 worker 并发写时等待而非立即报错
     db.exec(SCHEMA);
+    ensureColumn(db, "themes", "type", "type TEXT DEFAULT 'observation'");
     ensureColumn(db, "overview", "action", "action TEXT DEFAULT ''");
     ensureColumn(db, "pool", "health", "health TEXT DEFAULT '正常'");
     seedIfEmpty(db);

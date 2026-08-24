@@ -34,8 +34,17 @@ CREATE TABLE IF NOT EXISTS themes (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     description TEXT DEFAULT '',
+    type TEXT DEFAULT 'observation',
     enabled INTEGER DEFAULT 1,
     created_at TEXT DEFAULT ''
+);
+-- 策略型主题的参数版本（追加式，最新一条为当前生效；修改留痕含理由）
+CREATE TABLE IF NOT EXISTS strategy_params (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    theme_id TEXT NOT NULL,
+    params_json TEXT NOT NULL,
+    note TEXT DEFAULT '',
+    created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS metrics (
     metric_key TEXT PRIMARY KEY,
@@ -170,8 +179,18 @@ def seed_theme(conn, theme):
     """
     tid = theme["id"]
     conn.execute(
-        "INSERT OR IGNORE INTO themes (id, name, description, enabled, created_at) VALUES (?,?,?,1,?)",
-        (tid, theme["name"], theme.get("description", ""), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        "INSERT OR IGNORE INTO themes (id, name, description, type, enabled, created_at) VALUES (?,?,?,?,1,?)",
+        (tid, theme["name"], theme.get("description", ""), theme.get("type", "observation"),
+         datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    # 策略型主题的默认参数（仅在没有任何参数版本时播种；用户修改永不覆盖）
+    if theme.get("strategy_params"):
+        cnt = conn.execute("SELECT COUNT(*) AS c FROM strategy_params WHERE theme_id = ?",
+                           (tid,)).fetchone()["c"]
+        if cnt == 0:
+            conn.execute(
+                "INSERT INTO strategy_params (theme_id, params_json, note, created_at) VALUES (?,?,?,?)",
+                (tid, json.dumps(theme["strategy_params"], ensure_ascii=False), "初始默认参数",
+                 datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     for key, label, unit, kind, params in theme.get("metrics", []):
         conn.execute(
             "INSERT OR IGNORE INTO metrics (metric_key, label, unit, kind, params, enabled) VALUES (?,?,?,?,?,1)",
@@ -224,6 +243,7 @@ def init_db():
     conn = get_db()
     try:
         conn.executescript(SCHEMA)
+        ensure_column(conn, "themes", "type", "type TEXT DEFAULT 'observation'")
         ensure_column(conn, "overview", "action", "action TEXT DEFAULT ''")
         ensure_column(conn, "pool", "health", "health TEXT DEFAULT '正常'")
         if BASE_DIR not in sys.path:
