@@ -133,6 +133,24 @@ CREATE TABLE IF NOT EXISTS advice (
     reason TEXT DEFAULT '',
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS paper_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    theme_id TEXT NOT NULL, name TEXT NOT NULL,
+    initial_cash REAL NOT NULL, cash REAL NOT NULL,
+    fee_bps REAL DEFAULT 1, exec_rule TEXT DEFAULT 'next_close',
+    last_advice_id INTEGER DEFAULT 0, status TEXT DEFAULT 'running', created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS paper_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, account_id INTEGER NOT NULL,
+    date TEXT NOT NULL, code TEXT NOT NULL, name TEXT DEFAULT '', side TEXT NOT NULL,
+    shares INTEGER NOT NULL, price REAL NOT NULL, fee REAL NOT NULL,
+    advice_id INTEGER DEFAULT 0, note TEXT DEFAULT '', created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS paper_positions (
+    account_id INTEGER NOT NULL, code TEXT NOT NULL, name TEXT DEFAULT '',
+    shares INTEGER NOT NULL, cost REAL NOT NULL, updated_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, code)
+);
 CREATE TABLE IF NOT EXISTS strategy_params (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     theme_id TEXT NOT NULL,

@@ -546,3 +546,122 @@ export function getMarketWidth(): {
     series: series.slice(-60),
   };
 }
+
+/* ---------- 模拟盘（paper trading，strategy 主题） ---------- */
+
+export interface PaperAccount {
+  id: number;
+  theme_id: string;
+  name: string;
+  initial_cash: number;
+  cash: number;
+  fee_bps: number;
+  exec_rule: string;
+  last_advice_id: number;
+  status: string;
+  created_at: string;
+}
+
+export interface PaperPosition {
+  code: string;
+  name: string;
+  shares: number;
+  cost: number;
+  updated_at: string;
+  lastPx: number | null;
+  lastPxDate: string;
+  mktval: number | null;
+  pnl: number | null;
+  pnlPct: number | null;
+}
+
+export interface PaperTrade {
+  id: number;
+  date: string;
+  code: string;
+  name: string;
+  side: string;
+  shares: number;
+  price: number;
+  fee: number;
+  advice_id: number;
+  note: string;
+  created_at: string;
+}
+
+/** 当前 running 的模拟盘账户（无则 null） */
+export function getPaperAccount(): PaperAccount | null {
+  return (
+    (getDb()
+      .prepare("SELECT * FROM paper_accounts WHERE status = 'running' ORDER BY id DESC LIMIT 1")
+      .get() as PaperAccount) ?? null
+  );
+}
+
+/** 持仓 + 最新价（px:{code}）与浮动盈亏 */
+export function getPaperPositions(accountId: number): PaperPosition[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM paper_positions WHERE account_id = ? ORDER BY code")
+    .all(accountId) as Array<{
+    code: string;
+    name: string;
+    shares: number;
+    cost: number;
+    updated_at: string;
+  }>;
+  const pxStmt = getDb().prepare(
+    "SELECT period_date, value FROM snapshots WHERE metric_key = ? ORDER BY period_date DESC LIMIT 1"
+  );
+  return rows.map((r) => {
+    const px = pxStmt.get(`px:${r.code}`) as
+      | { period_date: string; value: number }
+      | undefined;
+    const lastPx = px?.value ?? null;
+    const mktval = lastPx !== null ? r.shares * lastPx : null;
+    const pnl = lastPx !== null ? (lastPx - r.cost) * r.shares : null;
+    const pnlPct = lastPx !== null && r.cost !== 0 ? lastPx / r.cost - 1 : null;
+    return {
+      code: r.code,
+      name: r.name,
+      shares: r.shares,
+      cost: r.cost,
+      updated_at: r.updated_at,
+      lastPx,
+      lastPxDate: px?.period_date ?? "",
+      mktval,
+      pnl,
+      pnlPct,
+    };
+  });
+}
+
+export function getPaperTrades(accountId: number, limit = 50): PaperTrade[] {
+  return getDb()
+    .prepare("SELECT * FROM paper_trades WHERE account_id = ? ORDER BY id DESC LIMIT ?")
+    .all(accountId, limit) as PaperTrade[];
+}
+
+/** 模拟盘/理想建议/基准三序列按日期合并；paper:nav 为绝对金额，按 initialCash 归一（从 1 起） */
+export function getPaperNavSeries(
+  initialCash: number
+): Array<{ d: string; paper: number | null; adv: number | null; bm: number | null }> {
+  const keys = [
+    ["paper:nav", "paper"],
+    ["adv:nav", "adv"],
+    ["bm:nav", "bm"],
+  ] as const;
+  type Row = { d: string; paper: number | null; adv: number | null; bm: number | null };
+  const map = new Map<string, Row>();
+  const norm = initialCash > 0 ? initialCash : 1;
+  for (const [metric, field] of keys) {
+    for (const p of getSeries(metric)) {
+      let row = map.get(p.d);
+      if (!row) {
+        row = { d: p.d, paper: null, adv: null, bm: null };
+        map.set(p.d, row);
+      }
+      row[field] = field === "paper" ? p.v / norm : p.v;
+    }
+  }
+  return [...map.values()].sort((a, b) => (a.d < b.d ? -1 : 1));
+}

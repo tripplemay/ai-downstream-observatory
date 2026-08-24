@@ -15,6 +15,7 @@ TYPE="${1:-monthly}"
   if [ "$TYPE" = "daily" ]; then
     python worker/fetch_data.py --only universe,etf_px,yf_price,model_price,fund_info || RC=$?
     python worker/rules.py || RC=$?
+    python worker/paper_trade.py || RC=$?
   elif [ "$TYPE" = "weekly" ]; then
     python worker/fetch_data.py --only index_data || RC=$?
     python worker/backtest_rotation.py || RC=$?

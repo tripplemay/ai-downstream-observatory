@@ -14,6 +14,7 @@ import {
   LineChart,
   Radar,
   TrafficCone,
+  Wallet,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -33,6 +34,7 @@ export const STRATEGY_NAV_ITEMS = [
   { path: "/", label: "总览", icon: LayoutDashboard },
   { path: "/universe", label: "监测", icon: Radar },
   { path: "/advice", label: "建议", icon: Lightbulb },
+  { path: "/paper", label: "模拟盘", icon: Wallet },
   { path: "/thesis", label: "规则", icon: BookOpen },
   { path: "/reports", label: "报告", icon: FileText },
 ];

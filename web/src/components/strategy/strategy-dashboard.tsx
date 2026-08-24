@@ -79,12 +79,20 @@ export function StrategyDashboard({ themeId }: { themeId: string }) {
             ) : (
               <p className="text-sm text-muted-foreground">当前无合格标的，全部持币。</p>
             )}
-            <Link
-              href={`/${themeId}/advice`}
-              className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline dark:text-blue-400"
-            >
-              查看详情 <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
+            <div className="flex items-center gap-4">
+              <Link
+                href={`/${themeId}/advice`}
+                className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline dark:text-blue-400"
+              >
+                查看详情 <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
+              <Link
+                href={`/${themeId}/paper`}
+                className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline dark:text-blue-400"
+              >
+                模拟盘 <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
+            </div>
           </CardContent>
         </Card>
 
