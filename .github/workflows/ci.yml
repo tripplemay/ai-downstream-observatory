@@ -42,7 +42,7 @@ jobs:
       - name: schema, market, recovery and release fixtures
         run: node --test tests/*/*.test.mjs
       - name: shell release checks
-        run: shellcheck scripts/deploy-workbench.sh tests/deployment/container-smoke.sh
+        run: shellcheck scripts/deploy-workbench.sh tests/deployment/container-smoke.sh tests/deployment/provider-container-smoke.sh
       - name: Web typecheck
         working-directory: web
         run: npm run typecheck
@@ -76,6 +76,8 @@ jobs:
           ref: ${{ inputs.release_sha || github.sha }}
       - name: isolated non-root container migration and recovery smoke
         run: sudo --preserve-env=PATH bash tests/deployment/container-smoke.sh
+      - name: optional provider native runtime without credentials or network
+        run: bash tests/deployment/provider-container-smoke.sh
       - name: preserve container evidence
         if: always()
         uses: actions/upload-artifact@v4

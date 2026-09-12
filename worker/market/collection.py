@@ -157,24 +157,34 @@ def _capture_summary(receipt, receipt_hash):
 
 
 def verify_provider_capture(connection, batch_id, require_published=True, *, replay=True, known_at=None):
+    if connection.execute("SELECT 1 FROM market_sdk_captures WHERE batch_id=?", (batch_id,)).fetchone():
+        from .price_collection import verify_price_provider_capture
+        return verify_price_provider_capture(connection, batch_id, require_published, replay=replay, known_at=known_at)
+    return _verify_capture(connection, batch_id, require_published, replay=replay, known_at=known_at)
+
+
+def _verify_capture(connection, batch_id, require_published=True, *, replay=True, known_at=None,
+                    table="market_provider_captures", prepared_type=PreparedCollection,
+                    verify_material=_verify_material, request_payload=_request_payload,
+                    job_type="market_collect", source_id=SOURCE_ID):
     """Check immutable capture and worker origin, never merely a source label.
 
     `replay=False` is limited to short, already prepared publication writes.
     Read-side callers also reparse the original bytes outside a write lock.
     """
     try:
-        row = connection.execute("SELECT * FROM market_provider_captures WHERE batch_id=?", (batch_id,)).fetchone()
+        row = connection.execute("SELECT * FROM " + table + " WHERE batch_id=?", (batch_id,)).fetchone()
         if row is None:
             raise WorkbenchError("PROVIDER_CAPTURE_MISSING")
         request = connection.execute("SELECT * FROM command_requests WHERE id=?", (row["command_request_id"],)).fetchone()
         job = connection.execute("SELECT * FROM job_runs WHERE id=?", (row["job_id"],)).fetchone()
         attempt = connection.execute("SELECT * FROM job_attempts WHERE job_id=? AND attempt=?", (row["job_id"], row["attempt"])).fetchone()
         receipt = json.loads(row["receipt_json"])
-        prepared = PreparedCollection(bytes(row["raw_body"]), receipt, json.loads(row["normalized_json"]), json.loads(row["document_json"]))
-        _verify_material(prepared, request, replay=replay)
+        prepared = prepared_type(bytes(row["raw_body"]), receipt, json.loads(row["normalized_json"]), json.loads(row["document_json"]))
+        verify_material(prepared, request, replay=replay)
         if (row["receipt_hash"] != content_hash(receipt) or receipt["id"] != row["id"]
                 or receipt["batch_id"] != batch_id or receipt["job_id"] != row["job_id"] or receipt["attempt"] != row["attempt"]
-                or job["command_request_id"] != request["id"] or job["job_type"] != "market_collect"
+                or job["command_request_id"] != request["id"] or job["job_type"] != job_type
                 or job["scope"] != request["portfolio_id"] or attempt["fencing_token"] != receipt["fencing_token"]
                 or job["attempt_count"] != receipt["attempt"] or job["fencing_token"] != receipt["fencing_token"]
                 or instant(receipt["request_started_at"]) < instant(attempt["started_at"])
@@ -183,7 +193,7 @@ def verify_provider_capture(connection, batch_id, require_published=True, *, rep
         if require_published:
             result = json.loads(job["result_json"])
             if (job["status"] != "succeeded" or attempt["status"] != "succeeded"
-                    or _request_payload(request)["publish"] is not True or result.get("batch_status") != "published"
+                    or request_payload(request)["publish"] is not True or result.get("batch_status") != "published"
                     or result.get("capture_id") != row["id"] or result.get("receipt_hash") != row["receipt_hash"]
                     or result.get("batch_id") != batch_id or not isinstance(attempt["finished_at"], str)
                     or instant(row["created_at"]) > instant(attempt["finished_at"])
@@ -196,7 +206,7 @@ def verify_provider_capture(connection, batch_id, require_published=True, *, rep
         summary = _capture_summary(receipt, row["receipt_hash"])
         if batch is not None:
             validation = json.loads(batch["validation_json"])
-            if (validation["plan"] != prepared.document["batch"] or batch["source_id"] != SOURCE_ID
+            if (validation["plan"] != prepared.document["batch"] or batch["source_id"] != source_id
                     or batch["scope"] != prepared.document["batch"]["scope"]):
                 raise WorkbenchError("PROVIDER_BATCH_MISMATCH")
             pages = connection.execute("SELECT * FROM market_batch_pages WHERE batch_id=? ORDER BY page_number", (batch_id,)).fetchall()

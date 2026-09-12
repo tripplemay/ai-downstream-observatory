@@ -95,6 +95,14 @@ class ProjectionTests(unittest.TestCase):
             with self.subTest(changes=changes):
                 self.assertNotEqual(parse(**changes)["projection_sha256"], baseline)
 
+    def test_listing_identifier_matches_common_contract_without_becoming_a_path(self):
+        listing_id = "listing:synthetic.ETF_1-2"
+        result = parse(mapping={**MAPPING, "listing_id": listing_id})
+        self.assertEqual(result["request"]["mapping"]["listing_id"], listing_id)
+        self.assertTrue(all(row["listing_id"] == listing_id for row in result["records"]))
+        with self.assertRaisesRegex(WorkbenchError, "MAPPING_INVALID"):
+            parse(mapping={**MAPPING, "listing_id": "listing:synthetic/ETF-1"})
+
     def test_cn_hk_us_mapping_and_timezone_do_not_rewrite_provider_symbol(self):
         for market, symbol, currency, zone in (("CN", "500001.SH", "CNY", "Asia/Shanghai"),
                                                ("CN", "100001.SZ", "CNY", "Asia/Shanghai"),

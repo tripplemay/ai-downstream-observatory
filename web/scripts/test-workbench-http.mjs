@@ -26,6 +26,7 @@ const report = {
     'Monthly HTTP cases prove negative authorization, immutable empty state and recovery boundaries; authorized proposal publication is covered separately by service and Python-to-Node integration tests.',
     'Rotation HTTP cases use a real authenticated network session and Python worker with synthetic research data; they do not certify G/S gates, real forward performance or broker execution.',
     'Collection HTTP cases patch only the independent test Python transport with synthetic XML; no app request can provide a URL, body, credential or provider clock, and no CI provider network request is made.',
+    'Price collection cases use human-reviewed synthetic references and SDK projections in an independent test transport; they do not verify exchange calendars, subscriptions, real market data or broker buyability.',
   ],
 };
 const sha = (value) => createHash('sha256').update(value).digest('hex');
@@ -109,9 +110,9 @@ async function main() {
     await check('HTTP-00', 'fresh migration and current production build', async () => {
       const migration = migrateWorkbench(filename);
       const db = new Database(filename);
-      db.prepare("INSERT INTO instruments(id,name,created_at) VALUES('http-instrument','Synthetic ETF','2026-01-01')").run();
-      db.prepare("INSERT INTO listings(id,instrument_id,market,exchange,ticker,currency,created_at) VALUES('http-listing','http-instrument','CN','SSE','TEST01','CNY','2026-01-01')").run();
-      db.prepare("INSERT INTO listings(id,instrument_id,market,exchange,ticker,currency,created_at) VALUES('http-listing-2','http-instrument','US','SYNTHETIC','TEST02','USD','2026-01-01')").run();
+      db.prepare("INSERT INTO instruments(id,name,created_at) VALUES('http-instrument','Synthetic ETF','2026-01-01T00:00:00.000000Z')").run();
+      db.prepare("INSERT INTO listings(id,instrument_id,market,exchange,ticker,currency,created_at) VALUES('http-listing','http-instrument','CN','SSE','TEST01','CNY','2026-01-01T00:00:00.000000Z')").run();
+      db.prepare("INSERT INTO listings(id,instrument_id,market,exchange,ticker,currency,created_at) VALUES('http-listing-2','http-instrument','US','SYNTHETIC','TEST02','USD','2026-01-01T00:00:00.000000Z')").run();
       db.close();
       if (report.build_performed) {
         const build = spawnSync(process.execPath, ['node_modules/next/dist/bin/next', 'build'], {
@@ -153,6 +154,7 @@ async function main() {
       assert.equal((await request('/workbench/governance')).headers.get('location'), '/login');
       assert.equal((await request('/workbench/funding')).headers.get('location'), '/login');
       assert.equal((await request('/workbench/catalog')).headers.get('location'), '/login');
+      assert.equal((await request('/workbench/market')).headers.get('location'), '/login');
       assert.equal((await jsonRequest('/api/workbench/catalog')).status, 401);
       assert.equal((await jsonRequest('/api/workbench')).status, 401);
       assert.equal((await post({ action: 'create_portfolio', name: 'Forbidden' })).status, 401);
@@ -1552,6 +1554,161 @@ finally:
       return { job_status: 'retry_queued', attempt_status: 'failed', error: 'PROVIDER_COLLECTION_FAILED', previous_head_unchanged: true,
         capture_created: false, financial_tables_unchanged: true, actual_provider_requests: 0 };
     });
+    let pricePortfolio, priceSource, priceVersions, pricePayload, priceResult;
+    const priceDocuments = ['http-listing', 'http-price-listing'].map((listing_id, i) => ({ kind: 'mapping', facts: {
+      provider: 'longport', listing_id, provider_symbol: `00000${i + 1}.SH`, market: 'CN', exchange: 'SSE', currency: 'CNY', valid_from: '2025-01-01', valid_to: null,
+    } }));
+    priceDocuments.push({ kind: 'calendar', facts: { market: 'CN', exchange: 'SSE', timezone: 'Asia/Shanghai', range_start: '2025-06-05', range_end: '2025-06-08',
+      days: [{ date: '2025-06-05', kind: 'full', close_at: '2025-06-05T07:00:00.000000Z' }, { date: '2025-06-06', kind: 'half', close_at: '2025-06-06T07:00:00.000000Z' },
+        { date: '2025-06-07', kind: 'closed', close_at: null }, { date: '2025-06-08', kind: 'closed', close_at: null }] } });
+    const priceRaw = JSON.stringify({ fixture: 'Synthetic review input; not exchange or provider evidence', documents: priceDocuments }, null, 2) + '\n';
+    const marketPost = (body, extraHeaders = {}) => jsonRequest('/api/workbench/market', { method: 'POST', headers: {
+      Cookie: cookie, Origin: origin, 'Content-Type': 'application/json', ...collectionHeaders(), ...extraHeaders,
+    }, body: JSON.stringify(body) });
+    const marketGet = (query = `portfolio=${pricePortfolio}`) => jsonRequest(`/api/workbench/market?${query}`, { headers: { Cookie: cookie, ...collectionHeaders() } });
+    const reviewCommand = (document, version = 0) => ({ action: 'publish_reference', command: { portfolio_id: pricePortfolio,
+      idempotency_key: `http-price-review:${++sourceSequence}`, expected_version: version, source_id: priceSource.id, source_hash: priceSource.content_hash,
+      review_reason: 'Synthetic human review only; no exchange verification', acknowledgement: true, document } });
+    const priceCommand = (payload, key) => collectionCommand(payload, key, { portfolio_id: pricePortfolio, command_type: 'market_collect_prices' });
+    const priceWorker = (requestId, fail = false) => {
+      const script = `import json,sys
+from unittest.mock import patch
+from worker.orchestration.db import WorkbenchError,open_database
+from worker.orchestration.runtime import run_pending_once
+from worker.market.collection import verify_provider_capture
+from tests.market.test_price_collection import fake_collect
+db=open_database(sys.argv[1]); calls=[]
+def transport(**kwargs):
+    calls.append(kwargs['mapping']['listing_id'])
+    if len(calls)==2 and sys.argv[3]=='fail':
+        raise RuntimeError('synthetic-sdk-detail-not-for-api')
+    return fake_collect(**kwargs)
+try:
+    with patch('worker.market.providers.longport.collect_longport_candles',transport):
+        try:
+            job=run_pending_once(db,'synthetic-http-price-worker',role='longport',lease_seconds=300)
+        except WorkbenchError as error:
+            print(json.dumps({'error':str(error),'calls':calls})); sys.exit(2)
+    assert job['command_request_id']==sys.argv[2]
+    result=json.loads(job['result_json'])
+    print(json.dumps({'status':job['status'],'result':result,'proof':verify_provider_capture(db,result['batch_id']),'calls':calls}))
+finally: db.close()
+`;
+      const worker = spawnSync(rotationPython, ['-c', script, filename, requestId, fail ? 'fail' : 'success'], { cwd: root, env: rotationEnv, encoding: 'utf8', timeout: 30000 });
+      assert.equal(worker.status, fail ? 2 : 0, worker.stderr || worker.stdout || String(worker.error));
+      const result = JSON.parse(worker.stdout); assert.deepEqual(result.calls, ['http-listing', 'http-price-listing']); return result;
+    };
+    const priceWebProof = (knownAt = new Date().toISOString()) => {
+      const script = `import Database from 'better-sqlite3';
+import {verifiedMarketSource} from './src/server/market-source.ts';
+import {verifiedPriceCalendarSession} from './src/server/market-price-source.ts';
+const db=new Database(process.argv[1],{readonly:true});
+try { console.log(JSON.stringify({source:verifiedMarketSource(db,process.argv[2],process.argv[4]),
+session:verifiedPriceCalendarSession(db,process.argv[2],process.argv[3],'http-listing','2025-06-07T06:00:00Z',process.argv[4])})); }
+catch(error) { console.log(JSON.stringify({error:error.message})); } finally {db.close();}`;
+      const checked = spawnSync(path.join(web, 'node_modules/.bin/tsx'), ['-e', script, filename, priceResult.batch_id, pricePortfolio, knownAt], { cwd: web, encoding: 'utf8', timeout: 30000 });
+      assert.equal(checked.status, 0, checked.stderr || String(checked.error)); return JSON.parse(checked.stdout);
+    };
+    await check('HTTP-MP01', 'scoped human source storage preserves exact bytes and audited reference versions without creating financial facts', async () => {
+      const created = await post({ action: 'create_portfolio', name: 'Synthetic price HTTP fixture' }); assert.equal(created.status, 200); pricePortfolio = created.json.id;
+      const db = new Database(filename);
+      try { db.prepare("INSERT INTO listings(id,instrument_id,market,exchange,ticker,currency,created_at) VALUES('http-price-listing','http-instrument','CN','SSE','SYNTH03','CNY',?)").run(new Date().toISOString()); } finally { db.close(); }
+      for (const [i, listing_id] of ['http-listing', 'http-price-listing'].entries()) {
+        const added = await catalogPost('add_entry', { portfolio_id: pricePortfolio, expected_catalog_revision: i, idempotency_key: `http-price-entry:${i}`, listing_id });
+        assert.equal(added.status, 200, JSON.stringify(added.json));
+      }
+      const before = rotationSnapshot();
+      const stored = await marketPost({ action: 'store_source', command: { portfolio_id: pricePortfolio, idempotency_key: 'http-price-source', reference: 'Synthetic review fixture', content_text: priceRaw } });
+      assert.equal(stored.status, 200, JSON.stringify(stored.json)); priceSource = stored.json;
+      assert.equal(priceSource.verification_status, 'unreviewed'); assert.equal(priceSource.content_hash, sha(priceRaw));
+      const download = await request(`/api/workbench/market?portfolio=${pricePortfolio}&view=source&id=${priceSource.id}`, { headers: { Cookie: cookie, ...collectionHeaders() } });
+      assert.equal(download.status, 200); assert.equal(await download.text(), priceRaw);
+      assert.match(download.headers.get('content-disposition'), /^attachment;/); assert.match(download.headers.get('content-type'), /^application\/json/);
+      assert.match(download.headers.get('content-security-policy'), /sandbox/); assert.match(download.headers.get('content-security-policy'), /default-src 'none'/);
+      assert.match(download.headers.get('cache-control'), /private.*no-store/); assert.match(download.headers.get('vary'), /Cookie/i);
+      priceVersions = [];
+      for (const document of priceDocuments) {
+        const reviewed = await marketPost(reviewCommand(document)); assert.equal(reviewed.status, 200, JSON.stringify(reviewed.json));
+        assert.equal(reviewed.json.version, 1); assert.equal(reviewed.json.verification_status, 'human_reviewed_not_provider_verified'); priceVersions.push(reviewed.json);
+        const detail = await marketGet(`portfolio=${pricePortfolio}&view=version&id=${reviewed.json.id}`); assert.equal(detail.status, 200);
+        assert.equal(detail.json.version.created_by, 'owner'); assert.match(detail.json.version.known_at, /\.\d{6}Z$/);
+      }
+      const summary = await marketGet(); assert.equal(summary.status, 200); assert.equal(summary.json.heads.length, 3);
+      const page = await request('/workbench/market', { headers: { Cookie: cookie } }); assert.equal(page.status, 200); assert.match(await page.text(), /市场资料与价格采集/);
+      assert.equal(summary.json.sources.length, 1); assert.doesNotMatch(JSON.stringify(summary.json), /content_text|"days"|raw_body|longport-candles-projection/);
+      const foreign = await marketGet(`portfolio=${otherPortfolio}`); assert.equal(foreign.status, 200); assert.equal(foreign.json.sources.length, 0); assert.equal(foreign.json.versions.length, 0);
+      assert.equal((await marketGet(`portfolio=${otherPortfolio}&view=source&id=${priceSource.id}`)).status, 403);
+      assert.equal((await marketGet(`portfolio=${otherPortfolio}&view=version&id=${priceVersions[0].id}`)).status, 403);
+      assert.equal(rotationSnapshot(), before);
+      pricePayload = { schema_version: 'market-price-collect-v1', provider: 'longport', mapping_version_ids: priceVersions.slice(0, 2).map(row => row.id), calendar_version_ids: [priceVersions[2].id],
+        start_date: '2025-06-05', end_date: '2025-06-06', expected_publication_revision: 0, publish: true };
+      return { exact_source_sha256: priceSource.content_hash, reviewed_versions: 3, human_review_only: true, cross_portfolio_source: 403, financial_tables_unchanged: true, inert_download: true };
+    });
+    await check('HTTP-MP02', 'market endpoints reject unauthenticated, forged, duplicate-query and recovery writes before changing state', async () => {
+      const before = inspectionStorage(), body = reviewCommand(priceDocuments[0], 1);
+      assert.equal((await jsonRequest('/api/workbench/market')).status, 401);
+      assert.equal((await jsonRequest('/api/workbench/market', { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).status, 401);
+      assert.equal((await marketPost(body, { Origin: 'https://synthetic-wrong-origin.invalid' })).status, 403);
+      assert.equal((await marketPost(body, { 'X-Workbench-Session-Binding': '0'.repeat(64) })).status, 401);
+      assert.equal((await marketGet(`portfolio=${pricePortfolio}&portfolio=${pricePortfolio}`)).status, 400);
+      assert.equal((await marketGet(`portfolio=${pricePortfolio}&unexpected=1`)).status, 400);
+      for (const fields of [{ verified: true }, { created_by: 'worker' }, { known_at: '2025-01-01T00:00:00.000000Z' }, { audit_id: 'synthetic-forged' }]) {
+        const rejected = await marketPost({ ...body, command: { ...body.command, ...fields } }); assert.equal(rejected.status, 400, JSON.stringify(rejected.json));
+      }
+      for (const fields of [{ url: 'https://synthetic-provider.invalid/' }, { token: 'SYNTHETIC-NOT-A-CREDENTIAL' }, { raw_body: '{}' }, { collector_runtime: 'isolated_official_sdk' }]) {
+        const rejected = await post(priceCommand({ ...pricePayload, ...fields }, `http-price-forged:${++sourceSequence}`), collectionHeaders());
+        assert.equal(rejected.status, 400, JSON.stringify(rejected.json)); assert.equal(rejected.json.error, 'INVALID_MARKET_PRICE_COLLECT');
+      }
+      const marker = path.join(directory, 'RESTORE_PENDING_REVIEW'); writeFileSync(marker, 'Synthetic reviewed-reference recovery fixture\n');
+      try {
+        assert.equal((await marketGet()).json.read_only, true); assert.equal((await marketPost(body)).status, 423);
+        assert.equal((await post(priceCommand(pricePayload, 'http-price-recovery'), collectionHeaders())).status, 423);
+      } finally { rmSync(marker); }
+      assert.deepEqual(inspectionStorage(), before);
+      return { authentication: 401, origin: 403, binding: 401, invalid_metadata: 400, recovery: 423, database_unchanged: true, network_requests: 0 };
+    });
+    await check('HTTP-MP03', 'two reviewed ETF mappings reach one atomic SDK capture through the dedicated Python role and independent Web verification', async () => {
+      const before = rotationSnapshot(), body = priceCommand(pricePayload, 'http-price-success');
+      const queued = await post(body, collectionHeaders()); assert.equal(queued.status, 200, JSON.stringify(queued.json));
+      const duplicate = await post(body, collectionHeaders()); assert.equal(duplicate.status, 200); assert.deepEqual(duplicate.json, queued.json);
+      const worker = priceWorker(queued.json.request_id); assert.equal(worker.status, 'succeeded'); priceResult = worker.result;
+      assert.equal(priceResult.live_advice_eligible, false); assert.equal(worker.proof.capture_kind, 'sdk_projection');
+      const db = new Database(filename, { readonly: true });
+      try {
+        const captures = db.prepare('SELECT * FROM market_sdk_captures WHERE command_request_id=?').all(queued.json.request_id); assert.equal(captures.length, 1);
+        assert.equal(sha(captures[0].raw_body), worker.proof.raw_sha256);
+        const rows = db.prepare('SELECT * FROM market_observations WHERE batch_id=?').all(priceResult.batch_id); assert.equal(rows.length, 4);
+        for (const row of rows) { assert.equal(row.time_precision, 'date'); assert.equal(row.published_at, null); assert.equal(row.value, '10.100000000000000001'); }
+      } finally { db.close(); }
+      const proof = priceWebProof(); assert.equal(proof.source.portfolio_id, pricePortfolio); assert.equal(proof.session, '2025-06-06');
+      const current = await state(pricePortfolio); assert.equal(current.tasks.find(row => row.id === queued.json.request_id).status, 'succeeded');
+      assert.doesNotMatch(JSON.stringify(current), /raw_body|projection_bytes|candlesticks|synthetic-sdk-detail/); assert.equal(rotationSnapshot(), before);
+      return { sdk_calls_in_test_transport: 2, atomic_captures: 1, observations: 4, date_precision_preserved: true, independently_verified_session: proof.session,
+        financial_tables_unchanged: true, provider_requests: 0, live_advice_eligible: false };
+    });
+    await check('HTTP-MP04', 'second ETF failure leaves the old publication and capture intact with a safe retryable error', async () => {
+      const before = collectionMarketState(), financial = rotationSnapshot();
+      const queued = await post(priceCommand({ ...pricePayload, expected_publication_revision: 1 }, 'http-price-second-failure'), collectionHeaders()); assert.equal(queued.status, 200, JSON.stringify(queued.json));
+      assert.equal(priceWorker(queued.json.request_id, true).error, 'PRICE_PROVIDER_COLLECTION_FAILED');
+      const db = new Database(filename, { readonly: true });
+      try {
+        const job = db.prepare('SELECT * FROM job_runs WHERE command_request_id=?').get(queued.json.request_id); assert.equal(job.status, 'retry_queued');
+        const attempt = db.prepare('SELECT * FROM job_attempts WHERE job_id=?').get(job.id); assert.equal(attempt.status, 'failed');
+        assert.deepEqual(JSON.parse(attempt.error_json), { code: 'WorkbenchError', message: 'PRICE_PROVIDER_COLLECTION_FAILED' });
+        assert.equal(db.prepare('SELECT COUNT(*) n FROM market_sdk_captures WHERE command_request_id=?').get(queued.json.request_id).n, 0);
+      } finally { db.close(); }
+      assert.deepEqual(collectionMarketState(), before); assert.equal(rotationSnapshot(), financial);
+      assert.doesNotMatch(JSON.stringify(await state(pricePortfolio)), /synthetic-sdk-detail-not-for-api|raw_body|candlesticks/);
+      return { partial_capture_created: false, previous_market_state_unchanged: true, safe_error: 'PRICE_PROVIDER_COLLECTION_FAILED', financial_tables_unchanged: true };
+    });
+    await check('HTTP-MP05', 'reference revisions invalidate current SDK use while preserving independently verified as-known evidence', async () => {
+      const known = new Date().toISOString(), before = rotationSnapshot(); assert.equal(priceWebProof(known).session, '2025-06-06');
+      const changed = await marketPost(reviewCommand(priceDocuments[2], 1)); assert.equal(changed.status, 200, JSON.stringify(changed.json)); assert.equal(changed.json.version, 2);
+      assert.equal(priceWebProof(known).session, '2025-06-06'); assert.equal(priceWebProof().error, 'MARKET_PROVIDER_EVIDENCE_INVALID');
+      const stale = await post(priceCommand({ ...pricePayload, expected_publication_revision: 1 }, 'http-price-stale-reference'), collectionHeaders()); assert.equal(stale.status, 409);
+      assert.equal(rotationSnapshot(), before);
+      return { current_old_reference_rejected: true, as_known_snapshot_preserved: true, stale_queue: 409, financial_tables_unchanged: true };
+    });
     await check('HTTP-16', 'storage errors do not expose paths or SQL', async () => {
       renameSync(filename, `${filename}.held`);
       try {
@@ -1563,6 +1720,7 @@ finally:
       const result = await request('/api/auth/logout', { method: 'POST', headers: { Cookie: cookie, Origin: origin } }); assert.equal(result.status, 303);
       assert.equal((await jsonRequest('/api/workbench', { headers: { Cookie: cookie } })).status, 401);
       assert.equal((await catalogGet()).status, 401);
+      assert.equal((await marketGet()).status, 401);
       const deniedCatalog = await jsonRequest('/api/workbench/catalog', { method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: 'x'.repeat(2 * 1024 * 1024 + 1) }); assert.equal(deniedCatalog.status, 401);
       const db = new Database(filename, { readonly: true });
       try {

@@ -160,7 +160,7 @@ export function prepareMonthlyEvaluation(db: Database.Database, lease: Evaluatio
     for (const row of [...positions, ...transits.map(row => ({ ...row, account_id: row.source_account_id }))]) {
       if (!amount(row.quantity).isZero() && strategy.universe.includes(row.listing_id) && !targetKeys.has(JSON.stringify([row.account_id, row.listing_id]))) throw new Error("EVALUATION_TARGET_SCOPE_INCOMPLETE");
     }
-    const publications = currentPublications(db, policy, riskKnowledge); input.publications = publications;
+    const publications = currentPublications(db, policy, riskKnowledge, portfolio); input.publications = publications;
     for (const publication of publications) known(publication.published_at, cycle.knowledge_at);
     const valuationId = db.prepare("SELECT id FROM valuation_runs WHERE portfolio_id=? AND ledger_revision=? AND quality='complete' AND julianday(created_at)<=julianday(?) AND julianday(cutoff_at)<=julianday(?) ORDER BY cutoff_at DESC,created_at DESC,id DESC LIMIT 1")
       .get(portfolio, revision(db, portfolio), cycle.knowledge_at, cycle.cutoff_at) as { id: string } | undefined;
@@ -175,7 +175,7 @@ export function prepareMonthlyEvaluation(db: Database.Database, lease: Evaluatio
       const evidence = parseStrictJson(String(item.evidence_json)) as { price_observation_id?: string; fx_observation_id?: string };
       const checkVector = (scope: string | undefined, series: string, metric: string, expected: string | undefined) => {
         if (!scope) throw new Error("EVALUATION_VALUATION_PRICE_VECTOR_MISMATCH");
-        const selected = evaluationObservation(db, publications, scope, series, metric, policy, riskKnowledge);
+        const selected = evaluationObservation(db, publications, scope, series, metric, policy, riskKnowledge, portfolio);
         known((selected as unknown as { ingested_at: string }).ingested_at, cycle.knowledge_at);
         if (selected.published_at) known(selected.published_at, cycle.knowledge_at);
         if (selected.time_precision === "second") known(selected.observed_at, cycle.cutoff_at);
@@ -205,7 +205,7 @@ export function prepareMonthlyEvaluation(db: Database.Database, lease: Evaluatio
         known(evidence.attachment.created_at, cycle.knowledge_at); permissions.push({ evidence: evidence.attachment });
       }
       const observe = (metric: string) => {
-        const value = evaluationObservation(db, publications, policy.price_scope_by_market[info.market], info.id, metric, policy, riskKnowledge);
+        const value = evaluationObservation(db, publications, policy.price_scope_by_market[info.market], info.id, metric, policy, riskKnowledge, portfolio);
         known((value as unknown as { ingested_at: string }).ingested_at, cycle.knowledge_at);
         if (value.published_at) known(value.published_at, cycle.knowledge_at);
         if (value.time_precision === "second") known(value.observed_at, cycle.cutoff_at);

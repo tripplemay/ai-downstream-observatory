@@ -279,6 +279,9 @@ def _child_main():
     """Fixed private stdin protocol; no arbitrary code, paths, or SDK methods."""
     try:
         import resource
+        # Kernel-enforced deadline survives a stalled or terminated parent.
+        signal.signal(signal.SIGALRM, signal.SIG_DFL)
+        signal.setitimer(signal.ITIMER_REAL, CALL_TIMEOUT_SECONDS)
         resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_PROJECTION_BYTES, MAX_PROJECTION_BYTES))
         body = sys.stdin.buffer.read(MAX_CHILD_INPUT_BYTES + 1)
         if not 1 <= len(body) <= MAX_CHILD_INPUT_BYTES:

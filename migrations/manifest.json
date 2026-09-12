@@ -80,6 +80,11 @@
       "version": 16,
       "file": "0016_market_provider_captures.sql",
       "sha256": "acfe19599089f37978cdefdf9146427e7559990baa242119b4927b227fbf7597"
+    },
+    {
+      "version": 17,
+      "file": "0017_market_reference_and_prices.sql",
+      "sha256": "cbf17492de5d40b6a0b892ac46c8013a9b4dcf210cb3486bd29a8afff98c416a"
     }
   ]
 }

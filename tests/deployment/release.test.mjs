@@ -27,6 +27,31 @@ test('personal plans and local data stay outside Docker build context and Git pu
     assert.deepEqual(privateFiles, []);
   }
 });
+test('credential basenames have recursive Docker rules and actual Git exclusions without hiding templates', t => {
+  const basenames = ['market-provider.env', 'runtime.env', 'release.env'];
+  const dockerRules = readFileSync(join(root, '.dockerignore'), 'utf8').split(/\r?\n/);
+  const gitRules = readFileSync(join(root, '.gitignore'), 'utf8').split(/\r?\n/);
+  for (const name of basenames) {
+    assert.ok(gitRules.includes(name), `unanchored Git basename: ${name}`);
+    assert.ok(dockerRules.includes(`**/${name}`), `root and arbitrary-depth Docker basename: ${name}`);
+  }
+  for (const rules of [gitRules, dockerRules]) {
+    assert.ok(!rules.includes('*.env') && !rules.includes('**/*.env'), 'do not hide unrelated environment templates');
+    assert.ok(!rules.some(rule => /^!.*(?:market-provider|runtime|release)\.env$/.test(rule)), 'no credential-specific re-inclusion');
+  }
+  const directory = fixture(t);
+  writeFileSync(join(directory, '.gitignore'), gitRules.join('\n'));
+  const initialized = spawnSync('git', ['init', '--quiet', directory], { encoding: 'utf8' });
+  assert.equal(initialized.status, 0, initialized.stderr);
+  const protectedPaths = ['', 'nested/', 'nested/deeper/'].flatMap(prefix => basenames.map(name => prefix + name));
+  const templates = ['', 'nested/', 'nested/deeper/'].flatMap(prefix => [
+    ...basenames.map(name => `${prefix}${name}.example`), `${prefix}synthetic-template.env`,
+  ]);
+  const result = spawnSync('git', ['-c', 'core.excludesFile=/dev/null', 'check-ignore', '--no-index', '--stdin'],
+    { cwd: directory, input: [...protectedPaths, ...templates].join('\n') + '\n', encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.stdout.trim().split('\n'), protectedPaths);
+});
 test('legacy research examples share an impersonal scope and label simulation-only capital', () => {
   const statement = '- 通用长期研究示例：依据证实/证伪信号而非短期波动调整研究判断，不代表任何用户的个人投资期限或偏好。';
   for (const path of ['AI下游投资观测台.md', 'worker/themes/ai_downstream.py', 'web/src/lib/seed.ts']) {
@@ -39,6 +64,8 @@ test('legacy research examples share an impersonal scope and label simulation-on
   const paper = readFileSync(join(root, 'worker/paper_trade.py'), 'utf8');
   assert.match(paper, /# Synthetic legacy simulation capital; never an actual-workbench cash default\.\nINITIAL_CASH = /);
   assert.ok(paper.includes('INSERT INTO paper_accounts'));
+  const policy = readFileSync(join(root, 'docs/03-decision-policy.md'), 'utf8');
+  assert.ok(policy.includes('### 5.2 日期化追加')); assert.ok(!policy.includes('### 5.2 年初追加'));
 });
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'etf-release-'));

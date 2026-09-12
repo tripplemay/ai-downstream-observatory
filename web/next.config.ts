@@ -17,6 +17,8 @@ const nextConfig: NextConfig = {
       { key: "Content-Security-Policy", value: "sandbox; default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" },
     ] }, { source: "/api/workbench/catalog", headers: [
       { key: "Content-Security-Policy", value: "sandbox; default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" },
+    ] }, { source: "/api/workbench/market", headers: [
+      { key: "Content-Security-Policy", value: "sandbox; default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" },
     ] }];
   },
 };

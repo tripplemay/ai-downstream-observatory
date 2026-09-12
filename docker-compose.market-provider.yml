@@ -1,0 +1,33 @@
+services:
+  market-provider:
+    profiles: [market-provider]
+    image: etf-workbench-market-provider:${WORKBENCH_RELEASE_SHA:-development}
+    build:
+      context: .
+      dockerfile: Dockerfile.market-provider
+      args:
+        RELEASE_SHA: ${WORKBENCH_RELEASE_SHA:-development}
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:mode=1777]
+    user: "10001:10001"
+    restart: unless-stopped
+    env_file:
+      - path: ${WORKBENCH_MARKET_PROVIDER_ENV_FILE:-/etc/etf-workbench/market-provider.env}
+        required: true
+        format: raw
+    environment:
+      WORKBENCH_DB_PATH: /app/data/etf-workbench.db
+      WORKBENCH_DATA_DIR: /app/data
+      WORKBENCH_MODE: ${WORKBENCH_MODE:-ledger}
+    volumes:
+      - type: bind
+        source: ${WORKBENCH_DATA_DIR_HOST:-./data-workbench}
+        target: /app/data
+        bind:
+          create_host_path: false
+    depends_on:
+      web:
+        condition: service_healthy

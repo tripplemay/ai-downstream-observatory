@@ -17,6 +17,10 @@ OBSERVATION_COLUMNS = (
 IDENTITY_COLUMNS = ("source_id", "series_key", "metric", "observed_at", "price_basis", "revision_id")
 
 
+def _capture_table(plan):
+    return "market_sdk_captures" if plan.get("source_id") == "provider:longport:prices" else "market_provider_captures"
+
+
 def _batch(connection, batch_id):
     row = connection.execute("SELECT * FROM market_batches WHERE id=?", (batch_id,)).fetchone()
     if row is None:
@@ -29,7 +33,8 @@ def _batch(connection, batch_id):
 def stage_batch(connection, plan, now=None):
     from .collection import reserved_source, verify_provider_capture
     provider = plan.get("source_mode") == "provider_observed"
-    validate_contract(plan, "market-provider-batch.schema.json" if provider else "market-batch.schema.json", fragment="properties/batch")
+    schema = "market-price-provider-batch.schema.json" if plan.get("source_id") == "provider:longport:prices" else "market-provider-batch.schema.json"
+    validate_contract(plan, schema if provider else "market-batch.schema.json", fragment="properties/batch")
     if reserved_source(plan) and not provider:
         raise WorkbenchError("RESERVED_MARKET_SOURCE")
     if provider:
@@ -72,7 +77,7 @@ def stage_page(connection, batch_id, page_number, observations, now=None):
         for observation in observations:
             observation_semantics(observation, batch["validation"]["plan"])
         if batch["validation"]["plan"].get("source_mode") == "provider_observed":
-            capture = connection.execute("SELECT document_json,receipt_json FROM market_provider_captures WHERE batch_id=?", (batch_id,)).fetchone()
+            capture = connection.execute("SELECT document_json,receipt_json FROM " + _capture_table(batch["validation"]["plan"]) + " WHERE batch_id=?", (batch_id,)).fetchone()
             if (capture is None or page_number != 1
                     or json.loads(capture["document_json"])["pages"][0]["observations"] != observations
                     or json.loads(capture["receipt_json"])["received_at"] != received):
@@ -186,7 +191,7 @@ def publish_batch(connection, batch_id, expected_revision=None, now=None):
         if batch["validation"]["plan"].get("source_mode") == "provider_observed":
             from .collection import verify_provider_capture
             verify_provider_capture(connection, batch_id, require_published=False, replay=False)
-            capture = connection.execute("""SELECT c.payload_json,j.* FROM market_provider_captures p
+            capture = connection.execute("SELECT c.payload_json,j.* FROM " + _capture_table(batch["validation"]["plan"]) + """ p
                 JOIN command_requests c ON c.id=p.command_request_id JOIN job_runs j ON j.id=p.job_id
                 WHERE p.batch_id=?""", (batch_id,)).fetchone()
             if (json.loads(capture["payload_json"])["publish"] is not True or capture["status"] != "running"

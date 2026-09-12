@@ -8,13 +8,14 @@ import { isGovernanceClientError } from "./errors";
 import { valuationFreshness } from "../valuation-freshness";
 import { ledgerFactQualityAt } from "../ledger/fact-quality-db";
 import { verifiedMarketSource } from "../market-source";
+import { verifiedPriceCalendarSession } from "../market-price-source";
 
 export interface ProposalRow { id: string; portfolio_id: string; environment: string; policy_version_id: string; strategy_version_id: string; ledger_revision: number; market_manifest: string; input_hash: string; expires_at: string; created_at: string }
 export interface ItemRow { id: string; proposal_id: string; account_id: string; listing_id: string; side: "buy" | "sell"; currency: string; quantity: string; limit_price: string; estimated_fees: string }
 export interface Publication { scope: string; batch_id: string; manifest_hash: string; revision: number; published_at: string }
 export interface Listing { id: string; instrument_id: string; market: "CN" | "HK" | "US"; currency: string; quantity_step: string | null; price_step: string | null; status: string; asset_class: string; index_id: string | null; exposure_json: string; verified_at: string | null }
 export interface Capability { rules_json: string; evidence_id: string; approved_by: string }
-export interface Observation { id: string; value: string; unit: string; observed_at: string; published_at: string | null; price_basis: string; provenance: string; time_precision: string; source_timezone: string }
+export interface Observation { id: string; source_id: string; value: string; unit: string; observed_at: string; published_at: string | null; price_basis: string; provenance: string; time_precision: string; source_timezone: string }
 export interface Balance { account_id: string; currency: string; ledger_account: string; balance: string }
 export interface Position { account_id: string; listing_id: string; currency: string; quantity: string; cost_known: number }
 export interface SecurityTransit extends Omit<Position, "account_id"> { transfer_event_id: string; source_account_id: string; target_account_id: string }
@@ -51,13 +52,16 @@ export function loadProposal(db: Database.Database, portfolio: string, id: strin
   if (!proposal || proposal.environment !== "actual") throw new Error("PROPOSAL_OUT_OF_SCOPE");
   return { proposal, items: db.prepare("SELECT * FROM proposal_items WHERE proposal_id=? ORDER BY id").all(id) as ItemRow[], context: JSON.parse(proposal.market_manifest) as ProposalContext };
 }
-export function currentPublications(db: Database.Database, policy: Policy, now: string): Publication[] {
+export function currentPublications(db: Database.Database, policy: Policy, now: string, portfolioId?: string): Publication[] {
   const scopes = [...new Set([...Object.values(policy.price_scope_by_market), policy.fx_scope])].sort();
   const rows: Publication[] = [];
   for (const scope of scopes) {
     const row = db.prepare("SELECT p.*,b.validation_json FROM market_publications p JOIN market_batches b ON b.id=p.batch_id WHERE p.scope=?").get(scope) as (Publication & { validation_json: string }) | undefined;
     if (!row) { if (Object.values(policy.price_scope_by_market).includes(scope)) throw new Error("MARKET_PUBLICATION_MISSING"); else continue; }
-    try { verifiedMarketSource(db, row.batch_id, now); } catch { throw new Error("ACTUAL_DATA_NOT_VERIFIED"); }
+    try {
+      const source = verifiedMarketSource(db, row.batch_id, now);
+      if (source.mode === "provider_observed" && source.provider === "longport" && source.portfolio_id !== portfolioId) throw new Error("PRIVATE_PRICE_SOURCE_OUT_OF_SCOPE");
+    } catch { throw new Error("ACTUAL_DATA_NOT_VERIFIED"); }
     if (row.published_at > now) throw new Error("FUTURE_MARKET_PUBLICATION");
     rows.push({ scope: row.scope, batch_id: row.batch_id, manifest_hash: row.manifest_hash, revision: row.revision, published_at: row.published_at });
   }
@@ -102,7 +106,7 @@ function capability(db: Database.Database, account: string, listing: Listing, si
   if (!rules.success || !rules.data.currencies.includes(listing.currency) || !rules.data.listing_ids.includes(listing.id) || (side === "buy" ? !rules.data.buy : !rules.data.sell)) throw new Error("ACCOUNT_CAPABILITY_MISSING");
   return row;
 }
-function observation(db: Database.Database, publications: Publication[], scope: string | undefined, key: string, metric: string, policy: Policy, now: string) {
+function observation(db: Database.Database, publications: Publication[], scope: string | undefined, key: string, metric: string, policy: Policy, now: string, portfolioId?: string) {
   const publication = publications.find(row => row.scope === scope);
   if (!publication) throw new Error("MARKET_PUBLICATION_MISSING");
   const row = db.prepare("SELECT o.* FROM market_batch_members m JOIN market_observations o ON o.id=m.observation_id WHERE m.batch_id=? AND o.series_key=? AND o.metric=? AND o.ingested_at<=? ORDER BY o.observed_at DESC,o.ingested_at DESC,o.id DESC LIMIT 1").get(publication.batch_id, key, metric, now) as Observation | undefined;
@@ -112,6 +116,9 @@ function observation(db: Database.Database, publications: Publication[], scope: 
     const parts = new Intl.DateTimeFormat("en-CA", { timeZone: row.source_timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(now));
     const part = (type: string) => parts.find(value => value.type === type)!.value;
     if (row.observed_at >= `${part("year")}-${part("month")}-${part("day")}`) throw new Error(`MARKET_OBSERVATION_UNAVAILABLE:${metric}`);
+  }
+  if (metric === "close" && row.source_id === "provider:longport:prices") {
+    if (!portfolioId || row.observed_at !== verifiedPriceCalendarSession(db, publication.batch_id, portfolioId, key, now, now)) throw new Error("PRICE_CALENDAR_UNVERIFIED");
   }
   return row;
 }
@@ -133,7 +140,7 @@ export function evaluateRisk(db: Database.Database, actor: GovernanceActor, prop
     state.activation = active;
     if (active.policy.id !== proposal.policy_version_id || active.strategy.id !== proposal.strategy_version_id) throw new Error("GOVERNANCE_VERSION_CHANGED");
     verifyGateEvidence(db, actor, portfolio, JSON.parse(active.row.evidence_json).gate_attachments, active.policy, active.strategy, options, now);
-    const publications = currentPublications(db, policy, now); state.publications = publications;
+    const publications = currentPublications(db, policy, now, portfolio); state.publications = publications;
     if (canonical(publications) !== canonical(context.publications)) throw new Error("PROPOSAL_MARKET_CHANGED");
     const valuation = requireValuation(db, portfolio, context.valuation_id, policy, publications, now); state.valuation = valuation;
     const balances = db.prepare("SELECT a.account_id,a.currency,a.ledger_account,a.balance FROM account_projections a JOIN accounts b ON b.id=a.account_id WHERE b.portfolio_id=? ORDER BY a.account_id,a.currency,a.ledger_account").all(portfolio) as Balance[];
@@ -156,7 +163,7 @@ export function evaluateRisk(db: Database.Database, actor: GovernanceActor, prop
     const projected = new Map<string, { value: Decimal; info: Listing }>();
     for (const position of ownedSecurityPositions(positions, transits).filter(row => !amount(row.quantity).isZero())) {
       if (!policy.account_ids.includes(position.account_id) || !position.cost_known || amount(position.quantity).lt(0)) throw new Error("POSITION_INPUT_INCOMPLETE");
-      const info = listing(db, position.listing_id, policy, now), price = observation(db, publications, policy.price_scope_by_market[info.market], info.id, "close", policy, now);
+      const info = listing(db, position.listing_id, policy, now), price = observation(db, publications, policy.price_scope_by_market[info.market], info.id, "close", policy, now, portfolio);
       if (position.currency !== info.currency || price.unit !== info.currency || !amount(price.value).gt(0)) throw new Error("MARKET_UNITS_INVALID");
       (state.listings as unknown[]).push(info); (state.observations as unknown[]).push(price);
       const value = amount(position.quantity).mul(amount(price.value)).mul(fx(position.currency));
@@ -182,7 +189,7 @@ export function evaluateRisk(db: Database.Database, actor: GovernanceActor, prop
       const quantity = amount(item.quantity), price = amount(item.limit_price), fee = amount(item.estimated_fees);
       if (!quantity.gt(0) || !price.gt(0) || fee.lt(0)) throw new Error("INVALID_PROPOSAL_AMOUNTS");
       if (!quantity.mod(amount(info.quantity_step)).isZero() || !price.mod(amount(info.price_step)).isZero()) throw new Error("INVALID_TRADING_INCREMENT");
-      const read = (metric: string) => { const row = observation(db, publications, policy.price_scope_by_market[info.market], info.id, metric, policy, now); (state.observations as unknown[]).push(row); return row; };
+      const read = (metric: string) => { const row = observation(db, publications, policy.price_scope_by_market[info.market], info.id, metric, policy, now, portfolio); (state.observations as unknown[]).push(row); return row; };
       const close = read("close"), spread = read("spread_bps"), premium = read("premium_bps"), turnover = read("turnover"), volume = read("volume");
       if (close.unit !== info.currency || turnover.unit !== info.currency || volume.unit !== "shares" || spread.unit !== "bps" || premium.unit !== "bps" || !amount(close.value).gt(0) || !amount(volume.value).gt(0)) throw new Error("MARKET_UNITS_INVALID");
       if (price.sub(close.value).abs().div(close.value).mul(10000).gt(policy.execution.max_price_deviation_bps)) throw new Error("PRICE_DEVIATION_EXCEEDED");

@@ -1,0 +1,19 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://etf-workbench.invalid/contracts/v1/market-sdk-capture.schema.json",
+  "type":"object",
+  "required":["schema_version","id","batch_id","provider","capture_kind","command_request_id","job_id","attempt","fencing_token","request_hash","request_started_at","received_at","raw_sha256","raw_bytes","parser_version","sdk_version","normalized_hash","document_hash","references_hash","rate_kind","publication_time_status","timestamp_semantics","coverage_kind"],
+  "properties":{
+    "schema_version":{"const":"market-sdk-capture-v1"},"id":{"$ref":"common.schema.json#/$defs/id"},
+    "batch_id":{"$ref":"common.schema.json#/$defs/id"},"provider":{"const":"longport"},"capture_kind":{"const":"sdk_projection"},
+    "command_request_id":{"$ref":"common.schema.json#/$defs/id"},"job_id":{"$ref":"common.schema.json#/$defs/id"},
+    "attempt":{"type":"integer","minimum":1,"maximum":9007199254740991},"fencing_token":{"type":"integer","minimum":1,"maximum":9007199254740991},
+    "request_hash":{"$ref":"common.schema.json#/$defs/hash"},"request_started_at":{"$ref":"market-reference-facts.schema.json#/$defs/instant"},
+    "received_at":{"$ref":"market-reference-facts.schema.json#/$defs/instant"},"raw_sha256":{"$ref":"common.schema.json#/$defs/hash"},
+    "raw_bytes":{"type":"integer","minimum":1,"maximum":2097152},"parser_version":{"const":"longport-price-collection-v1"},
+    "sdk_version":{"const":"4.3.7"},"normalized_hash":{"$ref":"common.schema.json#/$defs/hash"},
+    "document_hash":{"$ref":"common.schema.json#/$defs/hash"},"references_hash":{"$ref":"common.schema.json#/$defs/hash"},
+    "rate_kind":{"const":"market_price_not_executable"},"publication_time_status":{"const":"not_supplied"},
+    "timestamp_semantics":{"const":"provider_bar_timestamp_not_confirmed_close"},"coverage_kind":{"const":"reviewed_calendar_exact_dates"}
+  },"additionalProperties":false
+}

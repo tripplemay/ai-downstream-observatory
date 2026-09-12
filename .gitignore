@@ -27,6 +27,9 @@ artifacts/
 .env.*
 web/.env
 web/.env.*
+market-provider.env
+runtime.env
+release.env
 data-workbench/
 backups-workbench/
 restores-workbench/

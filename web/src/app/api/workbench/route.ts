@@ -19,6 +19,7 @@ import { getResearchState } from "@/server/research-queries";
 import { getFundingState, isFundingClientError } from "@/server/funding/service";
 import { executeFundingCommand } from "@/server/funding-commands";
 import { isCsvRecoveryClientError, saveCsvConfirmationAttempt } from "@/server/ledger/csv-confirmation-recovery";
+import { isReferenceClientError } from "@/server/market-references/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,7 +43,7 @@ const clientErrors = new Set([
   "SECURITY_VALUE_EVIDENCE_REQUIRED", "INVALID_SECURITY_VALUE_EVIDENCE", "SECURITY_VALUE_TIME_MISMATCH", "INVALID_SECURITY_TRANSFER", "INVALID_SECURITY_TRANSIT_BALANCE",
   "UNSUPPORTED_EVENT_TYPE", "VALIDATION_FAILED", "OPENING_ALREADY_RECORDED", "OPENING_DATE_MISMATCH", "OPENING_PERIOD_CLOSED",
   "FUTURE_FACT_NOT_ALLOWED", "INVALID_CLOCK",
-  "INVALID_VALUATION_RULES", "INVALID_MARKET_BATCH", "INVALID_MARKET_COLLECT", "RESERVED_MARKET_SOURCE", "FUTURE_VALUATION_NOT_ALLOWED", "LISTING_ALREADY_EXISTS",
+  "INVALID_VALUATION_RULES", "INVALID_MARKET_BATCH", "INVALID_MARKET_COLLECT", "INVALID_MARKET_PRICE_COLLECT", "RESERVED_MARKET_SOURCE", "FUTURE_VALUATION_NOT_ALLOWED", "LISTING_ALREADY_EXISTS",
   "INVALID_ATTACHMENT_TEXT", "INVALID_ATTACHMENT_UTF8", "INVALID_ACCOUNT_STATEMENT", "INVALID_STATEMENT_JSON",
   "INVALID_RECONCILIATION_COMMAND", "INVALID_RECONCILIATION_RESOLUTION", "HISTORICAL_RECONCILIATION_UNSUPPORTED",
   "FUTURE_STATEMENT_NOT_ALLOWED", "RESOLUTION_REQUIRES_MATCHED_STATEMENT", "RESOLUTION_CUTOFF_TOO_EARLY",
@@ -109,6 +110,9 @@ function failure(error: unknown): NextResponse {
   if (["ACCOUNT_OUT_OF_SCOPE", "IMPORT_BATCH_OUT_OF_SCOPE", "ATTACHMENT_OUT_OF_SCOPE", "VALUATION_OUT_OF_SCOPE", "STATEMENT_OUT_OF_SCOPE", "RECONCILIATION_ISSUE_OUT_OF_SCOPE", "RESEARCH_OUT_OF_SCOPE", "UNAUTHENTICATED"].includes(message)) return NextResponse.json({ error: message }, { status: message === "UNAUTHENTICATED" ? 401 : 403 });
   if (["PORTFOLIO_NOT_FOUND", "IMPORT_NOT_FOUND", "ATTACHMENT_NOT_FOUND"].includes(message)) return NextResponse.json({ error: message }, { status: 404 });
   if (message === "WORKBENCH_READ_ONLY") return NextResponse.json({ error: message }, { status: 423 });
+  if (isReferenceClientError(message)) return NextResponse.json({ error: message }, {
+    status: message.endsWith("_CONFLICT") ? 409 : message.endsWith("_OUT_OF_SCOPE") || message.endsWith("_PERMISSION_DENIED") ? 403 : message.endsWith("_NOT_FOUND") ? 404 : message.endsWith("_TOO_LARGE") ? 413 : 400,
+  });
   if (["IMPORT_TOO_LARGE", "ATTACHMENT_TOO_LARGE"].includes(message)) return NextResponse.json({ error: message }, { status: 413 });
   if (isCsvRecoveryClientError(message)) return NextResponse.json({ error: message }, {
     status: message === "CSV_RECOVERY_NOT_FOUND" ? 404 : message.endsWith("_TOO_LARGE") || message === "CSV_RECOVERY_BUDGET_EXCEEDED" ? 413 : 400,

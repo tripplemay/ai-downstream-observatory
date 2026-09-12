@@ -19,13 +19,27 @@ from .jobs import JobCommit, enqueue_job, enqueue_notification, run_one
 
 RESEARCH_COMMANDS = ("research_register", "research_register_trial", "research_trial", "research_freeze",
                      "research_unseal", "research_ai_context", "research_ai_review")
-SUPPORTED_COMMANDS = ("market_ingest", "market_collect", "valuation", "performance", *RESEARCH_COMMANDS, "monthly_evaluation")
+CORE_COMMANDS = ("market_ingest", "market_collect", "valuation", "performance", *RESEARCH_COMMANDS, "monthly_evaluation")
+PRICE_COMMANDS = ("market_collect_prices",)
+SUPPORTED_COMMANDS = (*CORE_COMMANDS, *PRICE_COMMANDS)
 
 
-def sync_requests(connection, limit=100, now=None):
+def role_commands(role):
+    if role == "core":
+        return CORE_COMMANDS
+    if role == "longport":
+        return PRICE_COMMANDS
+    raise WorkbenchError("INVALID_WORKER_ROLE")
+
+
+def sync_requests(connection, limit=100, now=None, command_types=None):
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
         raise WorkbenchError("INVALID_DISPATCH_LIMIT")
-    placeholders = ",".join("?" for _ in SUPPORTED_COMMANDS)
+    supported = SUPPORTED_COMMANDS if command_types is None else command_types
+    if (not isinstance(supported, tuple) or not supported
+            or any(value not in SUPPORTED_COMMANDS for value in supported)):
+        raise WorkbenchError("INVALID_DISPATCH_COMMANDS")
+    placeholders = ",".join("?" for _ in supported)
     requests = connection.execute("""SELECT c.* FROM command_requests c
         LEFT JOIN job_runs j ON j.command_request_id=c.id
         WHERE c.command_type IN (""" + placeholders + """) AND j.id IS NULL
@@ -34,7 +48,7 @@ def sync_requests(connection, limit=100, now=None):
           AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.code')='MONTHLY_EVALUATION_REQUEST_INVALID'
           AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.command_request_id')=c.id
           AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.portfolio_id')=c.portfolio_id)
-        ORDER BY c.created_at,c.id LIMIT ?""", (*SUPPORTED_COMMANDS, limit)).fetchall()
+        ORDER BY c.created_at,c.id LIMIT ?""", (*supported, limit)).fetchall()
     jobs = []
     for request in requests:
         if request["command_type"] == "monthly_evaluation":
@@ -168,9 +182,12 @@ def _research_command(connection, request, payload, clock, job):
     return {"effect": commit}
 
 
-def command_handler(connection, clock=None, lease_seconds=300, stop_requested=None):
+def command_handler(connection, clock=None, lease_seconds=300, stop_requested=None, role="core"):
     clock = (lambda: None) if clock is None else clock
+    supported = role_commands(role)
     def handle(job, lease):
+        if job["job_type"] not in supported:
+            raise WorkbenchError("JOB_REQUIRES_DIFFERENT_WORKER_ROLE")
         request = connection.execute("SELECT * FROM command_requests WHERE id=?", (job["command_request_id"],)).fetchone()
         if request is None or request["portfolio_id"] != job["scope"] or request["command_type"] != job["job_type"]:
             raise WorkbenchError("COMMAND_JOB_SCOPE_MISMATCH")
@@ -183,6 +200,16 @@ def command_handler(connection, clock=None, lease_seconds=300, stop_requested=No
                                    stop_requested=stop_requested)
         if job["job_type"] in RESEARCH_COMMANDS:
             return _research_command(connection, request, payload, clock, job)
+        if job["job_type"] == "market_collect_prices":
+            from worker.market.price_collection import prepare_price_collection, persist_price_collection
+            if stop_requested is not None and stop_requested():
+                raise WorkbenchError("WORKER_STOP_REQUESTED")
+            prepared = prepare_price_collection(connection, request, job, lease)
+            def persist(db):
+                if stop_requested is not None and stop_requested():
+                    raise WorkbenchError("WORKER_STOP_REQUESTED")
+                return JobCommit(persist_price_collection(db, prepared, now=clock()))
+            return {"effect": persist}
         if job["job_type"] == "market_collect":
             if stop_requested is not None and stop_requested():
                 raise WorkbenchError("WORKER_STOP_REQUESTED")
@@ -222,11 +249,15 @@ def command_handler(connection, clock=None, lease_seconds=300, stop_requested=No
 
 
 def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery_limit=100, stop_requested=None,
-                     discovery_state=None):
+                     discovery_state=None, role="core"):
     clock = (lambda: None) if clock is None else clock
-    discover_due_cycles(connection, limit=discovery_limit, now=clock(), state=discovery_state)
-    sync_requests(connection, now=clock())
+    supported = role_commands(role)
+    if role == "longport" and (type(lease_seconds) is not int or lease_seconds < 180):
+        raise WorkbenchError("PRICE_WORKER_LEASE_TOO_SHORT")
+    if role == "core":
+        discover_due_cycles(connection, limit=discovery_limit, now=clock(), state=discovery_state)
+    sync_requests(connection, now=clock(), command_types=supported)
     # One oldest-ready selection avoids starving periodic jobs behind a busy
     # ingestion stream while still excluding unsupported modules' jobs.
-    return run_one(connection, owner, command_handler(connection, clock, lease_seconds, stop_requested),
-                   job_type=SUPPORTED_COMMANDS, lease_seconds=lease_seconds, clock=clock)
+    return run_one(connection, owner, command_handler(connection, clock, lease_seconds, stop_requested, role),
+                   job_type=supported, lease_seconds=lease_seconds, clock=clock)

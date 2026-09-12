@@ -17,13 +17,14 @@ import { canonical, hash } from "./ledger/service";
 import { Decimal } from "./ledger/decimal";
 import { ledgerFactQualityAt } from "./ledger/fact-quality-db";
 import { verifiedMarketSource } from "./market-source";
+import { verifiedPriceCalendarSession } from "./market-price-source";
 
 type ObjectValue = Record<string, unknown>;
 type Valuation = { id: string; market_manifest: string; ledger_revision: number };
 type StoredValuation = Valuation & { portfolio_id: string; method_version: string; nav_cny: string | null; quality: string; cutoff_at: string; created_at: string };
 type Publication = { scope: string; revision: number; batch_id: string; manifest_hash: string; published_at: string };
 type Item = { account_id: string; item_type: string; listing_id: string | null; currency: string; amount: string | null; fx_rate: string | null; value_cny: string | null; evidence_json: string };
-type Observation = { metric: string; price_basis: string; listing_id: string | null; series_key: string; unit: string; market: string | null; listing_currency: string | null; observed_at: string; ingested_at: string; published_at: string | null; time_precision: string; source_timezone: string };
+type Observation = { source_id: string; metric: string; price_basis: string; listing_id: string | null; series_key: string; unit: string; market: string | null; listing_currency: string | null; observed_at: string; ingested_at: string; published_at: string | null; time_precision: string; source_timezone: string };
 const ajv = new Ajv2020({ strict: true, strictRequired: false });
 addFormats(ajv);
 ajv.addSchema(common);
@@ -257,6 +258,13 @@ function inspectValuation(db: Database.Database, run: Valuation) {
         catch { checkedSources.set(publication.batch_id, false); }
       }
       if (!checkedSources.get(publication.batch_id)) { issues.push("MARKET_SOURCE_UNVERIFIED"); continue; }
+      if (kind === "price" && observation.source_id === "provider:longport:prices") {
+        try {
+          const knownAt = manifest.mode === "as_known" ? stored.cutoff_at : String(object(manifest.ledger_fact_quality)?.knowledge_at);
+          const session = verifiedPriceCalendarSession(db, publication.batch_id, stored.portfolio_id, item.listing_id!, stored.cutoff_at, knownAt);
+          if (observation.observed_at !== session || object(rules.expected_sessions)?.[observation.market ?? ""] !== session) throw new Error("PRICE_CALENDAR_RULE_MISMATCH");
+        } catch { issues.push("PRICE_CALENDAR_UNVERIFIED"); continue; }
+      }
       scopes.set(publication.scope, publication);
     }
   }
@@ -417,11 +425,20 @@ function inspectFlows(db: Database.Database, manifest: ObjectValue, snapshots: S
   return issues;
 }
 
+function restatedReferenceChanged(db: Database.Database, publication: Publication): boolean {
+  const batch = db.prepare("SELECT source_id FROM market_batches WHERE id=?").get(publication.batch_id) as { source_id: string } | undefined;
+  if (batch?.source_id !== "provider:longport:prices") return false;
+  try { verifiedMarketSource(db, publication.batch_id); return false; } catch { return true; }
+}
+
 export function valuationFreshness(db: Database.Database, run: Valuation, currentRevision: number): string[] {
   const { issues, scopes, manifest } = inspectValuation(db, run);
   if (run.ledger_revision !== currentRevision) issues.push("LEDGER_REVISION_CHANGED");
   // As-known still needs complete evidence, but a newer publication cannot rewrite its history.
-  if (manifest?.mode === "restated") for (const [scope, publication] of scopes) if (!headMatches(db, scope, publication)) issues.push("RESTATED_MARKET_CHANGED:" + scope);
+  if (manifest?.mode === "restated") for (const [scope, publication] of scopes) {
+    if (!headMatches(db, scope, publication)) issues.push("RESTATED_MARKET_CHANGED:" + scope);
+    if (restatedReferenceChanged(db, publication)) issues.push("RESTATED_MARKET_REFERENCE_CHANGED:" + scope);
+  }
   return [...new Set(issues)];
 }
 
@@ -455,6 +472,7 @@ export function performanceFreshness(db: Database.Database, run: { id?: string; 
     if (evidence.manifest?.mode !== manifest.mode) issues.push("VALUATION_EVIDENCE_INVALID");
     for (const [scope, publication] of evidence.scopes) {
       scopes.add(scope);
+      if (manifest.mode === "restated" && restatedReferenceChanged(db, publication)) issues.push("RESTATED_MARKET_REFERENCE_CHANGED:" + scope);
       const expected = object(heads[scope]);
       if (!expected || (manifest.mode === "restated" && (expected.revision !== publication.revision || expected.manifest_hash !== publication.manifest_hash))) issues.push("MARKET_EVIDENCE_INVALID");
     }

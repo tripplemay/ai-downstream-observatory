@@ -12,6 +12,7 @@ import providerBatchSchema from "../../../contracts/v1/market-provider-batch.sch
 import { canonical, hash } from "./ledger/service";
 import { amount } from "./ledger/decimal";
 import { parseStrictJson } from "./strict-json";
+import { verifiedSdkMarketSource, type SdkMarketSource } from "./market-price-source";
 
 type JsonObject = Record<string, unknown>;
 type Batch = { id: string; source_id: string; scope: string; batch_type: string; status: string; expected_pages: number; received_pages: number; row_count: number; manifest_hash: string | null; validation_json: string; started_at: string; completed_at: string | null };
@@ -21,7 +22,7 @@ type Job = { id: string; command_request_id: string; job_type: string; scope: st
 type Attempt = { status: string; fencing_token: number; started_at: string; finished_at: string | null };
 type Receipt = { id: string; batch_id: string; command_request_id: string; job_id: string; attempt: number; fencing_token: number; request_hash: string; request_started_at: string; received_at: string; endpoint: string; raw_sha256: string; raw_bytes: number; normalized_hash: string; document_hash: string; parser_version: string; rate_kind: "reference_not_executable"; capture_kind: "http_response_bytes" };
 export type MarketCollectRequest = { provider: "ecb"; feed: "daily" | "hist_90d"; currencies: string[]; expected_publication_revision: number; publish: boolean };
-export type MarketSource = { mode: "manual_verified"; source_evidence: unknown } | { mode: "provider_observed"; provider: "ecb"; capture_id: string; receipt_hash: string; rate_kind: "reference_not_executable"; capture_kind: "http_response_bytes"; received_at: string };
+export type MarketSource = { mode: "manual_verified"; source_evidence: unknown } | { mode: "provider_observed"; provider: "ecb"; capture_id: string; receipt_hash: string; rate_kind: "reference_not_executable"; capture_kind: "http_response_bytes"; received_at: string } | SdkMarketSource;
 
 const ajv = new Ajv2020({ strict: true, strictRequired: false });
 addFormats(ajv);
@@ -115,6 +116,7 @@ export function verifiedMarketSource(db: Database.Database, batchId: string, kno
   try {
     const batch = db.prepare("SELECT * FROM market_batches WHERE id=?").get(batchId) as Batch | undefined;
     requireTrue(batch);
+    if (batch.source_id === "provider:longport:prices") return verifiedSdkMarketSource(db, batchId, knownAt);
     const validation = parsed(batch.validation_json), plan = object(validation.plan);
     if (isReservedMarketSource(batch.source_id) || isReservedMarketSource(batch.scope) || isReservedMarketSource(plan.source_id) || isReservedMarketSource(plan.scope) || plan.source_mode === "provider_observed") return capturedSource(db, batch, validation, knownAt);
     requireTrue(plan.source_mode === "manual_verified");

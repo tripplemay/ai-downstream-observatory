@@ -1,4 +1,8 @@
-# Optional isolated adapter, not part of the current workbench runtime image.
-# Require an available binary wheel rather than silently building native code.
+# Optional CPython 3.11 macOS / glibc Linux provider worker, not the core image.
+# Published PyPI 4.3.7 wheels; no native source-build or unpinned transitive deps.
 --only-binary=longport
-longport==4.3.7
+longport==4.3.7 \
+    --hash=sha256:a7fd58bc0e5f3e60c6e2e272d7b6ef473eaac282d7849b9a174bf09e2a10e75b \
+    --hash=sha256:2a32a21a63b91c0971e8f7e0544475e9f4fcc1d9b12de579946d2b5080082051 \
+    --hash=sha256:57d0224ef769307b06af35136081825af2fcec646bd51fa7de7cfb5a47d6f12e \
+    --hash=sha256:5999c06273a77f1273042fc802a5342f1e9ea6aa11d19c99e65805c883a51152

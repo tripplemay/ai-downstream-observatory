@@ -253,6 +253,18 @@ def prepare_valuation(connection, portfolio_id, cutoff_at, rules, mode="as_known
             blocked = True
             prices[listing_id] = None
             continue
+        if chosen["source_id"] == "provider:longport:prices":
+            from .references import price_calendar_session
+            try:
+                completed = price_calendar_session(connection, publications[scope]["batch_id"],
+                                                   portfolio_id, listing_id, cutoff, known_at)
+                if expected_session != completed:
+                    raise WorkbenchError("PRICE_CALENDAR_RULE_MISMATCH")
+            except WorkbenchError:
+                issues.append("PRICE_CALENDAR_UNVERIFIED:" + listing_id)
+                blocked = True
+                prices[listing_id] = None
+                continue
         if chosen["unit"] != info["listing_currency"]:
             issues.append("PRICE_CURRENCY_MISMATCH:" + listing_id)
             blocked = True

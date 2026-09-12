@@ -7,6 +7,8 @@ import common from "../../../contracts/v1/common.schema.json";
 import observation from "../../../contracts/v1/market-observation.schema.json";
 import batch from "../../../contracts/v1/market-batch.schema.json";
 import marketCollect from "../../../contracts/v1/market-collect.schema.json";
+import referenceFacts from "../../../contracts/v1/market-reference-facts.schema.json";
+import marketPriceCollect from "../../../contracts/v1/market-price-collect.schema.json";
 import valuationRules from "../../../contracts/v1/valuation-rules.schema.json";
 import performanceCommand from "../../../contracts/v1/performance-command.schema.json";
 import flowFxRules from "../../../contracts/v1/flow-fx-rules.schema.json";
@@ -20,6 +22,7 @@ import { assertWritableDatabase } from "./workbench-db";
 import { audit, canonical, hash, revision, type Actor } from "./ledger/service";
 import { amount, exact } from "./ledger/decimal";
 import { isReservedMarketSource } from "./market-source";
+import { validatePriceCollectRequest } from "./market-references/service";
 
 const id = z.string().trim().min(1).max(200);
 const decimal = z.string().max(80).refine(value => {
@@ -34,7 +37,7 @@ export const listingCommandSchema = envelope.extend({
   source_evidence: z.string().trim().min(1).max(2000),
 }).strict();
 export const taskCommandSchema = envelope.extend({
-  command_type: z.enum(["valuation", "market_ingest", "market_collect", "performance", "research_register", "research_register_trial", "research_trial", "research_freeze", "research_unseal", "research_ai_context", "research_ai_review"]), payload: z.unknown(),
+  command_type: z.enum(["valuation", "market_ingest", "market_collect", "market_collect_prices", "performance", "research_register", "research_register_trial", "research_trial", "research_freeze", "research_unseal", "research_ai_context", "research_ai_review"]), payload: z.unknown(),
 }).strict();
 const valuationPayload = z.object({ cutoff_at: z.string().datetime(), rules: z.unknown(), mode: z.enum(["as_known", "restated"]).optional() }).strict();
 const marketPayload = z.object({ document: z.unknown(), publish: z.boolean() }).strict();
@@ -44,6 +47,8 @@ ajv.addSchema(common);
 ajv.addSchema(observation);
 const checkBatch = ajv.compile(batch), checkRules = ajv.compile(valuationRules);
 const checkMarketCollect = ajv.compile(marketCollect);
+ajv.addSchema(referenceFacts);
+const checkPriceCollect = ajv.compile(marketPriceCollect);
 ajv.addSchema(flowFxRules);
 const checkPerformance = ajv.compile(performanceCommand);
 ajv.addSchema(researchParameters);
@@ -109,6 +114,9 @@ export function enqueueWorkbenchTask(db: Database.Database, actor: Actor, raw: u
   } else if (input.command_type === "market_collect") {
     if (!checkMarketCollect(input.payload)) throw new Error("INVALID_MARKET_COLLECT");
     payload = input.payload;
+  } else if (input.command_type === "market_collect_prices") {
+    if (!checkPriceCollect(input.payload)) throw new Error("INVALID_MARKET_PRICE_COLLECT");
+    payload = input.payload;
   } else if (input.command_type.startsWith("research_")) {
     if (!checkResearch({ command_type: input.command_type, payload: input.payload })) throw new Error("INVALID_RESEARCH_COMMAND");
     const parsed = input.payload as Record<string, unknown>;
@@ -125,6 +133,7 @@ export function enqueueWorkbenchTask(db: Database.Database, actor: Actor, raw: u
     payload = parsed;
   }
   return transact(db, actor, "enqueue_task", input, { ...input, payload }, now, () => {
+    if (input.command_type === "market_collect_prices") validatePriceCollectRequest(db, input.portfolio_id, payload, now);
     const requestId = randomUUID(), payloadHash = hash(payload);
     db.prepare("INSERT INTO command_requests(id,portfolio_id,command_type,idempotency_key,payload_hash,payload_json,actor_id,created_at) VALUES(?,?,?,?,?,?,?,?)")
       .run(requestId, input.portfolio_id, input.command_type, input.idempotency_key, payloadHash, canonical(payload), actor.id, now);

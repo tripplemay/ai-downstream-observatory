@@ -11,6 +11,7 @@ export function AppSidebar() {
         <Link href="/workbench" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">ETF 投资工作台</Link>
         <Link href="/workbench/funding" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">资金计划与投入批次</Link>
         <Link href="/workbench/catalog" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">ETF 标的与持仓比较</Link>
+        <Link href="/workbench/market" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">市场资料与价格采集</Link>
         <Link href="/workbench/research" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">策略研究与 AI</Link>
         <Link href="/workbench/governance" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">政策与执行审批</Link>
         <Link href="/workbench/evaluations" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">月度策略评估</Link>

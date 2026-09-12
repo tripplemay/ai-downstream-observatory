@@ -1,6 +1,6 @@
 # ETF 投资工作台：验收证据与缺口映射
 
-版本：v0.8 | 日期：2026-09-13 | 状态：公开通用版阶段性证据索引，非验收或放行报告
+版本：v0.9 | 日期：2026-09-13 | 状态：公开通用版阶段性证据索引，非验收或放行报告
 
 依据：[01 投资约束](01-investment-mandate.md)、[02 产品需求](02-product-requirements.md)、[03 决策治理](03-decision-policy.md)、[04 数据与核算](04-data-and-accounting.md)、[05 架构迁移](05-architecture-and-migration.md)、[06 验证验收](06-validation-and-acceptance.md)。六份原始个人 v1.0 基线已在本地保存；公开版以通用模板替换个人参数，不是范围削减，也不缩减验收要求。
 
@@ -12,7 +12,7 @@
 - 目前有合成单元、跨语言、HTTP、浏览器和隔离容器验证，**没有正式 live 数据/账户样本验收、新工作台生产部署验收、真正的治理验证 Worker 或任何 S 门槛验收**。旧站 HTTP 200、远端 fixture 成功、测试中创建的政策和验证记录均不能替代它们。
 - L-0 文档确认保持有效；本表不能宣布 L-1/L-2 全部验收，更不能升级 L-3。D-01 至 D-08 未完成细节继续阻塞相应能力；计划预算不等于实际余额，只有已核实本金及到账事实才能入账。
 - 公开边界已确认：**公开代码和通用示例，个人方案本地隔离，提交前核验 index**。金额精度、并发及性能测试中的明确合成数值仅为 fixture，不是个人投资参数。
-- 当前工作区迁移为 v16、NAV v4，保留绩效 v5 并为 provider 逐流证据增加 v6。新增固定来源采集、原始响应与 Worker 回执、发布权限及知识时间验真。**实现不等于完整验收**。本次冻结源码回归为 Python 443、Web 524、根目录 Node 107、HTTP 72 全通过，构建和类型检查通过；详见 [v16 记录](07-implementation-tracker.md#provider-collection-worktree-v16)。以下历史运行段保留其原版本与时点，不替代本次证据或生产放行。
+- 当前工作区迁移为 v17、NAV v4，保留绩效 v5 与 provider 逐流证据 v6。新增组合私有人审 JSON 映射/日历、独立 `market_collect_prices` role、SDK 投影捕获与双端验真；人审不等于供应商认证，收市时间不等于发布时间。**实现不等于完整验收**。v17 暂仅记录定向检查，最终同版全量/HTTP/镜像证据待补。已公开 v16 提交 `926dc4ce4912b7cd8768d315a398d43d8ed51fc0` 的 CI `34710911980` 已成功；其 Python 443、Web 524、根目录 Node 107、HTTP 72 及 schema 16 镜像结果不适用于新 v17。详见 [v16 记录](07-implementation-tracker.md#subsequent-exact-sha-v16-ci-verification)。以下历史运行段保留原版本与时点。
 - 来源基线是持续变化的工作区，不是单一已签核 release。下列结果需在最终源码冻结后统一重跑，补齐 release SHA、锁文件、schema、环境、fixture、退出码、差异及签核。
 
 ## 2. 证据目录与复现入口
@@ -29,7 +29,8 @@
 | CSV | [CSV 导入](csv-import.md)；`web/src/server/ledger/csv*.ts`；`csv-{workspace,mapping-wizard,mapping-builder,recovery-panel,recovery-client}.tsx/ts`；`web/tests/csv*.test.ts` | 零写检查、完整原值分页、可视化显式映射与高级 JSON；有界原件上传、不可变版本/逐行预检、人工重复决定、原子确认/重试和来源别名；v14 会话隔离的原请求封存与只读恢复，无自动确认；无真实券商格式认证 |
 | ACCOUNTING | `worker/accounting/`；`tests/accounting/{test_accounting,test_golden_contract}.py`；`tests/accounting/golden.json` | Decimal 金标准和收益函数；包括固定种子往返属性测试，不等于完整随机业务序列覆盖 |
 | MARKET | `worker/market/`；`tests/market/{test_market,test_valuation_units}.py`、`contracts.test.mjs` | NAV v4、显式批次/发布历史、原币/FX 单位检查与独立事实质量证明；缺资料不输出精确 NAV；没有外部实时采集器验收 |
-| PROVIDER | [采集边界](market-provider-collection.md)；`worker/market/{collection,providers/ecb,providers/longport}.py`；`web/src/server/market-source.ts`；`test_collection.py`、`test_market_collection.py`、`provider-captures.test.mjs`、`market-source.test.ts` | ECB 固定 HTTPS 到私有原始 BLOB、发布及双端验真已做独立本地实际网络验证；合成测试覆盖权限、PIT、恢复；LongPort 隔离适配器尚未接共享发布和可信日历，不是三市场实盘数据准入 |
+| PROVIDER | [采集边界](market-provider-collection.md)；`worker/market/{collection,providers/ecb,providers/longport}.py`；`web/src/server/market-source.ts`；`test_collection.py`、`test_market_collection.py`、`provider-captures.test.mjs`、`market-source.test.ts` | ECB 固定 HTTPS 到私有原始 BLOB、发布及双端验真已做独立本地实际网络验证；v16 exact-SHA CI 已过。LongPort 新共享路径见 PRICE；SDK 投影不是 HTTP 原件，两者均不授予账户/策略权限 |
+| PRICE | [价格采集](market-price-collection.md)；`worker/market/{references,price_collection}.py`；`web/src/server/{market-references,market-price-source.ts}`；`test_market_references.py`、`test_price_collection.py`、`test_provider_roles.py`、`market-prices.test.mjs`、`provider-container.test.mjs` | v17 人审映射/日历版本、完整集合 scope、固定 SDK 日价格、原子发布、引用/PIT/当前 head 独立验真；日期不补造秒级发布；真实权限/数据/权威日历、专属镜像与原生 UI 仍未验收 |
 | PERFORMANCE | `worker/performance/{pipeline,flows}.py`；`tests/performance/{test_pipeline,test_market_integrity,test_flow_fx,test_security_flows}.py`；`web/tests/valuation-freshness.test.ts` | v5 现金/证券逐事件 FX、fact/posting/event/PIT/发布证据和分红/公司行动点与区间质量证明；迟到事实/修订与重述；Python 产物经 Web 独立复核；完整验收及真实资料未完成 |
 | FUNDING | `web/src/server/funding/`、`funding-commands.ts`、`funding-summary.ts`；`web/tests/funding*.test.ts`；[资金计划边界](funding-plans.md) | 日期化多币种来源/批次、版本/延期、到账/执行关联、预算/现金分离、超额及更正复核；不授予投资权限 |
 | CATALOG | [标的目录边界](etf-catalog.md)；`web/src/server/catalog/`；`web/tests/catalog*.test.ts`；`tests/migrations/catalog.test.mjs`；`worker/research/holdings_overlap.py`；`tests/research/test_holdings_overlap.py` | 组合私有研究版本、独立 CAS/分页/范围、结构化 JSON 来源下载、账户证据摘要、最多 4 标的比较；部分披露不归一化、异期不伪同日，TS/Python 重叠一致；未认证真实 ETF/发行商原件或交易准入 |
@@ -38,7 +39,7 @@
 | JOB | `worker/orchestration/`、`web/src/server/workbench-commands.ts`；`tests/orchestration/{test_jobs,test_research_commands,test_evaluations,test_evaluations_bridge}.py` | 授权请求到 Worker、lease/fencing、重试、结果/outbox 原子写入；月度发现有界扫描和固定发布桥；没有真实通知传输 |
 | MONTHLY | [月度评估](monthly-evaluations.md)；`web/src/server/evaluation/`、`web/tests/evaluation*.test.ts` | 显式目标、人工启停、原周期知识边界、独立重试、完整证据方可无需调整；真实 Python/Node/SQLite 进程链及原子候选生成；不是完整轮动或实盘有效性证明 |
 | AUTH | `web/src/server/auth/`；`web/tests/auth.test.ts`、`auth-http.integration.ts` | 服务端会话、撤销、过期、限速、Origin、缺配置拒绝；生产 TLS/代理及运维配置另验 |
-| MIGRATION | `migrations/manifest.json`；`tests/migrations/*.test.mjs`；`tests/deployment/release.test.mjs`；`web/tests/fact-quality.test.ts` | 工作区迁移至 v16，旧事实、周期和回执不变，新增有界原始响应与采集身份；当前镜像及最终切换尾差尚需另验 |
+| MIGRATION | `migrations/manifest.json`；`tests/migrations/*.test.mjs`；`tests/deployment/release.test.mjs`；`web/tests/fact-quality.test.ts` | 工作区迁移至 v17，旧事实、周期、回执及 v16 ECB 原件不变；新资料版本和 SDK 捕获不可改，head CAS 与来源类型隔离；新镜像及最终切换尾差尚需另验 |
 | RECOVERY | `scripts/{backup-workbench,restore-workbench,archive-legacy}.mjs`；`tests/recovery/backup-restore.test.mjs` | 一致性备份、加密、附件清单、全新目录恢复、只读标记、不覆盖新事实；不是异机 RPO/RTO 验收 |
 | HTTP27 | [报告](../artifacts/verification/workbench-http/2026-09-11T22-47-15-552Z/report.md)及同目录 `manifest.json`；`web/scripts/test-workbench-http.mjs` | 27 个 HTTP 场景的阶段快照，详见下文 |
 | HTTP32 | `artifacts/verification/workbench-http/2026-09-12T00-31-30-306Z/{report.md,manifest.json}`；`web/scripts/test-workbench-http.mjs` | v9 生产构建与新增资金计划 HTTP 场景；仍为本地合成 fixture，详见 2.4 |
@@ -132,10 +133,10 @@ npm run test:workbench:http
 | E-06 / BLOCKED | TWR/Dietz、XIRR 诊断、回撤、v5 现金/证券流逐笔 FX 与点/区间事实质量跨语言验真 | ACCOUNTING `PerformanceTests/XirrTests`；PERFORMANCE；SECURITIES；DIVIDEND | 真实历史流量/FX 资料；多期归因/基准；完整金标准、容差/残差和缺口 UI 的正式验收 |
 | E-07 / NOT_RUN | 原件重传、跨文件来源去重、语义冲突、同额不同来源保留 | IMPORT `source cross-file duplicates...`；LEDGER 幂等；HTTP27 `07/10/12` | 国内/跨境券商脱敏样本和无可靠来源 ID 的人工疑似重复流程；不能把当前拒绝缺字段当完整券商去重能力 |
 | E-08 / BLOCKED | 部分真实成交消耗剩余预留，回报不入账，取消只释放余量 | GOVERNANCE `E21...partial fills`、report 幂等；IMPORT；HTTP27 `10` | 分次独立费用关联执行事项、原生分笔文件验证；实际状态驱动新的剩余目标/建议生成尚不完整，不自动重下原单 |
-| E-09 / BLOCKED | 缺价/FX 不填零；显式会话截止、休市与陈旧区分；公司行动缺口标质量 | MARKET 估值测试；ACCOUNTING `QualityTests`；HTTP27 `21` | 可核验的 A/HK/US 日历与公司行动提供方、真实休市样例、质量规则批准；完整页面不跨接缺失曲线验收 |
-| E-10 / BLOCKED | 空/缺页/重复/冲突批次不替换当前发布，遗漏不停用证券 | MARKET `test_empty_or_partial_never_replaces_publication_or_disables_listing`、page tests；MIGRATION | 真实 ETF 清单采集适配、分页/覆盖率异常与独立退市证据生命周期；旧采集器不因此被认证 |
-| E-11 / NOT_RUN | 口径分键，未复权估值与调整序列隔离；消费端核对单位/口径 | MARKET `test_price_basis_keeps_separate_observation_keys`、`test_valuation_units.py`；RESEARCH 口径负例 | 冻结版本混合真实来源/修订/分红样例，证明估值、研究及展示全链无口径混用；新单位加严需重建 HTTP/镜像 |
-| E-12 / BLOCKED | effective/recorded 与发布/获取时间分离；as_known/restated；迟到更正保留历史 | CORRECTION；MARKET 时点/发布历史；PERFORMANCE 行情修订测试；RESEARCH PIT；HTTP27 `24` | 真实发布时间/修订档案、财报和披露适配；全链真实决策重放；日期精度不足时仍明确拒绝，不能补造时点 |
+| E-09 / BLOCKED | 缺价/FX 不填零；人审日历明确 full/half/closed、当前引用和截止；公司行动缺口标质量 | MARKET 估值测试；PRICE；ACCOUNTING `QualityTests`；HTTP27 `21` | 权威 A/HK/US 日历与公司行动提供方、真实休市样例、质量规则批准；人审记录不能替代资料真实性验收 |
+| E-10 / BLOCKED | 空/缺页/重复/冲突批次不替换当前发布，遗漏不停用证券；SDK 单市场完整集合日期核对 | MARKET `test_empty_or_partial_never_replaces_publication_or_disables_listing`、page tests；PRICE；MIGRATION | 真实 ETF 清单采集适配、分页/覆盖率异常与独立退市证据生命周期；固定日价格子路径不认证全量市场覆盖 |
+| E-11 / NOT_RUN | 口径分键，未复权估值与调整序列隔离；SDK 固定 Day/NoAdjust/regular，消费端独立核对 | MARKET `test_price_basis_keeps_separate_observation_keys`、`test_valuation_units.py`；PRICE；RESEARCH 口径负例 | 冻结版本混合真实来源/修订/分红样例、完整 HTTP/镜像与展示验收；SDK 投影不得冒充网络原字节 |
+| E-12 / BLOCKED | effective/recorded 与发布/获取时间分离；as_known/restated；人审版本 known_at 与更新失效/历史重放 | CORRECTION；MARKET；PRICE；PERFORMANCE 行情修订测试；RESEARCH PIT；HTTP27 `24` | 真实发布时间/修订档案、财报和披露适配；全链真实决策重放；日历 close_at 不补造价格 published_at，日期精度不足继续拒绝 |
 | E-13 / NOT_RUN | 冲销/替代追加不可改；后续成本及结算依赖重放；与干净顺序基线比较 | CORRECTION `corrected average-cost history equals...`、import provenance；HTTP27 `24` | 最终同版多事件随机序列/跨语言全投影对照、历史报告人工核对；混合精度/跨时区日期/超过 5000 步仍需受限范围签核 |
 | E-14 / BLOCKED | 未知成本保留未知，不将卖出全额当利润；外部证券确认市值与成本分离、内部在途仅计一次；区间新增开账不制造收益 | LEDGER；SECURITIES；CORRECTION；PERFORMANCE | 真实转仓凭证、经核对期初市值/绩效起点及全生命周期验收；日期外部证券流仍阻断收益，不能声称全生命周期盈利 |
 | E-15 / NOT_RUN | 38 位/18 小数约束、Decimal、非有限数/浮点/指数拒绝；代码保留字符串 | LEDGER 精度负例；ACCOUNTING `DecimalBoundaryTests`；MIGRATION contracts；IMPORT strict JSON | 完整原生文件格式解析/来源量子与舍入规则样本；极值跨语言逐步比较、原文隔离和展示的最终证据 |
@@ -468,3 +469,54 @@ build `sEkIoKGmHirFndk_aAYTy`，schema 15，378 项源码前后及随后一致�
 SHA-256 `d3a65f80d902076b8e97c88a23759f07e0584d9c764ff92f3c2e9ef9769dd186`。
 日志前缀为 `rotation-v2-ci-followup`；没有业务放宽、跳过坏回执检查或新增策略准入。
 下一准确提交的远程 CI 结果仍须另行核对，旧失败不改写。
+
+<a id="price-collection-v17"></a>
+
+## 16. 人审引用与价格采集：v17 工作区边界
+
+### 已公开 v16 的独立后续证据
+
+提交 `926dc4ce4912b7cd8768d315a398d43d8ed51fc0`、tree
+`9d45a68699d007b76f60e562fc7322c034ed71ad` 的
+[CI 34710911980](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/34710911980)
+已成功。该版本 Python 443、Web 524、根目录 Node 107、HTTP 72，以及 Linux core
+镜像迁移/健康检查/本地加密恢复通过。容器 run `20260912T182101Z-2244` 实际使用
+schema 16、Node v22.23.2、UID 10001，加载 native SQLite 后拒坏 lease 且全库逻辑不变；
+16 个迁移 checksum 和固定 bundle hash 与同提交对应。
+
+本地完整证据位于 `artifacts/verification/github-ci/34710911980/`，包含
+`provider-v16-ci.log` 及下载的 container JSON。恢复保持人工复审标记、废除旧会话，
+重复目标拒绝覆盖；`independent_host_restore=false`。这个镜像不含 LongPort native SDK；
+合成适配器测试不证明真实 SDK 权限、行情覆盖或新 v17 provider 镜像。没有生产切换。
+
+### v17 实现与定向验证，不外推全量通过
+
+| 子路径 | 当前实现 / 已执行定向检查 | 未证边界 |
+|---|---|---|
+| 引用 | `market_reference_sources/versions/heads`，严格 JSON 原文、组合隔离、审核人/输入/结果/hash 绑定、连续版本 CAS；审核级别仅 `human_reviewed_not_provider_verified` | 权威来源、供应商背书、账户或策略批准不能由上传/审核推导 |
+| 请求与采集 | 同组合/市场 1–4 catalog listing、最多 31 自然日、明确映射/日历版本；SDK projection → 有界 BLOB → 原子批次/发布/任务；独立 Python/Web 重放 | 未验证 ETF asset_class、供应商真实 ticker 身份或生命周期；没有本轮真实 A/HK/US 许可/数据验收；日期 close_at 不变成 published_at |
+| 时序 | 当前资料更新阻断当前使用，历史按冻结知识时点保留；缺/重复/多余/未来 bar 拒绝，未知发布时间保持未知 | 未完整验收真实历史修订、休市/半日市、PIT 档案或周期采集 |
+| 迁移 | `node --test tests/migrations/*.test.mjs`：69/69，其中新 v17 11 项；旧 v16 全表值及 ECB BLOB 字节保持、重复迁移零写、SDK/ECB 不能互冒充 | 不是完整 v17 工作区回归或镜像升级验收 |
+| 运行隔离 | `provider-container.test.mjs`：8/8；含实际 CLI 前置配置拒绝、角色隔离、跨连接/组合 mutex、kernel deadline、strict report gate；其调用的 Python 8 项不重复累计 | Docker 配置与脚本审查不是实际容器；本轮 optional image 仍待 exact-SHA Linux CI |
+| 公开边界 | `release.test.mjs`：17/17；3 种凭据 basename 的 Git 实际排除、Docker 递归规则及模板不误屏蔽，日期化通用文档 | 不是未来任何路径/工件的秘密扫描保证；提交前仍核实际 index |
+
+API/UI 入口为 `/api/workbench/market`、`/workbench/market` 和原有 `enqueue_task` 的
+`market_collect_prices`。核心 Worker 不装 SDK、不派发/领取价格任务；独立 provider
+role 使用专属凭据、非 root Trixie 镜像、固定 CPython 3.11 wheel hashes，lease 最少
+180 秒/默认 300 秒、同库价格互斥和 30 秒子进程内核截止。可选 Compose 未自动加入
+生产部署脚本。测试和源码入口详见 [价格采集边界](market-price-collection.md)。
+
+冻结源码本地回归：Python **488/488**、Web **559/559**、根目录 Node **127/127**，
+无失败或跳过；类型、构建、认证 HTTP、shellcheck、依赖检查通过，npm audit 为 0。
+完整 HTTP **77/77**，schema 17、build `xen1hgaLxyanVXxYT9nph`；425 项源码运行前后
+及随后核对一致。工件为 `artifacts/verification/workbench-http/2026-09-12T19-25-41-402Z/`，
+manifest SHA-256 `ad9b146d6343fae4875e5223a3f36c589f12f2a037e2b15fc4c63d31ffddd713`。
+HTTP-MP01..05 覆盖人审资料、两标的一次合成捕获、独立消费验真、失败原子性及
+引用修订；不会因此授予实际行情或投资准入。完整范围与失败前置记录见 [07](07-implementation-tracker.md#price-collection-worktree-v17)。
+
+尚无新提交绑定的 Linux core/provider 镜像或生产结果。原生浏览器诊断仍为
+`BROWSER_RUNTIME_UNAVAILABLE`，未擅自重启，不能以 10 项组件 callback 替代原生验收。
+未决请求仅保存在页面内存；离页警告不是持久恢复，也不能阻止所有强制关闭。
+真实许可/价格/权威引用、recurrence、完整原生 UI、独立恢复、上线以及 D/G/S 门槛
+仍未完成；E-09/10/12 等保持 BLOCKED，E-11 等仍 NOT_RUN。个人方案、私人 provider
+凭据和真实网络证据不得进入公开源码、镜像或 CI 上传的 `artifacts/verification/`。

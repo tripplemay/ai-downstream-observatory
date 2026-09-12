@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/market-reference-facts.schema.json",
+  "oneOf": [
+    {"type":"object","required":["kind","facts"],"properties":{"kind":{"const":"mapping"},"facts":{"$ref":"#/$defs/mapping"}},"additionalProperties":false},
+    {"type":"object","required":["kind","facts"],"properties":{"kind":{"const":"calendar"},"facts":{"$ref":"#/$defs/calendar"}},"additionalProperties":false}
+  ],
+  "$defs": {
+    "date": {"$ref":"common.schema.json#/$defs/date","not":{"type":"string","pattern":"^0000-"}},
+    "instant": {"type":"string","format":"date-time","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{6}Z$","not":{"type":"string","pattern":"^0000-"}},
+    "mapping": {
+      "type":"object","required":["provider","listing_id","provider_symbol","market","exchange","currency","valid_from","valid_to"],
+      "properties": {
+        "provider":{"const":"longport"},"listing_id":{"$ref":"common.schema.json#/$defs/id"},
+        "provider_symbol":{"type":"string","minLength":1,"maxLength":80,"pattern":"^[A-Za-z0-9][A-Za-z0-9._-]*\\.(SH|SZ|HK|US)$"},
+        "market":{"enum":["CN","HK","US"]},"exchange":{"$ref":"common.schema.json#/$defs/id"},
+        "currency":{"$ref":"common.schema.json#/$defs/currency"},"valid_from":{"$ref":"#/$defs/date"},
+        "valid_to":{"anyOf":[{"type":"null"},{"$ref":"#/$defs/date"}]}
+      },"additionalProperties":false
+    },
+    "calendar": {
+      "type":"object","required":["market","exchange","timezone","range_start","range_end","days"],
+      "properties": {
+        "market":{"enum":["CN","HK","US"]},"exchange":{"$ref":"common.schema.json#/$defs/id"},
+        "timezone":{"$ref":"common.schema.json#/$defs/timezone"},"range_start":{"$ref":"#/$defs/date"},"range_end":{"$ref":"#/$defs/date"},
+        "days":{"type":"array","minItems":1,"maxItems":3660,"items":{"$ref":"#/$defs/day"}}
+      },"additionalProperties":false,
+      "description":"Every calendar date in the inclusive range must occur exactly once. Review is human review, not provider verification. close_at is the exchange session close, never a quote publication time."
+    },
+    "day": {
+      "oneOf":[
+        {"type":"object","required":["date","kind","close_at"],"properties":{"date":{"$ref":"#/$defs/date"},"kind":{"const":"closed"},"close_at":{"type":"null"}},"additionalProperties":false},
+        {"type":"object","required":["date","kind","close_at"],"properties":{"date":{"$ref":"#/$defs/date"},"kind":{"enum":["full","half"]},"close_at":{"$ref":"#/$defs/instant"}},"additionalProperties":false}
+      ]
+    }
+  }
+}

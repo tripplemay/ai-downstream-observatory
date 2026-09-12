@@ -1,0 +1,21 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://etf-workbench.invalid/contracts/v1/market-reference-version.schema.json",
+  "type":"object",
+  "required":["schema_version","id","portfolio_id","kind","scope_key","version","source_id","source_hash","source_known_at","known_at","created_by","review_reason","review_basis","facts"],
+  "properties":{
+    "schema_version":{"const":"market-reference-version-v1"},"id":{"$ref":"common.schema.json#/$defs/id"},
+    "portfolio_id":{"$ref":"common.schema.json#/$defs/id"},"kind":{"enum":["mapping","calendar"]},
+    "scope_key":{"$ref":"common.schema.json#/$defs/id"},"version":{"type":"integer","minimum":1,"maximum":9007199254740991},
+    "source_id":{"$ref":"common.schema.json#/$defs/id"},"source_hash":{"$ref":"common.schema.json#/$defs/hash"},
+    "source_known_at":{"$ref":"market-reference-facts.schema.json#/$defs/instant"},
+    "known_at":{"$ref":"market-reference-facts.schema.json#/$defs/instant"},"created_by":{"$ref":"common.schema.json#/$defs/id"},
+    "review_reason":{"type":"string","minLength":1,"maxLength":2000,"pattern":"\\S"},
+    "review_basis":{"const":"human_reviewed_not_provider_verified"},
+    "facts":{"type":"object"}
+  },
+  "allOf":[
+    {"if":{"properties":{"kind":{"const":"mapping"}},"required":["kind"]},"then":{"properties":{"facts":{"$ref":"market-reference-facts.schema.json#/$defs/mapping"}}},"else":{"properties":{"facts":{"$ref":"market-reference-facts.schema.json#/$defs/calendar"}}}}
+  ],
+  "additionalProperties":false
+}

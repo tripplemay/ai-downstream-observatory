@@ -70,7 +70,7 @@ def register_experiment(connection, experiment_id, portfolio_id, plan, dataset, 
         if not dataset["publication_refs"]:
             raise WorkbenchError("PUBLISHED_MARKET_SNAPSHOT_REQUIRED")
         metadata = {key: value for key, value in dataset.items() if key not in ("observations", "publication_refs")}
-        verified = snapshot_from_publications(connection, metadata, dataset["publication_refs"])
+        verified = snapshot_from_publications(connection, metadata, dataset["publication_refs"], portfolio_id=portfolio_id)
         if sorted(verified["observations"], key=lambda row: row["id"]) != sorted(dataset["observations"], key=lambda row: row["id"]):
             raise WorkbenchError("RESEARCH_OBSERVATIONS_DO_NOT_MATCH_PUBLICATIONS")
     plan_hash, dataset_hash = content_hash(plan), content_hash(dataset)

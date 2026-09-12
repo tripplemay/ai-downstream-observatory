@@ -5,7 +5,11 @@ admission. The approved [publication boundary](publication-privacy.md) applies:
 personal plans, account originals and real provider captures are not public
 fixtures.
 
-## Current vertical path
+## ECB vertical path (introduced in v16)
+
+The v17 worktree also implements [reviewed references and LongPort price
+collection](market-price-collection.md). Its SDK projections use a separate
+capture table and contract; they do not replace or reinterpret ECB HTTP bytes.
 
 The authenticated workbench task entry accepts `market_collect`. The request
 uses the strict `market-collect.schema.json` contract:
@@ -81,7 +85,8 @@ Migration v16 adds immutable `market_provider_captures`. Its `raw_body` stores u
 to 2 MiB within the private database; normalized and batch documents are each
 bounded to 4 MiB. The existing encrypted database backup/restore therefore covers
 these bounded originals without an additional untracked attachment directory.
-Larger multi-security capture storage needs a separate bounded design.
+The v17 price path has its own bounded multi-security SDK capture design and
+table; it does not rebuild or weaken this v16 table.
 
 DDL and service checks bind capture, request, attempt, fence, source, types and
 timestamps. UPDATE, DELETE and SQLite REPLACE cannot overwrite captures. Read-only
@@ -113,17 +118,22 @@ and process-group cleanup. It never constructs a TradeContext.
 
 The native wheel and method signatures were checked locally. Synthetic tests
 exercise actual isolated processes and the wrapper boundary; no real LongPort
-credentials or market call have been used. LongPort is **not yet accepted by the
-shared collection request schema**. Mapping/calendar evidence, projection capture
-publication, actual permissions and read-only network validation remain work to
-complete. Adapter tests alone do not establish A/HK/US live coverage.
+credentials or market call have been used. The v17 `market_collect_prices`
+request now connects portfolio-private, human-reviewed mapping/calendar versions
+to bounded SDK capture, atomic publication and independent consumers. The review
+grade remains `human_reviewed_not_provider_verified`; actual permissions,
+authoritative references and live market acceptance remain outstanding.
+Adapter tests alone do not establish A/HK/US live coverage.
 
 The SDK is an explicit optional dependency in `requirements-market-longport.txt`,
 not the core runtime. Its CPython 3.11 Linux wheels target `manylinux_2_39`, which
-cannot run on the current Bookworm/glibc 2.36 image. The optional file requires a
-binary wheel and fails rather than silently compiling an unreviewed Rust build.
-Do not add it to the runtime image until the supported provider image is designed
-and verified. Core CI tests use fake SDKs and need no SDK installation or keys.
+cannot run on the core Bookworm/glibc 2.36 image. The v17 dedicated
+`Dockerfile.market-provider` uses a digest-pinned Trixie image and reviewed wheel
+hashes, binary-only installation, no unpinned transitive dependencies and UID
+10001. Core workers do not take optional price jobs. The optional Compose profile
+is not automatically deployed by the base release script. Native offline image
+validation is a separate CI step; its real-market result must remain false.
+Core CI tests use fake SDKs and need no SDK installation or keys.
 [Pinned distribution files](https://pypi.org/project/longport/4.3.7/#files)
 
 ## Evidence and remaining acceptance
@@ -144,7 +154,11 @@ The three collection HTTP cases use only synthetic XML and verify successful
 worker publication, pre-write rejection and failure preserving the previous
 head. See the [checkpoint record](07-implementation-tracker.md#provider-collection-worktree-v16).
 
-Native UI acceptance, exact-commit Linux image checks and deployment/recovery
-gates remain necessary. Other providers, verified calendars, recurring
-collection, real broker formats, continuous forward simulation and trusted
-strategy admission are not completed by this checkpoint.
+The v16 public checkpoint is commit
+`926dc4ce4912b7cd8768d315a398d43d8ed51fc0`; its exact-SHA
+[CI 34710911980](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/34710911980)
+succeeded, including Linux core images, schema 16 and local encrypted recovery.
+That historical run did not contain the v17 optional provider image or shared
+price publication. Native UI acceptance, authoritative calendars, recurring
+collection, real broker formats, continuous forward simulation, trusted strategy
+admission, independent-host recovery and production deployment remain open.

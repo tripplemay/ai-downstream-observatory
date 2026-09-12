@@ -184,7 +184,7 @@ def validate_plan(plan, dataset):
     validate_parameters(plan["benchmark"], dataset)
 
 
-def snapshot_from_publications(connection, metadata, publication_refs):
+def snapshot_from_publications(connection, metadata, publication_refs, portfolio_id=None):
     """No mutable latest lookup: exact publication manifests and members only."""
     snapshot = deepcopy(metadata)
     if "observations" in snapshot or "publication_refs" in snapshot:
@@ -200,6 +200,11 @@ def snapshot_from_publications(connection, metadata, publication_refs):
         plan = json.loads(batch["validation_json"])["plan"]
         if plan.get("source_mode") == "provider_observed" or reserved_source(plan) or reserved_source(dict(batch)):
             verify_provider_capture(connection, ref["batch_id"])
+        if batch["source_id"] == "provider:longport:prices":
+            owner = connection.execute("""SELECT c.portfolio_id FROM market_sdk_captures s
+                JOIN command_requests c ON c.id=s.command_request_id WHERE s.batch_id=?""", (ref["batch_id"],)).fetchone()
+            if portfolio_id is None or owner is None or owner["portfolio_id"] != portfolio_id:
+                raise WorkbenchError("RESEARCH_PRIVATE_SOURCE_OUT_OF_SCOPE")
         for value in connection.execute("""SELECT o.* FROM market_batch_members m
             JOIN market_observations o ON o.id=m.observation_id WHERE m.batch_id=?""", (ref["batch_id"],)):
             observation = {key: value[key] for key in value.keys() if value[key] is not None}

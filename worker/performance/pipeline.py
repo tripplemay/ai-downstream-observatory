@@ -145,6 +145,12 @@ def _market_context(connection, snapshots):
                         verify_provider_capture(connection, publication["batch_id"], known_at=known_at)
                     chosen, problem = _choose_observation([observation], cutoff, known_at)
                     eligible = chosen is not None and not problem and instant(publication["published_at"]) <= known_at
+                    if kind == "price" and observation["source_id"] == "provider:longport:prices":
+                        from worker.market.references import price_calendar_session
+                        session = price_calendar_session(connection, publication["batch_id"], snapshot["portfolio_id"],
+                                                         observation["listing_id"], cutoff, known_at)
+                        eligible = (eligible and observation["observed_at"] == session
+                                    and rules.get("expected_sessions", {}).get(listing["market"]) == session)
                 except (KeyError, ValueError, TypeError, WorkbenchError):
                     eligible = False
                 if not scope or not correct_metric or member is None or not bound or not eligible:
