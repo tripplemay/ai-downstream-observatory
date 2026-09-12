@@ -13,6 +13,9 @@ from worker.research import (
 )
 from .db import WorkbenchError, content_hash
 from .evaluations import discover_due_cycles, monthly_request_binding
+from .collections import (
+    COLLECTION_TERMINAL_CODES, collection_request_binding, discover_due_collections,
+)
 from .external import publish_monthly
 from .jobs import JobCommit, enqueue_job, enqueue_notification, run_one
 
@@ -48,6 +51,10 @@ def sync_requests(connection, limit=100, now=None, command_types=None):
           AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.code')='MONTHLY_EVALUATION_REQUEST_INVALID'
           AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.command_request_id')=c.id
           AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.portfolio_id')=c.portfolio_id)
+        AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.dedup_key='collection-request-invalid:' || c.id
+          AND o.topic='collection_schedule.request_invalid'
+          AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.command_request_id')=c.id
+          AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.portfolio_id')=c.portfolio_id)
         ORDER BY c.created_at,c.id LIMIT ?""", (*supported, limit)).fetchall()
     jobs = []
     for request in requests:
@@ -65,6 +72,21 @@ def sync_requests(connection, limit=100, now=None, command_types=None):
                                     max_attempts=definition["max_attempts"],
                                     command_request_id=request["id"], now=now))
             continue
+        if request["command_type"] == "market_collect":
+            try:
+                binding = collection_request_binding(connection, request)
+            except WorkbenchError:
+                enqueue_notification(connection, "collection-request-invalid:" + request["id"],
+                                     "collection_schedule.request_invalid",
+                                     {"command_request_id": request["id"], "portfolio_id": request["portfolio_id"],
+                                      "code": "COLLECTION_BINDING_INVALID"}, now=now)
+                continue
+            if binding is not None:
+                jobs.append(enqueue_job(connection, request["command_type"], request["portfolio_id"],
+                                        binding["slot"]["period"], request["id"] + ":" + request["payload_hash"],
+                                        max_attempts=binding["definition"]["max_attempts"],
+                                        command_request_id=request["id"], now=now))
+                continue
         jobs.append(enqueue_job(connection, request["command_type"], request["portfolio_id"],
                                 request["created_at"][:10], request["id"] + ":" + request["payload_hash"],
                                 command_request_id=request["id"], now=now))
@@ -213,11 +235,26 @@ def command_handler(connection, clock=None, lease_seconds=300, stop_requested=No
         if job["job_type"] == "market_collect":
             if stop_requested is not None and stop_requested():
                 raise WorkbenchError("WORKER_STOP_REQUESTED")
-            prepared = prepare_collection(connection, request, job, lease)
+            binding = collection_request_binding(connection, request)
+            def terminal(error):
+                return JobCommit({"code": str(error), "live_advice_eligible": False},
+                                 "failed" if str(error) == "COLLECTION_BINDING_INVALID" else "skipped")
+            try:
+                prepared = prepare_collection(connection, request, job, lease, clock=clock)
+            except WorkbenchError as error:
+                if binding is None or str(error) not in COLLECTION_TERMINAL_CODES:
+                    raise
+                result = terminal(error)
+                return {"result": result.result, "outcome": result.outcome}
             def persist(db):
                 if stop_requested is not None and stop_requested():
                     raise WorkbenchError("WORKER_STOP_REQUESTED")
-                return JobCommit(persist_collection(db, prepared, now=clock()))
+                try:
+                    return JobCommit(persist_collection(db, prepared, now=clock(), job=job, lease=lease))
+                except WorkbenchError as error:
+                    if binding is None or str(error) not in COLLECTION_TERMINAL_CODES:
+                        raise
+                    return terminal(error)
             return {"effect": persist}
         if job["job_type"] == "performance":
             prepared = prepare_performance(connection, request["portfolio_id"], payload, now=clock())
@@ -249,13 +286,14 @@ def command_handler(connection, clock=None, lease_seconds=300, stop_requested=No
 
 
 def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery_limit=100, stop_requested=None,
-                     discovery_state=None, role="core"):
+                     discovery_state=None, role="core", collection_discovery_limit=100, collection_discovery_state=None):
     clock = (lambda: None) if clock is None else clock
     supported = role_commands(role)
     if role == "longport" and (type(lease_seconds) is not int or lease_seconds < 180):
         raise WorkbenchError("PRICE_WORKER_LEASE_TOO_SHORT")
     if role == "core":
         discover_due_cycles(connection, limit=discovery_limit, now=clock(), state=discovery_state)
+        discover_due_collections(connection, limit=collection_discovery_limit, now=clock(), state=collection_discovery_state)
     sync_requests(connection, now=clock(), command_types=supported)
     # One oldest-ready selection avoids starving periodic jobs behind a busy
     # ingestion stream while still excluding unsupported modules' jobs.

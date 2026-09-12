@@ -77,22 +77,26 @@ def _current_revision(connection, scope):
     return row["revision"] if row else 0
 
 
-def prepare_collection(connection, request, job, lease):
+def prepare_collection(connection, request, job, lease, *, clock=None):
     """Fixed public download outside the writer transaction; no caller clock."""
     if connection.in_transaction:
         raise WorkbenchError("PROVIDER_NETWORK_INSIDE_TRANSACTION")
+    from worker.orchestration.collections import assert_collection_authorized, COLLECTION_TERMINAL_CODES
+    clock = (lambda: None) if clock is None else clock
     assert_writable(connection)
     payload = _request_payload(request)
     if (job["id"] != lease.job_id or job["command_request_id"] != request["id"]
             or job["scope"] != request["portfolio_id"] or job["job_type"] != "market_collect"):
         raise WorkbenchError("PROVIDER_JOB_SCOPE_MISMATCH")
-    assert_lease(connection, lease)
+    assert_lease(connection, lease, now=clock())
     if _current_revision(connection, collection_scope(payload)) != payload["expected_publication_revision"]:
         raise WorkbenchError("STALE_PUBLICATION_REVISION")
+    assert_collection_authorized(connection, request, job, lease, now=clock())
     try:
         downloaded = download_ecb_xml(payload["feed"])
-        assert_lease(connection, lease)
+        assert_lease(connection, lease, now=clock())
         assert_writable(connection)
+        assert_collection_authorized(connection, request, job, lease, now=clock())
         if (downloaded["source_url"] != URLS[payload["feed"]] or downloaded["http_status"] != 200
                 or downloaded["redirects_followed"] != 0
                 or downloaded["completed_at"] != downloaded["retrieved_at"]):
@@ -118,7 +122,7 @@ def prepare_collection(connection, request, job, lease):
     except Exception as error:
         # No provider exception, response body, headers or cause escapes to the
         # generic job logger. Safe lease/restore failures retain their diagnosis.
-        allowed = {"STALE_OR_EXPIRED_LEASE", "RESTORE_PENDING_REVIEW", "WORKBENCH_READ_ONLY"}
+        allowed = {"STALE_OR_EXPIRED_LEASE", "RESTORE_PENDING_REVIEW", "WORKBENCH_READ_ONLY"} | COLLECTION_TERMINAL_CODES
         code = str(error) if isinstance(error, WorkbenchError) and str(error) in allowed else "PROVIDER_COLLECTION_FAILED"
         raise WorkbenchError(code) from None
 
@@ -182,6 +186,12 @@ def _verify_capture(connection, batch_id, require_published=True, *, replay=True
         receipt = json.loads(row["receipt_json"])
         prepared = prepared_type(bytes(row["raw_body"]), receipt, json.loads(row["normalized_json"]), json.loads(row["document_json"]))
         verify_material(prepared, request, replay=replay)
+        scheduled = None
+        if job_type == "market_collect":
+            from worker.orchestration.collections import collection_request_binding
+            scheduled = collection_request_binding(connection, request)
+            if scheduled is not None:
+                _verify_collection_window(scheduled, receipt["request_started_at"], receipt["received_at"], row["created_at"])
         if (row["receipt_hash"] != content_hash(receipt) or receipt["id"] != row["id"]
                 or receipt["batch_id"] != batch_id or receipt["job_id"] != row["job_id"] or receipt["attempt"] != row["attempt"]
                 or job["command_request_id"] != request["id"] or job["job_type"] != job_type
@@ -200,6 +210,8 @@ def _verify_capture(connection, batch_id, require_published=True, *, replay=True
                     or instant(attempt["finished_at"]) > instant(job["updated_at"])
                     or (known_at is not None and instant(job["updated_at"]) > instant(known_at))):
                 raise WorkbenchError("PROVIDER_JOB_NOT_COMMITTED")
+            if scheduled is not None:
+                _verify_collection_window(scheduled, attempt["finished_at"], job["updated_at"])
         elif job["status"] not in ("running", "succeeded") or attempt["status"] not in ("running", "succeeded"):
             raise WorkbenchError("PROVIDER_JOB_NOT_COMMITTED")
         batch = connection.execute("SELECT * FROM market_batches WHERE id=?", (batch_id,)).fetchone()
@@ -233,6 +245,8 @@ def _verify_capture(connection, batch_id, require_published=True, *, replay=True
                         or event["scope"] != batch["scope"] or result.get("manifest_hash") != batch["manifest_hash"]
                         or instant(event["published_at"]) < instant(receipt["received_at"])):
                     raise WorkbenchError("PROVIDER_PUBLICATION_NOT_COMMITTED")
+                if scheduled is not None:
+                    _verify_collection_window(scheduled, event["published_at"])
         elif require_published:
             raise WorkbenchError("PROVIDER_BATCH_MISSING")
         return summary
@@ -240,13 +254,29 @@ def _verify_capture(connection, batch_id, require_published=True, *, replay=True
         raise WorkbenchError("PROVIDER_EVIDENCE_INVALID") from None
 
 
-def persist_collection(connection, prepared, now=None):
+def _verify_collection_window(binding, *values):
+    start = instant(binding["slot"]["scheduled_at"])
+    end = instant(binding["slot"]["deadline_at"])
+    if binding["authorization"]["ended_at"] is not None:
+        end = min(end, instant(binding["authorization"]["ended_at"]))
+    if any(not start <= instant(value) < end for value in values):
+        raise WorkbenchError("COLLECTION_BINDING_INVALID")
+
+
+def persist_collection(connection, prepared, now=None, *, job=None, lease=None):
     """Store originals with the batch so the existing encrypted DB backup covers both."""
     from .batches import stage_batch, stage_page, validate_batch, publish_batch
+    from worker.orchestration.collections import assert_collection_authorized, collection_request_binding
     receipt, current = prepared.receipt, stamp(now)
     with transaction(connection):
         request = connection.execute("SELECT * FROM command_requests WHERE id=?", (receipt["command_request_id"],)).fetchone()
         payload = _verify_material(prepared, request, replay=False)
+        scheduled = collection_request_binding(connection, request)
+        if scheduled is not None:
+            if job is None or lease is None:
+                raise WorkbenchError("COLLECTION_BINDING_INVALID")
+            assert_collection_authorized(connection, request, job, lease, now=current)
+            _verify_collection_window(scheduled, receipt["request_started_at"], receipt["received_at"], current)
         if _current_revision(connection, collection_scope(payload)) != payload["expected_publication_revision"]:
             raise WorkbenchError("STALE_PUBLICATION_REVISION")
         if instant(current) < instant(receipt["received_at"]):

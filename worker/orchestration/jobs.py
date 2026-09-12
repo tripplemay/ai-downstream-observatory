@@ -169,6 +169,12 @@ def complete_job(connection, lease, result, outcome="succeeded", effect=None, no
         if instant(finished) < instant(current):
             raise WorkbenchError("JOB_CLOCK_REGRESSION")
         assert_lease(connection, lease, now=finished)
+        if outcome == "succeeded":
+            job = connection.execute("SELECT * FROM job_runs WHERE id=?", (lease.job_id,)).fetchone()
+            if job["job_type"] == "market_collect":
+                from .collections import assert_collection_finalization
+                request = connection.execute("SELECT * FROM command_requests WHERE id=?", (job["command_request_id"],)).fetchone()
+                assert_collection_finalization(connection, request, job, lease, now=finished)
         connection.execute("""UPDATE job_attempts SET status=?,finished_at=? WHERE job_id=? AND attempt=?""",
                            (outcome, finished, lease.job_id, lease.attempt))
         connection.execute("""UPDATE job_runs SET status=?,result_json=?,lease_owner=NULL,lease_until=NULL,
@@ -219,7 +225,12 @@ def run_one(connection, owner, handler, job_type=None, lease_seconds=60, clock=N
             if committed is not None:
                 return committed
         try:
-            fail_job(connection, lease, {"code": type(exc).__name__, "message": str(exc)}, now=clock())
+            retryable = True
+            if row["job_type"] == "market_collect" and isinstance(exc, WorkbenchError):
+                from .collections import COLLECTION_TERMINAL_CODES
+                scheduled = connection.execute("SELECT 1 FROM collection_schedule_slots WHERE command_request_id=?", (row["command_request_id"],)).fetchone()
+                retryable = not (str(exc) in COLLECTION_TERMINAL_CODES and (scheduled or str(exc) == "COLLECTION_BINDING_INVALID"))
+            fail_job(connection, lease, {"code": type(exc).__name__, "message": str(exc)}, retryable=retryable, now=clock())
         except WorkbenchError as lease_error:
             if str(lease_error) != "STALE_OR_EXPIRED_LEASE":
                 raise

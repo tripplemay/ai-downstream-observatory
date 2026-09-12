@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from worker.market.collection import persist_collection, prepare_collection, verify_provider_capture
-from worker.orchestration.db import WorkbenchError, instant, stamp
+from worker.orchestration.db import WorkbenchError, canonical_json, content_hash, instant, stamp
 from worker.orchestration.jobs import claim_job
 from worker.orchestration.runtime import run_pending_once, sync_requests
 from tests.market.test_collection import add_request, db_state, fake_download, fixture, payload, utc_now
@@ -32,9 +32,9 @@ class MarketCollectionRuntimeTests(unittest.TestCase):
         request = self.request()
         facts_before = [tuple(row) for row in self.db.execute("SELECT * FROM ledger_events")]
         boundaries = []
-        def prepare(db, command, job, lease):
+        def prepare(db, command, job, lease, **kwargs):
             boundaries.append(("prepare", db.in_transaction, lease.fencing_token))
-            return prepare_collection(db, command, job, lease)
+            return prepare_collection(db, command, job, lease, **kwargs)
         def persist(db, prepared, **kwargs):
             boundaries.append(("persist", db.in_transaction, prepared.receipt["fencing_token"]))
             return persist_collection(db, prepared, **kwargs)
@@ -67,6 +67,28 @@ class MarketCollectionRuntimeTests(unittest.TestCase):
         self.assertEqual(first["status"], "succeeded")
         for table in ("job_runs", "job_attempts", "market_provider_captures", "market_publication_events"):
             self.assertEqual(self.db.execute("SELECT COUNT(*) FROM " + table).fetchone()[0], 1, table)
+
+    def test_unbound_system_request_is_quarantined_without_starving_manual_dispatch(self):
+        value = payload()
+        self.db.execute("""INSERT INTO command_requests
+            (id,portfolio_id,command_type,idempotency_key,payload_hash,payload_json,actor_id,created_at)
+            VALUES('synthetic-unbound-system','p','market_collect','synthetic-unbound-system',?,?,
+                   'system:collection-discovery',?)""",
+                        (content_hash(value), canonical_json(value), stamp(utc_now())))
+        manual = self.request()
+        with patch("worker.market.collection.download_ecb_xml") as download:
+            self.assertEqual(sync_requests(self.db, limit=1, now=utc_now()), [])
+            self.assertEqual(len(sync_requests(self.db, limit=1, now=utc_now())), 1)
+            self.assertEqual(sync_requests(self.db, limit=1, now=utc_now()), [])
+            download.assert_not_called()
+        self.assertEqual(self.db.execute("SELECT command_request_id FROM job_runs").fetchone()[0], manual["id"])
+        diagnostic = self.db.execute("SELECT dedup_key,topic,payload_json FROM outbox").fetchall()
+        self.assertEqual(len(diagnostic), 1)
+        self.assertEqual(diagnostic[0]["dedup_key"], "collection-request-invalid:synthetic-unbound-system")
+        self.assertEqual(diagnostic[0]["topic"], "collection_schedule.request_invalid")
+        self.assertEqual(json.loads(diagnostic[0]["payload_json"]), {
+            "command_request_id": "synthetic-unbound-system", "portfolio_id": "p", "code": "COLLECTION_BINDING_INVALID"})
+        self.no_market_effects()
 
     def test_failed_transport_retries_without_leaking_details_or_publishing_partial_data(self):
         self.request()

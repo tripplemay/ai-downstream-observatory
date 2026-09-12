@@ -7,6 +7,7 @@ import time
 
 from .db import WorkbenchError, canonical_json, open_database
 from .evaluations import DiscoveryState
+from .collections import CollectionDiscoveryState
 from .runtime import run_pending_once
 
 
@@ -17,10 +18,11 @@ def main(argv=None):
     parser.add_argument("--poll-seconds", type=float, default=5)
     parser.add_argument("--lease-seconds", type=int, default=300)
     parser.add_argument("--evaluation-discovery-limit", type=int, default=100)
+    parser.add_argument("--collection-discovery-limit", type=int, default=100)
     parser.add_argument("--role", choices=("core", "longport"), default="core")
     args = parser.parse_args(argv)
     if (not args.db or not 0.1 <= args.poll_seconds <= 3600 or not 1 <= args.lease_seconds <= 86400
-            or not 1 <= args.evaluation_discovery_limit <= 1000):
+            or not 1 <= args.evaluation_discovery_limit <= 1000 or not 1 <= args.collection_discovery_limit <= 1000):
         parser.error("absolute --db, poll 0.1..3600, lease 1..86400 and discovery limit 1..1000 required")
     if args.role == "longport" and args.lease_seconds < 180:
         parser.error("longport role requires a lease of at least 180 seconds")
@@ -41,13 +43,15 @@ def main(argv=None):
                 raise WorkbenchError("LONGPORT_RUNTIME_NOT_CONFIGURED") from None
         connection = open_database(args.db)
         discovery_state = DiscoveryState()
+        collection_discovery_state = CollectionDiscoveryState()
         try:
             while not stop:
                 try:
                     result = run_pending_once(connection, owner, args.lease_seconds,
                                               discovery_limit=args.evaluation_discovery_limit,
                                               stop_requested=lambda: stop, discovery_state=discovery_state,
-                                              role=args.role)
+                                              role=args.role, collection_discovery_limit=args.collection_discovery_limit,
+                                              collection_discovery_state=collection_discovery_state)
                     if result is not None:
                         print(canonical_json({"job_id": result["id"], "status": result["status"]}), flush=True)
                     if args.once:

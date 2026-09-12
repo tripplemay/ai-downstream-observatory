@@ -1,6 +1,6 @@
 # ETF 投资工作台：验收证据与缺口映射
 
-版本：v0.9 | 日期：2026-09-13 | 状态：公开通用版阶段性证据索引，非验收或放行报告
+版本：v0.10 | 日期：2026-09-13 | 状态：公开通用版阶段性证据索引，非验收或放行报告
 
 依据：[01 投资约束](01-investment-mandate.md)、[02 产品需求](02-product-requirements.md)、[03 决策治理](03-decision-policy.md)、[04 数据与核算](04-data-and-accounting.md)、[05 架构迁移](05-architecture-and-migration.md)、[06 验证验收](06-validation-and-acceptance.md)。六份原始个人 v1.0 基线已在本地保存；公开版以通用模板替换个人参数，不是范围削减，也不缩减验收要求。
 
@@ -12,7 +12,7 @@
 - 目前有合成单元、跨语言、HTTP、浏览器和隔离容器验证，**没有正式 live 数据/账户样本验收、新工作台生产部署验收、真正的治理验证 Worker 或任何 S 门槛验收**。旧站 HTTP 200、远端 fixture 成功、测试中创建的政策和验证记录均不能替代它们。
 - L-0 文档确认保持有效；本表不能宣布 L-1/L-2 全部验收，更不能升级 L-3。D-01 至 D-08 未完成细节继续阻塞相应能力；计划预算不等于实际余额，只有已核实本金及到账事实才能入账。
 - 公开边界已确认：**公开代码和通用示例，个人方案本地隔离，提交前核验 index**。金额精度、并发及性能测试中的明确合成数值仅为 fixture，不是个人投资参数。
-- 当前工作区迁移为 v17、NAV v4，保留绩效 v5 与 provider 逐流证据 v6。新增组合私有人审 JSON 映射/日历、独立 `market_collect_prices` role、SDK 投影捕获与双端验真；人审不等于供应商认证，收市时间不等于发布时间。**实现不等于完整验收**。v17 本地全量与 HTTP 已过；首次 CI 的 test/core 镜像通过，provider 报告失败，修正后新同版 CI 仍待补，详见第 16 节。已公开 v16 提交 `926dc4ce4912b7cd8768d315a398d43d8ed51fc0` 的 CI `34710911980` 已成功；其 Python 443、Web 524、根目录 Node 107、HTTP 72 及 schema 16 镜像结果不适用于新 v17。详见 [v16 记录](07-implementation-tracker.md#subsequent-exact-sha-v16-ci-verification)。以下历史运行段保留原版本与时点。
+- 当前工作区迁移为 v18、NAV v4，保留绩效 v5 与 provider 逐流证据 v6。新增显式人工启用/暂停的 ECB daily 周期采集，不自动生成投资建议或交易；LongPort 周期采集未加入。**实现不等于完整验收**，本地 Python 525、Web 598、Node 165、HTTP 81 已通过，新同版 CI 尚待完成。已公开 v17 提交 `edcb3ea07384f32091d4f76fd452c83c2d6f53e1` 的 CI `34716214716` 已成功，含 Python 488、Web 559、根目录 Node 148、HTTP 77 和 core/provider 镜像；其 schema 17 结果不适用于新 v18。详见 [同提交 v17 记录](07-implementation-tracker.md#subsequent-exact-sha-v17-ci-verification)。以下历史运行段保留原版本与时点。
 - 来源基线是持续变化的工作区，不是单一已签核 release。下列结果需在最终源码冻结后统一重跑，补齐 release SHA、锁文件、schema、环境、fixture、退出码、差异及签核。
 
 ## 2. 证据目录与复现入口
@@ -562,3 +562,31 @@ CI 运行环境。应用代码未改、沿用原构建。最终工件为
 `artifacts/verification/workbench-http/2026-09-12T20-07-03-623Z/manifest.json`，
 SHA-256 `32b77e6ac139e18324d9459b20a79ca64438ba54628bc427d1a106314c6137d0`；
 427 项源码首尾及随后核验一致。原候选及失败日志保留；新提交仍须同版 CI。
+
+## 17. 显式周期参考汇率采集 v18
+
+实现入口为 `/workbench/market/schedules`、市场 API、`worker/orchestration/collections.py`
+与迁移 0018，完整边界见 [周期采集说明](market-collection-schedules.md)。新组合无默认
+调度；人工保存必为暂停，人工启用后才发现全局 scope/date 槽位。错过窗口仅留
+missed 记录，不用今日 daily feed 冒充历史观察。每次控制结束旧授权；原 key 的
+完全相同命令才幂等返回，更换 CAS 不能套用旧回执。
+
+下载前后、原子发布前及 job 成功终态前均重新核授权、lease、截止与恢复锁；
+旧 publication CAS 不自动重基。跨截止的最终提交会完整回滚，后续暂停不撤销
+合法历史捕获。SQL/Python/Web 拒绝 system 身份冒充人工，审计字段和字符串语义
+一致；1024 control 的最后一次只保留给从 enabled 到 paused，耗尽需维护。
+
+- 最终本地 Python **525/525**、Web **598/598**、根目录 Node **165/165**，无失败/跳过；
+  类型、生产构建、认证 HTTP、shellcheck 与依赖审计通过，漏洞报告为 0。
+- HTTP **81/81**，schema 18、build `BoaC-frR1nw0aU3kBfgp3`，446 项源码首尾及随后
+  核对一致。`HTTP-SC01..04` 真实等待 UTC 触发，经独立合成 Worker 与实际暂停 API
+  验证一次成功发布、另一在途结果拒绝、恢复启用不重放和双端历史验真；账本事实不变。
+- 工件：`artifacts/verification/workbench-http/2026-09-12T21-02-02-761Z/manifest.json`；
+  SHA-256 `fcf2571d1e48d8c256982ad38461aeddcb0024b10a633c8f01a669de86bc208d`。
+  首次 HTTP 用错误预期测试 CAS 0；修正为 400，并另测合法错配 CAS 的 409 后重跑，
+  原失败工件保留，未放宽业务约束。其他审查修订与 RED/GREEN 证据见 [07 记录](07-implementation-tracker.md#daily-collection-schedules-worktree-v18)。
+- 原生 Tabbit 仍无法连接（exit 69），未重启、未冒称原生交互通过。新同提交 CI/镜像、
+  真实资料、部署节奏、通知传输、全负载与异机恢复仍需独立证据；本次没有生产切换。
+
+以上仅市场采集子路径的工程检查，不升级原 P/ACC/E/S 全部门槛，不取得投资批准
+或盈利证明。个人方案、真实账户/供应商原件与凭据仍不得进入公开源、镜像或 CI 工件。

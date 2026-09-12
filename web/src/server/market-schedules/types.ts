@@ -1,0 +1,14 @@
+import type { CollectionScheduleDefinition } from "./schemas";
+export type { CollectionScheduleDefinition } from "./schemas";
+export type CollectionActor = { id: string; kind: "human" | "ai" | "worker" | "strategy" };
+export type CollectionOptions = { now?: string };
+export type CollectionScheduleReceipt = { schedule_id: string; version_id: string; version: number; schedule_revision: number; status: "enabled" | "paused"; scope_key: string; content_hash: string };
+export type CollectionVersionView = { id: string; version: number; definition_json: string; definition: CollectionScheduleDefinition; content_hash: string; created_by: string; created_at: string; audit_id: string };
+export type CollectionScheduleView = { id: string; portfolio_id: string; scope_key: string; schedule_revision: number; status: "enabled" | "paused"; current_version: CollectionVersionView; last_audit_id: string; updated_at: string; next_trigger_at: string | null };
+export type CollectionSlotView = { id: string; portfolio_id: string; scope_key: string; period: string; schedule_id: string; schedule_version_id: string; authorization_audit_id: string; authorization_revision: number; scheduled_at: string; deadline_at: string; created_at: string; disposition: "requested" | "missed"; reason_code: string | null; command_request_id: string | null; expected_publication_revision: number | null; job: null | { id: string; status: string; attempt_count: number; max_attempts: number; updated_at: string }; capture: null | { id: string; received_at: string; rate_date: string | null; batch_id: string; receipt_hash: string; status: string }; };
+export type CollectionScheduleState = { schema_version: "collection-schedules-v1"; portfolios: { id: string; name: string }[]; portfolios_truncated: boolean; selected_portfolio_id: string | null; read_only: boolean; server_now: string; schedules: CollectionScheduleView[]; schedules_truncated: boolean; slots: CollectionSlotView[]; next_cursor: string | null };
+export type CollectionSlotDetail = { schema_version: "collection-slot-v1"; portfolio_id: string; read_only: boolean; server_now: string; slot: CollectionSlotView; version: CollectionVersionView; attempts: { attempt: number; status: string; started_at: string; finished_at: string | null; error_code: string | null }[] };
+export type CollectionScheduleRow = { id: string; portfolio_id: string; provider: "ecb"; scope_key: string; created_by: string; created_at: string };
+export type CollectionControl = { schedule_id: string; revision: number; version_id: string; status: "paused" | "enabled"; audit_id: string; created_at: string };
+export type CollectionSlotRow = Omit<CollectionSlotView, "job" | "capture">;
+export type ScheduledCollectionBinding = { slot: CollectionSlotRow; definition: CollectionScheduleDefinition; schedule: CollectionScheduleRow; authorization: CollectionControl & { ended_at: string | null } };

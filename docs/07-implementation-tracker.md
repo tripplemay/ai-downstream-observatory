@@ -22,18 +22,18 @@ replacing personal parameters with public templates does not reduce scope.
 
 | Workstream | Current implementation | Remaining work / release evidence |
 |---|---|---|
-| Contracts and new database | Versioned migrations through v17 in the current worktree; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, private catalog versions, monthly schedule/cycle/attempt identity, human-reviewed private market references and separate bounded HTTP/SDK captures | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
+| Contracts and new database | Versioned migrations through v18 in the current worktree; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, private catalog versions, monthly schedule/cycle/attempt identity, human-reviewed private market references, bounded HTTP/SDK captures and daily collection authorization/slots | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
 | Authentication | Sealed sessions, persistent revocation/rate limit, server-side guards, strict Origin; authenticated HTTP and native login/logout checked; initialization/login share UTF-8 password bounds | Production TLS/proxy, operator configuration and real owner login |
 | Financial ledger | Exact decimal facts, cash/trades/settlement/dividends/FX/transfers/splits; unknown/estimated/confirmed tax, net-only receipts, cumulative tax assessment and actual withholding kept separate; corporate-action notice/resolution isolation; securities transit and append-only dependent corrections | Real dividend/tax/corporate-action and security-transfer evidence, full acceptance matrix |
 | Import and reconciliation | JSON and raw CSV attachment/preview/atomic confirmation; zero-write CSV inspection and visual explicit mapping; immutable mappings and row evidence; explicit duplicate review and persistent source aliases; scoped downloads and encrypted recovery; explicit balance/tax-payable/settled/transit reconciliation and unresolved-fact guards | Domestic/cross-border broker samples, native wizard acceptance, large background imports and full throughput/fault acceptance |
 | Accounting and performance | Immutable NAV v4/performance v5; source-owned transit NAV and per-event external-flow FX; independent Python/Web fact-quality proofs for NAV, after-tax performance and attribution, including intermediate-period unresolved states | Actual historical FX/provider and dividend evidence, full attribution/benchmark/history workflows; implementation is not complete acceptance |
 | Funding plans | Dated multi-currency sources and tranches, version editing/deferral, partial receipt matching, execution association, cash/reservation separation, over-budget acknowledgement, correction review and full audit history | User-confirmed dated plan, broker evidence, D-05 allocation choices and full execution/funding workflow acceptance |
 | ETF research directory | Portfolio-private membership/source/profile/disclosure versions; independent CAS, stable pagination, account-evidence summaries and up-to-four version-bound comparisons; TS/Python exact-decimal overlap bounds with coverage and date semantics | Verified provider originals, identity-kind/lifecycle migration, current fees/liquidity/premiums and weighted exposures; full P-05 and native comparison/mobile acceptance |
-| Market and orchestration | Immutable paged batches, validate/publish CAS, as-known/restated valuation, leases/fencing/retry/outbox; monthly discovery and fixed Node publisher; ECB reference-FX plus LongPort day-price SDK projection publication bound to private human-reviewed mapping/calendar versions; separate core/provider roles | Actual A/HK/US permissions/data, authoritative exchange references, recurring collection, full fault/load tests and current optional-image verification |
+| Market and orchestration | Immutable paged batches, validate/publish CAS, as-known/restated valuation, leases/fencing/retry/outbox; monthly discovery and fixed Node publisher; ECB reference-FX plus explicit daily collection schedules; LongPort day-price SDK publication bound to private human-reviewed mapping/calendar versions; separate core/provider roles | Actual A/HK/US permissions/data, authoritative exchange references, recurring price collection, full fault/load tests and current-image verification |
 | Strategy and AI | Preregistered v1 contribution-only research plus explicit v2 monthly momentum/MA rotation and fixed-rebalance benchmark; exact PIT ranking, simulated sales/settlement/fixed buys, costs and bounded read-only summaries; frozen inputs/implementation and independent research windows | Live providers/models, continuous forward simulation, complete long-history workflow performance and genuine S-gate evidence; v2 does not activate actual schedules |
 | Governance and execution | Human version/capability APIs, risk/approval CAS, independent-process cash/share reservation race tests, execution reports separate from facts; trusted verification import rejects user PASS claims; Web/API integration | Actual trusted verification Worker, formal evidence and runtime manifest binding; actual D/G/S approvals remain absent |
 | Product UI | Account, funding, catalog, research, governance, monthly evaluation and private market-reference workspaces; typed securities and dividend/tax/corporate-action preview/confirm; visual CSV mapping and server-backed, current-session, read-only confirmation recovery | Native market-reference/monthly/wizard/recovery/BFCache and full catalog comparison/positive governance acceptance; complete accessibility and readonly UX |
-| Deployment | Manual-only release, encrypted backup/restore, exact-SHA CI-verified non-root v16 core images and local restore; full historical real legacy-copy archive/recovery rehearsal; separate v17 provider-image definition; old production unchanged | New optional-image source-bound checks, independent-host restore, protected credentials/configuration, release and post-release checks |
+| Deployment | Manual-only release, encrypted backup/restore, exact-SHA CI-verified non-root v17 core/provider images and local restore; full historical real legacy-copy archive/recovery rehearsal; old production unchanged | New v18 source-bound image checks, independent-host restore, protected credentials/configuration, release and post-release checks |
 
 Latest published checkpoint before the v15 monthly work is commit
 `1b06926ac0d9f98a016d6e690be4a73e6a572f2e`; its
@@ -113,6 +113,74 @@ Historical visual CSV checkpoint (local stable-source validation, schema v13):
   not deployment or profitability acceptance.
 
 ## Reproducible checks
+
+### Daily collection schedules worktree (v18)
+
+[Daily ECB collection](market-collection-schedules.md) adds explicit human save,
+enable and pause controls, immutable authorization history and globally unique
+scope/date slots. Saving is paused; no portfolio receives a default schedule.
+Missed windows are recorded without downloading historical daily feeds. Current
+windows take priority over bounded historical bookkeeping within each scan.
+
+Execution rechecks the frozen authorization before/after download, before
+publication and at successful job finalization. Pause/resume does not revive old
+requests. A final deadline failure rolls back the capture and publication;
+completed historical evidence remains valid after later pause. Publication CAS
+is never automatically rebased. Neither discovery nor collection creates
+financial facts, valuations, advice or orders. LongPort recurrence is not added.
+
+Migration 0018 preserves old migrations and data. Definitions, controls and
+slots are independently checked by Python and Web. The history budget is 1024
+controls, with revision 1024 reserved for an enabled-to-paused transition;
+exhaustion requires maintenance, not implicit renewal. Same-status new commands
+also close the previous authorization. Deduplication includes the submitted CAS;
+only the original command returns its old receipt. An exact trigger-time enable
+is valid; one microsecond later cannot authorize that missed trigger.
+
+Final local validation passed Python 525/525, Web 598/598 and root Node 165/165,
+with no failures/skips. Typecheck, production build, authentication HTTP, shell
+checks and dependency audit passed (zero reported vulnerabilities). The schema 18
+production build `BoaC-frR1nw0aU3kBfgp3` passed HTTP 81/81, including a real UTC
+trigger, a loopback HTTP pause during synthetic download, zero partial publication
+and valid historical proof after pause/resume. All 446 inventoried sources matched
+start/end and subsequent current-file verification. Evidence:
+`artifacts/verification/workbench-http/2026-09-12T21-02-02-761Z/manifest.json`,
+SHA-256 `fcf2571d1e48d8c256982ad38461aeddcb0024b10a633c8f01a669de86bc208d`.
+Migration 0018 SHA-256:
+`60315ed2e47d5b89c787cd179317148900a4405f380ca4fb1ffd91aecf14ed62`.
+
+Review first reproduced a system actor masquerading as a human schedule audit.
+SQL and both independent readers now reject it, strict audit fields and string
+semantics align, and a full 1024-control fixture tests the last-pause boundary.
+The first full HTTP run correctly rejected CAS 0 as malformed (400), rather than
+the fixture's expected conflict (409). The corrected test separately asserts
+invalid zero and valid-but-mismatched CAS; that failed artifact remains intact.
+Final logs use `collection-v18-*-final*.log` and `collection-v18-http-second.log`
+under `artifacts/verification/final-regression/`.
+
+Native Tabbit diagnosis again returned `BROWSER_RUNTIME_UNAVAILABLE`, exit 69;
+there was no restart or native UI acceptance. The new commit still requires its
+own exact-SHA CI and images. Neither local synthetic results nor the preceding
+v17 CI certify actual data, independent-host recovery, production or investment
+gates. Full original scope remains unchanged.
+
+### Subsequent exact-SHA v17 CI verification
+
+Commit `edcb3ea07384f32091d4f76fd452c83c2d6f53e1` passed
+[CI 34716214716](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/34716214716):
+Python 488, Web 559, root Node 148 and HTTP 77, plus typecheck/build/authentication,
+shell checks and dependency audit (zero reported vulnerabilities). Both Linux
+core and optional provider images passed schema 17/native-runtime checks; core
+encrypted recovery was same-host isolation, not independent-host RPO/RTO proof.
+The provider report binds the actual LongPort 4.3.7 extension and records no
+credentials, network or quote context. It does not verify real market access.
+
+All 427 HTTP source hashes matched start/end and the exact commit blobs. Original
+artifact ZIP sizes/hashes and reports were checked; evidence is retained in
+`artifacts/verification/github-ci/34716214716/`. Verification-result SHA-256:
+`a792639f3115c276aff97e5c1069d2cc74d2361eaae9407a4f04311ee74b0dbe`.
+The earlier failed runs below remain failed historical records. No production
+workflow or cutover was performed. New v18 changes require their own checks.
 
 ### Price collection worktree (v17)
 

@@ -85,6 +85,11 @@
       "version": 17,
       "file": "0017_market_reference_and_prices.sql",
       "sha256": "cbf17492de5d40b6a0b892ac46c8013a9b4dcf210cb3486bd29a8afff98c416a"
+    },
+    {
+      "version": 18,
+      "file": "0018_collection_schedules.sql",
+      "sha256": "60315ed2e47d5b89c787cd179317148900a4405f380ca4fb1ffd91aecf14ed62"
     }
   ]
 }

@@ -27,6 +27,7 @@ const report = {
     'Monthly HTTP cases prove negative authorization, immutable empty state and recovery boundaries; authorized proposal publication is covered separately by service and Python-to-Node integration tests.',
     'Rotation HTTP cases use a real authenticated network session and Python worker with synthetic research data; they do not certify G/S gates, real forward performance or broker execution.',
     'Collection HTTP cases patch only the independent test Python transport with synthetic XML; no app request can provide a URL, body, credential or provider clock, and no CI provider network request is made.',
+    'Recurring collection cases use an actual UTC trigger and loopback HTTP pause, but do not certify production uptime, real provider freshness or native browser behavior.',
     'Price collection cases use human-reviewed synthetic references and SDK projections in an independent test transport; they do not verify exchange calendars, subscriptions, real market data or broker buyability.',
   ],
 };
@@ -1499,6 +1500,172 @@ finally:
       assert.equal(rotationSnapshot(), financialBefore);
       return { transport: 'real HTTP plus independent synthetic Python transport', original_bytes_sha256: rawHash,
         publication_revision: 1, provider_reference_not_executable: true, financial_tables_unchanged: true, api_exposes_original_xml: false };
+    });
+    let scheduleDue, scheduleDefinition, scheduleReceipts = [], scheduledWinner, scheduledLoser;
+    const schedulePost = (action, command, extraHeaders = {}) => jsonRequest('/api/workbench/market', {
+      method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json', ...collectionHeaders(), ...extraHeaders },
+      body: JSON.stringify({ action, command }),
+    });
+    const scheduleGet = (extra = '', selected = collectionPortfolio) => jsonRequest(`/api/workbench/market?view=collection_schedules&portfolio=${selected}${extra}`, { headers: { Cookie: cookie, ...collectionHeaders() } });
+    const scheduleSave = (definition, idempotency_key, selected = collectionPortfolio) => ({ portfolio_id: selected,
+      expected_schedule_id: null, expected_schedule_revision: 0, definition_json: JSON.stringify(definition),
+      idempotency_key, reason: 'Synthetic recurring collection HTTP fixture', acknowledgement: true });
+    const scheduleStatus = (receipt, status, idempotency_key, selected = collectionPortfolio) => ({ portfolio_id: selected,
+      schedule_id: receipt.schedule_id, expected_schedule_revision: receipt.schedule_revision, status, idempotency_key,
+      reason: 'Synthetic explicit collection authorization', acknowledgement: true });
+    const scheduledWorker = (pause = null) => {
+      const script = `import json,sys
+from urllib.request import Request,urlopen
+from unittest.mock import patch
+from worker.orchestration.db import open_database
+from worker.orchestration.runtime import run_pending_once
+from worker.market.collection import verify_provider_capture
+from tests.market.test_collection import fake_download,utc_now
+control=json.load(sys.stdin)
+db=open_database(sys.argv[1])
+paused=[]
+def revoke():
+    if control is not None:
+        request=Request(control['url'],data=json.dumps(control['body']).encode(),headers=control['headers'],method='POST')
+        with urlopen(request,timeout=10) as response:
+            paused.append(response.status)
+            assert json.load(response)['status']=='paused'
+def synthetic_download(feed):
+    started=utc_now()
+    revoke()
+    response=fake_download()(feed)
+    from worker.orchestration.db import instant,stamp
+    response['started_at']=stamp(started)
+    if control is not None:
+        ended=db.execute('SELECT updated_at FROM collection_schedule_heads WHERE schedule_id=?',
+                         (control['body']['command']['schedule_id'],)).fetchone()['updated_at']
+        assert started <= instant(ended) <= instant(response['completed_at'])
+    return response
+try:
+    with patch('worker.market.collection.download_ecb_xml',side_effect=synthetic_download) as download:
+        job=run_pending_once(db,'synthetic-http-schedule-worker',lease_seconds=300,clock=utc_now)
+    result=None if job is None else json.loads(job['result_json'])
+    slot=None if job is None else dict(db.execute('SELECT * FROM collection_schedule_slots WHERE command_request_id=?',(job['command_request_id'],)).fetchone())
+    proof=verify_provider_capture(db,result['batch_id']) if job is not None and job['status']=='succeeded' else None
+    print(json.dumps({'status':None if job is None else job['status'],'download_calls':download.call_count,'slot':slot,'result':result,'proof':proof,'pause_statuses':paused}))
+finally: db.close()
+`;
+      const worker = spawnSync(process.env.WORKBENCH_TEST_PYTHON || process.env.WORKBENCH_PYTHON || 'python3', ['-c', script, filename], {
+        cwd: root, env: { PATH: process.env.PATH, PYTHONPATH: root, PYTHONDONTWRITEBYTECODE: '1', TZ: 'UTC',
+          WORKBENCH_DB_PATH: filename, WORKBENCH_DATA_DIR: path.join(directory, 'auth'), WORKBENCH_MODE: 'ledger' },
+        input: JSON.stringify(pause), encoding: 'utf8', timeout: 30000, maxBuffer: 1024 * 1024,
+      });
+      assert.equal(worker.status, 0, worker.stderr || worker.stdout || String(worker.error));
+      return JSON.parse(worker.stdout);
+    };
+    const scheduledWebProof = batchId => {
+      const script = `import Database from 'better-sqlite3';
+import {verifiedMarketSource} from './src/server/market-source.ts';
+const db=new Database(process.argv[1],{readonly:true});
+try {console.log(JSON.stringify(verifiedMarketSource(db,process.argv[2],new Date().toISOString())));}finally{db.close();}`;
+      const result = spawnSync(path.join(web, 'node_modules/.bin/tsx'), ['-e', script, filename, batchId], { cwd: web, encoding: 'utf8', timeout: 30000 });
+      assert.equal(result.status, 0, result.stderr || String(result.error)); return JSON.parse(result.stdout);
+    };
+    await check('HTTP-SC01', 'private recurring schedules have no defaults and saving never enables or collects data', async () => {
+      assert.equal((await request('/workbench/market/schedules')).headers.get('location'), '/login');
+      const page = await request('/workbench/market/schedules', { headers: { Cookie: cookie } }); assert.equal(page.status, 200);
+      const empty = await scheduleGet(); assert.equal(empty.status, 200); assert.deepEqual(empty.json.schedules, []); assert.deepEqual(empty.json.slots, []);
+      scheduleDue = new Date(Math.ceil((Date.now() + 15000) / 60000) * 60000);
+      scheduleDefinition = { schema_version: 'collection-schedule-v1', provider: 'ecb', feed: 'daily', currencies: ['EUR'],
+        frequency: 'daily', timezone: 'UTC', start_date: scheduleDue.toISOString().slice(0, 10), end_date: null,
+        trigger: { hour: scheduleDue.getUTCHours(), minute: scheduleDue.getUTCMinutes() }, deadline_seconds: 120,
+        max_attempts: 2, publish: true, missed_policy: 'record_no_backfill' };
+      const financial = rotationSnapshot();
+      for (const currency of ['EUR', 'CNY']) {
+        const command = scheduleSave({ ...scheduleDefinition, currencies: [currency] }, `synthetic-http-schedule:${currency}`);
+        const saved = await schedulePost('save_collection_schedule', command); assert.equal(saved.status, 200, JSON.stringify(saved.json));
+        assert.equal(saved.json.status, 'paused'); assert.equal(saved.json.schedule_revision, 1); assert.equal(saved.json.version, 1);
+        assert.equal(saved.json.content_hash, sha(command.definition_json));
+        assert.deepEqual((await schedulePost('save_collection_schedule', command)).json, saved.json);
+        scheduleReceipts.push(saved.json);
+      }
+      const idle = scheduledWorker(); assert.equal(idle.status, null); assert.equal(idle.download_calls, 0);
+      const savedState = await scheduleGet(); assert.equal(savedState.status, 200); assert.equal(savedState.json.schedules.length, 2);
+      assert(savedState.json.schedules.every(row => row.status === 'paused')); assert.deepEqual(savedState.json.slots, []);
+      assert.equal(rotationSnapshot(), financial);
+      return { schedules: 2, initial_status: 'paused', slots: 0, provider_requests: 0, financial_tables_unchanged: true };
+    });
+    await check('HTTP-SC02', 'recurring controls reject unauthenticated, forged, stale and read-only writes without mutating state', async () => {
+      const command = scheduleStatus(scheduleReceipts[0], 'enabled', 'synthetic-http-schedule-invalid');
+      const before = inspectionStorage();
+      const anonymous = await jsonRequest('/api/workbench/market', { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_collection_schedule_status', command }) });
+      assert.equal(anonymous.status, 401);
+      assert.equal((await schedulePost('set_collection_schedule_status', command, { Origin: 'https://synthetic-wrong-origin.invalid' })).status, 403);
+      assert.equal((await schedulePost('set_collection_schedule_status', command, { 'X-Workbench-Session-Binding': '0'.repeat(64) })).status, 401);
+      assert.equal((await schedulePost('set_collection_schedule_status', { ...command, actor_id: 'forged' })).status, 400);
+      assert.equal((await schedulePost('set_collection_schedule_status', { ...command, expected_schedule_revision: 0 })).status, 400, 'Status controls require a positive CAS.');
+      assert.equal((await schedulePost('set_collection_schedule_status', { ...command, expected_schedule_revision: 2 })).status, 409, 'A valid but mismatched CAS must conflict.');
+      assert.equal((await schedulePost('set_collection_schedule_status', { ...command, portfolio_id: otherPortfolio })).status, 403);
+      assert.equal((await scheduleGet('&view=collection_schedules')).status, 400);
+      assert.equal((await scheduleGet('&limit=51')).status, 400);
+      const marker = path.join(directory, 'RESTORE_PENDING_REVIEW'); writeFileSync(marker, 'Synthetic recurring collection recovery fixture\n');
+      try {
+        assert.equal((await scheduleGet()).json.read_only, true);
+        assert.equal((await schedulePost('set_collection_schedule_status', command)).status, 423);
+      } finally { rmSync(marker); }
+      assert.deepEqual(inspectionStorage(), before);
+      for (let i = 0; i < scheduleReceipts.length; i++) {
+        const enabled = await schedulePost('set_collection_schedule_status', scheduleStatus(scheduleReceipts[i], 'enabled', `synthetic-http-schedule-enable:${i}`));
+        assert.equal(enabled.status, 200, JSON.stringify(enabled.json)); assert.equal(enabled.json.status, 'enabled'); scheduleReceipts[i] = enabled.json;
+      }
+      assert(Date.now() < scheduleDue.getTime(), 'Fixture setup must finish before its real authorized trigger.');
+      const sharedScope = await schedulePost('save_collection_schedule', scheduleSave(scheduleDefinition, 'synthetic-http-schedule-other-scope', otherPortfolio));
+      assert.equal(sharedScope.status, 200);
+      const conflict = await schedulePost('set_collection_schedule_status', scheduleStatus(sharedScope.json, 'enabled', 'synthetic-http-schedule-scope-conflict', otherPortfolio));
+      assert.equal(conflict.status, 409); assert.equal(conflict.json.error, 'COLLECTION_SCOPE_CONFLICT');
+      assert.deepEqual((await scheduleGet()).json.slots, []);
+      return { initial_rejections_zero_write: true, explicit_enable_required: true, cross_portfolio_same_scope_conflict: 409, actual_trigger: scheduleDue.toISOString() };
+    });
+    await check('HTTP-SC03', 'a real authorized UTC trigger publishes one synthetic capture while an in-flight HTTP pause blocks the other scope atomically', async () => {
+      const financial = rotationSnapshot();
+      await new Promise(resolve => setTimeout(resolve, Math.max(0, scheduleDue.getTime() - Date.now() + 50)));
+      scheduledWinner = scheduledWorker(); assert.equal(scheduledWinner.status, 'succeeded'); assert.equal(scheduledWinner.download_calls, 1);
+      assert.equal(scheduledWinner.slot.disposition, 'requested'); assert.equal(scheduledWinner.slot.authorization_revision, 2);
+      assert.equal(scheduledWinner.result.live_advice_eligible, false);
+      const listed = await scheduleGet(); assert.equal(listed.status, 200, JSON.stringify(listed.json)); assert.equal(listed.json.slots.length, 2);
+      const pending = listed.json.slots.find(row => row.job.status === 'queued'); assert.ok(pending);
+      const receipt = scheduleReceipts.find(row => row.schedule_id === pending.schedule_id); assert.ok(receipt);
+      scheduledLoser = scheduledWorker({ url: address + '/api/workbench/market',
+        headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json', ...collectionHeaders() },
+        body: { action: 'set_collection_schedule_status', command: scheduleStatus(receipt, 'paused', 'synthetic-http-schedule-inflight-pause') } });
+      assert.equal(scheduledLoser.status, 'skipped'); assert.equal(scheduledLoser.download_calls, 1); assert.deepEqual(scheduledLoser.pause_statuses, [200]);
+      assert.equal(scheduledLoser.slot.id, pending.id); assert.equal(scheduledLoser.result.code, 'COLLECTION_AUTHORIZATION_ENDED');
+      const current = await scheduleGet(); assert.equal(current.status, 200, JSON.stringify(current.json));
+      const success = current.json.slots.find(row => row.id === scheduledWinner.slot.id), stopped = current.json.slots.find(row => row.id === pending.id);
+      assert.equal(success.job.status, 'succeeded'); assert.equal(success.capture.rate_date, '2025-06-06');
+      assert.notEqual(success.capture.received_at.slice(0, 10), success.capture.rate_date);
+      assert.equal(stopped.job.status, 'skipped'); assert.equal(stopped.capture, null);
+      assert.equal(scheduledWebProof(success.capture.batch_id).capture_id, success.capture.id);
+      const db = new Database(filename, { readonly: true });
+      try {
+        assert.equal(db.prepare('SELECT COUNT(*) n FROM market_provider_captures WHERE command_request_id=?').get(pending.command_request_id).n, 0);
+        assert.equal(db.prepare('SELECT COUNT(*) n FROM market_publications WHERE scope=?').get(pending.scope_key).n, 0);
+        assert.equal(db.prepare('SELECT COUNT(*) n FROM collection_schedule_slots WHERE scope_key=? AND period=?').get(success.scope_key, success.period).n, 1);
+      } finally { db.close(); }
+      assert.equal(rotationSnapshot(), financial);
+      return { actual_time_trigger: true, synthetic_provider_downloads: 2, atomic_publications: 1, inflight_pause_status: 'skipped',
+        old_rate_date_preserved: true, source_verified_independently: true, financial_tables_unchanged: true };
+    });
+    await check('HTTP-SC04', 'pause and resume never replay a completed daily slot and historical capture proof remains valid', async () => {
+      const winner = scheduleReceipts.find(row => row.schedule_id === scheduledWinner.slot.schedule_id);
+      const paused = await schedulePost('set_collection_schedule_status', scheduleStatus(winner, 'paused', 'synthetic-http-schedule-history-pause'));
+      assert.equal(paused.status, 200);
+      const resumed = await schedulePost('set_collection_schedule_status', scheduleStatus(paused.json, 'enabled', 'synthetic-http-schedule-history-resume'));
+      assert.equal(resumed.status, 200);
+      const before = collectionMarketState(), idle = scheduledWorker(); assert.equal(idle.status, null); assert.equal(idle.download_calls, 0);
+      assert.deepEqual(collectionMarketState(), before);
+      const detail = await jsonRequest(`/api/workbench/market?view=collection_slot&portfolio=${collectionPortfolio}&id=${scheduledWinner.slot.id}`, { headers: { Cookie: cookie, ...collectionHeaders() } });
+      assert.equal(detail.status, 200, JSON.stringify(detail.json)); assert.equal(detail.json.attempts.length, 1); assert.equal(detail.json.slot.job.status, 'succeeded');
+      assert.equal(scheduledWebProof(scheduledWinner.result.batch_id).capture_id, scheduledWinner.proof.id);
+      const denied = await jsonRequest(`/api/workbench/market?view=collection_slot&portfolio=${otherPortfolio}&id=${scheduledWinner.slot.id}`, { headers: { Cookie: cookie, ...collectionHeaders() } });
+      assert.equal(denied.status, 403);
+      assert.doesNotMatch(JSON.stringify(detail.json), /raw_body|normalized_json|<\?xml|gesmes:Envelope/);
+      return { daily_slot_replayed: false, provider_requests: 0, historical_capture_still_verified: true, cross_portfolio_detail: 403 };
     });
     await check('HTTP-MC02', 'collection HTTP rejects caller transport, reserved manual origin, unauthorized sessions, stale ledger versions and recovery writes without durable side effects', async () => {
       const before = inspectionStorage();

@@ -13,11 +13,12 @@ import { canonical, hash } from "./ledger/service";
 import { amount } from "./ledger/decimal";
 import { parseStrictJson } from "./strict-json";
 import { verifiedSdkMarketSource, type SdkMarketSource } from "./market-price-source";
+import { verifyScheduledCollectionRequest } from "./market-schedules/verification";
 
 type JsonObject = Record<string, unknown>;
 type Batch = { id: string; source_id: string; scope: string; batch_type: string; status: string; expected_pages: number; received_pages: number; row_count: number; manifest_hash: string | null; validation_json: string; started_at: string; completed_at: string | null };
 type Capture = { id: string; batch_id: string; command_request_id: string; job_id: string; attempt: number; raw_body: Buffer; receipt_json: string; receipt_hash: string; normalized_json: string; document_json: string; created_at: string };
-type RequestRow = { id: string; portfolio_id: string; actor_id: string; command_type: string; payload_hash: string; payload_json: string; created_at: string };
+type RequestRow = { id: string; portfolio_id: string; actor_id: string; command_type: string; idempotency_key: string; payload_hash: string; payload_json: string; created_at: string };
 type Job = { id: string; command_request_id: string; job_type: string; scope: string; status: string; attempt_count: number; fencing_token: number; result_json: string; updated_at: string };
 type Attempt = { status: string; fencing_token: number; started_at: string; finished_at: string | null };
 type Receipt = { id: string; batch_id: string; command_request_id: string; job_id: string; attempt: number; fencing_token: number; request_hash: string; request_started_at: string; received_at: string; endpoint: string; raw_sha256: string; raw_bytes: number; normalized_hash: string; document_hash: string; parser_version: string; rate_kind: "reference_not_executable"; capture_kind: "http_response_bytes" };
@@ -72,6 +73,13 @@ function capturedSource(db: Database.Database, batch: Batch, validation: JsonObj
   const document = parsed(capture.document_json); requireTrue(validDocument(document) && hash(document) === receipt.document_hash && same(document.batch, plan));
   const request = db.prepare("SELECT * FROM command_requests WHERE id=?").get(capture.command_request_id) as RequestRow | undefined;
   requireTrue(request && request.command_type === "market_collect" && request.actor_id.trim());
+  const scheduled = verifyScheduledCollectionRequest(db, request);
+  const withinSchedule = (...values: unknown[]) => {
+    if (!scheduled) return;
+    const start = instant(scheduled.slot.scheduled_at), deadline = instant(scheduled.slot.deadline_at);
+    const closed = scheduled.authorization.ended_at === null ? deadline : instant(scheduled.authorization.ended_at);
+    requireTrue(values.every(value => instant(value) >= start && instant(value) < deadline && instant(value) < closed));
+  };
   const inputObject = parsed(request.payload_json); requireTrue(validCollect(inputObject));
   const input = inputObject as unknown as MarketCollectRequest;
   requireTrue(hash(inputObject) === request.payload_hash && request.payload_hash === receipt.request_hash && receipt.endpoint === endpoints[input.feed]);
@@ -81,6 +89,7 @@ function capturedSource(db: Database.Database, batch: Batch, validation: JsonObj
   const result = parsed(job.result_json);
   requireTrue(input.publish === true && result.batch_status === "published" && result.capture_id === capture.id && result.receipt_hash === capture.receipt_hash && result.batch_id === batch.id && result.manifest_hash === batch.manifest_hash);
   requireTrue(instant(request.created_at) <= instant(attempt.started_at) && instant(attempt.started_at) <= instant(receipt.request_started_at) && instant(receipt.request_started_at) <= instant(receipt.received_at) && instant(receipt.received_at) <= instant(capture.created_at) && instant(capture.created_at) <= instant(attempt.finished_at) && instant(attempt.finished_at) <= instant(job.updated_at));
+  withinSchedule(receipt.request_started_at, receipt.received_at, capture.created_at, attempt.finished_at, job.updated_at);
   if (knownAt !== undefined) requireTrue(instant(job.updated_at) <= instant(knownAt));
   requireTrue(batch.status === "published" && batch.source_id === "provider:ecb:reference-fx" && batch.scope === marketCollectScope(input) && batch.batch_type === "fx" && batch.expected_pages === 1 && batch.received_pages === 1 && batch.row_count === normalized.records.length);
   requireTrue(plan.expected_publication_revision === input.expected_publication_revision && plan.expected_rows === normalized.records.length && plan.source_mode === "provider_observed");
@@ -108,6 +117,7 @@ function capturedSource(db: Database.Database, batch: Batch, validation: JsonObj
   requireTrue(same(validation.issues, []) && same(validation.manifest, manifest) && hash(manifest) === batch.manifest_hash);
   const publication = db.prepare("SELECT * FROM market_publication_events WHERE batch_id=? AND scope=?").get(batch.id, batch.scope) as { revision: number; manifest_hash: string; published_at: string } | undefined;
   requireTrue(publication && publication.revision === input.expected_publication_revision + 1 && publication.manifest_hash === batch.manifest_hash && instant(publication.published_at) >= instant(receipt.received_at));
+  withinSchedule(publication.published_at);
   return { mode: "provider_observed", provider: "ecb", capture_id: capture.id, receipt_hash: capture.receipt_hash, rate_kind: receipt.rate_kind, capture_kind: receipt.capture_kind, received_at: receipt.received_at };
 }
 
