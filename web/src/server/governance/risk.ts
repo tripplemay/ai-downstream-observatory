@@ -7,6 +7,7 @@ import { activation, verifyGateEvidence, type GovernanceActor, type GovernanceOp
 import { isGovernanceClientError } from "./errors";
 import { valuationFreshness } from "../valuation-freshness";
 import { ledgerFactQualityAt } from "../ledger/fact-quality-db";
+import { verifiedMarketSource } from "../market-source";
 
 export interface ProposalRow { id: string; portfolio_id: string; environment: string; policy_version_id: string; strategy_version_id: string; ledger_revision: number; market_manifest: string; input_hash: string; expires_at: string; created_at: string }
 export interface ItemRow { id: string; proposal_id: string; account_id: string; listing_id: string; side: "buy" | "sell"; currency: string; quantity: string; limit_price: string; estimated_fees: string }
@@ -56,7 +57,7 @@ export function currentPublications(db: Database.Database, policy: Policy, now: 
   for (const scope of scopes) {
     const row = db.prepare("SELECT p.*,b.validation_json FROM market_publications p JOIN market_batches b ON b.id=p.batch_id WHERE p.scope=?").get(scope) as (Publication & { validation_json: string }) | undefined;
     if (!row) { if (Object.values(policy.price_scope_by_market).includes(scope)) throw new Error("MARKET_PUBLICATION_MISSING"); else continue; }
-    if (JSON.parse(row.validation_json)?.plan?.source_mode !== "manual_verified") throw new Error("ACTUAL_DATA_NOT_VERIFIED");
+    try { verifiedMarketSource(db, row.batch_id, now); } catch { throw new Error("ACTUAL_DATA_NOT_VERIFIED"); }
     if (row.published_at > now) throw new Error("FUTURE_MARKET_PUBLICATION");
     rows.push({ scope: row.scope, batch_id: row.batch_id, manifest_hash: row.manifest_hash, revision: row.revision, published_at: row.published_at });
   }

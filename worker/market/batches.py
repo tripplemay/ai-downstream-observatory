@@ -27,7 +27,13 @@ def _batch(connection, batch_id):
 
 
 def stage_batch(connection, plan, now=None):
-    validate_contract(plan, fragment="properties/batch")
+    from .collection import reserved_source, verify_provider_capture
+    provider = plan.get("source_mode") == "provider_observed"
+    validate_contract(plan, "market-provider-batch.schema.json" if provider else "market-batch.schema.json", fragment="properties/batch")
+    if reserved_source(plan) and not provider:
+        raise WorkbenchError("RESERVED_MARKET_SOURCE")
+    if provider:
+        verify_provider_capture(connection, plan["id"], require_published=False, replay=False)
     plan = dict(plan)
     for key in ("expected_pages", "expected_rows", "expected_publication_revision"):
         plan[key] = int(plan[key])
@@ -65,6 +71,12 @@ def stage_page(connection, batch_id, page_number, observations, now=None):
             raise WorkbenchError("PAGE_OUTSIDE_EXPECTED_RANGE")
         for observation in observations:
             observation_semantics(observation, batch["validation"]["plan"])
+        if batch["validation"]["plan"].get("source_mode") == "provider_observed":
+            capture = connection.execute("SELECT document_json,receipt_json FROM market_provider_captures WHERE batch_id=?", (batch_id,)).fetchone()
+            if (capture is None or page_number != 1
+                    or json.loads(capture["document_json"])["pages"][0]["observations"] != observations
+                    or json.loads(capture["receipt_json"])["received_at"] != received):
+                raise WorkbenchError("PROVIDER_PAGE_MISMATCH")
         connection.execute("""INSERT INTO market_batch_pages
             (batch_id,page_number,payload_hash,observations_json,received_at) VALUES(?,?,?,?,?)""",
                            (batch_id, page_number, digest, body, received))
@@ -153,6 +165,10 @@ def validate_batch(connection, batch_id, now=None):
         manifest = {"schema_version": "market-publication-v1", "plan": plan,
                     "pages": [{"page_number": page["page_number"], "payload_hash": page["payload_hash"], "received_at": page["received_at"]} for page in pages],
                     "observation_ids": sorted(row["id"] for row in rows)}
+        if plan.get("source_mode") == "provider_observed":
+            from .collection import verify_provider_capture
+            manifest["schema_version"] = "market-publication-v2"
+            manifest["provider_capture"] = verify_provider_capture(connection, batch_id, require_published=False, replay=False)
         connection.execute("UPDATE market_batches SET status='validated',row_count=?,manifest_hash=?,validation_json=? WHERE id=?",
                            (len(rows), content_hash(manifest), canonical_json({"plan": plan, "issues": [], "manifest": manifest}), batch_id))
         return _batch(connection, batch_id)
@@ -167,6 +183,15 @@ def publish_batch(connection, batch_id, expected_revision=None, now=None):
             return dict(published)
         if batch["status"] != "validated":
             raise WorkbenchError("BATCH_NOT_VALIDATED")
+        if batch["validation"]["plan"].get("source_mode") == "provider_observed":
+            from .collection import verify_provider_capture
+            verify_provider_capture(connection, batch_id, require_published=False, replay=False)
+            capture = connection.execute("""SELECT c.payload_json,j.* FROM market_provider_captures p
+                JOIN command_requests c ON c.id=p.command_request_id JOIN job_runs j ON j.id=p.job_id
+                WHERE p.batch_id=?""", (batch_id,)).fetchone()
+            if (json.loads(capture["payload_json"])["publish"] is not True or capture["status"] != "running"
+                    or not capture["lease_owner"] or instant(capture["lease_until"]) <= instant(current)):
+                raise WorkbenchError("PROVIDER_PUBLICATION_REQUIRES_ACTIVE_COMMAND")
         if current < batch["started_at"]:
             raise WorkbenchError("PUBLICATION_BEFORE_BATCH_START")
         latest_receipt = connection.execute("SELECT MAX(received_at) FROM market_batch_pages WHERE batch_id=?", (batch_id,)).fetchone()[0]

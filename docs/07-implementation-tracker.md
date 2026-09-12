@@ -22,14 +22,14 @@ replacing personal parameters with public templates does not reduce scope.
 
 | Workstream | Current implementation | Remaining work / release evidence |
 |---|---|---|
-| Contracts and new database | Versioned migrations through v15 in the current worktree; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, private catalog versions and explicit monthly schedule/cycle/attempt identity | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
+| Contracts and new database | Versioned migrations through v16 in the current worktree; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, private catalog versions, explicit monthly schedule/cycle/attempt identity and bounded provider originals | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
 | Authentication | Sealed sessions, persistent revocation/rate limit, server-side guards, strict Origin; authenticated HTTP and native login/logout checked; initialization/login share UTF-8 password bounds | Production TLS/proxy, operator configuration and real owner login |
 | Financial ledger | Exact decimal facts, cash/trades/settlement/dividends/FX/transfers/splits; unknown/estimated/confirmed tax, net-only receipts, cumulative tax assessment and actual withholding kept separate; corporate-action notice/resolution isolation; securities transit and append-only dependent corrections | Real dividend/tax/corporate-action and security-transfer evidence, full acceptance matrix |
 | Import and reconciliation | JSON and raw CSV attachment/preview/atomic confirmation; zero-write CSV inspection and visual explicit mapping; immutable mappings and row evidence; explicit duplicate review and persistent source aliases; scoped downloads and encrypted recovery; explicit balance/tax-payable/settled/transit reconciliation and unresolved-fact guards | Domestic/cross-border broker samples, native wizard acceptance, large background imports and full throughput/fault acceptance |
 | Accounting and performance | Immutable NAV v4/performance v5; source-owned transit NAV and per-event external-flow FX; independent Python/Web fact-quality proofs for NAV, after-tax performance and attribution, including intermediate-period unresolved states | Actual historical FX/provider and dividend evidence, full attribution/benchmark/history workflows; implementation is not complete acceptance |
 | Funding plans | Dated multi-currency sources and tranches, version editing/deferral, partial receipt matching, execution association, cash/reservation separation, over-budget acknowledgement, correction review and full audit history | User-confirmed dated plan, broker evidence, D-05 allocation choices and full execution/funding workflow acceptance |
 | ETF research directory | Portfolio-private membership/source/profile/disclosure versions; independent CAS, stable pagination, account-evidence summaries and up-to-four version-bound comparisons; TS/Python exact-decimal overlap bounds with coverage and date semantics | Verified provider originals, identity-kind/lifecycle migration, current fees/liquidity/premiums and weighted exposures; full P-05 and native comparison/mobile acceptance |
-| Market and orchestration | Immutable paged batches, validate/publish CAS, as-known/restated valuation, leases/fencing/retry/outbox; bounded monthly discovery and a fixed Node publisher reusing actual governance checks | Real provider adapters, validated exchange calendars, other recurring tasks, full fault/load tests and current image verification |
+| Market and orchestration | Immutable paged batches, validate/publish CAS, as-known/restated valuation, leases/fencing/retry/outbox; bounded monthly discovery, fixed Node publisher and ECB reference-FX capture with independently checked provider originals | A/HK/US price-provider integration, validated exchange calendars, other recurring tasks, full fault/load tests and current image verification |
 | Strategy and AI | Preregistered v1 contribution-only research plus explicit v2 monthly momentum/MA rotation and fixed-rebalance benchmark; exact PIT ranking, simulated sales/settlement/fixed buys, costs and bounded read-only summaries; frozen inputs/implementation and independent research windows | Live providers/models, continuous forward simulation, complete long-history workflow performance and genuine S-gate evidence; v2 does not activate actual schedules |
 | Governance and execution | Human version/capability APIs, risk/approval CAS, independent-process cash/share reservation race tests, execution reports separate from facts; trusted verification import rejects user PASS claims; Web/API integration | Actual trusted verification Worker, formal evidence and runtime manifest binding; actual D/G/S approvals remain absent |
 | Product UI | Account, funding, catalog, research, governance and monthly evaluation workspaces; typed securities and dividend/tax/corporate-action preview/confirm; visual CSV mapping and server-backed, current-session, read-only confirmation recovery | Native monthly/wizard/recovery/BFCache and full catalog comparison/positive governance acceptance; complete accessibility and readonly UX |
@@ -113,6 +113,51 @@ Historical visual CSV checkpoint (local stable-source validation, schema v13):
   not deployment or profitability acceptance.
 
 ## Reproducible checks
+
+### Provider collection worktree (v16)
+
+The current worktree adds [provider collection](market-provider-collection.md):
+fixed ECB HTTPS capture, immutable original BLOB and worker receipts, versioned
+publication, authenticated queueing, independent Python/Web source checks and
+knowledge-time binding. Existing v1 manual batch and flow/performance v2/v5
+contracts are unchanged; provider evidence has distinct versioned contracts.
+The LongPort SDK projection adapter and isolated runtime are implemented, but
+shared projection/calendar publication and real entitlement validation remain.
+
+Real public ECB daily/90-day downloads completed the capture-to-publication-to-
+Python/Web-verifier path in a separate local database with no accounts, cash or
+approvals. Originals stay private and are not CI fixtures. This does not complete
+real price coverage, strategy gates, recurring collection or deployment. The
+older v15 CI checkpoints do not certify this new worktree; final v16 evidence
+must be bound separately.
+
+Local frozen-source regression (2026-09-13): Python 443/443, Web 524/524 and
+root Node 107/107 passed. Typecheck, production build, authentication HTTP,
+shellcheck and Python dependency consistency passed; npm audit reported zero
+vulnerabilities. Full production-build HTTP passed 72/72 on schema 16, build
+`Oq5FSZA1E4o249IJA397b`, including three new synthetic collection cases.
+Evidence: `artifacts/verification/workbench-http/2026-09-12T18-09-03-125Z/`;
+manifest SHA-256
+`cc12894b40800045a95ccd3f84b5dbf4a02a66107601c970970e3ffd737518f1`.
+Source hashes did not change during HTTP execution. Logs are under
+`artifacts/verification/final-regression/provider-v16-*`; the earlier failed
+Web fixture run remains preserved and is superseded by the final 524-case run.
+Native Tabbit diagnosis again returned `BROWSER_RUNTIME_UNAVAILABLE`; these
+results are not native UI acceptance. New exact-commit Linux CI and production
+release are not inferred from this local checkpoint.
+
+Pre-commit image review found that the optional LongPort SDK's CPython 3.11 Linux
+wheel requires a newer glibc than the current Bookworm image. It was split into
+`requirements-market-longport.txt`, with binary-only installation; the current
+core runtime does not install this unconnected SDK. The above local run precedes
+that dependency-only split. A fresh core-only Python 3.11 environment, confirmed
+to contain no LongPort package before or after testing, passed all 443 cases and
+`pip check`. After the split, HTTP again passed 72/72 with all 396 source hashes
+matching before, after and current files; it reused the same production build.
+Evidence: `artifacts/verification/workbench-http/2026-09-12T18-17-46-040Z/`,
+manifest SHA-256
+`0ec8037e6748f2ca0db011befb8a6b531f15242a67294f037cdb0028d90ac12d`.
+Exact-commit Linux CI still needs to bind the resulting commit.
 
 Run from repository root unless otherwise stated. Test suites use temporary
 databases and synthetic facts, not user accounts.

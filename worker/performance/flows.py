@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from worker.accounting import canonical, decimal
 from worker.market.contracts import validate_contract
+from worker.market.collection import source_verified
 from worker.market.valuation import _choose_observation, _observed_instant
 from worker.orchestration.db import WorkbenchError, content_hash, instant, stamp
 
@@ -145,8 +146,11 @@ def resolve_flow(connection, portfolio_id, event, posting, mode, rules, evaluati
                     plan = validation["plan"]
                     evidence.update(source_validation_hash=content_hash(validation),
                                     source_mode=plan.get("source_mode"), source_evidence=plan.get("source_evidence"))
-                    if (plan.get("source_mode") != "manual_verified"
-                            or not isinstance(plan.get("source_evidence"), str) or not plan["source_evidence"].strip()):
+                    if plan.get("source_mode") == "provider_observed":
+                        evidence["schema_version"] = "flow-fx-evidence-v3"
+                    if (not source_verified(connection, publication["batch_id"], plan, known_at=known_at)
+                            or (plan.get("source_mode") == "manual_verified"
+                                and (not isinstance(plan.get("source_evidence"), str) or not plan["source_evidence"].strip()))):
                         issues.append("FLOW_FX_SOURCE_UNVERIFIED")
                     if (publication["status"] != "published" or publication["manifest_hash"] != publication["batch_manifest_hash"]
                             or plan.get("source_id") != publication["source_id"] or plan.get("scope") != scope):
@@ -190,5 +194,5 @@ def resolve_flow(connection, portfolio_id, event, posting, mode, rules, evaluati
             evidence.update(fx_rate=canonical(rate), amount_cny=canonical(amount * rate), quality="complete")
     evidence["issues"] = sorted({code + ":" + event["id"] for code in issues})
     evidence["binding_id"] = content_hash(evidence)
-    validate_contract(evidence, "flow-fx-evidence-v2.schema.json")
+    validate_contract(evidence, evidence["schema_version"] + ".schema.json")
     return evidence, heads

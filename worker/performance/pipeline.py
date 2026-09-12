@@ -12,6 +12,7 @@ from worker.accounting import (
 from worker.accounting.decimal_math import ONE, ZERO, financial
 from worker.accounting.fact_quality import evaluate_fact_quality
 from worker.market.contracts import validate_contract
+from worker.market.collection import reserved_source, verify_provider_capture
 from worker.market.valuation import _choose_observation, _observed_instant
 from worker.orchestration.db import WorkbenchError, canonical_json, content_hash, instant, stamp, transaction
 from .flows import SECURITY_EXTERNAL_TYPES, in_period, resolve_flow
@@ -131,9 +132,17 @@ def _market_context(connection, snapshots):
                                              (scope, publication["revision"])).fetchone() if publication else None
                 bound = (history is not None and publication.get("scope") == scope and all(
                     history[key] == publication.get(key) for key in ("batch_id", "manifest_hash", "published_at")))
+                batch = connection.execute("SELECT source_id,scope,validation_json FROM market_batches WHERE id=?", (publication["batch_id"],)).fetchone()
+                plan = {}
+                try:
+                    plan = json.loads(batch["validation_json"])["plan"] if batch else {}
+                except (ValueError, KeyError, TypeError):
+                    bound = False
                 try:
                     cutoff = instant(snapshot["cutoff_at"])
                     known_at = instant(manifest["ledger_fact_quality"]["knowledge_at"]) if manifest.get("mode") == "restated" else cutoff
+                    if plan.get("source_mode") == "provider_observed" or reserved_source(plan) or (batch and reserved_source(dict(batch))):
+                        verify_provider_capture(connection, publication["batch_id"], known_at=known_at)
                     chosen, problem = _choose_observation([observation], cutoff, known_at)
                     eligible = chosen is not None and not problem and instant(publication["published_at"]) <= known_at
                 except (KeyError, ValueError, TypeError, WorkbenchError):
@@ -332,7 +341,8 @@ def prepare_performance(connection, portfolio_id, payload, now=None):
                             and item["observation"]["series_key"] == "FX:" + posting["currency"]
                             and item["scope"] != payload["flow_fx_rules"]["fx_scope"]):
                         issues.append("INCOMPATIBLE_FLOW_FX_SOURCE:" + posting["currency"])
-    manifest_value = {"schema_version": "performance-input-v5", "mode": mode,
+    manifest_version = "performance-input-v6" if any(item["schema_version"] == "flow-fx-evidence-v3" for item in flow_evidence) else "performance-input-v5"
+    manifest_value = {"schema_version": manifest_version, "mode": mode,
         "ledger_revision": revision, "evaluation_timezone": payload["evaluation_timezone"],
         "market_heads": market_heads,
         "valuations": [{"id": row["id"], "content_hash": content_hash(row)} for row in snapshots],
@@ -340,7 +350,7 @@ def prepare_performance(connection, portfolio_id, payload, now=None):
         "flow_fx_rules_hash": content_hash(payload["flow_fx_rules"]) if payload.get("flow_fx_rules") else None,
         "external_flow_evidence": flow_evidence, "ledger_fact_quality": fact_qualities,
         "period_fact_quality": period_fact_quality}
-    validate_contract(manifest_value, "performance-input-v5.schema.json")
+    validate_contract(manifest_value, manifest_version + ".schema.json")
     manifest = canonical_json(manifest_value)
     flows.sort(key=lambda row: (row[0], row[2]))
     if issues:
@@ -395,7 +405,10 @@ def prepare_performance(connection, portfolio_id, payload, now=None):
 def persist_performance(connection, prepared, now=None):
     try:
         manifest = json.loads(prepared.manifest)
-        validate_contract(manifest, "performance-input-v5.schema.json")
+        version = manifest.get("schema_version")
+        if version not in ("performance-input-v5", "performance-input-v6"):
+            raise WorkbenchError("PERFORMANCE_INPUT_MANIFEST_INVALID")
+        validate_contract(manifest, version + ".schema.json")
     except (WorkbenchError, ValueError, TypeError) as exc:
         raise WorkbenchError("PERFORMANCE_INPUT_MANIFEST_INVALID") from exc
     if (manifest["ledger_revision"] != prepared.ledger_revision or manifest["market_heads"] != prepared.market_heads
@@ -422,7 +435,8 @@ def persist_performance(connection, prepared, now=None):
             raise WorkbenchError("PERFORMANCE_INPUT_MANIFEST_INVALID")
         if evidence["knowledge_at"] and instant(evidence["knowledge_at"]) > instant(now):
             raise WorkbenchError("PERFORMANCE_KNOWLEDGE_AFTER_PERSIST_TIME")
-    run_id = "performance:" + content_hash({"portfolio_id": prepared.portfolio_id, "manifest": prepared.manifest, "method_version": METHOD_VERSION})
+    method_version = "snapshot-performance-cny-v6" if version == "performance-input-v6" else METHOD_VERSION
+    run_id = "performance:" + content_hash({"portfolio_id": prepared.portfolio_id, "manifest": prepared.manifest, "method_version": method_version})
     with transaction(connection):
         head = connection.execute("SELECT revision FROM ledger_heads WHERE portfolio_id=?", (prepared.portfolio_id,)).fetchone()
         if head is None or head["revision"] != prepared.ledger_revision:
@@ -456,6 +470,6 @@ def persist_performance(connection, prepared, now=None):
             return dict(existing)
         connection.execute("""INSERT INTO performance_runs(id,portfolio_id,ledger_revision,market_manifest,method_version,
             period_start,period_end,quality,method,result_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-            (run_id, prepared.portfolio_id, prepared.ledger_revision, prepared.manifest, METHOD_VERSION,
+            (run_id, prepared.portfolio_id, prepared.ledger_revision, prepared.manifest, method_version,
              prepared.period_start, prepared.period_end, prepared.quality, prepared.method, canonical_json(prepared.result), stamp(now)))
         return dict(connection.execute("SELECT * FROM performance_runs WHERE id=?", (run_id,)).fetchone())

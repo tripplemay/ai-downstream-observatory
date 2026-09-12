@@ -6,6 +6,7 @@ import { z } from "zod";
 import common from "../../../contracts/v1/common.schema.json";
 import observation from "../../../contracts/v1/market-observation.schema.json";
 import batch from "../../../contracts/v1/market-batch.schema.json";
+import marketCollect from "../../../contracts/v1/market-collect.schema.json";
 import valuationRules from "../../../contracts/v1/valuation-rules.schema.json";
 import performanceCommand from "../../../contracts/v1/performance-command.schema.json";
 import flowFxRules from "../../../contracts/v1/flow-fx-rules.schema.json";
@@ -18,6 +19,7 @@ import researchFixedRebalance from "../../../contracts/v1/research-fixed-rebalan
 import { assertWritableDatabase } from "./workbench-db";
 import { audit, canonical, hash, revision, type Actor } from "./ledger/service";
 import { amount, exact } from "./ledger/decimal";
+import { isReservedMarketSource } from "./market-source";
 
 const id = z.string().trim().min(1).max(200);
 const decimal = z.string().max(80).refine(value => {
@@ -32,7 +34,7 @@ export const listingCommandSchema = envelope.extend({
   source_evidence: z.string().trim().min(1).max(2000),
 }).strict();
 export const taskCommandSchema = envelope.extend({
-  command_type: z.enum(["valuation", "market_ingest", "performance", "research_register", "research_register_trial", "research_trial", "research_freeze", "research_unseal", "research_ai_context", "research_ai_review"]), payload: z.unknown(),
+  command_type: z.enum(["valuation", "market_ingest", "market_collect", "performance", "research_register", "research_register_trial", "research_trial", "research_freeze", "research_unseal", "research_ai_context", "research_ai_review"]), payload: z.unknown(),
 }).strict();
 const valuationPayload = z.object({ cutoff_at: z.string().datetime(), rules: z.unknown(), mode: z.enum(["as_known", "restated"]).optional() }).strict();
 const marketPayload = z.object({ document: z.unknown(), publish: z.boolean() }).strict();
@@ -41,6 +43,7 @@ addFormats(ajv);
 ajv.addSchema(common);
 ajv.addSchema(observation);
 const checkBatch = ajv.compile(batch), checkRules = ajv.compile(valuationRules);
+const checkMarketCollect = ajv.compile(marketCollect);
 ajv.addSchema(flowFxRules);
 const checkPerformance = ajv.compile(performanceCommand);
 ajv.addSchema(researchParameters);
@@ -103,6 +106,9 @@ export function enqueueWorkbenchTask(db: Database.Database, actor: Actor, raw: u
       if (!db.prepare("SELECT id FROM valuation_runs WHERE id=? AND portfolio_id=?").get(valuationId, input.portfolio_id)) throw new Error("VALUATION_OUT_OF_SCOPE");
     }
     payload = parsed;
+  } else if (input.command_type === "market_collect") {
+    if (!checkMarketCollect(input.payload)) throw new Error("INVALID_MARKET_COLLECT");
+    payload = input.payload;
   } else if (input.command_type.startsWith("research_")) {
     if (!checkResearch({ command_type: input.command_type, payload: input.payload })) throw new Error("INVALID_RESEARCH_COMMAND");
     const parsed = input.payload as Record<string, unknown>;
@@ -114,6 +120,8 @@ export function enqueueWorkbenchTask(db: Database.Database, actor: Actor, raw: u
   } else {
     const parsed = marketPayload.parse(input.payload);
     if (!checkBatch(parsed.document)) throw new Error("INVALID_MARKET_BATCH");
+    const plan = (parsed.document as { batch: { source_id: string; scope: string } }).batch;
+    if (isReservedMarketSource(plan.source_id) || isReservedMarketSource(plan.scope)) throw new Error("RESERVED_MARKET_SOURCE");
     payload = parsed;
   }
   return transact(db, actor, "enqueue_task", input, { ...input, payload }, now, () => {

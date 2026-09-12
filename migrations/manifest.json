@@ -75,6 +75,11 @@
       "version": 15,
       "file": "0015_monthly_evaluations.sql",
       "sha256": "6f67a3f0d08b39c6c6b5f30934ca924a6063de0ee943f3643f5559f39cc1d34c"
+    },
+    {
+      "version": 16,
+      "file": "0016_market_provider_captures.sql",
+      "sha256": "acfe19599089f37978cdefdf9146427e7559990baa242119b4927b227fbf7597"
     }
   ]
 }

@@ -159,11 +159,14 @@ def complete_job(connection, lease, result, outcome="succeeded", effect=None, no
         if notification is not None:
             enqueue_notification(connection, notification["dedup_key"], notification["topic"],
                                  notification["payload"], now=current)
-        assert_lease(connection, lease, now=clock() if clock is not None else current)
+        finished = stamp(clock()) if clock is not None else current
+        if instant(finished) < instant(current):
+            raise WorkbenchError("JOB_CLOCK_REGRESSION")
+        assert_lease(connection, lease, now=finished)
         connection.execute("""UPDATE job_attempts SET status=?,finished_at=? WHERE job_id=? AND attempt=?""",
-                           (outcome, current, lease.job_id, lease.attempt))
+                           (outcome, finished, lease.job_id, lease.attempt))
         connection.execute("""UPDATE job_runs SET status=?,result_json=?,lease_owner=NULL,lease_until=NULL,
-            updated_at=? WHERE id=?""", (outcome, canonical_json(result), current, lease.job_id))
+            updated_at=? WHERE id=?""", (outcome, canonical_json(result), finished, lease.job_id))
 
 
 def fail_job(connection, lease, error, retryable=True, partial=False, retry_delay_seconds=30, now=None):

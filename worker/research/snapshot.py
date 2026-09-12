@@ -3,6 +3,7 @@
 from copy import deepcopy
 from bisect import bisect_right
 from decimal import Decimal
+import json
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from worker.accounting import decimal, fact_decimal
@@ -194,6 +195,11 @@ def snapshot_from_publications(connection, metadata, publication_refs):
                                  (ref["scope"], ref["revision"])).fetchone()
         if row is None or row["batch_id"] != ref["batch_id"] or row["manifest_hash"] != ref["manifest_hash"]:
             raise WorkbenchError("RESEARCH_PUBLICATION_HASH_MISMATCH")
+        from worker.market.collection import reserved_source, verify_provider_capture
+        batch = connection.execute("SELECT source_id,scope,validation_json FROM market_batches WHERE id=?", (ref["batch_id"],)).fetchone()
+        plan = json.loads(batch["validation_json"])["plan"]
+        if plan.get("source_mode") == "provider_observed" or reserved_source(plan) or reserved_source(dict(batch)):
+            verify_provider_capture(connection, ref["batch_id"])
         for value in connection.execute("""SELECT o.* FROM market_batch_members m
             JOIN market_observations o ON o.id=m.observation_id WHERE m.batch_id=?""", (ref["batch_id"],)):
             observation = {key: value[key] for key in value.keys() if value[key] is not None}

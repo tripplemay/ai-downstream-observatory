@@ -6,7 +6,9 @@ import valuationRules from "../../../contracts/v1/valuation-rules.schema.json";
 import marketObservation from "../../../contracts/v1/market-observation.schema.json";
 import flowRules from "../../../contracts/v1/flow-fx-rules.schema.json";
 import flowEvidence from "../../../contracts/v1/flow-fx-evidence-v2.schema.json";
+import providerFlowEvidence from "../../../contracts/v1/flow-fx-evidence-v3.schema.json";
 import performanceInput from "../../../contracts/v1/performance-input-v5.schema.json";
+import providerPerformanceInput from "../../../contracts/v1/performance-input-v6.schema.json";
 import securityValue from "../../../contracts/v1/security-transfer-value.schema.json";
 import valuationInput from "../../../contracts/v1/valuation-input-v3.schema.json";
 import factQualitySchema from "../../../contracts/v1/ledger-fact-quality.schema.json";
@@ -14,6 +16,7 @@ import ledgerFact from "../../../contracts/v1/ledger-fact.schema.json";
 import { canonical, hash } from "./ledger/service";
 import { Decimal } from "./ledger/decimal";
 import { ledgerFactQualityAt } from "./ledger/fact-quality-db";
+import { verifiedMarketSource } from "./market-source";
 
 type ObjectValue = Record<string, unknown>;
 type Valuation = { id: string; market_manifest: string; ledger_revision: number };
@@ -28,10 +31,12 @@ ajv.addSchema(marketObservation);
 ajv.addSchema(flowRules);
 ajv.addSchema(securityValue);
 ajv.addSchema(flowEvidence);
+ajv.addSchema(providerFlowEvidence);
 ajv.addSchema(factQualitySchema);
 const validRules = ajv.compile(valuationRules);
 const validValuationInput = ajv.compile(valuationInput);
 const validPerformanceInput = ajv.compile(performanceInput);
+const validProviderPerformanceInput = ajv.compile(providerPerformanceInput);
 const validSecurityValue = ajv.getSchema(securityValue.$id)!;
 const validLedgerFact = ajv.compile(ledgerFact);
 const FlowDecimal = Decimal.clone({ precision: 80 });
@@ -215,6 +220,7 @@ function inspectMonetaryItems(db: Database.Database, run: StoredValuation, items
 
 function inspectValuation(db: Database.Database, run: Valuation) {
   const issues: string[] = [], scopes = new Map<string, Publication>();
+  const checkedSources = new Map<string, boolean>();
   const manifest = parse(run.market_manifest);
   const stored = db.prepare("SELECT * FROM valuation_runs WHERE id=?").get(run.id) as StoredValuation | undefined;
   if (!stored || stored.market_manifest !== run.market_manifest || stored.ledger_revision !== run.ledger_revision) issues.push("VALUATION_EVIDENCE_INVALID");
@@ -246,6 +252,11 @@ function inspectValuation(db: Database.Database, run: Valuation) {
       if (!metricValid || !observation || !publication || !stored || !observationEligible(observation, publication, stored, manifest.mode) || !db.prepare("SELECT 1 FROM market_batch_members WHERE batch_id=? AND observation_id=?").get(publication.batch_id, id)) {
         issues.push("MARKET_EVIDENCE_INVALID"); continue;
       }
+      if (!checkedSources.has(publication.batch_id)) {
+        try { verifiedMarketSource(db, publication.batch_id, manifest.mode === "as_known" ? stored.cutoff_at : String(object(manifest.ledger_fact_quality)?.knowledge_at)); checkedSources.set(publication.batch_id, true); }
+        catch { checkedSources.set(publication.batch_id, false); }
+      }
+      if (!checkedSources.get(publication.batch_id)) { issues.push("MARKET_SOURCE_UNVERIFIED"); continue; }
       scopes.set(publication.scope, publication);
     }
   }
@@ -377,7 +388,12 @@ function inspectFlows(db: Database.Database, manifest: ObjectValue, snapshots: S
     if (!observation || hash(Object.fromEntries(Object.entries(observation).filter(([, value]) => value !== null))) !== flow.observation_hash || hash(declared) !== flow.observation_hash || !db.prepare("SELECT 1 FROM market_batch_members WHERE batch_id=? AND observation_id=?").get(publication.batch_id, declared.id)) { issues.push("FLOW_FX_EVIDENCE_INVALID"); continue; }
     const batch = db.prepare("SELECT validation_json,source_id,status,manifest_hash FROM market_batches WHERE id=?").get(publication.batch_id) as { validation_json: string; source_id: string; status: string; manifest_hash: string } | undefined;
     const validation = batch ? parse(batch.validation_json) : undefined, plan = object(validation?.plan);
-    if (!validation || hash(validation) !== flow.source_validation_hash || !plan || flow.source_mode !== plan.source_mode || flow.source_evidence !== (plan.source_evidence ?? null) || flow.source_mode !== "manual_verified" || typeof flow.source_evidence !== "string" || !flow.source_evidence.trim() || observation.provenance === "reconstructed") { issues.push("FLOW_FX_SOURCE_UNVERIFIED"); continue; }
+    let sourceVerified = false;
+    try {
+      const source = verifiedMarketSource(db, publication.batch_id, String(flow.knowledge_at));
+      sourceVerified = source.mode === flow.source_mode && (source.mode === "provider_observed" ? flow.schema_version === "flow-fx-evidence-v3" : typeof flow.source_evidence === "string" && Boolean(flow.source_evidence.trim()));
+    } catch { /* Invalid provider proof is never downgraded to manual verification. */ }
+    if (!validation || hash(validation) !== flow.source_validation_hash || !plan || flow.source_mode !== plan.source_mode || flow.source_evidence !== (plan.source_evidence ?? null) || !sourceVerified || observation.provenance === "reconstructed") { issues.push("FLOW_FX_SOURCE_UNVERIFIED"); continue; }
     if (!batch || batch.status !== "published" || batch.manifest_hash !== publication.manifest_hash || plan.source_id !== batch.source_id || plan.scope !== scope || observation.source_id !== batch.source_id || observation.published_at === null) { issues.push("FLOW_FX_EVIDENCE_INVALID"); continue; }
     if (observation.metric !== "fx_cny_per_unit" || observation.price_basis !== "not_applicable" || observation.unit !== "CNY_per_unit_currency" || observation.series_key !== "FX:" + posting.currency || observation.listing_id !== null) { issues.push("FLOW_FX_EVIDENCE_INVALID"); continue; }
     const candidates = db.prepare("SELECT o.* FROM market_observations o JOIN market_batch_members m ON m.observation_id=o.id WHERE m.batch_id=? AND o.series_key=? AND o.metric='fx_cny_per_unit' AND o.price_basis='not_applicable'").all(publication.batch_id, "FX:" + posting.currency) as ObjectValue[];
@@ -412,10 +428,11 @@ export function valuationFreshness(db: Database.Database, run: Valuation, curren
 export function performanceFreshness(db: Database.Database, run: { id?: string; market_manifest: string; method_version: string; ledger_revision: number }, currentRevision: number): string[] {
   const issues: string[] = [];
   if (run.ledger_revision !== currentRevision) issues.push("LEDGER_REVISION_CHANGED");
-  if (run.method_version !== "snapshot-performance-cny-v5") issues.push("PERFORMANCE_METHOD_SUPERSEDED");
+  if (!["snapshot-performance-cny-v5", "snapshot-performance-cny-v6"].includes(run.method_version)) issues.push("PERFORMANCE_METHOD_SUPERSEDED");
   const manifest = parse(run.market_manifest);
   const heads = object(manifest?.market_heads), references = manifest?.valuations;
-  if (!manifest || !validPerformanceInput(manifest) || manifest.ledger_revision !== run.ledger_revision || !heads || !Array.isArray(references) || typeof manifest.evaluation_timezone !== "string") return [...issues, "INPUT_MANIFEST_INVALID"];
+  const validInput = run.method_version === "snapshot-performance-cny-v6" ? validProviderPerformanceInput : validPerformanceInput;
+  if (!manifest || !validInput(manifest) || manifest.ledger_revision !== run.ledger_revision || !heads || !Array.isArray(references) || typeof manifest.evaluation_timezone !== "string") return [...issues, "INPUT_MANIFEST_INVALID"];
   try { new Intl.DateTimeFormat("en", { timeZone: manifest.evaluation_timezone }); } catch { return [...issues, "INPUT_MANIFEST_INVALID"]; }
   const scopes = new Set<string>(), ids = new Set<string>(), snapshots: StoredValuation[] = [];
   const stored = run.id ? db.prepare("SELECT * FROM performance_runs WHERE id=?").get(run.id) as StoredPerformance | undefined : undefined;

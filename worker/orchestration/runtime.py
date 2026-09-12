@@ -5,6 +5,7 @@ import sqlite3
 
 from worker.market import ingest_document, persist_valuation, prepare_valuation
 from worker.market.contracts import validate_contract
+from worker.market.collection import prepare_collection, persist_collection
 from worker.performance import persist_performance, prepare_performance
 from worker.research import (
     freeze_candidate, persist_trial, prepare_trial, record_review, record_trial_failure,
@@ -18,7 +19,7 @@ from .jobs import JobCommit, enqueue_job, enqueue_notification, run_one
 
 RESEARCH_COMMANDS = ("research_register", "research_register_trial", "research_trial", "research_freeze",
                      "research_unseal", "research_ai_context", "research_ai_review")
-SUPPORTED_COMMANDS = ("market_ingest", "valuation", "performance", *RESEARCH_COMMANDS, "monthly_evaluation")
+SUPPORTED_COMMANDS = ("market_ingest", "market_collect", "valuation", "performance", *RESEARCH_COMMANDS, "monthly_evaluation")
 
 
 def sync_requests(connection, limit=100, now=None):
@@ -182,6 +183,15 @@ def command_handler(connection, clock=None, lease_seconds=300, stop_requested=No
                                    stop_requested=stop_requested)
         if job["job_type"] in RESEARCH_COMMANDS:
             return _research_command(connection, request, payload, clock, job)
+        if job["job_type"] == "market_collect":
+            if stop_requested is not None and stop_requested():
+                raise WorkbenchError("WORKER_STOP_REQUESTED")
+            prepared = prepare_collection(connection, request, job, lease)
+            def persist(db):
+                if stop_requested is not None and stop_requested():
+                    raise WorkbenchError("WORKER_STOP_REQUESTED")
+                return JobCommit(persist_collection(db, prepared, now=clock()))
+            return {"effect": persist}
         if job["job_type"] == "performance":
             prepared = prepare_performance(connection, request["portfolio_id"], payload, now=clock())
             def persist(db):

@@ -251,11 +251,11 @@ function fixture(holding: "price" | "fx" | "cash" = "cash") {
   const publish = (scope: string, unit?: string, observed = "2026-01-05T00:00:00.000Z", precision = "second", zone = "UTC", options: { value?: string; knownAt?: string; sourceMode?: string; provenance?: string; currency?: string } = {}) => {
     const batch = randomUUID(), observation = randomUUID(), fx = scope.startsWith("FX");
     db.prepare("INSERT INTO market_batches(id,source_id,batch_type,scope,status,expected_pages,validation_json,started_at) VALUES(?,'fixture',?,?,'staging',1,?,?)")
-      .run(batch, fx ? "fx" : "prices", scope, canonical({ plan: { source_id: "fixture", scope, source_mode: options.sourceMode ?? "synthetic", source_evidence: "Synthetic fixture; no actual FX authorization" } }), options.knownAt ?? now);
+      .run(batch, fx ? "fx" : "prices", scope, canonical({ plan: { source_id: "fixture", scope, source_mode: options.sourceMode ?? "manual_verified", source_evidence: "Synthetic fixture; no actual FX authorization" } }), options.knownAt ?? now);
     db.prepare("INSERT INTO market_observations(id,batch_id,source_id,listing_id,series_key,metric,value,unit,observed_at,published_at,ingested_at,time_precision,source_timezone,price_basis,revision_id,raw_hash,parser_version,provenance) VALUES(?,?,'fixture',?,?,?,?,?,? ,?,?,?,?,?,?,?,'fixture',?)")
       .run(observation, batch, fx ? null : "l", fx ? "FX:" + (options.currency ?? "USD") : "l", fx ? "fx_cny_per_unit" : "close", options.value ?? "100",
         unit ?? (fx ? "CNY_per_unit_currency" : "CNY"), observed, options.knownAt ?? now, options.knownAt ?? now, precision, zone,
-        fx ? "not_applicable" : "unadjusted", batch, "a".repeat(64), options.provenance ?? "reconstructed");
+        fx ? "not_applicable" : "unadjusted", batch, "a".repeat(64), options.provenance ?? "live_observed");
     db.prepare("INSERT INTO market_batch_members(batch_id,observation_id) VALUES(?,?)").run(batch, observation);
     const manifest = hash({ batch, observation });
     db.prepare("UPDATE market_batches SET status='validated',manifest_hash=? WHERE id=?").run(manifest, batch);

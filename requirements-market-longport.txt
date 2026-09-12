@@ -1,0 +1,4 @@
+# Optional isolated adapter, not part of the current workbench runtime image.
+# Require an available binary wheel rather than silently building native code.
+--only-binary=longport
+longport==4.3.7

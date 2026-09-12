@@ -12,6 +12,7 @@ from worker.orchestration.db import (
     WorkbenchError, canonical_json, content_hash, instant, new_id, stamp, transaction,
 )
 from .contracts import validate_contract
+from .collection import source_verified
 
 
 ASSET_ACCOUNTS = {
@@ -206,8 +207,9 @@ def prepare_valuation(connection, portfolio_id, cutoff_at, rules, mode="as_known
         if publication is None:
             return "MISSING_PUBLICATION:" + str(scope)
         plan = json.loads(publication["validation_json"])["plan"]
-        if plan["source_mode"] != "manual_verified":
-            return "SYNTHETIC_DATA_NOT_ACTUAL_VALUATION:" + scope
+        if not source_verified(connection, publication["batch_id"], plan, known_at=known_at):
+            code = "PROVIDER_EVIDENCE_INVALID" if plan.get("source_mode") == "provider_observed" else "SYNTHETIC_DATA_NOT_ACTUAL_VALUATION"
+            return code + ":" + scope
         return None
 
     for currency in sorted(currencies - {"CNY"}):

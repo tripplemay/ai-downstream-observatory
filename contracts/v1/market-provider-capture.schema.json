@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/market-provider-capture.schema.json",
+  "type": "object",
+  "required": ["schema_version", "id", "batch_id", "provider", "capture_kind", "command_request_id", "job_id", "attempt", "fencing_token", "request_hash", "request_started_at", "received_at", "endpoint", "response_status", "response_headers", "raw_sha256", "raw_bytes", "parser_version", "normalized_hash", "document_hash", "rate_kind", "publication_time_status", "coverage_kind"],
+  "properties": {
+    "schema_version": {"const": "market-provider-capture-v1"},
+    "id": {"$ref": "common.schema.json#/$defs/id"},
+    "batch_id": {"$ref": "common.schema.json#/$defs/id"},
+    "provider": {"const": "ecb"},
+    "capture_kind": {"const": "http_response_bytes"},
+    "command_request_id": {"$ref": "common.schema.json#/$defs/id"},
+    "job_id": {"$ref": "common.schema.json#/$defs/id"},
+    "attempt": {"type": "integer", "minimum": 1},
+    "fencing_token": {"type": "integer", "minimum": 1},
+    "request_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "request_started_at": {"$ref": "common.schema.json#/$defs/instant"},
+    "received_at": {"$ref": "common.schema.json#/$defs/instant"},
+    "endpoint": {"enum": ["https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml", "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist-90d.xml"]},
+    "response_status": {"const": 200},
+    "response_headers": {
+      "type": "object", "properties": {
+        "content-type": {"$ref": "#/$defs/header"}, "content-length": {"$ref": "#/$defs/header"},
+        "date": {"$ref": "#/$defs/header"}, "last-modified": {"$ref": "#/$defs/header"}, "etag": {"$ref": "#/$defs/header"}
+      }, "additionalProperties": false
+    },
+    "raw_sha256": {"$ref": "common.schema.json#/$defs/hash"},
+    "raw_bytes": {"type": "integer", "minimum": 1, "maximum": 2097152},
+    "parser_version": {"const": "ecb-reference-xml-v1"},
+    "normalized_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "document_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "rate_kind": {"const": "reference_not_executable"},
+    "publication_time_status": {"const": "not_supplied"},
+    "coverage_kind": {"const": "returned_feed_dates_not_historical_calendar"}
+  },
+  "$defs": {"header": {"type": "string", "maxLength": 1024, "pattern": "^[^\u0000-\u001f\u007f]*$"}},
+  "additionalProperties": false
+}

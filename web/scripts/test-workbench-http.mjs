@@ -25,6 +25,7 @@ const report = {
     'This suite covers account creation and supported ledger/import API commands, not investment-strategy eligibility.',
     'Monthly HTTP cases prove negative authorization, immutable empty state and recovery boundaries; authorized proposal publication is covered separately by service and Python-to-Node integration tests.',
     'Rotation HTTP cases use a real authenticated network session and Python worker with synthetic research data; they do not certify G/S gates, real forward performance or broker execution.',
+    'Collection HTTP cases patch only the independent test Python transport with synthetic XML; no app request can provide a URL, body, credential or provider clock, and no CI provider network request is made.',
   ],
 };
 const sha = (value) => createHash('sha256').update(value).digest('hex');
@@ -1400,6 +1401,156 @@ async function main() {
       } finally { rmSync(marker); }
       assert.equal((await catalogGet()).json.catalog_revision, catalogRevision); assert.equal((await state(catalogPortfolio)).revision, 0); assert.equal(cash(await state()), '790231');
       return { read_only_mutation_status: 423, prior_ledger_unchanged: true };
+    });
+    let collectionPortfolio, collectionBinding, collectionResult;
+    const collectionPayload = { provider: 'ecb', feed: 'daily', currencies: ['USD', 'HKD'], expected_publication_revision: 0, publish: true };
+    const collectionCommand = (payload, idempotency_key, overrides = {}) => ({ action: 'enqueue_task', command: {
+      portfolio_id: collectionPortfolio, expected_revision: 0, idempotency_key, command_type: 'market_collect', payload, ...overrides,
+    } });
+    const collectionHeaders = () => ({ 'X-Workbench-Session-Binding': collectionBinding });
+    const collectionMarketState = () => inspectionStorage().tables.filter(row => row.name.startsWith('market_'));
+    const collectionWorker = (requestId, fail = false) => {
+      // This literal belongs only to the integration process. The application
+      // receives the ordinary fixed-provider command, never transport controls.
+      const script = `import json,sys
+from unittest.mock import patch
+from worker.orchestration.db import WorkbenchError,open_database
+from worker.orchestration.runtime import run_pending_once
+from worker.market.collection import verify_provider_capture
+from tests.market.test_collection import fake_download,utc_now
+db=open_database(sys.argv[1])
+try:
+    transport=RuntimeError('synthetic-transport-detail-not-for-api') if sys.argv[3]=='fail' else fake_download()
+    with patch('worker.market.collection.download_ecb_xml',side_effect=transport) as download:
+        try:
+            job=run_pending_once(db,'synthetic-http-collector',lease_seconds=300,clock=utc_now)
+        except WorkbenchError as error:
+            print(json.dumps({'error':str(error),'download_calls':download.call_count}))
+            sys.exit(2)
+    assert job['command_request_id']==sys.argv[2]
+    result=json.loads(job['result_json'])
+    proof=verify_provider_capture(db,result['batch_id'])
+    print(json.dumps({'status':job['status'],'request_id':job['command_request_id'],'download_calls':download.call_count,'proof':proof}))
+finally:
+    db.close()
+`;
+      const worker = spawnSync(process.env.WORKBENCH_TEST_PYTHON || process.env.WORKBENCH_PYTHON || 'python3', ['-c', script, filename, requestId, fail ? 'fail' : 'success'], {
+        cwd: root, env: { PATH: process.env.PATH, PYTHONPATH: root, PYTHONDONTWRITEBYTECODE: '1', TZ: 'UTC',
+          WORKBENCH_DB_PATH: filename, WORKBENCH_DATA_DIR: path.join(directory, 'auth'), WORKBENCH_MODE: 'ledger' },
+        encoding: 'utf8', timeout: 30000, maxBuffer: 1024 * 1024,
+      });
+      assert.equal(worker.status, fail ? 2 : 0, worker.stderr || worker.stdout || String(worker.error));
+      const result = JSON.parse(worker.stdout); assert.equal(result.download_calls, 1);
+      if (fail) assert.equal(result.error, 'PROVIDER_COLLECTION_FAILED');
+      return result;
+    };
+    await check('HTTP-MC01', 'authenticated fixed-provider command reaches real Python jobs and immutable synthetic capture without publishing financial facts or XML through the API', async () => {
+      const created = await post({ action: 'create_portfolio', name: 'Synthetic provider HTTP fixture' });
+      assert.equal(created.status, 200, JSON.stringify(created.json)); collectionPortfolio = created.json.id;
+      const session = await jsonRequest('/api/auth/session', { headers: { Cookie: cookie } });
+      assert.equal(session.status, 200); collectionBinding = session.json.session_binding; assert.match(collectionBinding, /^[a-f0-9]{64}$/);
+      const financialBefore = rotationSnapshot();
+      const body = collectionCommand(collectionPayload, 'http-collection-success');
+      const queued = await post(body, collectionHeaders());
+      assert.equal(queued.status, 200, JSON.stringify(queued.json)); assert.equal(queued.json.status, 'queued');
+      const duplicate = await post(body, collectionHeaders());
+      assert.equal(duplicate.status, 200); assert.deepEqual(duplicate.json, queued.json);
+      const worker = collectionWorker(queued.json.request_id);
+      assert.equal(worker.status, 'succeeded'); assert.equal(worker.request_id, queued.json.request_id);
+      const db = new Database(filename, { readonly: true });
+      let rawHash;
+      try {
+        const command = db.prepare('SELECT * FROM command_requests WHERE id=?').get(queued.json.request_id);
+        assert.equal(command.actor_id, 'owner'); assert.deepEqual(JSON.parse(command.payload_json), collectionPayload);
+        const job = db.prepare('SELECT * FROM job_runs WHERE command_request_id=?').get(command.id);
+        assert.equal(job.status, 'succeeded'); assert.equal(job.attempt_count, 1);
+        assert.equal(db.prepare("SELECT COUNT(*) n FROM job_attempts WHERE job_id=? AND status='succeeded' AND fencing_token=?").get(job.id, job.fencing_token).n, 1);
+        collectionResult = JSON.parse(job.result_json);
+        assert.equal(collectionResult.batch_status, 'published'); assert.equal(collectionResult.live_advice_eligible, false);
+        const capture = db.prepare('SELECT * FROM market_provider_captures WHERE command_request_id=?').get(command.id);
+        assert.ok(Buffer.isBuffer(capture.raw_body)); assert.deepEqual([...capture.raw_body.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+        const receipt = JSON.parse(capture.receipt_json); rawHash = sha(capture.raw_body);
+        assert.equal(receipt.raw_sha256, rawHash); assert.equal(receipt.raw_bytes, capture.raw_body.length);
+        assert.equal(receipt.capture_kind, 'http_response_bytes'); assert.equal(receipt.rate_kind, 'reference_not_executable');
+        assert.equal(worker.proof.id, capture.id); assert.equal(worker.proof.raw_sha256, rawHash);
+        assert.equal(worker.proof.receipt_hash, collectionResult.receipt_hash);
+        const publication = db.prepare('SELECT * FROM market_publications WHERE scope=?').get('provider:ecb:fx:daily:HKD-USD');
+        assert.equal(publication.revision, 1); assert.equal(publication.batch_id, capture.batch_id);
+        const observations = db.prepare('SELECT observed_at,published_at,ingested_at,time_precision FROM market_observations WHERE batch_id=?').all(capture.batch_id);
+        assert.equal(observations.length, 2);
+        for (const row of observations) {
+          assert.equal(row.observed_at, '2025-06-06'); assert.equal(row.published_at, null);
+          assert.equal(row.time_precision, 'date'); assert.equal(row.ingested_at, receipt.received_at);
+        }
+      } finally { db.close(); }
+      const current = await state(collectionPortfolio);
+      assert.equal(current.revision, 0); assert.equal(current.tasks.find(row => row.id === queued.json.request_id).status, 'succeeded');
+      assert.doesNotMatch(JSON.stringify(current), /<\?xml|gesmes:Envelope|"raw_body"|"normalized_json"|"document_json"/);
+      assert.doesNotMatch(JSON.stringify(queued.json), /<\?xml|gesmes:Envelope|"raw_body"/);
+      assert.equal(rotationSnapshot(), financialBefore);
+      return { transport: 'real HTTP plus independent synthetic Python transport', original_bytes_sha256: rawHash,
+        publication_revision: 1, provider_reference_not_executable: true, financial_tables_unchanged: true, api_exposes_original_xml: false };
+    });
+    await check('HTTP-MC02', 'collection HTTP rejects caller transport, reserved manual origin, unauthorized sessions, stale ledger versions and recovery writes without durable side effects', async () => {
+      const before = inspectionStorage();
+      const base = collectionCommand({ ...collectionPayload, expected_publication_revision: 1 }, 'http-collection-invalid');
+      const anonymous = await jsonRequest('/api/workbench', { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify(base) });
+      assert.equal(anonymous.status, 401);
+      const noOrigin = await jsonRequest('/api/workbench', { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(base) });
+      assert.equal(noOrigin.status, 403);
+      assert.equal((await post(base, { ...collectionHeaders(), Origin: 'https://synthetic-wrong-origin.invalid' })).status, 403);
+      assert.equal((await post(base, { 'X-Workbench-Session-Binding': '0'.repeat(64) })).status, 401);
+      assert.equal((await post({ ...base, command: { ...base.command, expected_revision: 1 } }, collectionHeaders())).status, 409);
+      const forbidden = [{ url: 'https://synthetic-provider.invalid/feed' }, { token: 'SYNTHETIC-NOT-A-CREDENTIAL' },
+        { received_at: '2025-06-06T12:00:00Z' }, { source_mode: 'provider_observed' }, { raw: '<synthetic-not-a-response/>' },
+        { headers: {} }, { provider_capture_id: 'synthetic-forged-capture' }, { scope: 'synthetic-forged-scope' }];
+      for (const [index, fields] of forbidden.entries()) {
+        const invalid = await post(collectionCommand({ ...collectionPayload, ...fields }, `http-collection-forbidden:${index}`), collectionHeaders());
+        assert.equal(invalid.status, 400, JSON.stringify(invalid.json)); assert.equal(invalid.json.error, 'INVALID_MARKET_COLLECT');
+      }
+      const observation = { id: 'http-synthetic-manual-fx', batch_id: 'http-synthetic-manual-batch', source_id: 'synthetic-manual',
+        series_key: 'FX:USD', metric: 'fx_cny_per_unit', value: '1', unit: 'CNY_per_unit_currency', observed_at: '2025-01-01',
+        ingested_at: '2025-01-02T00:00:00Z', source_timezone: 'UTC', time_precision: 'date', price_basis: 'not_applicable',
+        revision_id: 'synthetic-1', raw_hash: 'a'.repeat(64), parser_version: 'synthetic', provenance: 'live_observed' };
+      const document = { schema_version: 'market-batch-v1', batch: { id: observation.batch_id, source_id: observation.source_id,
+        batch_type: 'fx', scope: 'synthetic-manual-fx', expected_pages: 1, expected_rows: 1, expected_publication_revision: 0,
+        source_mode: 'manual_verified', source_evidence: 'Synthetic HTTP rejection fixture only' }, pages: [{ page_number: 1, observations: [observation] }] };
+      for (const field of ['source_id', 'scope']) {
+        const attempt = structuredClone(document); attempt.batch[field] = 'provider:ecb:reference-fx';
+        if (field === 'source_id') attempt.pages[0].observations[0].source_id = attempt.batch.source_id;
+        const invalid = await post(collectionCommand({ document: attempt, publish: true }, `http-manual-reserved:${field}`, { command_type: 'market_ingest' }), collectionHeaders());
+        assert.equal(invalid.status, 400, JSON.stringify(invalid.json)); assert.equal(invalid.json.error, 'RESERVED_MARKET_SOURCE');
+      }
+      const marker = path.join(directory, 'RESTORE_PENDING_REVIEW'); writeFileSync(marker, 'Synthetic collection recovery fixture\n');
+      try {
+        assert.equal((await state(collectionPortfolio)).read_only, true);
+        assert.equal((await post(base, collectionHeaders())).status, 423);
+      } finally { rmSync(marker); }
+      assert.deepEqual(inspectionStorage(), before);
+      return { authentication: 401, csrf: 403, session_binding: 401, stale_revision: 409, forbidden_transport_and_origin: 400,
+        restore_mutation: 423, database_and_attachment_state_unchanged: true, worker_or_provider_network_started: false };
+    });
+    await check('HTTP-MC03', 'a real queued collection failure records a safe failed attempt while keeping the previous publication and all financial facts unchanged', async () => {
+      const marketBefore = collectionMarketState(), financialBefore = rotationSnapshot();
+      const body = collectionCommand({ ...collectionPayload, expected_publication_revision: 1 }, 'http-collection-transport-failure');
+      const queued = await post(body, collectionHeaders()); assert.equal(queued.status, 200, JSON.stringify(queued.json));
+      const failed = collectionWorker(queued.json.request_id, true); assert.equal(failed.error, 'PROVIDER_COLLECTION_FAILED');
+      const db = new Database(filename, { readonly: true });
+      try {
+        const job = db.prepare('SELECT * FROM job_runs WHERE command_request_id=?').get(queued.json.request_id);
+        assert.equal(job.status, 'retry_queued'); assert.equal(job.attempt_count, 1);
+        const attempt = db.prepare('SELECT * FROM job_attempts WHERE job_id=?').get(job.id);
+        assert.equal(attempt.status, 'failed');
+        assert.deepEqual(JSON.parse(attempt.error_json), { code: 'WorkbenchError', message: 'PROVIDER_COLLECTION_FAILED' });
+        assert.equal(db.prepare('SELECT COUNT(*) n FROM market_provider_captures WHERE command_request_id=?').get(queued.json.request_id).n, 0);
+        assert.equal(db.prepare('SELECT batch_id FROM market_publications WHERE scope=?').get('provider:ecb:fx:daily:HKD-USD').batch_id, collectionResult.batch_id);
+      } finally { db.close(); }
+      const current = await state(collectionPortfolio);
+      assert.equal(current.tasks.find(row => row.id === queued.json.request_id).status, 'retry_queued');
+      assert.doesNotMatch(JSON.stringify(current), /synthetic-transport-detail-not-for-api|<\?xml|gesmes:Envelope|"raw_body"/);
+      assert.deepEqual(collectionMarketState(), marketBefore); assert.equal(rotationSnapshot(), financialBefore);
+      return { job_status: 'retry_queued', attempt_status: 'failed', error: 'PROVIDER_COLLECTION_FAILED', previous_head_unchanged: true,
+        capture_created: false, financial_tables_unchanged: true, actual_provider_requests: 0 };
     });
     await check('HTTP-16', 'storage errors do not expose paths or SQL', async () => {
       renameSync(filename, `${filename}.held`);

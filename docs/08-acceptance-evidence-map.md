@@ -1,6 +1,6 @@
 # ETF 投资工作台：验收证据与缺口映射
 
-版本：v0.7 | 日期：2026-09-12 | 状态：公开通用版阶段性证据索引，非验收或放行报告
+版本：v0.8 | 日期：2026-09-13 | 状态：公开通用版阶段性证据索引，非验收或放行报告
 
 依据：[01 投资约束](01-investment-mandate.md)、[02 产品需求](02-product-requirements.md)、[03 决策治理](03-decision-policy.md)、[04 数据与核算](04-data-and-accounting.md)、[05 架构迁移](05-architecture-and-migration.md)、[06 验证验收](06-validation-and-acceptance.md)。六份原始个人 v1.0 基线已在本地保存；公开版以通用模板替换个人参数，不是范围削减，也不缩减验收要求。
 
@@ -12,7 +12,7 @@
 - 目前有合成单元、跨语言、HTTP、浏览器和隔离容器验证，**没有正式 live 数据/账户样本验收、新工作台生产部署验收、真正的治理验证 Worker 或任何 S 门槛验收**。旧站 HTTP 200、远端 fixture 成功、测试中创建的政策和验证记录均不能替代它们。
 - L-0 文档确认保持有效；本表不能宣布 L-1/L-2 全部验收，更不能升级 L-3。D-01 至 D-08 未完成细节继续阻塞相应能力；计划预算不等于实际余额，只有已核实本金及到账事实才能入账。
 - 公开边界已确认：**公开代码和通用示例，个人方案本地隔离，提交前核验 index**。金额精度、并发及性能测试中的明确合成数值仅为 fixture，不是个人投资参数。
-- 当前工作区实现为迁移 v15、NAV v4、绩效 v5；在组合私有目录与 v14 会话恢复基础上加入明确授权的月度目标评估。**实现不等于完整验收**。以下历史运行段保留其原版本与时点，不据此声称新版本最终套数、HTTP 或构建已通过。
+- 当前工作区迁移为 v16、NAV v4，保留绩效 v5 并为 provider 逐流证据增加 v6。新增固定来源采集、原始响应与 Worker 回执、发布权限及知识时间验真。**实现不等于完整验收**。本次冻结源码回归为 Python 443、Web 524、根目录 Node 107、HTTP 72 全通过，构建和类型检查通过；详见 [v16 记录](07-implementation-tracker.md#provider-collection-worktree-v16)。以下历史运行段保留其原版本与时点，不替代本次证据或生产放行。
 - 来源基线是持续变化的工作区，不是单一已签核 release。下列结果需在最终源码冻结后统一重跑，补齐 release SHA、锁文件、schema、环境、fixture、退出码、差异及签核。
 
 ## 2. 证据目录与复现入口
@@ -29,6 +29,7 @@
 | CSV | [CSV 导入](csv-import.md)；`web/src/server/ledger/csv*.ts`；`csv-{workspace,mapping-wizard,mapping-builder,recovery-panel,recovery-client}.tsx/ts`；`web/tests/csv*.test.ts` | 零写检查、完整原值分页、可视化显式映射与高级 JSON；有界原件上传、不可变版本/逐行预检、人工重复决定、原子确认/重试和来源别名；v14 会话隔离的原请求封存与只读恢复，无自动确认；无真实券商格式认证 |
 | ACCOUNTING | `worker/accounting/`；`tests/accounting/{test_accounting,test_golden_contract}.py`；`tests/accounting/golden.json` | Decimal 金标准和收益函数；包括固定种子往返属性测试，不等于完整随机业务序列覆盖 |
 | MARKET | `worker/market/`；`tests/market/{test_market,test_valuation_units}.py`、`contracts.test.mjs` | NAV v4、显式批次/发布历史、原币/FX 单位检查与独立事实质量证明；缺资料不输出精确 NAV；没有外部实时采集器验收 |
+| PROVIDER | [采集边界](market-provider-collection.md)；`worker/market/{collection,providers/ecb,providers/longport}.py`；`web/src/server/market-source.ts`；`test_collection.py`、`test_market_collection.py`、`provider-captures.test.mjs`、`market-source.test.ts` | ECB 固定 HTTPS 到私有原始 BLOB、发布及双端验真已做独立本地实际网络验证；合成测试覆盖权限、PIT、恢复；LongPort 隔离适配器尚未接共享发布和可信日历，不是三市场实盘数据准入 |
 | PERFORMANCE | `worker/performance/{pipeline,flows}.py`；`tests/performance/{test_pipeline,test_market_integrity,test_flow_fx,test_security_flows}.py`；`web/tests/valuation-freshness.test.ts` | v5 现金/证券逐事件 FX、fact/posting/event/PIT/发布证据和分红/公司行动点与区间质量证明；迟到事实/修订与重述；Python 产物经 Web 独立复核；完整验收及真实资料未完成 |
 | FUNDING | `web/src/server/funding/`、`funding-commands.ts`、`funding-summary.ts`；`web/tests/funding*.test.ts`；[资金计划边界](funding-plans.md) | 日期化多币种来源/批次、版本/延期、到账/执行关联、预算/现金分离、超额及更正复核；不授予投资权限 |
 | CATALOG | [标的目录边界](etf-catalog.md)；`web/src/server/catalog/`；`web/tests/catalog*.test.ts`；`tests/migrations/catalog.test.mjs`；`worker/research/holdings_overlap.py`；`tests/research/test_holdings_overlap.py` | 组合私有研究版本、独立 CAS/分页/范围、结构化 JSON 来源下载、账户证据摘要、最多 4 标的比较；部分披露不归一化、异期不伪同日，TS/Python 重叠一致；未认证真实 ETF/发行商原件或交易准入 |
@@ -37,7 +38,7 @@
 | JOB | `worker/orchestration/`、`web/src/server/workbench-commands.ts`；`tests/orchestration/{test_jobs,test_research_commands,test_evaluations,test_evaluations_bridge}.py` | 授权请求到 Worker、lease/fencing、重试、结果/outbox 原子写入；月度发现有界扫描和固定发布桥；没有真实通知传输 |
 | MONTHLY | [月度评估](monthly-evaluations.md)；`web/src/server/evaluation/`、`web/tests/evaluation*.test.ts` | 显式目标、人工启停、原周期知识边界、独立重试、完整证据方可无需调整；真实 Python/Node/SQLite 进程链及原子候选生成；不是完整轮动或实盘有效性证明 |
 | AUTH | `web/src/server/auth/`；`web/tests/auth.test.ts`、`auth-http.integration.ts` | 服务端会话、撤销、过期、限速、Origin、缺配置拒绝；生产 TLS/代理及运维配置另验 |
-| MIGRATION | `migrations/manifest.json`；`tests/migrations/*.test.mjs`；`tests/deployment/release.test.mjs`；`web/tests/fact-quality.test.ts` | 工作区迁移至 v15，保留事实和旧周期，新调度/周期/尝试固定身份与追加证据；新 v15 镜像及最终切换尾差尚需验证 |
+| MIGRATION | `migrations/manifest.json`；`tests/migrations/*.test.mjs`；`tests/deployment/release.test.mjs`；`web/tests/fact-quality.test.ts` | 工作区迁移至 v16，旧事实、周期和回执不变，新增有界原始响应与采集身份；当前镜像及最终切换尾差尚需另验 |
 | RECOVERY | `scripts/{backup-workbench,restore-workbench,archive-legacy}.mjs`；`tests/recovery/backup-restore.test.mjs` | 一致性备份、加密、附件清单、全新目录恢复、只读标记、不覆盖新事实；不是异机 RPO/RTO 验收 |
 | HTTP27 | [报告](../artifacts/verification/workbench-http/2026-09-11T22-47-15-552Z/report.md)及同目录 `manifest.json`；`web/scripts/test-workbench-http.mjs` | 27 个 HTTP 场景的阶段快照，详见下文 |
 | HTTP32 | `artifacts/verification/workbench-http/2026-09-12T00-31-30-306Z/{report.md,manifest.json}`；`web/scripts/test-workbench-http.mjs` | v9 生产构建与新增资金计划 HTTP 场景；仍为本地合成 fixture，详见 2.4 |

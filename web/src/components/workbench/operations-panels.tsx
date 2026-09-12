@@ -99,15 +99,16 @@ export function OperationsPanels({ state, busy, mutate, perform, refresh, notice
       <div className="space-y-3">{state.valuations.map(value => <article key={value.id} className="rounded-lg border p-3 text-sm"><p className="font-medium">截止 {value.cutoff_at} · 账本 {value.ledger_revision} · {value.quality}{value.ledger_revision !== state.revision ? " · 账本已变更" : ""}</p><p className="mt-2">{value.stale_reasons.includes("VALUATION_METHOD_SUPERSEDED") ? "估值方法已更新，旧金额仅留档，需重新计算" : value.nav_cny === null ? "完整人民币净资产不可用" : `该时点人民币净资产：${value.nav_cny}`}</p><p className="mt-1 break-all font-mono text-xs">{value.method_version}</p>{value.stale_reasons.length > 0 && <p className="mt-2 break-all text-amber-600">需按当前输入重算：{value.stale_reasons.join(" / ")}</p>}<details className="mt-2"><summary className="cursor-pointer">数据质量与证据说明</summary><pre className="mt-2 whitespace-pre-wrap break-all text-xs">{value.issues_json}</pre></details></article>)}</div>
       {!state.valuations.length && <p className="text-sm text-muted-foreground">尚无估值快照。需要真实账本、适用行情/汇率与经核实的数据质量规则。</p>}
       <details className="mt-5 rounded-lg border p-4"><summary className="cursor-pointer text-sm font-medium">高级：提交标准数据 / 估值任务</summary>
-        <p className="my-3 text-sm text-muted-foreground">支持市场批次、估值和绩效标准载荷。合成数据不能用于实际完整估值；approved 仅表示已核实本次估值规则，不授予策略或下单权限。任务由独立 Worker 执行。</p>
+        <p className="my-3 text-sm text-muted-foreground">支持人工市场批次、ECB 参考汇率采集、估值和绩效标准载荷。合成数据不能用于实际完整估值；approved 仅表示已核实本次估值规则，不授予策略或下单权限。任务由独立 Worker 执行。</p>
+        <p className="my-3 text-sm text-muted-foreground">ECB 采集需显式填写 feed、currencies、expected_publication_revision 和 publish，provider 固定为 ecb；不接收网址、令牌或自报验证结果。仅采集公开参考汇率，不是可成交换汇报价，也不证明历史发布时间、交易日历完整或策略准入。请求成功仅代表排队，不会自动估值、下单或登记资金。</p>
         <form className="space-y-3" onSubmit={event => submit(event, async data => {
           const payload = parseStrictJson(taskPayload);
           await mutate({ action: "enqueue_task", command: { ...envelope(), command_type: data.get("type"), payload } });
           await refresh(); notice("后台请求已留档并排队；尚未将任务结果标记为成功。");
         })}>
-          <label className={field}>任务类型<select className={select} aria-label="任务类型" name="type"><option value="valuation">估值快照</option><option value="market_ingest">市场数据批次</option><option value="performance">历史绩效</option></select></label>
+          <label className={field}>任务类型<select className={select} aria-label="任务类型" name="type"><option value="valuation">估值快照</option><option value="market_ingest">人工市场数据批次</option><option value="market_collect">ECB 参考汇率采集</option><option value="performance">历史绩效</option></select></label>
           <label className={field}>标准任务载荷<textarea className={textarea} aria-label="标准任务载荷" value={taskPayload} onChange={event => setTaskPayload(event.target.value)} required placeholder="契约与示例见 worker/orchestration/README.md 和 worker/market/README.md" /></label>
-          <Button disabled={busy}>提交后台任务</Button>
+          <Button disabled={busy || state.read_only}>提交后台任务</Button>
         </form>
       </details>
       <ul className="mt-4 divide-y text-sm">{state.tasks.map(task => <li key={task.id} className="py-3"><p>{task.command_type} · {task.status} · 尝试 {task.attempt_count ?? 0} 次</p><p className="mt-1 break-all font-mono text-xs text-muted-foreground">{task.id} / {task.created_at}</p>{task.result_json && <pre className="mt-2 whitespace-pre-wrap break-all text-xs">{task.result_json}</pre>}</li>)}</ul>
