@@ -31,7 +31,7 @@ test('container report handoff gives the caller a bounded 0600 JSON without expo
   assert.equal(mode(join(f.directory, 'artifacts')), 0o700); assert.equal(mode(dirname(f.report)), 0o700); assert.equal(mode(f.report), 0o600);
   assert.equal(statSync(f.report).uid, process.getuid()); assert.equal(statSync(f.report).gid, process.getgid());
   assert.equal(mode(secrets), 0o700); assert.equal(mode(secret), 0o600);
-  assert.deepEqual(JSON.parse(readFileSync(f.report, 'utf8')), { run_id: runId, status: 'passed', non_root: true, legacy_actual_facts: 0, encrypted_local_restore: true, independent_host_restore: false, web_image: image, worker_image: image });
+  assert.deepEqual(JSON.parse(readFileSync(f.report, 'utf8')), { run_id: runId, status: 'passed', non_root: true, missing_bind_source_rejected: true, legacy_actual_facts: 0, encrypted_local_restore: true, independent_host_restore: false, web_image: image, worker_image: image });
   assert.doesNotMatch(readFileSync(f.report, 'utf8'), /SYNTHETIC-NOT-A-REAL-KEY/);
 });
 

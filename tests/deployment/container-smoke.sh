@@ -42,6 +42,15 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges:true
   const db=new Database("/fixture/legacy/observatory.db");db.pragma("journal_mode=WAL"); db.exec("CREATE TABLE metrics(id TEXT PRIMARY KEY,value REAL);INSERT INTO metrics VALUES(\u0027fixture\u0027,123.25)");db.close();
 '
 compose --profile tools config --no-env-resolution --quiet
+compose run --rm --no-deps --entrypoint /bin/true migrate
+if WORKBENCH_DATA_DIR_HOST="$temporary/missing-bind-source" compose run --rm --no-deps --entrypoint /bin/true migrate >"$temporary/missing-bind.log" 2>&1; then
+  printf 'Missing bind source unexpectedly allowed container startup\n' >&2; exit 1
+fi
+if [[ -e "$temporary/missing-bind-source" ]] || ! grep -Fq 'bind source path does not exist' "$temporary/missing-bind.log"; then
+  printf 'Missing bind source guard did not fail at the expected boundary\n' >&2
+  cat "$temporary/missing-bind.log" >&2; exit 1
+fi
+printf 'Missing bind source refused without creating the host path\n'
 compose run --rm --no-deps migrate
 compose run --rm --no-deps -e WORKBENCH_LEGACY_QUIESCED=1 archive-legacy
 backup=$(compose run --rm --no-deps backup)
@@ -99,6 +108,7 @@ try:
     descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directories[-1])
     try:
         report = {"run_id": run_id, "status": "passed", "non_root": True,
+                  "missing_bind_source_rejected": True,
                   "legacy_actual_facts": 0, "encrypted_local_restore": True,
                   "independent_host_restore": False, "web_image": web_image,
                   "worker_image": worker_image}

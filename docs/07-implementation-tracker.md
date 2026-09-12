@@ -368,3 +368,16 @@ runtime configuration and personal-data permissions are not relaxed. The origina
 logs remain local. Check the subsequent exact-SHA CI result before treating these
 test-environment corrections as verified; this does not change the outstanding
 product, native-browser, recovery or strategy gates.
+
+Follow-up CI `34695004802` at `8780daef8e39884c75b0284cee5d73db8432d997`
+verified container migration/recovery/HTTP and report upload. Its Node suite was
+71/72: Compose v2 omits `false` from normalized bind JSON, unlike the local CLI.
+The next correction checks explicit source guards and adds an actual Linux
+existing-path/missing-path container pair; it does not allow automatic host-path
+creation. These failed aggregate runs are retained, not relabeled as CI success.
+The official Compose 2.38.2 Darwin binary reproduced both omitted false fields
+and flattened env-file metadata. The corrected fixture passes all 14 release
+tests on that binary and local Compose 5.1.1, using only a synthetic marker.
+Required/raw env-file guards remain explicit in source, and production config
+validation remains quiet rather than printing potentially resolved secrets.
+The Linux missing-source behavior still requires the new container CI run.

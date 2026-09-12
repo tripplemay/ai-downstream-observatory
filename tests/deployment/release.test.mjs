@@ -122,9 +122,28 @@ test('readiness requires protected configuration and current schema but never se
   writeFileSync(join(directory, 'RESTORE_PENDING_REVIEW'), 'review'); assert.equal((await checkRuntime({ env })).recovery_read_only, true);
 });
 
+function assertExplicitBindGuards(source) {
+  const declarations = source.match(/^[ \t]*(?:- )?type: bind[ \t]*$/gm) ?? [];
+  const options = source.match(/^[ \t]*bind:[ \t]*$/gm) ?? [];
+  const guards = source.match(/^[ \t]*bind:[ \t]*\n[ \t]+create_host_path: false[ \t]*$/gm) ?? [];
+  assert.ok(declarations.length > 0);
+  assert.equal(options.length, declarations.length, 'every long bind has explicit options');
+  assert.equal(guards.length, declarations.length, 'every bind options block explicitly disables path creation');
+}
+
+test('all source bind declarations retain explicit missing-path guards', () => {
+  const source = readFileSync(join(root, 'docker-compose.yml'), 'utf8');
+  assertExplicitBindGuards(source);
+  for (const match of source.matchAll(/create_host_path: false/g)) {
+    for (const replacement of ['create_host_path: true', '']) {
+      assert.throws(() => assertExplicitBindGuards(source.slice(0, match.index) + replacement + source.slice(match.index + match[0].length)));
+    }
+  }
+});
+
 test('compose tools resolve without secrets and use fail-closed mounts and non-root containers', (t) => {
   const directory = fixture(t), runtimeFile = join(directory, 'runtime.env');
-  writeFileSync(runtimeFile, 'WORKBENCH_SESSION_SECRET=synthetic-unresolved-config-fixture\n', { mode: 0o600 });
+  writeFileSync(runtimeFile, 'WORKBENCH_CONFIG_FIXTURE_MARKER=synthetic-config-fixture\n', { mode: 0o600 });
   // Some Compose versions stat required env files even with --no-env-resolution.
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('WORKBENCH_') && !key.startsWith('COMPOSE_')));
   Object.assign(env, {
@@ -144,13 +163,23 @@ test('compose tools resolve without secrets and use fail-closed mounts and non-r
   for (const [name, service] of Object.entries(config.services)) {
     assert.equal(service.user, '10001:10001', name); assert.equal(service.read_only, true, name);
     assert.ok(service.cap_drop.includes('ALL'), name);
-    for (const volume of service.volumes ?? []) assert.equal(volume.bind?.create_host_path, false, name);
+    for (const volume of service.volumes ?? []) {
+      assert.equal(volume.type, 'bind', name);
+      // Compose v2 omits false JSON fields; the source and container behavior are checked separately.
+      assert.ok([false, undefined].includes(volume.bind?.create_host_path), name);
+    }
   }
   assert.equal(config.services.web.ports[0].host_ip, '127.0.0.1');
-  assert.equal(config.services.web.env_file[0].path, runtimeFile);
-  assert.ok([true, undefined].includes(config.services.web.env_file[0].required));
-  assert.match(readFileSync(join(root, 'docker-compose.yml'), 'utf8'), /env_file:\s*\n\s*- path: \$\{WORKBENCH_RUNTIME_ENV_FILE[^\n]+\n\s*required: true/);
-  assert.equal(config.services.web.env_file[0].format, 'raw');
+  if (config.services.web.env_file === undefined) {
+    assert.equal(config.services.web.environment.WORKBENCH_CONFIG_FIXTURE_MARKER, 'synthetic-config-fixture');
+  } else {
+    assert.equal(config.services.web.env_file.length, 1);
+    assert.equal(config.services.web.env_file[0].path, runtimeFile);
+    assert.ok([true, undefined].includes(config.services.web.env_file[0].required));
+    assert.equal(config.services.web.env_file[0].format, 'raw');
+    assert.equal(config.services.web.environment.WORKBENCH_CONFIG_FIXTURE_MARKER, undefined);
+  }
+  assert.match(readFileSync(join(root, 'docker-compose.yml'), 'utf8'), /env_file:\s*\n\s*- path: \$\{WORKBENCH_RUNTIME_ENV_FILE[^\n]+\n\s*required: true\s*\n\s*format: raw/);
   assert.equal(config.services.web.environment.WORKBENCH_PASSWORD_HASH, undefined);
   assert.equal(config.services.web.environment.WORKBENCH_SESSION_SECRET, undefined);
   for (const service of Object.values(config.services)) for (const volume of service.volumes ?? []) {
@@ -166,6 +195,7 @@ test('release workflow remains manual and failure path cannot restore over actua
   assert.ok(ci.indexOf('run: npm ci') < ci.indexOf('run: python -m unittest'));
   const deploy = readFileSync(join(root, 'scripts/deploy-workbench.sh'), 'utf8');
   assert.match(deploy, /RESTORE_PENDING_REVIEW/); assert.doesNotMatch(deploy, /git reset|docker compose down|cp .*etf-workbench\.db/);
+  assert.match(deploy, /^compose config --no-env-resolution --quiet$/m);
 });
 
 test('release rechecks recovery after build, before stopping writers, migration and startup', (t) => {
