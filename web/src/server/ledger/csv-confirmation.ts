@@ -1,11 +1,65 @@
 import type Database from "better-sqlite3";
+import { z } from "zod";
 import { assertWritableDatabase } from "../workbench-db";
 import type { AttachmentOptions } from "./attachments";
 import { audit, canonical, hash, recordFact, resolveSourceReceipt, revision, type Actor, type LedgerCommand, type Receipt } from "./service";
-import { verifyCsvEvidence, type CsvBatch } from "./csv-import-evidence";
+import { verifyCsvEvidence, type CsvBatch, type CsvManifest, type CsvStoredRow } from "./csv-import-evidence";
 import { buildCsvReviewCandidates, csvEconomicHash, parseCsvReview } from "./csv-review";
 
 interface Result { revision: number; receipts: Receipt[]; duplicate: boolean }
+export interface ConfirmedCsvImportResult extends Result { duplicate: true; csv_review_hash: string }
+const receiptSchema = z.object({ event_id: z.string().min(1).max(160), revision: z.number().int().nonnegative().safe(), audit_id: z.string().min(1).max(160),
+  warnings: z.array(z.string().max(128)).max(16), duplicate: z.boolean().optional() }).strict();
+
+function confirmedResult(db: Database.Database, batch: CsvBatch & { confirmed_revision: number | null }, manifest: CsvManifest, rows: CsvStoredRow[]): ConfirmedCsvImportResult {
+  const invalid = () => { throw new Error("CSV_IMPORT_OUTCOMES_INVALID"); };
+  const audits = db.prepare("SELECT payload_json,ledger_revision FROM audit_events WHERE action='confirm_import' AND object_id=? AND portfolio_id=?").all(batch.id, batch.portfolio_id) as { payload_json: string; ledger_revision: number }[];
+  if (audits.length !== 1) return invalid();
+  let old: Result & { csv_review_hash: string; csv_review: unknown; manifest_hash: string };
+  let resolutions: ReturnType<typeof parseCsvReview>;
+  try {
+    old = JSON.parse(audits[0].payload_json);
+    resolutions = parseCsvReview(old.csv_review, manifest.required_review_rows, manifest.candidates, manifest.review_hash);
+    if (!Array.isArray(old.receipts) || !old.receipts.every(receipt => receiptSchema.safeParse(receipt).success)) return invalid();
+  } catch { return invalid(); }
+  const outcomes = db.prepare(`SELECT o.*,e.portfolio_id,e.account_id,e.ledger_revision,e.payload_json AS event_payload
+    FROM csv_import_outcomes o JOIN ledger_events e ON e.id=o.event_id WHERE o.batch_id=? ORDER BY o.row_number`).all(batch.id) as {
+      row_number: number; event_id: string; duplicate: number; result_json: string; portfolio_id: string; account_id: string; ledger_revision: number; event_payload: string;
+    }[];
+  if (old.csv_review_hash !== hash(old.csv_review) || old.manifest_hash !== hash(manifest) || !Number.isSafeInteger(old.revision)
+    || old.revision !== batch.confirmed_revision || old.revision !== audits[0].ledger_revision || old.revision < batch.expected_revision
+    || old.revision > revision(db, batch.portfolio_id) || outcomes.length !== rows.length || old.receipts.length !== rows.length) return invalid();
+  for (let i = 0; i < rows.length; i++) {
+    const outcome = outcomes[i];
+    let stored: { receipt: Receipt; resolution: unknown };
+    try { stored = JSON.parse(outcome.result_json); } catch { return invalid(); }
+    if (!receiptSchema.safeParse(stored.receipt).success || outcome.row_number !== rows[i].row || outcome.portfolio_id !== batch.portfolio_id || outcome.account_id !== batch.account_id
+      || outcome.event_id !== stored.receipt.event_id || outcome.ledger_revision !== stored.receipt.revision || outcome.ledger_revision > old.revision
+      || outcome.duplicate !== Number(!!stored.receipt.duplicate) || canonical(stored.receipt) !== canonical(old.receipts[i])
+      || canonical(stored.resolution) !== canonical(resolutions.get(rows[i].row) ?? null)) return invalid();
+    const receiptAudit = db.prepare("SELECT action,object_id,portfolio_id,payload_json FROM audit_events WHERE id=?").get(stored.receipt.audit_id) as { action: string; object_id: string; portfolio_id: string; payload_json: string } | undefined;
+    if (!receiptAudit || receiptAudit.portfolio_id !== batch.portfolio_id) return invalid();
+    try {
+      if (receiptAudit.action === "record_fact" ? receiptAudit.object_id !== outcome.event_id
+        : receiptAudit.action !== "link_csv_row" || JSON.parse(receiptAudit.payload_json).event_id !== outcome.event_id) return invalid();
+      if (!rows[i].command || csvEconomicHash(JSON.parse(outcome.event_payload)) !== csvEconomicHash(rows[i].command!)) return invalid();
+    } catch { return invalid(); }
+  }
+  return { revision: old.revision, receipts: old.receipts, duplicate: true, csv_review_hash: old.csv_review_hash };
+}
+
+/** Authenticates retained evidence and actual historical receipts without invoking a mutation or write guard. */
+export function readConfirmedCsvImport(db: Database.Database, actor: Actor, portfolio: string, batchId: string, options: AttachmentOptions = {}): ConfirmedCsvImportResult {
+  if (!actor?.id?.trim()) throw new Error("UNAUTHENTICATED");
+  const read = () => {
+    const batch = db.prepare("SELECT * FROM import_batches WHERE id=? AND portfolio_id=?").get(batchId, portfolio) as CsvBatch & { confirmed_revision: number | null } | undefined;
+    if (!batch) throw new Error("IMPORT_NOT_FOUND");
+    if (batch.parser_version !== "csv-v1" || batch.status !== "confirmed") throw new Error("CSV_IMPORT_NOT_CONFIRMED");
+    const { manifest, rows } = verifyCsvEvidence(db, actor, batch, options, false);
+    return confirmedResult(db, batch, manifest, rows);
+  };
+  return db.inTransaction ? read() : db.transaction(read).deferred();
+}
 
 /** Called within the import confirmation's immediate transaction. */
 export function confirmCsvImport(db: Database.Database, actor: Actor, portfolio: string, batchId: string, previewHash: string, expectedRevision: number, now: string, options: AttachmentOptions, reviewInput: unknown): Result {
@@ -20,17 +74,8 @@ export function confirmCsvImport(db: Database.Database, actor: Actor, portfolio:
   const review = { acknowledge_unverified_mapping: true, review_hash: manifest.review_hash, rows: [...resolutions.values()].sort((a, b) => a.row - b.row) };
   const reviewHash = hash(review);
   if (batch.status === "confirmed") {
-    const audits = db.prepare("SELECT payload_json FROM audit_events WHERE action='confirm_import' AND object_id=? AND portfolio_id=?").all(batchId, portfolio) as { payload_json: string }[];
-    if (audits.length !== 1) throw new Error("CSV_IMPORT_OUTCOMES_INVALID");
-    const old = JSON.parse(audits[0].payload_json) as Result & { csv_review_hash: string; csv_review: unknown; manifest_hash: string };
+    const old = confirmedResult(db, batch, manifest, rows);
     if (old.csv_review_hash !== reviewHash) throw new Error("CSV_REVIEW_CONFLICT");
-    const outcomes = db.prepare("SELECT o.*,e.portfolio_id,e.account_id FROM csv_import_outcomes o JOIN ledger_events e ON e.id=o.event_id WHERE o.batch_id=? ORDER BY o.row_number").all(batchId) as { row_number: number; event_id: string; duplicate: number; result_json: string; portfolio_id: string; account_id: string }[];
-    if (old.csv_review_hash !== hash(old.csv_review) || old.manifest_hash !== hash(manifest) || old.revision !== batch.confirmed_revision || outcomes.length !== rows.length || old.receipts.length !== rows.length) throw new Error("CSV_IMPORT_OUTCOMES_INVALID");
-    for (let i = 0; i < rows.length; i++) {
-      const outcome = outcomes[i], stored = JSON.parse(outcome.result_json) as { receipt: Receipt; resolution: unknown };
-      if (outcome.row_number !== rows[i].row || outcome.portfolio_id !== portfolio || outcome.account_id !== batch.account_id || outcome.event_id !== stored.receipt.event_id
-        || outcome.duplicate !== Number(!!stored.receipt.duplicate) || canonical(stored.receipt) !== canonical(old.receipts[i]) || canonical(stored.resolution) !== canonical(resolutions.get(rows[i].row) ?? null)) throw new Error("CSV_IMPORT_OUTCOMES_INVALID");
-    }
     assertWritableDatabase(db);
     return { revision: old.revision, receipts: old.receipts, duplicate: true };
   }

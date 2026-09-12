@@ -26,7 +26,7 @@
 | CORRECTION | `web/src/server/ledger/corrections.ts`；`web/tests/ledger-corrections.test.ts`；[更正边界](ledger-corrections.md) | 追加冲销/替代、依赖重放、历史视图；支持子集有明确拒绝边界 |
 | DIVIDEND | [分红与公司行动边界](dividends-and-corporate-actions.md)；`web/src/server/ledger/{fact-quality,fact-quality-db,dividend-queries}.ts`；`worker/accounting/fact_quality.py`；`web/tests/{fact-quality,dividend-ledger-engine,dividend-ledger-service,dividend-input,dividend-workspace}.test.ts` | 未知税不当零税；累计税确认不改现金，实际补扣另记；净额/归因分离，公司行动通知/解决及时间范围质量证据；真实资料与完整人工闭环未验收 |
 | SECURITIES | [证券转移](security-transfers.md)；`web/tests/security-transfer-*.test.ts`、`security-transit-reconciliation.test.ts`；Python `test_security_transfers.py` / `test_security_flows.py` | 外部确认市值资本流、内部逐批在途、部分到达/退回/拆分/更正、两端覆盖；合成数据，不是券商实际转仓核验 |
-| CSV | [CSV 导入](csv-import.md)；`web/src/server/ledger/csv*.ts`；`csv-{workspace,mapping-wizard,mapping-builder}.tsx/ts`；`web/tests/csv*.test.ts` | 零写检查、完整原值分页、可视化显式映射与高级 JSON；有界原件上传、不可变版本/逐行预检、人工重复决定、原子确认/重试和来源别名；无真实券商格式认证 |
+| CSV | [CSV 导入](csv-import.md)；`web/src/server/ledger/csv*.ts`；`csv-{workspace,mapping-wizard,mapping-builder,recovery-panel,recovery-client}.tsx/ts`；`web/tests/csv*.test.ts` | 零写检查、完整原值分页、可视化显式映射与高级 JSON；有界原件上传、不可变版本/逐行预检、人工重复决定、原子确认/重试和来源别名；v14 会话隔离的原请求封存与只读恢复，无自动确认；无真实券商格式认证 |
 | ACCOUNTING | `worker/accounting/`；`tests/accounting/{test_accounting,test_golden_contract}.py`；`tests/accounting/golden.json` | Decimal 金标准和收益函数；包括固定种子往返属性测试，不等于完整随机业务序列覆盖 |
 | MARKET | `worker/market/`；`tests/market/{test_market,test_valuation_units}.py`、`contracts.test.mjs` | NAV v4、显式批次/发布历史、原币/FX 单位检查与独立事实质量证明；缺资料不输出精确 NAV；没有外部实时采集器验收 |
 | PERFORMANCE | `worker/performance/{pipeline,flows}.py`；`tests/performance/{test_pipeline,test_market_integrity,test_flow_fx,test_security_flows}.py`；`web/tests/valuation-freshness.test.ts` | v5 现金/证券逐事件 FX、fact/posting/event/PIT/发布证据和分红/公司行动点与区间质量证明；迟到事实/修订与重述；Python 产物经 Web 独立复核；完整验收及真实资料未完成 |
@@ -186,7 +186,7 @@ npm run test:workbench:http
 | 编号 / 整体状态 | 当前可用实现子集及证据 | 尚缺产品闭环 |
 |---|---|---|
 | P-01 / BLOCKED | 空组合/账户、开账、未知成本、显式对账和权限；LEDGER、IMPORT、GOVERNANCE、HTTP27 `05/19/20` | D-04/D-07 真实账户与启动资料；实物转入及完整起算确认；权限证据不能由市场名称推定 |
-| P-02 / BLOCKED | 标准 JSON 与通用 CSV 原件、零写检查/可视化映射、版本封存、逐行重复核对、预览确认、事实/更正、对账、附件；IMPORT、CSV、CORRECTION、HTTP27 `09..12/18/19/24` | 券商原生适配、向导原生/故障验收及跨导航未决请求恢复、分次费用/执行关联；支持列表之外事件不能编造成已支持 |
+| P-02 / BLOCKED | 标准 JSON 与通用 CSV 原件、零写检查/可视化映射、版本封存、逐行重复核对、预览确认、事实/更正、对账、附件及当前会话原请求恢复；IMPORT、CSV、CORRECTION、HTTP27 `09..12/18/19/24` | 券商原生适配、向导/恢复/BFCache 原生故障验收、分次费用/执行关联；支持列表之外事件不能编造成已支持 |
 | P-03 / BLOCKED | 原币现金/持仓、CNY NAV 质量、不可变绩效、TWR/Dietz/XIRR/快照回撤；MARKET、PERFORMANCE、UI | 完整真实资金流 FX、归因/影子基准/暴露与压力、全部时间/估算状态 UI；实际数据和账户回归 |
 | P-04 / BLOCKED | 日期化初始/追加来源、计划版本、批次截止/延期/未执行处理、到账匹配与执行关联、可用现金/预留分离、超预算和更正警示；FUNDING、GOVERNANCE、HTTP32 F01..F05、资金浏览器流程 | 用户确认实际年度计划/资料、D-05 投入选择与授权、完整多账户资金依赖及执行闭环验收 |
 | P-05 / BLOCKED | ETF/listing 登记、发布批次、口径与可买性证据；新增 CATALOG 私有研究目录、版本化费率/标签/持仓披露、四标的历史比较、覆盖及重叠上下界，HTTP50 `CAT01..05` | 真实标的提供方/原件认证、身份类型与生命周期、当前费用/流动性/折溢价资料、等价份额识别和完整加权穿透；目录不自动升级未核验 listing，原生比较/窄屏尚待验 |
@@ -318,7 +318,7 @@ Docker 现排除根及嵌套 `.private`。路径边界回归已加入 Node 套�
 不触发生产发布。原生目录验收、未完成产品能力、最终镜像/异机恢复、真实数据、
 全部 E/S/G 和生产签核仍保留未完成状态。
 
-## 12. CSV 可视化映射：本次同版证据
+## 12. CSV 可视化映射：历史 v13 同版证据
 
 | 范围 | 结果与工件 |
 |---|---|
@@ -348,3 +348,35 @@ Docker 现排除根及嵌套 `.private`。路径边界回归已加入 Node 套�
 本轮再次审查公开集合，替换旧 F-01/F-02、HTTP 和迁移计划样例中的关联现金数值，
 保留本地旧原件并重跑。上节提交前文本扫描不是绝对保证；当前替换不撤回已公开的
 Git 历史或旧 CI 工件，本轮未重写历史。个人规划和真实账户资料仍不进入新提交。
+
+## 13. CSV 确认恢复与会话隔离：v14 同版证据
+
+| 范围 | 本轮结果 |
+|---|---|
+| Web | 438/438；`artifacts/verification/final-regression/web-csv-recovery-v14-final.log`；含原请求服务/GET、响应完整性、实际组件 callback、会话与 Portal 边界 |
+| Python | 244/244；`python-csv-recovery-v14.log`；合成财务/市场/研究/Worker 回归 |
+| Node | 81/81；`node-csv-recovery-v14-all.log`；新增 v13 到 v14 的八项迁移约束与旧数据保持检查 |
+| 构建与 HTTP | build `3fnrZ4DRzdltM29QC7Z8V`；schema 14；63/63，新增 `HTTP-REC01..06` |
+| 其他 | `typecheck-csv-recovery-v14-final.log`、`auth-http-csv-recovery-v14.log`、`shellcheck-csv-recovery-v14.log` 通过；`audit-csv-recovery-v14.log` 为零已报告漏洞 |
+| 原生与发布 | 未新增通过声明；Tabbit 运行时不可用，未擅自重启或切换浏览器。当前结果不是最终镜像、异机恢复或生产部署 |
+
+HTTP 工件为 `artifacts/verification/workbench-http/2026-09-12T14-40-42-218Z/{manifest.json,report.md}`，
+运行 `2026-09-12T14:40:42.218Z` 至 `2026-09-12T14:40:59.874Z`。
+340 项源码在前后及随后核对一致；manifest SHA-256：
+`c10b1f76475525d7ef839824d20f5158ac0f36662a87877cffd928e001c72628`。
+首次 `2026-09-12T14-39-48-063Z` 运行因 Next 合并 `Vary` 响应头的过严等值断言失败，
+改为明确要求 `Cookie` token 后从干净库重建重跑；旧失败工件未删除。
+
+新 HTTP 覆盖丢弃成功响应正文后经 GET 恢复原 UTF-8/BOM/空白/字段序与真实 receipts、
+同原文单尝试/单事实、失败 review 留痕且显式更正生成新尝试、同 owner 不同 SID
+隔离、陈旧会话绑定拒绝且零写、只读恢复及严格分页/查询。服务测试补充容量预算、
+不可变证据/篡改拒绝及详情才核验正文的边界。确认仍经原幂等/CAS/来源去重引擎。
+
+组件 callback 测试曾实际复现恢复后账户刷新未完成就解锁的窗口，修复后由 RED 转 GREEN；
+另覆盖迟到失败不复活会话数据、无自动 POST、显式重试原字节及 401 清理。
+受保护 Radix Portal 改为边界内真实 container，未验证或 container 未就绪不回退 body；
+SSR/实际 wrapper 测试通过，但不是原生弹窗、BFCache 或可访问性验收。
+
+本轮没有公开个人原件或把真实资金/账户放入默认值。上述本地结果不自行证明新提交的
+远程 CI 或生产发布；实际 SHA、镜像和工作流必须另行绑定。P-02、完整 ACC/E/S/G、
+真实券商数据、1 万行后台导入、异机恢复及生产签核仍保持未完整验收。

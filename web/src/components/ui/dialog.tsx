@@ -4,10 +4,13 @@ import * as React from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SessionBoundaryPortal } from "@/components/session-boundary";
 
 const Dialog = DialogPrimitive.Root;
 const DialogTrigger = DialogPrimitive.Trigger;
-const DialogPortal = DialogPrimitive.Portal;
+const DialogPortal = (props: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Portal>) => (
+  <SessionBoundaryPortal>{container => <DialogPrimitive.Portal {...props} container={container ?? props.container} />}</SessionBoundaryPortal>
+);
 const DialogClose = DialogPrimitive.Close;
 
 const DialogOverlay = React.forwardRef<

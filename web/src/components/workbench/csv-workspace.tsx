@@ -7,6 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CsvMappingWizard } from "./csv-mapping-wizard";
 import { csvMappingSchema, type CsvMapping } from "@/server/ledger/csv-schemas";
+import { useSessionBoundary } from "@/components/session-boundary";
+import { CsvRecoveryPanel, fetchCsvRecovery, invalidateCsvSession, verifyCsvSession } from "./csv-recovery-panel";
+import { recoveryResolutionDrafts } from "./csv-recovery-client";
+import type { CsvConfirmationRecoveryDetailResponse } from "@/server/ledger/csv-confirmation-recovery-types";
 import { canClearCsvPreview, canRetryCsvConfirmation, csvContextDisposition, csvScopeKey, isCsvOperationCurrent, retainCsvConfirmedRefresh, sameCsvScope, shouldWarnCsvNavigation,
   type CsvContext, type CsvOperation, type CsvPendingConfirmation, type CsvScope } from "./csv-workspace-state";
 
@@ -44,6 +48,7 @@ function describe(value: unknown): string { return typeof value === "string" ? v
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : "请求失败，请核对状态后重试。"; }
 function linkOnly(outcome: unknown): boolean { return !!outcome && typeof outcome === "object" && "kind" in outcome && outcome.kind === "link_only"; }
 async function responseJson(response: Response): Promise<unknown> {
+  if (response.status === 401) { invalidateCsvSession(); throw new Error("登录会话已失效或改变，旧请求已停止。"); }
   let value: unknown;
   try { value = await response.json(); } catch { throw new Error(`服务器响应无法解析（HTTP ${response.status}），不能据此判断是否已提交。`); }
   if (!response.ok) throw new Error(value && typeof value === "object" && "error" in value && typeof value.error === "string" ? value.error : `请求失败（HTTP ${response.status}）`);
@@ -77,6 +82,8 @@ function Candidates({ title, values, onPick }: { title: string; values: readonly
 }
 
 export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted, readOnly = false, onScopeLockChange, onRestorePendingScope }: Props) {
+  const session = useSessionBoundary(), sessionState = useRef(session);
+  sessionState.current = session;
   const [file, setFile] = useState<File | null>(null), [fileKey, setFileKey] = useState(0);
   const [mapping, setMapping] = useState(""), [mappingFilename, setMappingFilename] = useState("");
   const [mode, setMode] = useState<"wizard" | "advanced">("wizard");
@@ -87,6 +94,11 @@ export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted, re
   const [page, setPage] = useState(0), [reviewOnly, setReviewOnly] = useState(false);
   const [busy, setBusy] = useState<"preview" | "confirm" | "mapping" | "status" | null>(null);
   const [pending, setPending] = useState<CsvPendingConfirmation | null>(null), [confirmation, setConfirmation] = useState<unknown>(null);
+  const [recoveryBusy, setRecoveryBusy] = useState(false), [recoveryRefresh, setRecoveryRefresh] = useState(0);
+  const [recoveryRefreshBusy, setRecoveryRefreshBusy] = useState(false);
+  const recoveryRefreshOperation = useRef<object | null>(null);
+  const [recovered, setRecovered] = useState<CsvConfirmationRecoveryDetailResponse | null>(null);
+  const appliedRecovery = useRef<string | null>(null);
   const [error, setError] = useState(""), [notice, setNotice] = useState("");
   const scope = csvScopeKey({ portfolioId, accountId }), context: CsvContext = { portfolioId, accountId, revision };
   const currentContext = useRef(context), previous = useRef(context), mounted = useRef(true), writeLocked = useRef(readOnly);
@@ -119,13 +131,43 @@ export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted, re
     setNotice(scopeChanged ? "账户范围已改变，请重新选择文件与映射。" : "账本版本已改变，旧预览已清除；如刚提交过确认，请先核对事实或重新上传同一原件。");
     if (scopeChanged) { setFile(null); setFileKey(key => key + 1); setMapping(""); setMappingFilename(""); }
   }, [scope, revision, pending]);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; operation.current = null; }; }, []);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; operation.current = null; recoveryRefreshOperation.current = null; }; }, []);
+  useEffect(() => {
+    const invalidate = () => {
+      sessionState.current = null; operation.current = null; ownCommit.current = null; previewScope.current = null; appliedRecovery.current = null; recoveryRefreshOperation.current = null;
+      setRecoveryRefreshBusy(false);
+      setPending(null); setPreview(null); setConfirmation(null); setRecovered(null); setOriginalBytes(null); setDrafts({}); setAcknowledged(false); setBusy(null);
+      setFile(null); setFileKey(value => value + 1); setMapping(""); setMappingFilename(""); setKnownMapping(null); setWizardHash(null); setError(""); setNotice("");
+    };
+    window.addEventListener("workbench:session-invalidated", invalidate);
+    return () => window.removeEventListener("workbench:session-invalidated", invalidate);
+  }, []);
+  useEffect(() => {
+    if (!recovered || !pending || pending.recoveryId !== recovered.attempt.id || !sameCsvScope(pending.context, context)
+      || recovered.confirmation.status !== "confirmed" || appliedRecovery.current === recovered.attempt.id || !session?.verified || busy || recoveryBusy) return;
+    appliedRecovery.current = recovered.attempt.id;
+    const refreshToken = {}, binding = session.sessionBinding, refreshScope = { portfolioId, accountId };
+    recoveryRefreshOperation.current = refreshToken; setRecoveryRefreshBusy(true);
+    ownCommit.current = { scope, revision: null }; setPending(null); setConfirmation(recovered.confirmation);
+    setNotice(recovered.confirmation.attempt_matches
+      ? "服务器已核验该批次和原人工决定的实际确认回执。恢复没有发送新确认，也没有重复入账。"
+      : "该批次已由另一份人工决定完成。本次尝试不能认定为已执行；以下展示批次实际回执，不再重复提交。");
+    void (async () => {
+      try { await onCommitted(); }
+      catch {
+        if (mounted.current && recoveryRefreshOperation.current === refreshToken && sessionState.current?.verified
+          && sessionState.current.sessionBinding === binding && sameCsvScope(refreshScope, currentContext.current)) setError("已核验批次确认，但账户页面刷新失败；不要据此重复记账。");
+      } finally {
+        if (mounted.current && recoveryRefreshOperation.current === refreshToken) { recoveryRefreshOperation.current = null; setRecoveryRefreshBusy(false); }
+      }
+    })();
+  }, [recovered, pending, scope, revision, session?.verified, session?.sessionBinding, onCommitted, busy, recoveryBusy, portfolioId, accountId]);
   useEffect(() => { setWizardHash(null); }, [file, scope, revision]);
-  useEffect(() => { onScopeLockChange?.(!!busy || wizardBusy || !!pending); }, [busy, wizardBusy, pending, onScopeLockChange]);
+  useEffect(() => { onScopeLockChange?.(!!busy || wizardBusy || recoveryBusy || recoveryRefreshBusy || !!pending); }, [busy, wizardBusy, recoveryBusy, recoveryRefreshBusy, pending, onScopeLockChange]);
   useEffect(() => () => { onScopeLockChange?.(false); }, [onScopeLockChange]);
   useEffect(() => {
     if (!pending) return;
-    const warning = "确认可能已入账。原请求只保存在当前页面内存；离开或刷新后不能保证恢复。请先核对服务器状态。仍要离开？";
+    const warning = "确认可能已入账。已封存请求可在本登录会话恢复记录中核对；未到达服务器的请求不能恢复。退出后新会话不会自动取得旧请求。建议先核对服务器状态，仍要离开？";
     const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     const onLink = (event: MouseEvent) => {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -149,8 +191,8 @@ export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted, re
   const filteredRows = useMemo(() => preview?.rows.filter(row => !reviewOnly || required.has(row.row)) ?? [], [preview, reviewOnly, required]);
   const pages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE)), currentPage = Math.min(page, pages - 1);
   const visibleRows = filteredRows.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
-  const frozen = readOnly || !!busy || !!pendingPayload || preview?.status === "confirmed";
-  const editFrozen = !!busy || wizardBusy || !!pendingPayload || !!preview;
+  const frozen = readOnly || !session?.verified || !!busy || recoveryRefreshBusy || !!pendingPayload || preview?.status === "confirmed";
+  const editFrozen = !session?.verified || !!busy || wizardBusy || recoveryBusy || recoveryRefreshBusy || !!pendingPayload || !!preview;
   const invalidateWizard = useCallback(() => setWizardHash(null), []);
   const applyWizard = useCallback((text: string, hash: string) => {
     if (busy || pending || preview) return false;
@@ -158,11 +200,11 @@ export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted, re
     setMapping(text); setMappingFilename(""); setWizardHash(hash); setError("");
     return true;
   }, [busy, pending, preview, mapping]);
-  const canConfirm = !readOnly && !!preview?.csv && previewScope.current === scope && preview.account_id === accountId && preview.expected_revision === revision
+  const canConfirm = !readOnly && !!session?.verified && !!preview?.csv && previewScope.current === scope && preview.account_id === accountId && preview.expected_revision === revision
     && preview.status === "preview" && !preview.csv.document_errors.length && preview.rows.length > 0
     && preview.rows.every(row => row.command && !row.errors.length && row.source && Array.isArray(row.source.cells)) && acknowledged && readyRows.length === required.size;
   const attachmentHref = (id: string) => `/api/workbench/attachments/${encodeURIComponent(id)}?portfolio=${encodeURIComponent(portfolioId)}`;
-  const isCurrent = (token: CsvOperation) => mounted.current && isCsvOperationCurrent(token, operation.current, currentContext.current);
+  const isCurrent = (token: CsvOperation) => mounted.current && sessionState.current?.verified === true && isCsvOperationCurrent(token, operation.current, currentContext.current);
   const startOperation = (kind: CsvOperation["kind"]): CsvOperation => {
     const token = { id: ++requestNumber.current, kind, context: { ...currentContext.current } };
     operation.current = token; setBusy(kind); return token;
@@ -171,12 +213,13 @@ export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted, re
   function clearPreview(abandonPending = false) {
     if (!canClearCsvPreview(pending, abandonPending)) return false;
     previewScope.current = null; ownCommit.current = null;
+    appliedRecovery.current = null; setRecovered(null);
     setPreview(null); setOriginalBytes(null); setDrafts({}); setAcknowledged(false); setPage(0); setReviewOnly(false); setPending(null); setConfirmation(null); setError(""); setNotice("");
     return true;
   }
   function editAgain() {
-    if (operation.current) return;
-    if (pendingPayload && !window.confirm("确认响应失败不代表未入账。结束后会放弃仅存在本页内存中的原确认请求和人工选择；服务器批次和可能已入账的事实不会撤销。建议先核对状态。确定放弃本页重试信息？")) return;
+    if (operation.current || recoveryRefreshOperation.current) return;
+    if (pendingPayload && !window.confirm("确认响应失败不代表未入账。结束后释放本页原请求和人工选择，但服务器已封存的尝试、批次和可能已入账事实不会撤销；可在本登录会话恢复记录中查找。建议先核对状态。确定结束本页重试？")) return;
     const wasElsewhere = pendingElsewhere;
     clearPreview(true);
     if (wasElsewhere) { setFile(null); setFileKey(key => key + 1); setMapping(""); setMappingFilename(""); }
@@ -186,6 +229,28 @@ export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted, re
     const token = startOperation("status"); setError("");
     try { await onRestorePendingScope({ portfolioId: pending.context.portfolioId, accountId: pending.context.accountId }); }
     catch (caught) { if (isCurrent(token)) setError(errorMessage(caught)); }
+    finally { if (operation.current === token) { operation.current = null; setBusy(null); } }
+  }
+  async function restoreRecovery(detail: CsvConfirmationRecoveryDetailResponse): Promise<boolean> {
+    if (operation.current || recoveryRefreshOperation.current || pending || !sessionState.current?.verified || detail.session_binding !== sessionState.current.sessionBinding) return false;
+    const target = { portfolioId: detail.attempt.portfolio_id, accountId: detail.attempt.account_id };
+    if (!sameCsvScope(target, context) && !onRestorePendingScope) { setError("请先切换到恢复记录的原组合和账户。"); return false; }
+    if (!clearPreview()) return false;
+    const token = startOperation("status");
+    try {
+      const batch = csvPreview(await responseJson(await fetch(`/api/workbench?portfolio=${encodeURIComponent(target.portfolioId)}&batch=${encodeURIComponent(detail.attempt.batch_id)}`, { cache: "no-store" })), target.accountId);
+      await verifyCsvSession(detail.session_binding);
+      if (!isCurrent(token)) return false;
+      if (batch.id !== detail.batch.id || batch.preview_hash !== detail.batch.preview_hash || batch.expected_revision !== detail.batch.expected_revision || batch.rows.length !== detail.batch.row_count || batch.status !== detail.batch.status) throw new Error("恢复时批次状态已变化，请重新查询恢复记录。");
+      const restored = recoveryResolutionDrafts(detail.payload_text);
+      previewScope.current = csvScopeKey(target); setPreview(batch); setOriginalBytes(null); setDrafts(restored.drafts); setAcknowledged(restored.acknowledged);
+      setPending({ context: { ...target, revision: detail.attempt.expected_revision }, batchId: batch.id, payload: detail.payload_text, recoveryId: detail.attempt.id, payloadHash: detail.attempt.payload_hash });
+      setRecovered(detail); setFile(null); setFileKey(value => value + 1); setMapping(""); setMappingFilename(""); setWizardHash(null);
+      setNotice("原请求已从服务器恢复到本页；未发送确认。原 revision、字段顺序、空白及人工决定均保持原样，原件可从批次下载。");
+      if (detail.review_error) setError(`原确认内容存在阻断：${detail.review_error}。请核对后明确结束此预览并更正，不自动改写原请求。`);
+      if (onRestorePendingScope) await onRestorePendingScope(target);
+      return true;
+    } catch (caught) { if (isCurrent(token)) setError(errorMessage(caught)); return false; }
     finally { if (operation.current === token) { operation.current = null; setBusy(null); } }
   }
   function updateDraft(row: number, changes: Partial<ResolutionDraft>) {
@@ -207,7 +272,7 @@ export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted, re
   }
   async function upload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (operation.current || wizardBusy || !file || !mapping.trim() || pendingPayload || readOnly || (mode === "wizard" && !wizardHash)) return;
+    if (operation.current || wizardBusy || recoveryBusy || !session?.verified || !file || !mapping.trim() || pendingPayload || readOnly || (mode === "wizard" && !wizardHash)) return;
     const token = startOperation("preview"); clearPreview();
     let sent = false;
     try {
@@ -220,10 +285,12 @@ export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted, re
       const contentHash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
       if (!isCurrent(token) || writeLocked.current) return;
       if (mode === "wizard" && contentHash !== wizardHash) throw new Error("CSV_WIZARD_FILE_HASH_MISMATCH");
+      await verifyCsvSession(session.sessionBinding);
+      if (!isCurrent(token) || writeLocked.current) return;
       const data = new FormData(); data.set("portfolio_id", portfolioId); data.set("account_id", accountId); data.set("expected_revision", String(revision)); data.set("mapping", mapping); data.set("file", file);
       try { const parsed = csvMappingSchema.safeParse(JSON.parse(mapping)); if (parsed.success) setKnownMapping({ scope, mapping: parsed.data }); } catch { /* Preserve raw JSON for authoritative server validation. */ }
       sent = true;
-      const result = csvPreview(await responseJson(await fetch("/api/workbench/csv", { method: "POST", body: data })), accountId);
+      const result = csvPreview(await responseJson(await fetch("/api/workbench/csv", { method: "POST", headers: { "X-Workbench-Session-Binding": session.sessionBinding }, body: data })), accountId);
       if (!isCurrent(token)) return;
       if (result.csv!.content_hash !== contentHash) throw new Error("CSV_PREVIEW_FILE_HASH_MISMATCH");
       if (result.status !== "confirmed" && result.expected_revision !== revision) throw new Error("CSV_PREVIEW_REVISION_MISMATCH");
@@ -238,13 +305,13 @@ export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted, re
     if (!isCurrent(token)) return;
     const endRevision = result && typeof result === "object" && "revision" in result && Number.isSafeInteger(result.revision) ? Number(result.revision) : null;
     ownCommit.current = { scope, revision: endRevision };
-    setPreview({ ...batch, status: "confirmed" }); setConfirmation(result); setPending(null); setError("");
+    setPreview({ ...batch, status: "confirmed" }); setConfirmation(result); setPending(null); setRecovered(null); setError("");
     setNotice("批次已确认。原件与逐行关联已留存；重复来源或人工关联行不会重复入账，账户需重新对账。");
     try { await Promise.resolve(onCommitted()); }
     catch { if (isCurrent(token)) setError("入账已确认，但页面刷新失败。请刷新工作台；不要据此重新记账。"); }
   }
   async function confirm() {
-    if (operation.current || readOnly || !preview?.csv || previewScope.current !== scope
+    if (operation.current || recoveryRefreshOperation.current || readOnly || !session?.verified || !preview?.csv || previewScope.current !== scope || (recovered?.review_error && pending)
       || (pending ? !canRetryCsvConfirmation(pending, currentContext.current, preview, readOnly) : !canConfirm)) return;
     const batch = preview;
     const payload = pendingPayload ?? JSON.stringify({ action: "confirm_import", portfolio_id: portfolioId, batch_id: batch.id, preview_hash: batch.preview_hash, expected_revision: batch.expected_revision,
@@ -254,38 +321,54 @@ export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted, re
     const token = startOperation("confirm");
     setPending(pending ?? { context: { portfolioId, accountId, revision: batch.expected_revision }, batchId: batch.id, payload }); setError(""); setNotice("");
     try {
-      const result = await responseJson(await fetch("/api/workbench", { method: "POST", headers: { "Content-Type": "application/json" }, body: payload }));
+      await verifyCsvSession(session.sessionBinding);
+      if (!isCurrent(token) || writeLocked.current) return;
+      const result = await responseJson(await fetch("/api/workbench", { method: "POST", headers: { "Content-Type": "application/json", "X-Workbench-Session-Binding": session.sessionBinding }, body: payload }));
+      await verifyCsvSession(session.sessionBinding);
       if (!result || typeof result !== "object" || !("revision" in result) || !Number.isSafeInteger(result.revision) || Number(result.revision) < batch.expected_revision
         || !("receipts" in result) || !Array.isArray(result.receipts) || result.receipts.length !== batch.rows.length) throw new Error("CSV_CONFIRM_RESPONSE_INVALID");
       await committed(result, batch, token);
-    } catch (caught) { if (isCurrent(token)) setError(`${errorMessage(caught)}。确认请求和人工选择已保留；可核对状态或重试完全相同的请求。`); }
-    finally { if (operation.current === token) { operation.current = null; setBusy(null); } }
+    } catch (caught) { if (isCurrent(token)) setError(`${errorMessage(caught)}。原请求暂存本页；已被服务器封存的尝试也可在本登录会话恢复记录中查询。核对状态后再决定是否原样重试。`); }
+    finally { if (operation.current === token) { operation.current = null; setBusy(null); setRecoveryRefresh(value => value + 1); } }
   }
   async function checkStatus() {
-    if (operation.current || !preview || previewScope.current !== scope) return;
+    if (operation.current || recoveryRefreshOperation.current || !session?.verified || !preview || previewScope.current !== scope) return;
     const token = startOperation("status"), batch = preview; setError("");
     try {
+      if (pending) {
+        const payloadHash = pending.payloadHash ?? [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pending.payload)))].map(value => value.toString(16).padStart(2, "0")).join("");
+        const detail = await fetchCsvRecovery(pending.recoveryId ? { id: pending.recoveryId } : { batch_id: pending.batchId, payload_hash: payloadHash }, session.sessionBinding);
+        if (!isCurrent(token)) return;
+        if (detail.payload_text !== pending.payload || detail.attempt.batch_id !== batch.id || detail.attempt.account_id !== accountId || detail.attempt.portfolio_id !== portfolioId || detail.batch.preview_hash !== batch.preview_hash) throw new Error("CSV_STATUS_RESPONSE_MISMATCH");
+        setRecovered(detail); setPending({ ...pending, recoveryId: detail.attempt.id, payloadHash });
+        setPreview({ ...batch, status: detail.batch.status });
+        if (detail.confirmation.status === "unconfirmed") setNotice(`已找到原请求封存记录，批次状态 ${detail.batch.status}；尚无已核验确认回执。不改变原 revision 或人工决定。`);
+        if (detail.review_error) setError(`原请求被阻断：${detail.review_error}；核对后结束预览并明确更正，不覆盖旧尝试。`);
+        return;
+      }
       const value = csvPreview(await responseJson(await fetch(`/api/workbench?portfolio=${encodeURIComponent(portfolioId)}&batch=${encodeURIComponent(preview.id)}`, { cache: "no-store" })), accountId);
+      await verifyCsvSession(session.sessionBinding);
       if (!isCurrent(token)) return;
       if (value.id !== batch.id || value.preview_hash !== batch.preview_hash || value.csv!.content_hash !== batch.csv!.content_hash || value.csv!.mapping_hash !== batch.csv!.mapping_hash) throw new Error("CSV_STATUS_RESPONSE_MISMATCH");
       if (value.status === "confirmed") await committed({ status: "confirmed", batch_id: value.id, detail: "服务器确认该批次已提交；下方行结果是封存预检，不代表实际逐行 receipt。" }, value, token);
       else setNotice(`服务器批次状态：${value.status}。已保留原确认请求；版本冲突或预览失效时请结束预览后重新核对。`);
-    } catch (caught) { if (isCurrent(token)) setError(errorMessage(caught)); }
+    } catch (caught) { if (isCurrent(token)) setError(errorMessage(caught) === "CSV_RECOVERY_NOT_FOUND" ? "当前登录会话未找到该原请求的封存记录；请求可能尚未到达或仍在途中。这不证明未入账，请保留原请求核对账本，不另造来源绕过去重。" : errorMessage(caught)); }
     finally { if (operation.current === token) { operation.current = null; setBusy(null); } }
   }
 
-  return <section className="min-w-0 rounded-xl border bg-card p-5 shadow-sm" aria-busy={!!busy || wizardBusy}>
+  return <section className="min-w-0 rounded-xl border bg-card p-5 shadow-sm" aria-busy={!!busy || wizardBusy || recoveryBusy || recoveryRefreshBusy}>
     <h2 className="text-lg font-semibold">CSV 原件检查与映射导入</h2>
     <p className="mt-2 text-sm text-muted-foreground">不是已认证的券商格式。由你明确列名、数值格式、费用、时区和账户映射；系统不猜测交易含义，不代替独立对账。预览只保存证据，确认后才记账。</p>
     <p className="mt-2 break-all text-xs text-muted-foreground">当前账户 {accountId || "未选择"} · 账本版本 {revision}。仅支持 UTF-8 CSV；原文件字节、映射和行定位均保留。</p>
     {error && <div role="alert" className="mt-4 break-words rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm">{error}</div>}
     {notice && <p role="status" className="mt-4 break-words rounded-lg border p-3 text-sm">{notice}</p>}
-    {pending && <p className="mt-4 rounded-lg border border-amber-500/40 p-3 text-sm">未决请求仅在本页内存中。请先核对服务器状态再离开；浏览器后退/前进等同文档导航可能不弹出提示，强制刷新后也不能保证恢复。</p>}
+    {pending && <p className="mt-4 rounded-lg border border-amber-500/40 p-3 text-sm">{pending.recoveryId ? "已找到服务器封存的原请求。" : "确认结果未决；原请求暂存本页，服务器收到后会先封存再执行。"}请先核对状态；后退/前进或刷新后可从本登录会话恢复记录查找，不自动重发。退出或失效后的新会话不自动获得旧请求。</p>}
+    <CsvRecoveryPanel disabled={!!busy || wizardBusy || recoveryRefreshBusy || !!pending || !!preview || !session?.verified} refreshKey={recoveryRefresh} onRestore={restoreRecovery} onBusyChange={setRecoveryBusy} />
     {readOnly && <p role="status" className="mt-4 rounded-lg border p-3 text-sm">恢复只读：可检查 CSV 与编辑本地映射，但不能保存预览或重试确认；仍可核对已保留批次的服务器状态、查看证据和下载原件。</p>}
     {pendingElsewhere && pending && <div role="alert" className="mt-4 space-y-3 rounded-lg border border-amber-500/40 p-3 text-sm">
       <p className="break-all">未决确认属于原组合 {pending.context.portfolioId} / 原账户 {pending.context.accountId}，批次 {pending.batchId}。当前范围不能覆盖或发送该请求。</p>
       <div className="flex flex-wrap gap-3">{onRestorePendingScope && <Button type="button" variant="outline" disabled={!!busy} onClick={() => void restorePendingScope()}>恢复原账户并核对未决确认</Button>}<Button type="button" variant="outline" disabled={!!busy} onClick={editAgain}>明确放弃本页未决请求信息</Button></div>
-      <details><summary className="cursor-pointer">原确认请求（仅当前页面内存）</summary><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-xs">{pending.payload}</pre></details>
+      <details><summary className="cursor-pointer">原确认请求（重试保持原字节）</summary><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-xs">{pending.payload}</pre></details>
     </div>}
     <form onSubmit={upload} className="mt-5 space-y-4">
       <fieldset disabled={editFrozen} className="grid min-w-0 gap-4 sm:grid-cols-2">
@@ -294,7 +377,7 @@ export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted, re
         {mode === "advanced" && <><label className={field}>加载映射 JSON（可选，最大 256 KiB）<Input key={`mapping-${fileKey}`} type="file" accept=".json,application/json" aria-label="加载映射 JSON" onChange={event => void loadMapping(event.target.files?.[0] ?? null)} />{mappingFilename && <span className="break-all text-xs text-muted-foreground">已读取 {mappingFilename}；提交以下编辑区的完整文字。</span>}</label>
           <label className={`${field} sm:col-span-2`}>映射 JSON 内容<textarea className={textareaClass} aria-label="CSV 映射 JSON 内容" value={mapping} onChange={event => { if (editFrozen || !clearPreview()) return; setMapping(event.target.value); setWizardHash(null); }} maxLength={MAPPING_MAX_BYTES} required spellCheck={false} placeholder="粘贴经人工核对的 csv-import-mapping-v1 定义。账户、上市标识、费用和时间格式必须明确；不预置券商猜测模板。" /></label></>}
       </fieldset>
-      <div hidden={mode !== "wizard"}><CsvMappingWizard file={file} portfolioId={portfolioId} accountId={accountId} revision={revision} disabled={!!busy || !!pendingPayload || !!preview || mode !== "wizard"} previousMapping={knownMapping?.scope === scope ? knownMapping.mapping : null} onApply={applyWizard} onInvalidate={invalidateWizard} onBusyChange={setWizardBusy} /></div>
+      <div hidden={mode !== "wizard"}><CsvMappingWizard file={file} portfolioId={portfolioId} accountId={accountId} revision={revision} disabled={!session?.verified || !!busy || recoveryBusy || !!pendingPayload || !!preview || mode !== "wizard"} previousMapping={knownMapping?.scope === scope ? knownMapping.mapping : null} onApply={applyWizard} onInvalidate={invalidateWizard} onBusyChange={setWizardBusy} /></div>
       <p className="text-xs text-muted-foreground">同一映射标识和版本不可覆盖，失败预览也可能已封存映射。修改定义应明确创建新版本；已确认原件需要更正时走事实更正流程，不能换映射重复导入。</p>
       {mode === "wizard" && !wizardHash && <p className="text-sm text-muted-foreground">先在向导中核对并生成映射，才能保存预览。</p>}
       <Button disabled={readOnly || editFrozen || !file || !mapping.trim() || !portfolioId || !accountId || (mode === "wizard" && !wizardHash)}>{busy === "preview" ? "正在核验原件与账本…" : "保存证据并预览（不入账）"}</Button>
@@ -342,8 +425,9 @@ export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted, re
         </article>;
       })}
       {preview.status !== "confirmed" && <label className="flex items-start gap-2 rounded-lg border p-3 text-sm"><input type="checkbox" className="mt-1" checked={acknowledged} disabled={frozen} onChange={event => setAcknowledged(event.target.checked)} /><span>我已核对全部分页中的原文、映射与费用/时间/账户含义，知悉这是未获券商格式认证的高级通用映射；逐行决定由我本人作出。</span></label>}
-      <div className="flex flex-wrap gap-3">{preview.status !== "confirmed" && <Button type="button" disabled={readOnly || !!busy || (!pendingPayload && !canConfirm)} onClick={() => void confirm()}>{busy === "confirm" ? "正在确认…" : pendingPayload ? "重试完全相同的确认请求" : "确认全部已核对行入账"}</Button>}<Button type="button" variant="outline" disabled={!!busy} onClick={() => void checkStatus()}>核对服务器批次状态</Button><Button type="button" variant="outline" disabled={!!busy} onClick={editAgain}>{preview.status === "confirmed" ? "结束审计展示，准备新预览" : "结束此预览，返回编辑"}</Button></div>
-      {pendingPayload && <details className="rounded border p-3 text-sm"><summary className="cursor-pointer">已冻结的原确认请求（重试不改写）</summary><p className="mt-2">仅保存在当前页面内存；离开或刷新后不能保证恢复，不代表服务器尚未入账。</p><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-xs">{pendingPayload}</pre></details>}
+      <div className="flex flex-wrap gap-3">{preview.status !== "confirmed" && <Button type="button" disabled={readOnly || !session?.verified || !!busy || preview.status !== "preview" || !!recovered?.review_error || (!pendingPayload && !canConfirm)} onClick={() => void confirm()}>{busy === "confirm" ? "正在确认…" : pendingPayload ? "重试完全相同的确认请求" : "确认全部已核对行入账"}</Button>}<Button type="button" variant="outline" disabled={!!busy} onClick={() => void checkStatus()}>核对服务器批次状态</Button><Button type="button" variant="outline" disabled={!!busy} onClick={editAgain}>{preview.status === "confirmed" ? "结束审计展示，准备新预览" : "结束此预览，返回编辑"}</Button></div>
+      {pendingPayload && <details className="rounded border p-3 text-sm"><summary className="cursor-pointer">已冻结的原确认请求（重试不改写）</summary><p className="mt-2">服务器已封存的尝试可在当前登录会话重新查询；未到达服务器的请求不保证恢复。封存不等于入账。</p><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-xs">{pendingPayload}</pre></details>}
+      {recovered && <details className="rounded border p-3 text-sm"><summary className="cursor-pointer">服务器恢复证据与原尝试</summary><p className="mt-2 break-all">尝试 {recovered.attempt.id} · 原请求 SHA-256 {recovered.attempt.payload_hash}</p><p className="mt-2">{recovered.confirmation.status === "confirmed" ? recovered.confirmation.attempt_matches ? "已核验实际回执与该原人工决定一致。" : "批次实际回执与此尝试不同，不认定此尝试成功。" : "没有已核验确认回执；不得把预检或尝试记录当作入账。"}</p><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-xs">{recovered.payload_text}</pre></details>}
       {confirmation !== null && <details className="rounded border p-3 text-sm"><summary className="cursor-pointer">本次确认结果与逐行关联</summary><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(confirmation, null, 2)}</pre></details>}
       <p className="text-xs text-muted-foreground">任何关键错误、未完成的必填行或版本冲突都会阻断整批。疑似重复提示不保证穷尽所有重叠文件；确认响应丢失时不要自行换来源号或文件绕过去重。</p>
     </div>}

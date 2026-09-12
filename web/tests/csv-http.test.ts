@@ -17,6 +17,7 @@ function route(options: { authError?: Error; openError?: Error; previewError?: u
   const dependencies: Record<string, unknown> = {
     "next/server": { NextResponse },
     "@/server/auth/core": { AuthError },
+    "@/server/auth/session-binding": { assertRequestSessionBinding: () => {} },
     "@/server/auth/session": { requireMutationSession: async () => {
       calls.push("authenticate-and-check-origin");
       if (options.authError) throw options.authError;
@@ -65,7 +66,7 @@ test("CSV route streams through the bounded multipart parser, derives identity f
   const response = await handler.post(request(form(bytes)));
   assert.equal(response.status, 200); assert.equal(response.headers.get("cache-control"), "private, no-store");
   assert.deepEqual(await response.json(), { id: "synthetic-batch", status: "preview", expected_revision: 7, rows: [] });
-  assert.deepEqual(handler.calls, ["authenticate-and-check-origin", "read-body", "open", "preview", "close"]);
+  assert.deepEqual(handler.calls, ["authenticate-and-check-origin", "read-body", "authenticate-and-check-origin", "open", "preview", "close"]);
   const captured = handler.captured()!;
   assert.equal(captured.actor.id, "owner"); assert.deepEqual(Object.keys(captured.actor), ["id"]);
   assert.equal(captured.input.portfolio_id, "synthetic-portfolio"); assert.equal(captured.input.account_id, "synthetic-account");
@@ -78,7 +79,7 @@ test("CSV route preserves an invalid preview as inspectable rows instead of clai
   const preview = { id: "invalid-batch", status: "invalid", rows: [{ row: 1, errors: ["CSV_VALUE_NOT_MAPPED"], command: null }] };
   const handler = route({ result: preview }), response = await handler.post(request());
   assert.equal(response.status, 200); assert.deepEqual(await response.json(), preview);
-  assert.deepEqual(handler.calls, ["authenticate-and-check-origin", "read-body", "open", "preview", "close"]);
+  assert.deepEqual(handler.calls, ["authenticate-and-check-origin", "read-body", "authenticate-and-check-origin", "open", "preview", "close"]);
 });
 
 test("CSV upload validation never opens a database and size errors close the connection", async () => {
@@ -111,7 +112,7 @@ test("CSV route maps only explicit business errors and always closes the opened 
   for (const [code, status] of cases) {
     const handler = route({ previewError: new Error(code) }), response = await handler.post(request());
     assert.equal(response.status, status, code); assert.deepEqual(await response.json(), { error: code });
-    assert.deepEqual(handler.calls, ["authenticate-and-check-origin", "read-body", "open", "preview", "close"]);
+    assert.deepEqual(handler.calls, ["authenticate-and-check-origin", "read-body", "authenticate-and-check-origin", "open", "preview", "close"]);
     assert.equal(handler.logs.length, 0);
     if (status === 413) assert.equal(response.headers.get("connection"), "close");
   }
@@ -135,5 +136,5 @@ test("native errors and corrupt persisted evidence return a generic failure with
   }
   const handler = route({ openError: new Error("ENOENT: /private/synthetic/workbench.db") }), response = await handler.post(request());
   assert.equal(response.status, 503); assert.deepEqual(await response.json(), { error: "WORKBENCH_UNAVAILABLE" });
-  assert.deepEqual(handler.calls, ["authenticate-and-check-origin", "read-body", "open"]);
+  assert.deepEqual(handler.calls, ["authenticate-and-check-origin", "read-body", "authenticate-and-check-origin", "open"]);
 });

@@ -4,6 +4,8 @@ export interface CsvPendingConfirmation {
   context: CsvContext;
   batchId: string;
   payload: string;
+  recoveryId?: string;
+  payloadHash?: string;
 }
 export interface CsvOperation {
   id: number;

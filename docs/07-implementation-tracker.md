@@ -22,7 +22,7 @@ replacing personal parameters with public templates does not reduce scope.
 
 | Workstream | Current implementation | Remaining work / release evidence |
 |---|---|---|
-| Contracts and new database | Versioned migrations through v13; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence and private catalog versions; dividend tax payable and independently reproducible fact-quality contracts | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
+| Contracts and new database | Versioned migrations through v14; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts and private catalog versions; dividend tax payable and independently reproducible fact-quality contracts | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
 | Authentication | Sealed sessions, persistent revocation/rate limit, server-side guards, strict Origin; authenticated HTTP and native login/logout checked; initialization/login share UTF-8 password bounds | Production TLS/proxy, operator configuration and real owner login |
 | Financial ledger | Exact decimal facts, cash/trades/settlement/dividends/FX/transfers/splits; unknown/estimated/confirmed tax, net-only receipts, cumulative tax assessment and actual withholding kept separate; corporate-action notice/resolution isolation; securities transit and append-only dependent corrections | Real dividend/tax/corporate-action and security-transfer evidence, full acceptance matrix |
 | Import and reconciliation | JSON and raw CSV attachment/preview/atomic confirmation; zero-write CSV inspection and visual explicit mapping; immutable mappings and row evidence; explicit duplicate review and persistent source aliases; scoped downloads and encrypted recovery; explicit balance/tax-payable/settled/transit reconciliation and unresolved-fact guards | Domestic/cross-border broker samples, native wizard acceptance, large background imports and full throughput/fault acceptance |
@@ -32,19 +32,19 @@ replacing personal parameters with public templates does not reduce scope.
 | Market and orchestration | Immutable paged batches, validate/publish CAS, as-known/restated valuation, leases/fencing/retry/outbox; valuation/market/performance worker commands | Real provider adapters, validated exchange calendars, recurring schedules, full fault/load tests |
 | Strategy and AI | Preregistered fixed-weight research, frozen inputs/implementation, train/validation/holdout separation, same-flow/cost/FX benchmark; seven Web-to-Worker commands and read-only AI review; 3300-day synthetic indexed replay | Live providers/models, complete rotation/forward simulation and genuine S-gate evidence |
 | Governance and execution | Human version/capability APIs, risk/approval CAS, independent-process cash/share reservation race tests, execution reports separate from facts; trusted verification import rejects user PASS claims; Web/API integration | Actual trusted verification Worker, formal evidence and runtime manifest binding; actual D/G/S approvals remain absent |
-| Product UI | Account, funding, catalog, research and governance workspaces; typed securities and dividend/tax/corporate-action preview/confirm; visual CSV mapping plus advanced JSON editor and paged row review; frozen same-body confirmation retry survives same-scope revision updates | Native wizard and full catalog comparison/positive governance acceptance; pending-request recovery across browser history navigation, complete accessibility and readonly UX |
+| Product UI | Account, funding, catalog, research and governance workspaces; typed securities and dividend/tax/corporate-action preview/confirm; visual CSV mapping plus advanced JSON editor and paged row review; frozen same-body retry and server-backed, current-session, read-only confirmation recovery | Native wizard/recovery/BFCache and full catalog comparison/positive governance acceptance; complete accessibility and readonly UX |
 | Deployment | Manual-only release, encrypted backup/restore, CI-verified non-root v13 checkpoint images and local restore; full real legacy-copy archive/recovery rehearsal; old production unchanged; late recovery marker blocks migration/cutover | Final source-bound image checks, independent-host restore, protected credentials/configuration, release and post-release checks |
 
-Latest published checkpoint before the visual CSV work is commit
-`0c9c6c7a174d440c7aedcdb38e99eb31056b7f6f`; its
-[GitHub CI run](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/34695643282)
-passed Web 315, Python 244, root Node 73, HTTP 50, build/typecheck/authentication,
+Latest published checkpoint before the v14 recovery work is commit
+`de1169f5490fdb5283c14c8790a05df727d953c0`; its
+[GitHub CI run](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/34697832339)
+passed Web 371, Python 244, root Node 73, HTTP 57, build/typecheck/authentication,
 dependency audit and Linux container migration/non-root/local encrypted recovery
 checks. It was a public code checkpoint, not a production deployment or an
-independent-host recovery. The visual CSV changes require a new source-bound run;
+independent-host recovery. The v14 recovery changes require a new source-bound run;
 the older counts do not certify them.
 
-Visual CSV checkpoint (local stable-source validation, schema still v13):
+Historical visual CSV checkpoint (local stable-source validation, schema v13):
 
 - Web 371/371, Python 244/244, root Node 73/73; typecheck, production build,
   authentication HTTP, shellcheck and dependency audit passed (zero reported
@@ -67,6 +67,40 @@ Visual CSV checkpoint (local stable-source validation, schema still v13):
   `node-csv-wizard-final.log`, `http-csv-wizard-final.log` under
   `artifacts/verification/final-regression/`. Actual new commit/push/CI results
   remain bound to Git and its workflow, not inferred from this local run.
+
+### v14 confirmation recovery checkpoint
+
+- Append-only exact confirmation attempts are saved in an independent transaction
+  before the original CSV confirmation engine runs. Current-session list/detail
+  recovery only reads; it does not auto-POST, approve rows or create ledger facts.
+  Actual receipt validation distinguishes a successful batch from a failed or
+  different review attempt. Browser storage contains no complete request.
+- The session boundary hides SSR, pagehide and hidden-tab content before probing
+  again; all protected Radix portals are kept inside that subtree. CSV writes
+  carry an optional session binding checked before body parsing, and upload
+  revalidates the session after reading the body. This is not a substitute for
+  Cookie authentication or Origin validation.
+- Local frozen-source validation: Web 438/438, Python 244/244, root Node 81/81;
+  typecheck, build, authentication HTTP, shellcheck and dependency audit passed
+  with zero reported vulnerabilities. Production-build HTTP 63/63 passed on
+  schema 14, build `3fnrZ4DRzdltM29QC7Z8V`.
+- Evidence: `artifacts/verification/workbench-http/2026-09-12T14-40-42-218Z/`;
+  all 340 source hashes matched before, after and on subsequent verification.
+  Manifest SHA-256:
+  `c10b1f76475525d7ef839824d20f5158ac0f36662a87877cffd928e001c72628`.
+- The first HTTP run exposed Next.js merging `Vary` fields; the assertion now
+  requires the `Cookie` token instead of incorrectly forbidding framework tokens.
+  A fresh build and clean fixture then passed all 63 cases. The failed artifact
+  is retained; no execution or security assertion was removed.
+- Actual React callback tests caught early scope unlocking during a pending
+  recovered-confirmation refresh. The fix retains the lock until refresh ends
+  and ignores late failure after session invalidation. Those tests and Portal
+  SSR/wrapper tests are not native browser or BFCache acceptance.
+- Native wizard/recovery/Portal verification is still outstanding because the
+  Tabbit runtime is unavailable and restart approval is pending. Real broker
+  formats, background large imports, full product/strategy gates, independent-host
+  restore and production release remain outstanding. This is a code checkpoint,
+  not deployment or profitability acceptance.
 
 ## Reproducible checks
 

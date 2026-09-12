@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { AuthError } from "@/server/auth/core";
 import { requireMutationSession } from "@/server/auth/session";
+import { assertRequestSessionBinding } from "@/server/auth/session-binding";
 import { openWorkbench } from "@/server/workbench-db";
 import { readCsvUpload } from "@/server/ledger/csv-upload";
 import { previewCsvImport } from "@/server/ledger/csv-imports";
@@ -47,7 +48,10 @@ function failure(error: unknown): NextResponse {
 export async function POST(request: Request) {
   try {
     const session = await requireMutationSession();
+    assertRequestSessionBinding(request, session.sessionId);
     const input = await readCsvUpload(request);
+    const current = await requireMutationSession();
+    if (current.userId !== session.userId || current.sessionId !== session.sessionId) throw new AuthError("SESSION_CHANGED", 401);
     const db = openWorkbench();
     try {
       const result = previewCsvImport(db, { id: session.userId }, input);

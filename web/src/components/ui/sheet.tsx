@@ -4,11 +4,14 @@ import * as React from "react";
 import * as SheetPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SessionBoundaryPortal } from "@/components/session-boundary";
 
 const Sheet = SheetPrimitive.Root;
 const SheetTrigger = SheetPrimitive.Trigger;
 const SheetClose = SheetPrimitive.Close;
-const SheetPortal = SheetPrimitive.Portal;
+const SheetPortal = (props: React.ComponentPropsWithoutRef<typeof SheetPrimitive.Portal>) => (
+  <SessionBoundaryPortal>{container => <SheetPrimitive.Portal {...props} container={container ?? props.container} />}</SessionBoundaryPortal>
+);
 
 const SheetOverlay = React.forwardRef<
   React.ElementRef<typeof SheetPrimitive.Overlay>,

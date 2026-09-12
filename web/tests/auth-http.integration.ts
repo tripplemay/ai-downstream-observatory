@@ -5,7 +5,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { hashPassword } from "../src/server/auth/core";
+import { unsealData } from "iron-session";
+import { hashPassword, tokenHash } from "../src/server/auth/core";
 import { AuthStore } from "../src/server/auth/store";
 
 async function freePort(): Promise<number> {
@@ -22,6 +23,7 @@ async function run() {
   let server: ChildProcess | undefined;
   let logs = "";
   const password = randomBytes(24).toString("base64url");
+  const sessionSecret = randomBytes(48).toString("base64url");
   const encoded = await hashPassword(password);
   const port = await freePort();
   const address = `http://127.0.0.1:${port}`;
@@ -29,6 +31,13 @@ async function run() {
   const legacyFile = path.join(directory, "must-not-open-unauthenticated.db");
   const authDirectory = path.join(directory, "configured");
   const request = (url: string, init: RequestInit = {}) => fetch(address + url, { ...init, redirect: "manual" });
+  const probe = async (cookie?: string) => {
+    const response = await request("/api/auth/session", { headers: cookie ? { Cookie: cookie } : {} });
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(existsSync(legacyFile), false); assert.equal(existsSync(path.join(directory, "must-not-open-workbench.db")), false);
+    return { status: response.status, body: await response.json() as { authenticated?: boolean; session_binding?: string; error?: string } };
+  };
   async function start(configured: boolean) {
     server = spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
       env: {
@@ -36,7 +45,7 @@ async function run() {
         WORKBENCH_DB_PATH: path.join(directory, "must-not-open-workbench.db"),
         WORKBENCH_DATA_DIR: configured ? authDirectory : "",
         WORKBENCH_PASSWORD_HASH: configured ? encoded : "",
-        WORKBENCH_SESSION_SECRET: configured ? randomBytes(48).toString("base64url") : "",
+        WORKBENCH_SESSION_SECRET: configured ? sessionSecret : "",
         WORKBENCH_ORIGIN: configured ? canonicalOrigin : "",
       }, stdio: ["ignore", "pipe", "pipe"],
     });
@@ -63,9 +72,11 @@ async function run() {
     assert.match(await (await request("/login")).text(), /认证尚未配置/);
     assert.equal((await request("/ai-downstream")).headers.get("location"), "/login");
     assert.equal((await request("/api/auth/login", { method: "POST" })).status, 503);
+    assert.deepEqual(await probe(), { status: 503, body: { error: "AUTH_UNAVAILABLE" } });
     assert.equal(existsSync(legacyFile), false);
     await stop();
     await start(true);
+    assert.deepEqual(await probe(), { status: 401, body: { error: "UNAUTHENTICATED" } });
     for (const url of ["/", "/ai-downstream", "/ai-downstream/reports", "/ai-downstream/pool"]) {
       const response = await request(url, { headers: { "x-middleware-subrequest": "middleware:middleware:middleware:middleware:middleware" } });
       assert.equal(response.headers.get("location"), "/login", url);
@@ -100,19 +111,29 @@ async function run() {
     assert.match(setCookie, /Secure/i);
     assert.match(setCookie, /SameSite=Strict/i);
     const cookie = setCookie.split(";")[0];
+    const session = await unsealData<{ sid?: string }>(decodeURIComponent(cookie.slice(cookie.indexOf("=") + 1)), { password: sessionSecret });
+    assert.ok(session.sid);
+    const expectedBinding = tokenHash(`workbench-client-session-v1:${session.sid}`), firstProbe = await probe(cookie);
+    assert.deepEqual(firstProbe, { status: 200, body: { authenticated: true, session_binding: expectedBinding } });
+    assert.notEqual(expectedBinding, session.sid); assert.notEqual(expectedBinding, tokenHash(session.sid));
+    assert.deepEqual(await probe(cookie), firstProbe);
     assert.equal((await request("/login", { headers: { Cookie: cookie } })).headers.get("location"), "/");
     assert.equal((await request("/api/auth/logout", { method: "POST", headers: { Cookie: cookie, Origin: "https://evil.example.test" } })).status, 403);
+    assert.deepEqual(await probe(cookie), firstProbe);
     assert.equal((await request("/api/auth/logout", { method: "POST", headers: { Cookie: cookie, Origin: canonicalOrigin } })).status, 303);
+    assert.deepEqual(await probe(cookie), { status: 401, body: { error: "UNAUTHENTICATED" } });
     assert.equal((await request("/ai-downstream", { headers: { Cookie: cookie } })).headers.get("location"), "/login");
     const second = await login(password);
     const secondCookie = (second.headers.get("set-cookie") ?? "").split(";")[0];
+    const secondProbe = await probe(secondCookie); assert.equal(secondProbe.status, 200); assert.notEqual(secondProbe.body.session_binding, expectedBinding);
     const store = new AuthStore(authDirectory);
     store.db.prepare("UPDATE sessions SET expires_at=0").run();
     store.close();
     assert.equal((await request("/ai-downstream", { headers: { Cookie: secondCookie } })).headers.get("location"), "/login");
+    assert.deepEqual(await probe(secondCookie), { status: 401, body: { error: "UNAUTHENTICATED" } });
     assert.equal(existsSync(legacyFile), false);
     assert.equal(existsSync(path.join(directory, "must-not-open-workbench.db")), false);
-    process.stdout.write("PASS auth HTTP: fail-closed config, private reads, direct action denial, Origin, login, secure cookie, persistent logout and expiry; no financial DB accessed.\n");
+    process.stdout.write("PASS auth HTTP: fail-closed config, private reads, direct action denial, Origin, login, secure cookie, domain-separated session probes, persistent logout and expiry; no financial DB accessed.\n");
   } finally {
     await stop();
     rmSync(directory, { recursive: true, force: true });

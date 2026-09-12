@@ -881,6 +881,156 @@ async function main() {
       assert.equal((await state(csvPortfolio)).revision, 3); assert.equal(csvCash(await state(csvPortfolio)), '149.123456789012345678');
       assert.equal((await state()).revision, revision); assert.equal(cash(await state()), '790231');
     });
+    let recoveryRaw, recoveredAttempt, recoveredConfirmation, recoveryReviewBatch, recoveryGoodAttempt;
+    const failedRecoveryAttempts = [];
+    const recoveryGet = (query = '', selectedCookie = cookie) => jsonRequest(`/api/workbench/csv/recovery${query ? `?${query}` : ''}`, { headers: selectedCookie ? { Cookie: selectedCookie } : {} });
+    const recoveryForPayload = (batch, raw, selectedCookie = cookie) => recoveryGet(new URLSearchParams({ batch, payload_hash: sha(Buffer.from(raw)) }).toString(), selectedCookie);
+    const rawConfirmation = raw => jsonRequest('/api/workbench', { method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: Buffer.from(raw) });
+    const attemptsForBatch = batch => {
+      const db = new Database(filename, { readonly: true });
+      try { return db.prepare('SELECT id,payload_text,payload_hash FROM csv_confirmation_attempts WHERE batch_id=? ORDER BY id').all(batch); }
+      finally { db.close(); }
+    };
+    await check('HTTP-REC01', 'discarded confirmation response is recovered through exact durable request bytes and independently checked real receipts', async () => {
+      const body = csvConfirmation(csvPending);
+      recoveryRaw = '\ufeff \n' + JSON.stringify({ expected_revision: body.expected_revision, csv_review: body.csv_review, preview_hash: body.preview_hash,
+        action: body.action, batch_id: body.batch_id, portfolio_id: body.portfolio_id }, null, 2) + '\r\n \t';
+      assert.deepEqual(attemptsForBatch(csvPending.id), []);
+      const response = await request('/api/workbench', { method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: Buffer.from(recoveryRaw) });
+      assert.equal(response.status, 200); await response.body?.cancel();
+      const recovered = await recoveryForPayload(csvPending.id, recoveryRaw);
+      assert.equal(recovered.status, 200, JSON.stringify(recovered.json)); const detail = recovered.json;
+      assert.equal(detail.schema_version, 'csv-confirmation-recovery-v1'); assert.equal(detail.payload_text, recoveryRaw);
+      assert.deepEqual(Buffer.from(detail.payload_text), Buffer.from(recoveryRaw)); assert.equal(detail.attempt.payload_hash, sha(Buffer.from(recoveryRaw)));
+      assert.equal(detail.attempt.payload_bytes, Buffer.byteLength(recoveryRaw)); assert.equal(detail.attempt.expected_revision, 3);
+      assert.equal(detail.attempt.portfolio_id, csvPortfolio); assert.equal(detail.attempt.account_id, csvAccount); assert.equal(detail.attempt.batch_id, csvPending.id);
+      assert.equal(detail.confirmation.status, 'confirmed'); assert.equal(detail.confirmation.attempt_matches, true); assert.equal(detail.confirmation.revision, 4); assert.equal(detail.confirmation.receipts.length, 1);
+      assert.equal(detail.review_error, null); assert.equal(detail.read_only, false); assert.match(detail.session_binding, /^[a-f0-9]{64}$/);
+      assert.equal(detail.batch.row_count, 1); assert.equal(detail.batch.status, 'confirmed'); assert.equal('rows' in detail.batch, false);
+      assert.equal(recovered.headers.get('cache-control'), 'private, no-store'); assert.ok(recovered.headers.get('vary')?.toLowerCase().split(',').map(value => value.trim()).includes('cookie'));
+      recoveredAttempt = detail.attempt; recoveredConfirmation = detail.confirmation;
+      const db = new Database(filename, { readonly: true });
+      try {
+        const receipt = detail.confirmation.receipts[0], event = db.prepare('SELECT * FROM ledger_events WHERE id=?').get(receipt.event_id);
+        assert.equal(event.portfolio_id, csvPortfolio); assert.equal(event.account_id, csvAccount); assert.equal(event.import_batch_id, csvPending.id); assert.equal(event.ledger_revision, receipt.revision);
+        assert.equal(db.prepare('SELECT object_id FROM audit_events WHERE id=?').get(receipt.audit_id).object_id, receipt.event_id);
+        assert.equal(JSON.parse(event.payload_json).fact.amount, '25');
+      } finally { db.close(); }
+      assert.equal((await state(csvPortfolio)).revision, 4); assert.equal(csvCash(await state(csvPortfolio)), '174.123456789012345678');
+      return { response_body_discarded_after_headers: true, recovered_only_via_get: true, exact_request_sha256: sha(Buffer.from(recoveryRaw)), request_bytes: Buffer.byteLength(recoveryRaw), actual_receipts: 1, revision: 4 };
+    });
+    await check('HTTP-REC02', 'same BOM, whitespace and field-order request replays to one attempt and one financial fact', async () => {
+      const before = attemptsForBatch(csvPending.id); assert.equal(before.length, 1); assert.equal(before[0].payload_text, recoveryRaw);
+      const replayed = await rawConfirmation(recoveryRaw); assert.equal(replayed.status, 200, JSON.stringify(replayed.json));
+      assert.equal(replayed.json.duplicate, true); assert.deepEqual(replayed.json.receipts, recoveredConfirmation.receipts); assert.equal(replayed.json.revision, 4);
+      assert.deepEqual(attemptsForBatch(csvPending.id), before);
+      const detail = await recoveryGet(new URLSearchParams({ id: recoveredAttempt.id }).toString());
+      assert.equal(detail.status, 200); assert.equal(detail.json.payload_text, recoveryRaw); assert.deepEqual(detail.json.confirmation, recoveredConfirmation);
+      assert.equal((await state(csvPortfolio)).revision, 4); assert.equal(csvCash(await state(csvPortfolio)), '174.123456789012345678');
+      return { exact_retry_single_attempt: true, ledger_revision_unchanged: 4, source_bytes_preserved: true };
+    });
+    await check('HTTP-REC03', 'missing or invalid reviews remain failed attempts without facts; an explicitly corrected review is a new successful attempt', async () => {
+      const bytes = Buffer.from('date,amount,id,note\r\n2026-01-04,7,csv-recovery-review,Synthetic review correction\r\n');
+      const previewed = await csvUpload(csvForm(bytes, { expected_revision: 4 })); assert.equal(previewed.status, 200); recoveryReviewBatch = previewed.json;
+      const correct = csvConfirmation(recoveryReviewBatch), { csv_review: _review, ...withoutReview } = correct;
+      const failures = [
+        [withoutReview, 400, 'CSV_REVIEW_INVALID'],
+        [{ ...correct, csv_review: { ...correct.csv_review, acknowledge_unverified_mapping: false } }, 400, 'CSV_REVIEW_INVALID'],
+        [{ ...correct, csv_review: { ...correct.csv_review, review_hash: '0'.repeat(64) } }, 409, 'CSV_REVIEW_HASH_MISMATCH'],
+      ];
+      for (const [body, status, error] of failures) {
+        const raw = ' \n' + JSON.stringify(body, null, 2) + '\n', rejected = await rawConfirmation(raw);
+        assert.equal(rejected.status, status, JSON.stringify(rejected.json)); assert.equal(rejected.json.error, error);
+        const restored = await recoveryForPayload(recoveryReviewBatch.id, raw); assert.equal(restored.status, 200, JSON.stringify(restored.json));
+        assert.equal(restored.json.payload_text, raw); assert.equal(restored.json.review_error, error);
+        assert.deepEqual(restored.json.confirmation, { status: 'unconfirmed', attempt_matches: null }); assert.equal(restored.json.batch.status, 'preview');
+        failedRecoveryAttempts.push({ id: restored.json.attempt.id, raw, error });
+        assert.equal((await state(csvPortfolio)).revision, 4); assert.equal(csvCash(await state(csvPortfolio)), '174.123456789012345678');
+      }
+      assert.equal(attemptsForBatch(recoveryReviewBatch.id).length, 3);
+      const repeatedFailure = await rawConfirmation(failedRecoveryAttempts[0].raw); assert.equal(repeatedFailure.status, 400); assert.equal(attemptsForBatch(recoveryReviewBatch.id).length, 3);
+      const successRaw = JSON.stringify(correct), confirmed = await rawConfirmation(successRaw); assert.equal(confirmed.status, 200, JSON.stringify(confirmed.json)); assert.equal(confirmed.json.revision, 5);
+      const success = await recoveryForPayload(recoveryReviewBatch.id, successRaw); assert.equal(success.status, 200); recoveryGoodAttempt = success.json.attempt;
+      assert.equal(success.json.confirmation.attempt_matches, true); assert.deepEqual(success.json.confirmation.receipts, confirmed.json.receipts); assert.equal(success.json.review_error, null);
+      assert.equal(attemptsForBatch(recoveryReviewBatch.id).length, 4);
+      for (const failed of failedRecoveryAttempts) {
+        const detail = await recoveryGet(new URLSearchParams({ id: failed.id }).toString()); assert.equal(detail.status, 200);
+        assert.equal(detail.json.payload_text, failed.raw); assert.equal(detail.json.review_error, failed.error);
+        assert.equal(detail.json.confirmation.status, 'confirmed'); assert.equal(detail.json.confirmation.attempt_matches, false);
+        assert.deepEqual(detail.json.confirmation.receipts, confirmed.json.receipts); assert.notEqual(detail.json.attempt.id, recoveryGoodAttempt.id);
+      }
+      assert.equal((await state(csvPortfolio)).revision, 5); assert.equal(csvCash(await state(csvPortfolio)), '181.123456789012345678');
+      return { failed_attempts_without_facts: 3, exact_failed_retry_no_extra_attempt: true, explicit_corrected_attempts: 1, old_attempt_matches_actual_confirmation: false, revision: 5 };
+    });
+    await check('HTTP-REC04', 'same owner with another session cannot list or address prior attempts and recovery bindings reveal no session authority', async () => {
+      const originalProbe = await jsonRequest('/api/auth/session', { headers: { Cookie: cookie } }); assert.equal(originalProbe.status, 200);
+      assert.deepEqual(Object.keys(originalProbe.json).sort(), ['authenticated', 'session_binding']); assert.equal(originalProbe.json.authenticated, true); assert.match(originalProbe.json.session_binding, /^[a-f0-9]{64}$/);
+      const detail = await recoveryGet(new URLSearchParams({ id: recoveredAttempt.id }).toString()); assert.equal(detail.status, 200); assert.equal(detail.json.session_binding, originalProbe.json.session_binding);
+      const db = new Database(filename, { readonly: true });
+      try {
+        const stored = db.prepare('SELECT session_hash FROM csv_confirmation_attempts WHERE id=?').get(recoveredAttempt.id);
+        assert.notEqual(originalProbe.json.session_binding, stored.session_hash); assert.equal(JSON.stringify(detail.json).includes(stored.session_hash), false);
+      } finally { db.close(); }
+      assert.equal(/"(?:sid|session_id|sessionId|session_hash|actor_id)"\s*:/.test(JSON.stringify(detail.json)), false);
+      const secondLogin = await request('/api/auth/login', { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ password }).toString() });
+      assert.equal(secondLogin.status, 303); const secondCookie = secondLogin.headers.get('set-cookie').split(';')[0];
+      const anotherProbe = await jsonRequest('/api/auth/session', { headers: { Cookie: secondCookie } }); assert.equal(anotherProbe.status, 200); assert.notEqual(anotherProbe.json.session_binding, originalProbe.json.session_binding);
+      const empty = await recoveryGet('', secondCookie); assert.equal(empty.status, 200); assert.deepEqual(empty.json.attempts, []); assert.equal(empty.json.next_cursor, null); assert.equal(empty.json.session_binding, anotherProbe.json.session_binding);
+      for (const query of [new URLSearchParams({ id: recoveredAttempt.id }).toString(), new URLSearchParams({ batch: csvPending.id, payload_hash: recoveredAttempt.payload_hash }).toString()]) {
+        const denied = await recoveryGet(query, secondCookie); assert.equal(denied.status, 404); assert.deepEqual(denied.json, { error: 'CSV_RECOVERY_NOT_FOUND' });
+      }
+      const beforeStaleSessionPost = inspectionStorage();
+      const staleSessionPost = await jsonRequest('/api/workbench', { method: 'POST', headers: { Cookie: secondCookie, Origin: origin, 'Content-Type': 'application/json', 'X-Workbench-Session-Binding': originalProbe.json.session_binding }, body: Buffer.from(recoveryRaw) });
+      assert.equal(staleSessionPost.status, 401); assert.equal(staleSessionPost.json.error, 'SESSION_CHANGED'); assert.deepEqual(inspectionStorage(), beforeStaleSessionPost);
+      const explicitNewSessionPost = await jsonRequest('/api/workbench', { method: 'POST', headers: { Cookie: secondCookie, Origin: origin, 'Content-Type': 'application/json', 'X-Workbench-Session-Binding': anotherProbe.json.session_binding }, body: Buffer.from(recoveryRaw) });
+      assert.equal(explicitNewSessionPost.status, 200, JSON.stringify(explicitNewSessionPost.json)); assert.equal(explicitNewSessionPost.json.duplicate, true);
+      assert.deepEqual(explicitNewSessionPost.json.receipts, recoveredConfirmation.receipts);
+      const ownNewAttempt = await recoveryForPayload(csvPending.id, recoveryRaw, secondCookie); assert.equal(ownNewAttempt.status, 200); assert.notEqual(ownNewAttempt.json.attempt.id, recoveredAttempt.id);
+      assert.equal(ownNewAttempt.json.session_binding, anotherProbe.json.session_binding); assert.equal(ownNewAttempt.json.confirmation.attempt_matches, true);
+      assert.equal((await recoveryGet(new URLSearchParams({ id: recoveredAttempt.id }).toString(), secondCookie)).status, 404);
+      assert.equal((await state(csvPortfolio)).revision, 5); assert.equal(csvCash(await state(csvPortfolio)), '181.123456789012345678');
+      assert.equal((await recoveryGet(new URLSearchParams({ id: recoveredAttempt.id }).toString())).status, 200);
+      const loggedOut = await request('/api/auth/logout', { method: 'POST', headers: { Cookie: secondCookie, Origin: origin } }); assert.equal(loggedOut.status, 303);
+      const revoked = await jsonRequest('/api/auth/session', { headers: { Cookie: secondCookie } }); assert.equal(revoked.status, 401);
+      assert.equal((await recoveryGet('', secondCookie)).status, 401); assert.equal((await jsonRequest('/api/auth/session', { headers: { Cookie: cookie } })).status, 200);
+      return { same_owner_other_session_initial_attempts: 0, cross_session_detail_status: 404, stale_session_post_status: 401, stale_session_post_writes: 0,
+        explicit_new_session_replay_duplicate: true, public_binding_distinct_from_authority_hash: true, second_session_logout_status: 401 };
+    });
+    await check('HTTP-REC05', 'restore mode allows exact recovery list and detail without writes but denies even same-body confirmation retry', async () => {
+      const marker = path.join(directory, 'RESTORE_PENDING_REVIEW'); writeFileSync(marker, 'Synthetic confirmation recovery lock\n');
+      try {
+        const before = inspectionStorage(), list = await recoveryGet(), detail = await recoveryGet(new URLSearchParams({ id: recoveredAttempt.id }).toString());
+        assert.equal(list.status, 200); assert.equal(detail.status, 200); assert.equal(list.json.read_only, true); assert.equal(detail.json.read_only, true);
+        assert.equal(detail.json.payload_text, recoveryRaw); assert.deepEqual(detail.json.confirmation, recoveredConfirmation);
+        assert.ok(list.json.attempts.some(attempt => attempt.id === recoveredAttempt.id));
+        const denied = await rawConfirmation(recoveryRaw); assert.equal(denied.status, 423); assert.equal(denied.json.error, 'WORKBENCH_READ_ONLY');
+        assert.deepEqual(inspectionStorage(), before); assert.equal((await state(csvPortfolio)).revision, 5);
+      } finally { rmSync(marker); }
+      return { readonly_detail_status: 200, readonly_list_status: 200, readonly_replay_status: 423, business_and_evidence_writes: 0 };
+    });
+    await check('HTTP-REC06', 'recovery authentication precedes query validation and scoped keyset pages reject duplicate or mixed selectors', async () => {
+      const anonymous = await recoveryGet('id=not-a-uuid&id=another', ''); assert.equal(anonymous.status, 401); assert.equal(anonymous.json.error, 'UNAUTHENTICATED');
+      for (const query of [
+        'id=not-a-uuid', 'limit=0', 'limit=21', 'limit=1&limit=2', 'portfolio_id=forged', 'cursor=not-a-cursor',
+        new URLSearchParams({ id: recoveredAttempt.id, limit: '1' }).toString(),
+        new URLSearchParams({ id: recoveredAttempt.id, batch: csvPending.id, payload_hash: recoveredAttempt.payload_hash }).toString(),
+        new URLSearchParams({ batch: csvPending.id }).toString(),
+      ]) {
+        const rejected = await recoveryGet(query); assert.equal(rejected.status, 400, JSON.stringify({ query, response: rejected.json }));
+      }
+      const ids = [], cursors = new Set(); let cursor = null, pages = 0;
+      do {
+        assert.ok(pages++ < 70, 'Recovery cursor must progress within the session budget.');
+        const query = new URLSearchParams({ limit: '2', ...(cursor === null ? {} : { cursor }) });
+        const page = await recoveryGet(query.toString()); assert.equal(page.status, 200, JSON.stringify(page.json)); assert.ok(page.json.attempts.length <= 2);
+        for (const attempt of page.json.attempts) { assert.equal('payload_text' in attempt, false); assert.equal('session_hash' in attempt, false); ids.push(attempt.id); }
+        cursor = page.json.next_cursor;
+        if (cursor !== null) { assert.equal(cursors.has(cursor), false); cursors.add(cursor); }
+      } while (cursor !== null);
+      assert.equal(new Set(ids).size, ids.length);
+      for (const id of [recoveredAttempt.id, recoveryGoodAttempt.id, ...failedRecoveryAttempts.map(attempt => attempt.id)]) assert.ok(ids.includes(id));
+      return { authenticated_query_rejections: 9, unauthenticated_bad_query_status: 401, pages, unique_attempts: ids.length, list_exposes_no_payload: true };
+    });
     let dividendPortfolio, dividendAccount, dividendRoot, dividendRevision = 0;
     const dividendCommand = (fact) => ({ portfolio_id: dividendPortfolio, expected_revision: dividendRevision, idempotency_key: `dividend-http:${++sourceSequence}`, source_id: 'synthetic-dividend-http', source_event_id: String(sourceSequence), effective_at: '2026-01-02', time_precision: 'date', source_timezone: 'UTC', reason: 'Synthetic dividend HTTP only', fact: { account_id: dividendAccount, currency: 'CNY', ...fact } });
     const dividendRecord = async (fact) => {

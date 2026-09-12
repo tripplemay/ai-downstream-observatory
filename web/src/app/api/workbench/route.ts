@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireApiSession, requireMutationSession } from "@/server/auth/session";
+import { assertRequestSessionBinding } from "@/server/auth/session-binding";
 import { openWorkbench } from "@/server/workbench-db";
 import { createAccount, createPortfolio, recordFact, type LedgerCommand } from "@/server/ledger/service";
 import { workbenchState } from "@/server/ledger/queries";
 import { confirmImport, getImportPreview, previewJsonImport } from "@/server/ledger/imports";
 import { dividendWorkspace } from "@/server/ledger/dividend-queries";
-import { AuthError } from "@/server/auth/core";
+import { AuthError, tokenHash } from "@/server/auth/core";
 import { storeJsonAttachment } from "@/server/ledger/attachments";
 import { reconcileAccount, type ReconciliationCommand } from "@/server/ledger/reconciliation";
 import { enqueueWorkbenchTask, registerListing } from "@/server/workbench-commands";
@@ -17,6 +18,7 @@ import { getGovernanceState, isGovernanceClientError } from "@/server/governance
 import { getResearchState } from "@/server/research-queries";
 import { getFundingState, isFundingClientError } from "@/server/funding/service";
 import { executeFundingCommand } from "@/server/funding-commands";
+import { isCsvRecoveryClientError, saveCsvConfirmationAttempt } from "@/server/ledger/csv-confirmation-recovery";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -53,7 +55,7 @@ const clientErrors = new Set([
   "INVALID_LEDGER_REVISION", "REVISION_NOT_PUBLISHED", "INVALID_RECORD_CONTEXT",
 ]);
 
-async function readBody(request: Request): Promise<string> {
+async function readBody(request: Request): Promise<{ raw: string; exact: string }> {
   const declared = request.headers.get("content-length");
   if (declared && (!/^\d+$/.test(declared) || Number(declared) > MAX_REQUEST_BYTES)) {
     throw new AuthError("REQUEST_TOO_LARGE", 413);
@@ -72,7 +74,10 @@ async function readBody(request: Request): Promise<string> {
     }
     chunks.push(value);
   }
-  try { return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)); }
+  try {
+    const bytes = Buffer.concat(chunks);
+    return { raw: new TextDecoder("utf-8", { fatal: true }).decode(bytes), exact: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes) };
+  }
   catch { throw new AuthError("INVALID_UTF8", 400); }
 }
 const command = z.discriminatedUnion("action", [
@@ -105,6 +110,9 @@ function failure(error: unknown): NextResponse {
   if (["PORTFOLIO_NOT_FOUND", "IMPORT_NOT_FOUND", "ATTACHMENT_NOT_FOUND"].includes(message)) return NextResponse.json({ error: message }, { status: 404 });
   if (message === "WORKBENCH_READ_ONLY") return NextResponse.json({ error: message }, { status: 423 });
   if (["IMPORT_TOO_LARGE", "ATTACHMENT_TOO_LARGE"].includes(message)) return NextResponse.json({ error: message }, { status: 413 });
+  if (isCsvRecoveryClientError(message)) return NextResponse.json({ error: message }, {
+    status: message === "CSV_RECOVERY_NOT_FOUND" ? 404 : message.endsWith("_TOO_LARGE") || message === "CSV_RECOVERY_BUDGET_EXCEEDED" ? 413 : 400,
+  });
   if (isFundingClientError(message)) return NextResponse.json({ error: message }, {
     status: message === "FUNDING_PERMISSION_DENIED" || message.endsWith("_OUT_OF_SCOPE") ? 403 : message.endsWith("_CONFLICT") ? 409 : 400,
   });
@@ -144,8 +152,9 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const session = await requireMutationSession(), actor = { id: session.userId };
+    assertRequestSessionBinding(request, session.sessionId);
     if (request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") return NextResponse.json({ error: "JSON_REQUIRED" }, { status: 415 });
-    const raw = await readBody(request);
+    const { raw, exact } = await readBody(request);
     let parsed: unknown;
     try { parsed = parseStrictJson(raw); } catch { return NextResponse.json({ error: "INVALID_JSON" }, { status: 400 }); }
     const input = command.parse(parsed), db = openWorkbench();
@@ -156,7 +165,17 @@ export async function POST(request: Request) {
         case "create_account": result = { id: createAccount(db, actor, input.portfolio_id, input.name, input.broker, input.currency) }; break;
         case "record_fact": result = recordFact(db, actor, input.command as LedgerCommand); break;
         case "preview_import": result = previewJsonImport(db, actor, input.portfolio_id, input.account_id, input.raw); break;
-        case "confirm_import": result = confirmImport(db, actor, input.portfolio_id, input.batch_id, input.preview_hash, input.expected_revision, undefined, {}, input.csv_review); break;
+        case "confirm_import": {
+          const batch = db.prepare("SELECT parser_version FROM import_batches WHERE id=? AND portfolio_id=?").get(input.batch_id, input.portfolio_id) as { parser_version: string } | undefined;
+          if (batch?.parser_version === "csv-v1") {
+            const before = await requireMutationSession();
+            if (before.sessionId !== session.sessionId) throw new AuthError("UNAUTHENTICATED", 401);
+            saveCsvConfirmationAttempt(db, { actorId: session.userId, sessionHash: tokenHash(session.sessionId) }, exact);
+            const after = await requireMutationSession();
+            if (after.sessionId !== session.sessionId) throw new AuthError("UNAUTHENTICATED", 401);
+          }
+          result = confirmImport(db, actor, input.portfolio_id, input.batch_id, input.preview_hash, input.expected_revision, undefined, {}, input.csv_review); break;
+        }
         case "store_attachment": result = storeJsonAttachment(db, actor, input); break;
         case "reconcile_account": result = reconcileAccount(db, actor, input.command as ReconciliationCommand); break;
         case "register_listing": result = registerListing(db, actor, input.command); break;
