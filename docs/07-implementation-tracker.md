@@ -182,6 +182,34 @@ authoritative calendars, recurrence, independent-host recovery and production
 remain separate acceptance work. All new test inputs are synthetic; private
 credentials and real capture evidence must not enter CI-uploaded paths.
 
+### Subsequent v17 CI and native-report correction
+
+Public commit `1bb5b76bb1dabbf9de880b5247868186a4b42897`, tree
+`ea88451bc07f50db1e5ba0ae7e09792d8f117d77`, ran
+[CI 34714360107](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/34714360107).
+The test job and core schema-17 non-root migration/recovery smoke passed, but the
+run failed in the optional provider report. Its image built and loaded the real
+SDK; the report then incorrectly assumed that the fileless PyO3 `openapi`
+submodule had `__file__`. The provider JSON is zero bytes, not a passing report.
+The full run log and both artifacts remain under
+`artifacts/verification/github-ci/34714360107/`; no production cutover occurred.
+
+The narrow correction hashes `longport.longport`, requiring the loaded
+`openapi` object's identity, an `ExtensionFileLoader`, and identical resolved
+`__file__`/`__spec__.origin` paths. It does not relax the native-report gate or
+change application code. A core-only regression extracts the actual helper and
+rejects broken identity, non-native loader and mismatched origin. The helper also
+passed against the actual local SDK without constructing a quote context or
+using credentials/network; this is not Linux image acceptance.
+
+After this test-only correction, root Node passed 128/128, shellcheck passed,
+and HTTP passed 77/77 using the unchanged production build. The new manifest is
+`artifacts/verification/workbench-http/2026-09-12T19-44-28-183Z/manifest.json`,
+SHA-256 `05833f18f1520d873191bbf0080a0367993c3d70b2cff138ba8b438ecd604e4b`;
+425 source hashes remained unchanged. Logs use `provider-v17-native-fix-*.log`.
+The previous full Python/Web results retain their original source boundary;
+the corrected commit still requires its own complete CI and Linux image result.
+
 ### Provider collection worktree (v16)
 
 Historical v16 implementation and local results follow; they are not v17 results.

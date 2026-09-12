@@ -142,7 +142,9 @@ test('native runtime CI executes without network or credentials and records only
   assert.doesNotMatch(shell, /--env-file|LONGPORT_APP|LONGPORT_ACCESS|--network host/);
   assert.match(probe, /sdk = longport\._load_sdk\(\)/);
   assert.match(probe, /inspect\.signature\(sdk\.QuoteContext\.history_candlesticks_by_date\)/);
-  assert.match(probe, /Path\(sdk\.__file__\)\.read_bytes\(\)/);
+  assert.match(probe, /sdk_binary = native_sdk_path\(sdk\)/);
+  assert.match(probe, /hashlib\.sha256\(sdk_binary\.read_bytes\(\)\)/);
+  assert.doesNotMatch(probe, /sdk\.__file__/);
   assert.doesNotMatch(probe, /sdk\.QuoteContext\(|\.history_candlesticks_by_date\(/);
   const syntax = spawnSync(python, ['-c', 'import ast,sys; ast.parse(sys.stdin.read())'], { input: probe, encoding: 'utf8', timeout: 10000 });
   assert.equal(syntax.status, 0, syntax.stderr);
@@ -169,6 +171,39 @@ function reportFixture(t) {
       { input: script, cwd: root, env: { ...process.env, PATH: bin + ':' + process.env.PATH }, encoding: 'utf8', timeout: 10000 });
   } };
 }
+
+test('native SDK hashing follows the loaded extension rather than its fileless PyO3 submodule', () => {
+  const code = `import ast,sys,tempfile,types
+from pathlib import Path
+from importlib.machinery import ExtensionFileLoader,SourceFileLoader,ModuleSpec
+tree=ast.parse(sys.stdin.read())
+function=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='native_sdk_path')
+with tempfile.TemporaryDirectory(prefix='synthetic-sdk-binary-') as directory:
+    path=Path(directory)/'synthetic-extension.so';path.write_bytes(b'synthetic-native-bytes-not-a-real-sdk')
+    alternate=Path(directory)/'alternate.so';alternate.write_bytes(b'synthetic-other')
+    sdk=types.SimpleNamespace()
+    loader=ExtensionFileLoader('longport.longport',str(path))
+    native=types.SimpleNamespace(openapi=sdk,__loader__=loader,__file__=str(path),__spec__=ModuleSpec('longport.longport',loader,origin=str(path)))
+    def imported(name):
+        assert name=='longport.longport'
+        return native
+    namespace={'Path':Path,'ExtensionFileLoader':ExtensionFileLoader,'import_module':imported}
+    exec(compile(ast.Module(body=[function],type_ignores=[]),'actual-smoke-helper','exec'),namespace)
+    locate=namespace['native_sdk_path']
+    assert not hasattr(sdk,'__file__') and locate(sdk)==path.resolve()
+    assert locate(sdk).read_bytes()==b'synthetic-native-bytes-not-a-real-sdk'
+    for key,value in [('openapi',object()),('__loader__',SourceFileLoader('fake',str(path))),('__file__',str(alternate))]:
+        old=getattr(native,key);setattr(native,key,value)
+        try:
+            try: locate(sdk)
+            except AssertionError: pass
+            else: raise AssertionError('unrelated native identity accepted: '+key)
+        finally: setattr(native,key,old)
+print('FILELESS_SUBMODULE_NATIVE_BINDING_PASSED')
+`;
+  const result = spawnSync(python, ['-c', code], { input: read('tests/deployment/provider-runtime-smoke.py'), encoding: 'utf8', timeout: 10000 });
+  assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout.trim(), 'FILELESS_SUBMODULE_NATIVE_BINDING_PASSED');
+});
 
 test('actual provider report gate accepts complete native proof and the captured image identity', t => {
   const f = reportFixture(t), result = f.run(f.proof);

@@ -12,7 +12,7 @@
 - 目前有合成单元、跨语言、HTTP、浏览器和隔离容器验证，**没有正式 live 数据/账户样本验收、新工作台生产部署验收、真正的治理验证 Worker 或任何 S 门槛验收**。旧站 HTTP 200、远端 fixture 成功、测试中创建的政策和验证记录均不能替代它们。
 - L-0 文档确认保持有效；本表不能宣布 L-1/L-2 全部验收，更不能升级 L-3。D-01 至 D-08 未完成细节继续阻塞相应能力；计划预算不等于实际余额，只有已核实本金及到账事实才能入账。
 - 公开边界已确认：**公开代码和通用示例，个人方案本地隔离，提交前核验 index**。金额精度、并发及性能测试中的明确合成数值仅为 fixture，不是个人投资参数。
-- 当前工作区迁移为 v17、NAV v4，保留绩效 v5 与 provider 逐流证据 v6。新增组合私有人审 JSON 映射/日历、独立 `market_collect_prices` role、SDK 投影捕获与双端验真；人审不等于供应商认证，收市时间不等于发布时间。**实现不等于完整验收**。v17 暂仅记录定向检查，最终同版全量/HTTP/镜像证据待补。已公开 v16 提交 `926dc4ce4912b7cd8768d315a398d43d8ed51fc0` 的 CI `34710911980` 已成功；其 Python 443、Web 524、根目录 Node 107、HTTP 72 及 schema 16 镜像结果不适用于新 v17。详见 [v16 记录](07-implementation-tracker.md#subsequent-exact-sha-v16-ci-verification)。以下历史运行段保留原版本与时点。
+- 当前工作区迁移为 v17、NAV v4，保留绩效 v5 与 provider 逐流证据 v6。新增组合私有人审 JSON 映射/日历、独立 `market_collect_prices` role、SDK 投影捕获与双端验真；人审不等于供应商认证，收市时间不等于发布时间。**实现不等于完整验收**。v17 本地全量与 HTTP 已过；首次 CI 的 test/core 镜像通过，provider 报告失败，修正后新同版 CI 仍待补，详见第 16 节。已公开 v16 提交 `926dc4ce4912b7cd8768d315a398d43d8ed51fc0` 的 CI `34710911980` 已成功；其 Python 443、Web 524、根目录 Node 107、HTTP 72 及 schema 16 镜像结果不适用于新 v17。详见 [v16 记录](07-implementation-tracker.md#subsequent-exact-sha-v16-ci-verification)。以下历史运行段保留原版本与时点。
 - 来源基线是持续变化的工作区，不是单一已签核 release。下列结果需在最终源码冻结后统一重跑，补齐 release SHA、锁文件、schema、环境、fixture、退出码、差异及签核。
 
 ## 2. 证据目录与复现入口
@@ -520,3 +520,20 @@ HTTP-MP01..05 覆盖人审资料、两标的一次合成捕获、独立消费验
 真实许可/价格/权威引用、recurrence、完整原生 UI、独立恢复、上线以及 D/G/S 门槛
 仍未完成；E-09/10/12 等保持 BLOCKED，E-11 等仍 NOT_RUN。个人方案、私人 provider
 凭据和真实网络证据不得进入公开源码、镜像或 CI 上传的 `artifacts/verification/`。
+
+### 后续 CI 失败与报告修正检查点
+
+已公开提交 `1bb5b76bb1dabbf9de880b5247868186a4b42897` 的
+[CI 34714360107](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/34714360107)
+整体失败：test job 和 schema 17 core 镜像迁移/本地恢复通过；provider 镜像已构建并
+加载真实 SDK，但报告错误读取无文件的 PyO3 `openapi.__file__`。provider JSON 为
+0 字节，不能视为通过；完整日志及两份工件保留在
+`artifacts/verification/github-ci/34714360107/`。这一后续结果不改写上文的历史时点。
+
+仅修正 smoke helper 与测试：绑定实际 `longport.longport` 原生扩展的对象身份、
+loader 和文件/origin 后再取二进制 hash，严格报告门槛不变。真实本地 SDK helper
+检查和三个错误绑定负例通过，未构造 QuoteContext、未用凭据或访问行情。
+根目录 Node **128/128**、shellcheck 通过；未改应用构建的 HTTP 再次 **77/77**，
+425 项源码保持一致。新工件为 `artifacts/verification/workbench-http/2026-09-12T19-44-28-183Z/`，
+manifest SHA-256 `05833f18f1520d873191bbf0080a0367993c3d70b2cff138ba8b438ecd604e4b`。
+修正提交仍须新的全量 CI 与 Linux provider 报告，不据本地检查宣布镜像或生产通过。
