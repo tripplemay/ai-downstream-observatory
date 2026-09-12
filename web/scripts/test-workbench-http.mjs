@@ -24,6 +24,7 @@ const report = {
     'HTTP client validates rendered HTML but is not browser interaction or TLS/proxy validation.',
     'This suite covers account creation and supported ledger/import API commands, not investment-strategy eligibility.',
     'Monthly HTTP cases prove negative authorization, immutable empty state and recovery boundaries; authorized proposal publication is covered separately by service and Python-to-Node integration tests.',
+    'Rotation HTTP cases use a real authenticated network session and Python worker with synthetic research data; they do not certify G/S gates, real forward performance or broker execution.',
   ],
 };
 const sha = (value) => createHash('sha256').update(value).digest('hex');
@@ -557,6 +558,120 @@ async function main() {
       assert.equal(research.json.live_advice_eligible, false); assert.equal((await state()).revision, revision);
       assert.equal(cash(await state()), '790231');
       return { research_trial_id: trial.trial_id, real_ledger_unchanged: true, live_advice_eligible: false };
+    });
+    let rotationPortfolio, rotationPrepared, rotationBinding;
+    const rotationPython = process.env.WORKBENCH_TEST_PYTHON || 'python3';
+    const rotationEnv = { PATH: process.env.PATH, PYTHONPATH: root, PYTHONDONTWRITEBYTECODE: '1', TZ: 'UTC',
+      WORKBENCH_DB_PATH: filename, WORKBENCH_DATA_DIR: path.join(directory, 'auth'), WORKBENCH_MODE: 'ledger' };
+    const rotationSnapshot = () => {
+      const db = new Database(filename, { readonly: true });
+      try {
+        return db.transaction(() => sha(JSON.stringify(['portfolios', 'accounts', 'ledger_heads', 'ledger_events', 'postings', 'position_movements',
+          'security_transit_movements', 'account_projections', 'position_projections', 'policy_versions', 'strategy_versions', 'activations',
+          'approval_events', 'reservations', 'execution_reports', 'proposals', 'proposal_items', 'risk_runs']
+          .map(table => ({ table, rows: db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all() }))))).deferred();
+      } finally { db.close(); }
+    };
+    const rotationCommand = (command_type, payload, idempotency_key) => ({ action: 'enqueue_task', command: {
+      portfolio_id: rotationPortfolio, expected_revision: 0, idempotency_key, command_type, payload,
+    } });
+    const rotationQueue = async (command_type, payload, id, expectedStatus = 'succeeded') => {
+      const body = rotationCommand(command_type, payload, id), headers = { 'X-Workbench-Session-Binding': rotationBinding };
+      const response = await post(body, headers); assert.equal(response.status, 200, JSON.stringify(response.json));
+      assert.equal(response.json.status, 'queued');
+      const duplicate = await post(body, headers); assert.equal(duplicate.status, 200); assert.deepEqual(duplicate.json, response.json);
+      const worker = spawnSync(rotationPython, ['-m', 'worker.orchestration', '--db', filename, '--once'], {
+        cwd: root, env: rotationEnv, encoding: 'utf8', timeout: 30000, maxBuffer: 1024 * 1024,
+      });
+      assert.equal(worker.status, expectedStatus === 'failed' ? 2 : 0, worker.stderr || worker.stdout);
+      const db = new Database(filename, { readonly: true });
+      try {
+        const stored = db.prepare('SELECT actor_id,payload_json FROM command_requests WHERE id=?').get(response.json.request_id);
+        assert.equal(stored.actor_id, 'owner'); assert.deepEqual(JSON.parse(stored.payload_json), payload);
+        const job = db.prepare('SELECT id,status,result_json FROM job_runs WHERE command_request_id=?').get(response.json.request_id);
+        assert.equal(job.status, expectedStatus, job.result_json);
+        assert.equal(db.prepare('SELECT COUNT(*) n FROM job_attempts WHERE job_id=? AND status=?').get(job.id, expectedStatus).n, 1);
+        return JSON.parse(job.result_json);
+      } finally { db.close(); }
+    };
+    await check('HTTP-R01', 'authenticated v2 rotation reaches real Python execution and exposes bounded money, cost and blocked summaries without changing actual accounts', async () => {
+      const session = await jsonRequest('/api/auth/session', { headers: { Cookie: cookie } });
+      assert.equal(session.status, 200); assert.equal(session.json.authenticated, true);
+      rotationBinding = session.json.session_binding; assert.match(rotationBinding, /^[a-f0-9]{64}$/);
+      const created = await post({ action: 'create_portfolio', name: 'Synthetic rotation research only' });
+      assert.equal(created.status, 200); rotationPortfolio = created.json.id;
+      assert.equal((await post({ action: 'create_account', portfolio_id: rotationPortfolio, name: 'Empty synthetic research boundary', broker: 'Synthetic only', currency: 'CNY' })).status, 200);
+      const before = rotationSnapshot();
+      const fixture = spawnSync(rotationPython, ['-c', 'import json; from tests.research.rotation_fixtures import dataset,plan,parameters; print(json.dumps({"dataset":dataset(),"plan":plan(),"parameters":parameters()}))'], {
+        cwd: root, env: rotationEnv, encoding: 'utf8', timeout: 10000, maxBuffer: 4 * 1024 * 1024,
+      });
+      assert.equal(fixture.status, 0, fixture.stderr); rotationPrepared = JSON.parse(fixture.stdout);
+      assert.equal(rotationPrepared.plan.schema_version, 'research-plan-v2'); assert.equal(rotationPrepared.dataset.schema_version, 'research-dataset-v2');
+      assert.equal(rotationPrepared.parameters.schema_version, 'research-rotation-parameters-v1');
+      const experiment_id = 'http-synthetic-rotation-v2';
+      const registered = await rotationQueue('research_register', { experiment_id, dataset: rotationPrepared.dataset, plan: rotationPrepared.plan }, 'rotation-http-register');
+      assert.equal(registered.experiment_id, experiment_id);
+      const trial = await rotationQueue('research_register_trial', { experiment_id, phase: 'train', parameters: rotationPrepared.parameters }, 'rotation-http-trial');
+      const executed = await rotationQueue('research_trial', { trial_id: trial.trial_id }, 'rotation-http-run');
+      assert.equal(executed.live_advice_eligible, false);
+      const response = await jsonRequest(`/api/workbench?portfolio=${rotationPortfolio}&view=research`, { headers: { Cookie: cookie } });
+      assert.equal(response.status, 200); assert.match(response.headers.get('cache-control'), /no-store/);
+      assert.equal(response.json.live_advice_eligible, false); assert.equal(response.json.trials.length, 1);
+      const summary = response.json.trials[0]; assert.equal(summary.status, 'succeeded'); assert.equal(summary.data_mode, 'synthetic');
+      assert.equal(summary.plan_schema_version, 'research-plan-v2'); assert.deepEqual(JSON.parse(summary.parameters_json), rotationPrepared.parameters);
+      const db = new Database(filename, { readonly: true });
+      let report, simulationEventCount;
+      try {
+        const run = db.prepare('SELECT environment,result_json FROM research_runs WHERE id=? AND portfolio_id=?').get(trial.research_run_id, rotationPortfolio);
+        assert.equal(run.environment, 'research'); report = JSON.parse(run.result_json);
+        assert.equal(report.live_advice_eligible, false); assert.notEqual(report.admission_grade, 'formal_verified');
+        assert.equal(Object.keys(report.strategy_gates).length, 10);
+        assert.ok(Object.values(report.strategy_gates).every(gate => ['NOT_RUN', 'BLOCKED'].includes(gate.status)));
+        assert.equal(report.result_hash, executed.result_hash); assert.equal(summary.result_hash, report.result_hash);
+        assert.equal(report.strategy.engine_version, 'monthly-rotation-rebalance-v1'); assert.equal(report.benchmark.engine_version, report.strategy.engine_version);
+        assert.equal(report.strategy.initial_equity_cny, rotationPrepared.plan.initial_capital_cny);
+        assert.equal(report.benchmark.initial_equity_cny, report.strategy.initial_equity_cny);
+        assert.equal(report.benchmark.contributions_cny, report.strategy.contributions_cny);
+        for (const key of ['engine_version', 'initial_equity_cny', 'contributions_cny', 'ending_nav_cny', 'profit_cny', 'fees_cny', 'fx_fees_cny', 'slippage_cny', 'cash_rounding_cny',
+          'buy_turnover_on_mean_observed_nav', 'sell_turnover_on_mean_observed_nav', 'total_turnover_on_mean_observed_nav', 'ending_cash_ratio', 'execution_failure_count', 'monthly_evaluation_counts'])
+          assert.deepEqual(summary[key], report.strategy[key], key);
+        assert.equal('curve' in summary, false); assert.equal('events' in summary, false); assert.equal('result_json' in summary, false);
+        for (const type of ['simulated_buy', 'simulated_sell', 'stock_settlement', 'sale_cash_settlement']) assert.ok(report.strategy.events.some(event => event.type === type), type);
+        for (const outcome of ['proposed', 'unchanged', 'blocked']) assert.equal(summary.monthly_evaluation_counts[outcome], report.strategy.events.filter(event => event.type === 'evaluation' && event.outcome === outcome).length);
+        simulationEventCount = db.prepare('SELECT COUNT(*) n FROM simulation_events WHERE run_id=?').get(trial.research_run_id).n;
+        assert.ok(simulationEventCount > 0);
+      } finally { db.close(); }
+      const replay = await rotationQueue('research_trial', { trial_id: trial.trial_id }, 'rotation-http-replay'); assert.equal(replay.result_hash, report.result_hash);
+      const reread = new Database(filename, { readonly: true });
+      try { assert.equal(reread.prepare('SELECT COUNT(*) n FROM simulation_events WHERE run_id=?').get(trial.research_run_id).n, simulationEventCount); }
+      finally { reread.close(); }
+      assert.equal(rotationSnapshot(), before); assert.equal((await state(rotationPortfolio)).revision, 0); assert.deepEqual((await state(rotationPortfolio)).balances, []);
+      assert.equal((await state()).revision, revision); assert.equal(cash(await state()), '790231');
+      return { transport: 'real HTTP with authenticated cookie and session binding', research_trial_id: trial.trial_id, result_hash: report.result_hash,
+        monthly_evaluation_counts: summary.monthly_evaluation_counts, actual_state_sha256: before, actual_tables_unchanged: 18, simulation_events: simulationEventCount, live_advice_eligible: false };
+    });
+    await check('HTTP-R02', 'rotation network requests reject invalid versions and forged session or result fields, while semantic failures remain failed worker evidence', async () => {
+      const before = rotationSnapshot(), count = () => { const db = new Database(filename, { readonly: true });
+        try { return db.prepare('SELECT COUNT(*) n FROM command_requests WHERE portfolio_id=?').get(rotationPortfolio).n; } finally { db.close(); } };
+      const queuedBefore = count(), payload = { experiment_id: 'rotation-rejected', dataset: rotationPrepared.dataset, plan: rotationPrepared.plan };
+      const valid = rotationCommand('research_register', payload, 'rotation-invalid');
+      for (const patch of [
+        { ...payload, plan: { ...rotationPrepared.plan, schema_version: 'research-plan-v1' } },
+        { ...payload, plan: { ...rotationPrepared.plan, auto_approve: true } },
+        { ...payload, dataset: { ...rotationPrepared.dataset, result: { status: 'PASS' } } },
+      ]) assert.equal((await post(rotationCommand('research_register', patch, 'rotation-invalid'), { 'X-Workbench-Session-Binding': rotationBinding })).status, 400);
+      assert.equal((await post(valid, { 'X-Workbench-Session-Binding': '0'.repeat(64) })).status, 401);
+      const anonymous = await jsonRequest('/api/workbench', { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify(valid) });
+      assert.equal(anonymous.status, 401); assert.equal(count(), queuedBefore);
+      const invalid = await rotationQueue('research_register', { experiment_id: 'rotation-semantic-invalid', dataset: rotationPrepared.dataset,
+        plan: { ...rotationPrepared.plan, parameter_candidates: [{ ...rotationPrepared.parameters, target_fraction: '1.1' }] } }, 'rotation-semantic-invalid', 'failed');
+      assert.equal(invalid.code, 'INVALID_RESEARCH_TARGET_FRACTION'); assert.equal(invalid.live_advice_eligible, false);
+      const db = new Database(filename, { readonly: true });
+      try { assert.equal(db.prepare("SELECT COUNT(*) n FROM research_experiments WHERE id='rotation-semantic-invalid'").get().n, 0);
+        assert.equal(db.prepare('SELECT COUNT(*) n FROM research_trials t JOIN research_experiments e ON e.id=t.experiment_id WHERE e.portfolio_id=?').get(rotationPortfolio).n, 1); }
+      finally { db.close(); }
+      assert.equal(rotationSnapshot(), before);
+      return { malformed_status: 400, anonymous_status: 401, stale_binding_status: 401, semantic_job_status: 'failed', semantic_code: invalid.code, actual_state_unchanged: true };
     });
     let fundingPortfolio, fundingAccount, fundingPlan, fundingOpening, fundingLink;
     const fundingView = async () => {

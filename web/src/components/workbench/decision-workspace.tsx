@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import Decimal from "decimal.js";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { WorkbenchState } from "@/server/ledger/queries";
 import type { ResearchState } from "@/server/research-queries";
 import { parseStrictJson } from "@/server/strict-json";
+import { researchTrialSummary } from "./research-trial-summary";
 
 const researchActions = [
   ["research_register", "登记实验与冻结数据"], ["research_register_trial", "登记一次试验"],
@@ -26,11 +26,6 @@ const governanceActions = [
 const inputClass = "w-full min-w-0 rounded-md border bg-background px-3 py-2 text-sm";
 const labelClass = "flex min-w-0 flex-col gap-2 text-sm";
 const panelClass = "min-w-0 space-y-4 rounded-xl border bg-card p-5 shadow-sm";
-function percent(value: string | null) {
-  if (value === null) return "不可用";
-  try { const number = new Decimal(value); return number.isFinite() ? `${number.mul(100).toFixed(2)}%` : "不可用"; }
-  catch { return "不可用"; }
-}
 function Evidence({ title, value }: { title: string; value: unknown }) {
   return <details className="min-w-0 rounded-md border p-3 text-sm"><summary className="cursor-pointer">{title}</summary><pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(value, null, 2)}</pre></details>;
 }
@@ -118,7 +113,10 @@ export function DecisionWorkspace({ initial, mode }: { initial: WorkbenchState; 
     <section className={panelClass}><div className="flex flex-wrap items-end gap-3"><label className={`${labelClass} flex-1`}>当前组合<select className={inputClass} aria-label="当前组合" value={selected ?? ""} disabled={busy} onChange={event => setSelected(event.target.value)}><option value="" disabled>请先建立组合</option>{workspace.portfolios.map(portfolio => <option key={portfolio.id} value={portfolio.id}>{portfolio.name}</option>)}</select></label><Button variant="outline" disabled={busy || !selected} onClick={() => void refresh()}>刷新工作区</Button></div><p className="text-sm text-muted-foreground">账本版本 {workspace.revision}。切换组合不会复制资金、策略或审批。</p>{!selected && <Link href="/workbench" className="text-sm underline">前往建立空账本</Link>}</section>
     {research && <>
       <section className={panelClass}><h2 className="text-lg font-semibold">已登记实验</h2>{!research.experiments.length && <p className="text-sm text-muted-foreground">暂无实验，不预填策略或默认风险阈值。</p>}{research.experiments.map(experiment => <article className="space-y-2 border-t pt-3 text-sm" key={experiment.id}><h3 className="break-all font-medium">{experiment.id} · {experiment.mode}</h3><p>{experiment.hypothesis}</p><p className="break-all font-mono text-xs">计划 {experiment.plan_hash}<br />数据 {experiment.dataset_hash}</p><p>试验预算：{experiment.trial_budgets_json ?? "未提供"}</p></article>)}</section>
-      <section className={panelClass}><h2 className="text-lg font-semibold">试验与同口径基准</h2>{!research.trials.length && <p className="text-sm text-muted-foreground">尚未登记或运行试验。</p>}{research.trials.map(trial => <article className="space-y-3 rounded-lg border p-4 text-sm" key={trial.id}><h3 className="break-all font-medium">{trial.phase} / #{trial.trial_number} / {trial.status}</h3><p className="break-all font-mono text-xs">试验 {trial.id}<br />运行 {trial.run_id}</p><dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><div><dt className="text-muted-foreground">研究收益率</dt><dd>{percent(trial.twr)}</dd></div><div><dt className="text-muted-foreground">同口径基准</dt><dd>{percent(trial.benchmark_twr)}</dd></div><div><dt className="text-muted-foreground">收益率差</dt><dd>{percent(trial.excess_twr)}</dd></div><div><dt className="text-muted-foreground">研究最大回撤</dt><dd>{percent(trial.max_drawdown)}</dd></div></dl>{trial.error && <p role="status">失败原因：{trial.error}</p>}<Evidence title="参数、结果哈希与 S 门槛（不等于通过）" value={trial} /></article>)}</section>
+      <section className={panelClass}><h2 className="text-lg font-semibold">试验、资金与同口径基准</h2><p className="text-sm text-muted-foreground">v1 仅按固定权重安排新增资金；v2 按明确参数运行月度排名轮动或固定权重再平衡。以下资金、现金、费用和交易均属于研究模拟，不是账户到账、实际持仓或前向 / 实时策略表现。换手率以观察点净资产算术均值为分母；缺失指标不补零。</p>{!research.trials.length && <p className="text-sm text-muted-foreground">尚未登记或运行试验。</p>}{research.trials.map(trial => {
+        const summary = researchTrialSummary(trial);
+        return <article className="space-y-3 rounded-lg border p-4 text-sm" key={trial.id}><h3 className="break-all font-medium">{trial.phase} / #{trial.trial_number} / {trial.status}</h3><p className="font-medium">{summary.method}</p><p className="break-all font-mono text-xs">引擎 {summary.engine}<br />试验 {trial.id}<br />运行 {trial.run_id}</p><dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{summary.metrics.map(metric => <div className="min-w-0" key={metric.label}><dt className="text-muted-foreground">{metric.label}</dt><dd className="break-all">{metric.value}</dd></div>)}</dl><p role="status">{summary.monthly}</p><p className="text-xs text-muted-foreground">“提出计划”不等于成交或获批；阻断与执行跳过 / 过期是不同阶段，不能据收益率忽略。</p>{(trial.error || trial.error_code) && <p role="status" className="break-all">失败原因：{trial.error_code ?? trial.error}</p>}<Evidence title="原参数、研究摘要、结果哈希与 S 门槛（不等于通过）" value={trial} /></article>;
+      })}</section>
       <section className={panelClass}><h2 className="text-lg font-semibold">冻结、解封与 AI 留档</h2><p className="text-sm text-muted-foreground">留出窗口须先冻结候选再由人解封，只允许一次留出试验。AI 的 valid 仅表示结构和引用校验，不表示策略有效。</p><Evidence title={`冻结/解封事件（${research.holdout_events.length}）`} value={research.holdout_events} /><Evidence title={`AI 审阅记录（${research.ai_reviews.length}）`} value={research.ai_reviews} /></section>
     </>}
     {mode === "governance" && data && <>

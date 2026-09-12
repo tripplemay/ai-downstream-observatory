@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/research-rotation-parameters.schema.json",
+  "type": "object",
+  "required": ["schema_version", "universe", "momentum_sessions", "moving_average_sessions", "top_n", "target_fraction", "signal_basis", "ranking_currency", "weighting", "eligibility", "momentum_floor", "rebalance", "tie_break", "insufficient_history", "missing_data", "tolerance"],
+  "properties": {
+    "schema_version": {"const": "research-rotation-parameters-v1"},
+    "universe": {"type": "array", "minItems": 1, "maxItems": 1000, "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/id"}},
+    "momentum_sessions": {"type": "integer", "minimum": 1, "maximum": 252},
+    "moving_average_sessions": {"type": "integer", "minimum": 2, "maximum": 500},
+    "top_n": {"type": "integer", "minimum": 1, "maximum": 100},
+    "target_fraction": {"$ref": "common.schema.json#/$defs/decimal"},
+    "signal_basis": {"const": "gross_total_return_index"},
+    "ranking_currency": {"const": "listing_currency"},
+    "weighting": {"const": "equal_top_n_slots"},
+    "eligibility": {"const": "strictly_above_moving_average"},
+    "momentum_floor": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/decimal"}]},
+    "rebalance": {"const": "first_decision_each_month"},
+    "tie_break": {"const": "listing_id_ascending"},
+    "insufficient_history": {"const": "ineligible"},
+    "missing_data": {"const": "block"},
+    "tolerance": {"$ref": "research-fixed-rebalance-parameters.schema.json#/$defs/tolerance"}
+  },
+  "additionalProperties": false
+}

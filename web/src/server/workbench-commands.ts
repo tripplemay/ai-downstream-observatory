@@ -13,6 +13,8 @@ import researchCommand from "../../../contracts/v1/research-command.schema.json"
 import researchPlan from "../../../contracts/v1/research-plan.schema.json";
 import researchDataset from "../../../contracts/v1/research-dataset.schema.json";
 import researchParameters from "../../../contracts/v1/research-parameters.schema.json";
+import researchRotation from "../../../contracts/v1/research-rotation-parameters.schema.json";
+import researchFixedRebalance from "../../../contracts/v1/research-fixed-rebalance-parameters.schema.json";
 import { assertWritableDatabase } from "./workbench-db";
 import { audit, canonical, hash, revision, type Actor } from "./ledger/service";
 import { amount, exact } from "./ledger/decimal";
@@ -42,6 +44,8 @@ const checkBatch = ajv.compile(batch), checkRules = ajv.compile(valuationRules);
 ajv.addSchema(flowFxRules);
 const checkPerformance = ajv.compile(performanceCommand);
 ajv.addSchema(researchParameters);
+ajv.addSchema(researchRotation);
+ajv.addSchema(researchFixedRebalance);
 ajv.addSchema(researchPlan);
 ajv.addSchema(researchDataset);
 const checkResearch = ajv.compile(researchCommand);

@@ -30,6 +30,21 @@ def validate_dataset(dataset):
             raise WorkbenchError("INVALID_RESEARCH_CALENDAR")
         sessions[key] = session
         session_dates.add(date_key)
+    if dataset["schema_version"] == "research-dataset-v2":
+        by_date = {(row["market"], row["session_date"]): row for row in dataset["sessions"]}
+        settlements = set()
+        for row in dataset["settlements"]:
+            key = row["market"], row["session_date"]
+            session = by_date.get(key)
+            if (key in settlements or session is None
+                    or instant(row["settled_at"]) < instant(session["close_at"])
+                    or instant(row["published_at"]) > instant(session["close_at"])
+                    or (dataset["mode"] == "actual_replay"
+                        and instant(row["ingested_at"]) > instant(session["close_at"]))):
+                raise WorkbenchError("INVALID_RESEARCH_SETTLEMENT_CALENDAR")
+            settlements.add(key)
+        if settlements != session_dates:
+            raise WorkbenchError("INCOMPLETE_RESEARCH_SETTLEMENT_CALENDAR")
     identities, ids = set(), set()
     for asset in dataset["assets"]:
         if fact_decimal(asset["quantity_step"]) <= 0:
@@ -91,15 +106,31 @@ def validate_dataset(dataset):
 def validate_parameters(parameters, dataset):
     validate_contract(parameters, "research-parameters.schema.json")
     assets = {asset["listing_id"] for asset in dataset["assets"]}
+    if parameters.get("schema_version"):
+        tolerance = parameters["tolerance"]
+        if fact_decimal(tolerance["absolute_cny"]) < 0 or not 0 <= fact_decimal(tolerance["weight"]) <= 1:
+            raise WorkbenchError("INVALID_RESEARCH_TARGET_TOLERANCE")
+        if parameters["schema_version"] == "research-rotation-parameters-v1":
+            if set(parameters["universe"]) - assets:
+                raise WorkbenchError("INVALID_RESEARCH_UNIVERSE")
+            if not 0 < fact_decimal(parameters["target_fraction"]) <= 1:
+                raise WorkbenchError("INVALID_RESEARCH_TARGET_FRACTION")
+            floor = parameters["momentum_floor"]
+            if floor is not None and fact_decimal(floor) < -1:
+                raise WorkbenchError("INVALID_RESEARCH_MOMENTUM_FLOOR")
+            return
     weights = {key: fact_decimal(value) for key, value in parameters["weights"].items()}
     if set(weights) - assets or any(value < 0 for value in weights.values()) or not Decimal("0") < sum(weights.values()) <= 1:
         raise WorkbenchError("INVALID_RESEARCH_WEIGHTS")
-    if not 0 < fact_decimal(parameters["deployment_fraction"]) <= 1:
+    if not parameters.get("schema_version") and not 0 < fact_decimal(parameters["deployment_fraction"]) <= 1:
         raise WorkbenchError("INVALID_DEPLOYMENT_FRACTION")
 
 
 def validate_plan(plan, dataset):
     validate_contract(plan, "research-plan.schema.json")
+    version = plan["schema_version"].removeprefix("research-plan-")
+    if dataset["schema_version"] != "research-dataset-" + version:
+        raise WorkbenchError("RESEARCH_PLAN_DATASET_VERSION_MISMATCH")
     try:
         ZoneInfo(plan["evaluation_timezone"])
     except (ValueError, ZoneInfoNotFoundError) as exc:
@@ -138,6 +169,8 @@ def validate_plan(plan, dataset):
     for name in ("commission_bps", "minimum_fee_cny", "slippage_bps", "fx_bps"):
         if fact_decimal(plan["execution"][name]) < 0:
             raise WorkbenchError("NEGATIVE_EXECUTION_COST")
+    if version == "v2" and fact_decimal(plan["execution"]["slippage_bps"]) >= 10000:
+        raise WorkbenchError("INVALID_RESEARCH_SELL_SLIPPAGE")
     if fact_decimal(plan["execution"]["cash_quantum"]) <= 0:
         raise WorkbenchError("INVALID_CASH_QUANTUM")
     candidates = set()

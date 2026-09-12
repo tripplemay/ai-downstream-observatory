@@ -30,7 +30,7 @@ replacing personal parameters with public templates does not reduce scope.
 | Funding plans | Dated multi-currency sources and tranches, version editing/deferral, partial receipt matching, execution association, cash/reservation separation, over-budget acknowledgement, correction review and full audit history | User-confirmed dated plan, broker evidence, D-05 allocation choices and full execution/funding workflow acceptance |
 | ETF research directory | Portfolio-private membership/source/profile/disclosure versions; independent CAS, stable pagination, account-evidence summaries and up-to-four version-bound comparisons; TS/Python exact-decimal overlap bounds with coverage and date semantics | Verified provider originals, identity-kind/lifecycle migration, current fees/liquidity/premiums and weighted exposures; full P-05 and native comparison/mobile acceptance |
 | Market and orchestration | Immutable paged batches, validate/publish CAS, as-known/restated valuation, leases/fencing/retry/outbox; bounded monthly discovery and a fixed Node publisher reusing actual governance checks | Real provider adapters, validated exchange calendars, other recurring tasks, full fault/load tests and current image verification |
-| Strategy and AI | Preregistered fixed-weight research, frozen inputs/implementation, train/validation/holdout separation, same-flow/cost/FX benchmark; seven Web-to-Worker commands and read-only AI review; 3300-day synthetic indexed replay | Live providers/models, complete rotation/forward simulation and genuine S-gate evidence |
+| Strategy and AI | Preregistered v1 contribution-only research plus explicit v2 monthly momentum/MA rotation and fixed-rebalance benchmark; exact PIT ranking, simulated sales/settlement/fixed buys, costs and bounded read-only summaries; frozen inputs/implementation and independent research windows | Live providers/models, continuous forward simulation, complete long-history workflow performance and genuine S-gate evidence; v2 does not activate actual schedules |
 | Governance and execution | Human version/capability APIs, risk/approval CAS, independent-process cash/share reservation race tests, execution reports separate from facts; trusted verification import rejects user PASS claims; Web/API integration | Actual trusted verification Worker, formal evidence and runtime manifest binding; actual D/G/S approvals remain absent |
 | Product UI | Account, funding, catalog, research, governance and monthly evaluation workspaces; typed securities and dividend/tax/corporate-action preview/confirm; visual CSV mapping and server-backed, current-session, read-only confirmation recovery | Native monthly/wizard/recovery/BFCache and full catalog comparison/positive governance acceptance; complete accessibility and readonly UX |
 | Deployment | Manual-only release, encrypted backup/restore, CI-verified non-root v13 checkpoint images and local restore; full real legacy-copy archive/recovery rehearsal; old production unchanged; late recovery marker blocks migration/cutover | Final source-bound image checks, independent-host restore, protected credentials/configuration, release and post-release checks |
@@ -132,6 +132,44 @@ npm run build
 npm run test:auth:http
 npm run test:workbench:http
 ```
+
+### Published v15 checkpoint and next research work
+
+Commit `251e36e8f5f9508d5e6d27ebc56c6a0c3e5e1dc3` passed exact-commit
+[CI 34704293626](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/34704293626):
+Web 498, Python 284, root Node 95 and HTTP 67, build/typecheck/authentication,
+audit and Linux non-root migration/local encrypted restore. The worker's actual
+Node 22/native SQLite publisher bundle matched the local hash. This supersedes
+the earlier pending-v15-CI note, not the pending production/independent-host gates.
+No production deployment occurred.
+
+The next worktree slice adds [versioned monthly rotation research](rotation-research.md):
+PIT gross-total-return momentum/MA ranking, fixed monthly slots, sell/buy orders,
+explicit settlement and a same-engine fixed-rebalance benchmark. Original v1
+contribution-only report hashes remain regression oracles. It is not an actual
+schedule method or continuous forward simulation.
+
+- Local frozen-source validation: Web 513/513, Python 358/358, root Node 96/96;
+  typecheck, production build, authentication HTTP and shellcheck passed;
+  full npm audit reported zero vulnerabilities.
+- Fresh-build HTTP 69/69, schema 15, build `Acaofnbv1hbjSYFc-1Mn7`;
+  `artifacts/verification/workbench-http/2026-09-12T16-51-33-968Z/`.
+  All 378 inventoried sources matched before/after and on subsequent verification.
+  Manifest SHA-256:
+  `1dc9b7b5a2aef16565c793268153a4b432f917aa9b0ba928d01bc0c342e2213b`.
+- New authenticated network cases run v2 through real Python and verify simulated
+  buying/selling/settlement and summaries while 18 actual-state tables remain
+  unchanged. The first HTTP attempt incorrectly expected exit 0 for an intentionally
+  failed worker job; the corrected test requires the CLI's explicit exit 2 and
+  still verifies the failed job/attempt/error. Original failure evidence remains.
+- Logs use `rotation-v2` names under `artifacts/verification/final-regression/`;
+  final Python and HTTP logs are `rotation-v2-final-python.log` and
+  `rotation-v2-final-http.log`. No new native-browser acceptance is claimed.
+
+This local candidate still requires its actual public index review, exact-commit
+CI and image evidence. It is not production deployment or full E/S acceptance.
+Real providers, continuous forward records, complete performance/fault acceptance,
+trusted verification, native UI and independent-host recovery remain outstanding.
 
 Previous local v11 CSV checkpoint, retained as historical evidence, not v12 acceptance:
 

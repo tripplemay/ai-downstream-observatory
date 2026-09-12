@@ -8,7 +8,7 @@
   "type": "object",
   "required": ["schema_version", "hypothesis", "falsification", "windows", "initial_capital_cny", "contributions", "decision_times", "parameter_candidates", "trial_budgets", "benchmark", "execution", "evaluation_timezone", "tax_coverage", "evidence_requirements"],
   "properties": {
-    "schema_version": {"const": "research-plan-v1"},
+    "schema_version": {"enum": ["research-plan-v1", "research-plan-v2"]},
     "evaluation_timezone": {"$ref": "common.schema.json#/$defs/timezone"},
     "hypothesis": {"type": "string", "minLength": 1, "maxLength": 4000},
     "falsification": {"type": "string", "minLength": 1, "maxLength": 4000},
@@ -20,8 +20,22 @@
     "trial_budgets": {"type": "object", "required": ["train", "validation", "holdout"], "properties": {"train": {"type": "integer", "minimum": 1, "maximum": 1000}, "validation": {"type": "integer", "minimum": 1, "maximum": 1000}, "holdout": {"const": 1}}, "additionalProperties": false},
     "benchmark": {"$ref": "research-parameters.schema.json"},
     "execution": {"type": "object", "required": ["model", "commission_bps", "minimum_fee_cny", "slippage_bps", "fx_bps", "cash_quantum", "max_fx_age_seconds", "settlement_model", "dividend_policy"],
-      "properties": {"model": {"const": "next_session_close_fixed_quantity"}, "commission_bps": {"$ref": "#/$defs/money"}, "minimum_fee_cny": {"$ref": "#/$defs/money"}, "slippage_bps": {"$ref": "#/$defs/money"}, "fx_bps": {"$ref": "#/$defs/money"}, "cash_quantum": {"$ref": "#/$defs/money"}, "max_fx_age_seconds": {"type": "integer", "minimum": 0, "maximum": 2592000}, "settlement_model": {"const": "prepaid_cash"}, "dividend_policy": {"const": "cash_in_original_currency"}}, "additionalProperties": false},
+      "properties": {"model": {"const": "next_session_close_fixed_quantity"}, "commission_bps": {"$ref": "#/$defs/money"}, "minimum_fee_cny": {"$ref": "#/$defs/money"}, "slippage_bps": {"$ref": "#/$defs/money"}, "fx_bps": {"$ref": "#/$defs/money"}, "cash_quantum": {"$ref": "#/$defs/money"}, "max_fx_age_seconds": {"type": "integer", "minimum": 0, "maximum": 2592000}, "settlement_model": {"enum": ["prepaid_cash", "explicit_market_calendar"]}, "sale_proceeds": {"const": "convert_to_cny_at_fill_then_settle"}, "dividend_policy": {"const": "cash_in_original_currency"}}, "additionalProperties": false},
     "tax_coverage": {"type": "string", "minLength": 1, "maxLength": 2000},
     "evidence_requirements": {"type": "object", "required": ["status", "description"], "properties": {"status": {"enum": ["unapproved", "approved_experiment_only"]}, "description": {"type": "string", "minLength": 1, "maxLength": 4000}}, "additionalProperties": false}
-  }, "additionalProperties": false
+  },
+  "allOf": [
+    {"if": {"properties": {"schema_version": {"const": "research-plan-v1"}}},
+      "then": {"properties": {
+        "parameter_candidates": {"type": "array", "items": {"type": "object", "not": {"required": ["schema_version"]}}},
+        "benchmark": {"type": "object", "not": {"required": ["schema_version"]}},
+        "execution": {"type": "object", "properties": {"settlement_model": {"const": "prepaid_cash"}}, "not": {"required": ["sale_proceeds"]}}
+      }},
+      "else": {"properties": {
+        "parameter_candidates": {"type": "array", "items": {"type": "object", "required": ["schema_version"]}},
+        "benchmark": {"type": "object", "required": ["schema_version"], "properties": {"schema_version": {"const": "research-fixed-rebalance-parameters-v1"}}},
+        "execution": {"type": "object", "required": ["sale_proceeds"], "properties": {"settlement_model": {"const": "explicit_market_calendar"}}}
+      }}
+    }
+  ], "additionalProperties": false
 }

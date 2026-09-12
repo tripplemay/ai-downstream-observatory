@@ -220,8 +220,14 @@ def compare_backtest(dataset, plan, parameters, phase):
         raise WorkbenchError("INVALID_RESEARCH_PHASE")
     if not dataset["corporate_actions_complete"]:
         raise WorkbenchError("CORPORATE_ACTION_COVERAGE_INCOMPLETE")
-    strategy = run_portfolio(dataset, plan, parameters, phase)
-    baseline = run_portfolio(dataset, plan, plan["benchmark"], phase)
+    if (plan["schema_version"] == "research-plan-v2") != bool(parameters.get("schema_version")):
+        raise WorkbenchError("RESEARCH_PLAN_PARAMETER_VERSION_MISMATCH")
+    runner = run_portfolio
+    if plan["schema_version"] == "research-plan-v2":
+        from .rotation import run_rotation_portfolio
+        runner = run_rotation_portfolio
+    strategy = runner(dataset, plan, parameters, phase)
+    baseline = runner(dataset, plan, plan["benchmark"], phase)
     if strategy["initial_equity_cny"] != baseline["initial_equity_cny"] or strategy["contributions_cny"] != baseline["contributions_cny"]:
         raise WorkbenchError("BENCHMARK_CASHFLOW_MISMATCH")
     report = {"schema_version": "research-result-v1", "dataset_hash": content_hash(dataset), "plan_hash": content_hash(plan),

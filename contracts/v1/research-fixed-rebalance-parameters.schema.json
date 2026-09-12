@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/research-fixed-rebalance-parameters.schema.json",
+  "$defs": {
+    "tolerance": {
+      "type": "object", "required": ["absolute_cny", "weight"],
+      "properties": {"absolute_cny": {"$ref": "common.schema.json#/$defs/decimal"}, "weight": {"$ref": "common.schema.json#/$defs/decimal"}},
+      "additionalProperties": false
+    }
+  },
+  "type": "object", "required": ["schema_version", "weights", "rebalance", "tolerance"],
+  "properties": {
+    "schema_version": {"const": "research-fixed-rebalance-parameters-v1"},
+    "weights": {"type": "object", "minProperties": 1, "maxProperties": 1000, "propertyNames": {"$ref": "common.schema.json#/$defs/id"}, "additionalProperties": {"$ref": "common.schema.json#/$defs/decimal"}},
+    "rebalance": {"const": "first_decision_each_month"},
+    "tolerance": {"$ref": "#/$defs/tolerance"}
+  },
+  "additionalProperties": false
+}
