@@ -22,27 +22,37 @@ replacing personal parameters with public templates does not reduce scope.
 
 | Workstream | Current implementation | Remaining work / release evidence |
 |---|---|---|
-| Contracts and new database | Versioned migrations through v14; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts and private catalog versions; dividend tax payable and independently reproducible fact-quality contracts | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
+| Contracts and new database | Versioned migrations through v15 in the current worktree; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, private catalog versions and explicit monthly schedule/cycle/attempt identity | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
 | Authentication | Sealed sessions, persistent revocation/rate limit, server-side guards, strict Origin; authenticated HTTP and native login/logout checked; initialization/login share UTF-8 password bounds | Production TLS/proxy, operator configuration and real owner login |
 | Financial ledger | Exact decimal facts, cash/trades/settlement/dividends/FX/transfers/splits; unknown/estimated/confirmed tax, net-only receipts, cumulative tax assessment and actual withholding kept separate; corporate-action notice/resolution isolation; securities transit and append-only dependent corrections | Real dividend/tax/corporate-action and security-transfer evidence, full acceptance matrix |
 | Import and reconciliation | JSON and raw CSV attachment/preview/atomic confirmation; zero-write CSV inspection and visual explicit mapping; immutable mappings and row evidence; explicit duplicate review and persistent source aliases; scoped downloads and encrypted recovery; explicit balance/tax-payable/settled/transit reconciliation and unresolved-fact guards | Domestic/cross-border broker samples, native wizard acceptance, large background imports and full throughput/fault acceptance |
 | Accounting and performance | Immutable NAV v4/performance v5; source-owned transit NAV and per-event external-flow FX; independent Python/Web fact-quality proofs for NAV, after-tax performance and attribution, including intermediate-period unresolved states | Actual historical FX/provider and dividend evidence, full attribution/benchmark/history workflows; implementation is not complete acceptance |
 | Funding plans | Dated multi-currency sources and tranches, version editing/deferral, partial receipt matching, execution association, cash/reservation separation, over-budget acknowledgement, correction review and full audit history | User-confirmed dated plan, broker evidence, D-05 allocation choices and full execution/funding workflow acceptance |
 | ETF research directory | Portfolio-private membership/source/profile/disclosure versions; independent CAS, stable pagination, account-evidence summaries and up-to-four version-bound comparisons; TS/Python exact-decimal overlap bounds with coverage and date semantics | Verified provider originals, identity-kind/lifecycle migration, current fees/liquidity/premiums and weighted exposures; full P-05 and native comparison/mobile acceptance |
-| Market and orchestration | Immutable paged batches, validate/publish CAS, as-known/restated valuation, leases/fencing/retry/outbox; valuation/market/performance worker commands | Real provider adapters, validated exchange calendars, recurring schedules, full fault/load tests |
+| Market and orchestration | Immutable paged batches, validate/publish CAS, as-known/restated valuation, leases/fencing/retry/outbox; bounded monthly discovery and a fixed Node publisher reusing actual governance checks | Real provider adapters, validated exchange calendars, other recurring tasks, full fault/load tests and current image verification |
 | Strategy and AI | Preregistered fixed-weight research, frozen inputs/implementation, train/validation/holdout separation, same-flow/cost/FX benchmark; seven Web-to-Worker commands and read-only AI review; 3300-day synthetic indexed replay | Live providers/models, complete rotation/forward simulation and genuine S-gate evidence |
 | Governance and execution | Human version/capability APIs, risk/approval CAS, independent-process cash/share reservation race tests, execution reports separate from facts; trusted verification import rejects user PASS claims; Web/API integration | Actual trusted verification Worker, formal evidence and runtime manifest binding; actual D/G/S approvals remain absent |
-| Product UI | Account, funding, catalog, research and governance workspaces; typed securities and dividend/tax/corporate-action preview/confirm; visual CSV mapping plus advanced JSON editor and paged row review; frozen same-body retry and server-backed, current-session, read-only confirmation recovery | Native wizard/recovery/BFCache and full catalog comparison/positive governance acceptance; complete accessibility and readonly UX |
+| Product UI | Account, funding, catalog, research, governance and monthly evaluation workspaces; typed securities and dividend/tax/corporate-action preview/confirm; visual CSV mapping and server-backed, current-session, read-only confirmation recovery | Native monthly/wizard/recovery/BFCache and full catalog comparison/positive governance acceptance; complete accessibility and readonly UX |
 | Deployment | Manual-only release, encrypted backup/restore, CI-verified non-root v13 checkpoint images and local restore; full real legacy-copy archive/recovery rehearsal; old production unchanged; late recovery marker blocks migration/cutover | Final source-bound image checks, independent-host restore, protected credentials/configuration, release and post-release checks |
 
-Latest published checkpoint before the v14 recovery work is commit
-`de1169f5490fdb5283c14c8790a05df727d953c0`; its
-[GitHub CI run](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/34697832339)
-passed Web 371, Python 244, root Node 73, HTTP 57, build/typecheck/authentication,
+Latest published checkpoint before the v15 monthly work is commit
+`1b06926ac0d9f98a016d6e690be4a73e6a572f2e`; its
+[GitHub CI run](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/34700180829)
+passed Web 438, Python 244, root Node 81, HTTP 63, build/typecheck/authentication,
 dependency audit and Linux container migration/non-root/local encrypted recovery
 checks. It was a public code checkpoint, not a production deployment or an
-independent-host recovery. The v14 recovery changes require a new source-bound run;
+independent-host recovery. The v15 monthly changes require a new source-bound run;
 the older counts do not certify them.
+
+Local v15 release candidate (2026-09-12): Web 498/498, Python 284/284 after
+correcting a synthetic queue-order assumption, root Node 95/95; typecheck,
+production build, authentication HTTP and shell checks passed. HTTP 67/67 uses
+schema 15/build `YppVpXF8n7Vgh5sOLLvJI`, with all 366 inventoried sources unchanged.
+The monthly workspace and fixed Python-to-Node publisher are implemented;
+the real bundle subprocess is tested, but the new Linux runtime image and
+exact-commit CI must still be verified. Native Tabbit runtime is unavailable.
+See [the monthly checkpoint](monthly-evaluations.md) for evidence and limits.
+These are synthetic engineering results, not production or strategy approval.
 
 Historical visual CSV checkpoint (local stable-source validation, schema v13):
 

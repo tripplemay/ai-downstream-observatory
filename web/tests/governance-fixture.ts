@@ -15,7 +15,7 @@ import { ledgerFactQualityAt } from "../src/server/ledger/fact-quality-db";
 
 export const human: GovernanceActor = { id: "SYNTHETIC-HUMAN-ONLY", kind: "human" };
 export const now = "2026-01-05T12:00:00.000Z";
-export function governanceFixture(patch?: (policy: Policy) => void, positionQuantity = "0", cash = "100000", activate = true, currency = "CNY") {
+export function governanceFixture(patch?: (policy: Policy) => void, positionQuantity = "0", cash = "100000", activate = true, currency = "CNY", laterPrice?: string) {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "etf-governance-")), filename = path.join(dataDir, "workbench.db");
   migrateWorkbench(filename);
   const db = openWorkbench(filename), portfolio = createPortfolio(db, human, "SYNTHETIC TEST - NOT LIVE AUTHORIZATION", now);
@@ -40,6 +40,12 @@ export function governanceFixture(patch?: (policy: Policy) => void, positionQuan
       const id = randomUUID();
       db.prepare("INSERT INTO market_observations(id,batch_id,source_id,listing_id,series_key,metric,value,unit,observed_at,published_at,ingested_at,time_precision,price_basis,revision_id,raw_hash,parser_version,provenance) VALUES(?,?,'synthetic-fixture',?,?,?,?,?,'2026-01-05T00:00:00.000Z','2026-01-05T01:00:00.000Z','2026-01-05T01:00:00.000Z','second',?,?,?,'fixture','live_observed')")
         .run(id, batchId, listing, listing, metric, value, unit, metric === "close" ? "unadjusted" : "not_applicable", batchId, "a".repeat(64));
+      db.prepare("INSERT INTO market_batch_members(batch_id,observation_id) VALUES(?,?)").run(batchId, id);
+    }
+    if (laterPrice) for (const listing of ["l", "l2"]) {
+      const id = randomUUID();
+      db.prepare("INSERT INTO market_observations(id,batch_id,source_id,listing_id,series_key,metric,value,unit,observed_at,published_at,ingested_at,time_precision,price_basis,revision_id,raw_hash,parser_version,provenance) VALUES(?,?,'synthetic-fixture',?,?,'close',?,?,'2026-01-05T03:00:00.000Z','2026-01-05T03:00:00.000Z','2026-01-05T03:00:00.000Z','second','unadjusted',?,?,'fixture','live_observed')")
+        .run(id, batchId, listing, listing, laterPrice, currency, batchId, "a".repeat(64));
       db.prepare("INSERT INTO market_batch_members(batch_id,observation_id) VALUES(?,?)").run(batchId, id);
     }
     db.prepare("UPDATE market_batches SET status='validated',manifest_hash=? WHERE id=?").run(manifest, batchId);
@@ -68,7 +74,7 @@ export function governanceFixture(patch?: (policy: Policy) => void, positionQuan
   const refs = { ledger_revision: revision(db, portfolio), ...(currency === "CNY" ? {} : { fx_observation_id: fxId }) };
   if (!amount(cash).isZero()) db.prepare("INSERT INTO valuation_items(id,run_id,account_id,item_type,currency,amount,fx_rate,value_cny,quality,evidence_json) VALUES(?,?,?,'cash_settled',?,?,?,?,'complete',?)").run(randomUUID(), valuationId, account, currency, cash, fxRate, exact(amount(cash).mul(fxRate)), canonical(refs));
   if (amount(positionQuantity).gt(0)) {
-    const price = db.prepare("SELECT o.id FROM market_observations o JOIN market_batch_members m ON m.observation_id=o.id WHERE m.batch_id=? AND o.listing_id='l' AND o.metric='close'").get(publication.batch_id) as { id: string };
+    const price = db.prepare("SELECT o.id FROM market_observations o JOIN market_batch_members m ON m.observation_id=o.id WHERE m.batch_id=? AND o.listing_id='l' AND o.metric='close' ORDER BY o.observed_at,o.id LIMIT 1").get(publication.batch_id) as { id: string };
     db.prepare("INSERT INTO valuation_items(id,run_id,account_id,listing_id,item_type,currency,amount,fx_rate,value_cny,quality,evidence_json) VALUES(?,?,?,'l','security_market_value',?,?,?,?,'complete',?)").run(randomUUID(), valuationId, account, currency, exact(amount(positionQuantity).mul(100)), fxRate, exact(amount(positionQuantity).mul(100).mul(fxRate)), canonical({ ...refs, quantity: positionQuantity, price_observation_id: price.id }));
   }
   const policy: Policy = { schema_version: 1, mandate_version: "SYNTHETIC-v1", approved_decisions: ["D-01", "D-02", "D-03", "D-04", "D-05", "D-06", "D-07", "D-08"], account_ids: [account], listing_ids: ["l", "l2"], allocation: { core: "0", strategy: "1", defensive: "0" }, limits: { listing_weight: "1", index_weight: "1", market_weight: "1", currency_weight: "1", region_weight: "1", sector_weight: "1", strategy_weight: "1", min_cash_weight: "0", max_order_cny: "1000000" }, execution: { proposal_ttl_seconds: 3600, max_price_age_seconds: 86400, max_valuation_age_seconds: 86400, max_reconciliation_age_seconds: 604800, price_buffer_bps: "0", max_price_deviation_bps: "100", fee_rate_bps: "0", max_fee_bps: "100", minimum_fee_by_currency: { CNY: "0" }, max_spread_bps: "10", max_premium_bps: "100", min_turnover: "1000000", max_participation: "0.1" }, price_scope_by_market: { CN: "CN" }, fx_scope: "FX", benchmark: "SYNTHETIC-CNY-BASELINE", evaluation_window: "Synthetic declared horizon", contribution_rule: "Only confirmed settled funds", emergency_rule: "Stop new advice and require human review", review_after: "2026-02-01T00:00:00.000Z", ai_mode: "not_required" };

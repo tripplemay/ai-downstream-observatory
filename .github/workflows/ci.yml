@@ -31,6 +31,9 @@ jobs:
         run: npm ci
       - name: install workbench Python dependencies
         run: pip install -r requirements-workbench.txt
+      - name: build fixed monthly evaluation publisher
+        working-directory: web
+        run: npm run build:evaluation-worker
       - name: Python accounting, market, worker and performance tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Web unit and ledger integration tests

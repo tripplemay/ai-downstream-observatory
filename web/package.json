@@ -5,8 +5,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:evaluation-worker": "node scripts/build-evaluation-worker.mjs",
     "start": "next start",
     "typecheck": "tsc --noEmit",
+    "pretest": "npm run build:evaluation-worker",
     "test": "tsx --test tests/*.test.ts",
     "test:auth": "tsx --test tests/auth.test.ts",
     "test:auth:http": "tsx tests/auth-http.integration.ts",
@@ -52,6 +54,7 @@
     "@types/node": "^22.15.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
+    "esbuild": "0.28.2",
     "autoprefixer": "^10.4.21",
     "postcss": "8.5.28",
     "tailwindcss": "^3.4.17",

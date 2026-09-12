@@ -6,6 +6,7 @@ import sys
 import time
 
 from .db import WorkbenchError, canonical_json, open_database
+from .evaluations import DiscoveryState
 from .runtime import run_pending_once
 
 
@@ -15,9 +16,11 @@ def main(argv=None):
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--poll-seconds", type=float, default=5)
     parser.add_argument("--lease-seconds", type=int, default=300)
+    parser.add_argument("--evaluation-discovery-limit", type=int, default=100)
     args = parser.parse_args(argv)
-    if not args.db or not 0.1 <= args.poll_seconds <= 3600 or not 1 <= args.lease_seconds <= 86400:
-        parser.error("absolute --db, poll 0.1..3600 and lease 1..86400 required")
+    if (not args.db or not 0.1 <= args.poll_seconds <= 3600 or not 1 <= args.lease_seconds <= 86400
+            or not 1 <= args.evaluation_discovery_limit <= 1000):
+        parser.error("absolute --db, poll 0.1..3600, lease 1..86400 and discovery limit 1..1000 required")
     owner = socket.gethostname() + ":" + str(os.getpid())
     stop = False
     def stopping(signum, frame):
@@ -27,10 +30,13 @@ def main(argv=None):
     signal.signal(signal.SIGINT, stopping)
     try:
         connection = open_database(args.db)
+        discovery_state = DiscoveryState()
         try:
             while not stop:
                 try:
-                    result = run_pending_once(connection, owner, args.lease_seconds)
+                    result = run_pending_once(connection, owner, args.lease_seconds,
+                                              discovery_limit=args.evaluation_discovery_limit,
+                                              stop_requested=lambda: stop, discovery_state=discovery_state)
                     if result is not None:
                         print(canonical_json({"job_id": result["id"], "status": result["status"]}), flush=True)
                     if args.once:

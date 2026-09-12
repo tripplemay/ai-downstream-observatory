@@ -8,6 +8,7 @@ run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 temporary=$(mktemp -d "${TMPDIR:-/tmp}/workbench-container-$run_id-XXXXXX")
 project="etf-fixture-$$"
 export WORKBENCH_RELEASE_SHA="verify-$run_id"
+export WORKBENCH_MODE=ledger
 export WORKBENCH_DATA_DIR_HOST="$temporary/data"
 export WORKBENCH_LEGACY_DATA_DIR="$temporary/legacy"
 export WORKBENCH_BACKUP_DIR_HOST="$temporary/backups"
@@ -52,6 +53,60 @@ if [[ -e "$temporary/missing-bind-source" ]] || ! grep -Fq 'bind source path doe
 fi
 printf 'Missing bind source refused without creating the host path\n'
 compose run --rm --no-deps migrate
+monthly_publisher=$(compose run --rm --no-deps -T --entrypoint python worker - <<'PY_PUBLISHER'
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+
+from worker.orchestration.db import open_database
+from worker.orchestration.external import _publisher_argv
+from worker.orchestration.jobs import Lease
+
+if (os.getuid(), os.getgid()) != (10001, 10001):
+    raise SystemExit("Monthly publisher fixture must run as the image's unprivileged user")
+lease = Lease("synthetic-missing-monthly-job", "synthetic-container-worker", 1, 1, "2099-01-01T00:00:00.000000Z")
+argv = _publisher_argv(lease)
+publisher = Path("/app/worker-bridge/monthly-evaluation.mjs")
+if len(argv) != 10 or argv[1] != str(publisher):
+    raise SystemExit("Monthly publisher bridge did not select the fixed deployed bundle")
+node = subprocess.run([argv[0], "--version"], capture_output=True, text=True, timeout=10, check=True)
+if node.stderr or not re.fullmatch(r"v22\.\d+\.\d+\n", node.stdout):
+    raise SystemExit("Monthly publisher Node runtime is not the pinned major version")
+
+def fingerprint(connection):
+    digest = hashlib.sha256()
+    for statement in connection.iterdump():
+        digest.update(statement.encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+connection = open_database(os.environ["WORKBENCH_DB_PATH"])
+try:
+    for table in ("portfolios", "accounts", "ledger_events", "proposals", "reservations", "evaluation_cycles", "job_runs"):
+        if connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] != 0:
+            raise SystemExit("Monthly publisher fixture is not an empty isolated database")
+    before = fingerprint(connection)
+    schema_version = connection.execute("PRAGMA user_version").fetchone()[0]
+    rejected = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30, check=False)
+    # This branch is reached only after the bundle loads native SQLite and validates the migrated database.
+    if rejected.returncode != 1 or rejected.stdout != "" or rejected.stderr != "STALE_OR_EXPIRED_LEASE\n":
+        raise SystemExit("Monthly publisher did not reject the nonexistent lease at its database boundary")
+    if fingerprint(connection) != before:
+        raise SystemExit("Rejected monthly publisher changed the isolated database")
+finally:
+    connection.close()
+with publisher.open("rb") as original:
+    bundle_hash = hashlib.file_digest(original, "sha256").hexdigest()
+print(json.dumps({"schema_version": "monthly-publisher-smoke-v1", "publisher_path": str(publisher),
+                  "bundle_sha256": bundle_hash, "node_version": node.stdout.strip(),
+                  "sqlite_schema_version": schema_version, "runtime_uid": os.getuid(),
+                  "native_sqlite_loaded": True, "invalid_lease_rejected": True,
+                  "logical_database_unchanged": True}, separators=(",", ":")))
+PY_PUBLISHER
+)
 compose run --rm --no-deps -e WORKBENCH_LEGACY_QUIESCED=1 archive-legacy
 backup=$(compose run --rm --no-deps backup)
 archive=$(printf '%s' "$backup" | python3 -c 'import json,sys; print(json.load(sys.stdin)["path"].split("/")[-1])')
@@ -69,17 +124,36 @@ compose exec -T worker python -c 'import os; from worker.orchestration.db import
 [[ $(curl --max-time 5 --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$WORKBENCH_HTTP_PORT/api/workbench") == 401 ]]
 for image in "$web_image" "$worker_image"; do
   [[ $(docker image inspect "$image" --format '{{.Config.User}}') == '10001:10001' ]]
-  docker run --rm --read-only --entrypoint sh "$image" -c 'test ! -e /app/data/observatory.db && test ! -e /app/config/gateway.json && test ! -e /app/.env'
+  docker run --rm --read-only --entrypoint sh "$image" -c 'test ! -e /app/data/observatory.db && test ! -e /app/config/gateway.json && test ! -e /app/.env && test ! -e /app/.private'
 done
 publish_container_report() {
-  python3 - "$root" "$run_id" "$1" "$2" <<'PY_REPORT'
+  python3 - "$root" "$run_id" "$1" "$2" "$monthly_publisher" <<'PY_REPORT'
 import json
 import os
 import re
 import stat
 import sys
 
-root, run_id, web_image, worker_image = sys.argv[1:]
+root, run_id, web_image, worker_image, publisher_json = sys.argv[1:]
+if len(publisher_json.encode("utf-8")) > 4096:
+    raise SystemExit("Monthly publisher proof is oversized")
+try:
+    publisher = json.loads(publisher_json)
+    with open(os.path.join(root, "migrations", "manifest.json"), encoding="utf-8") as source:
+        schema_version = len(json.load(source)["migrations"])
+    keys = {"schema_version", "publisher_path", "bundle_sha256", "node_version", "sqlite_schema_version",
+            "runtime_uid", "native_sqlite_loaded", "invalid_lease_rejected", "logical_database_unchanged"}
+    if (not isinstance(publisher, dict) or set(publisher) != keys
+            or publisher["schema_version"] != "monthly-publisher-smoke-v1"
+            or publisher["publisher_path"] != "/app/worker-bridge/monthly-evaluation.mjs"
+            or not isinstance(publisher["bundle_sha256"], str) or not re.fullmatch(r"[a-f0-9]{64}", publisher["bundle_sha256"])
+            or not isinstance(publisher["node_version"], str) or not re.fullmatch(r"v22\.\d+\.\d+", publisher["node_version"])
+            or type(publisher["sqlite_schema_version"]) is not int or publisher["sqlite_schema_version"] != schema_version
+            or type(publisher["runtime_uid"]) is not int or publisher["runtime_uid"] != 10001
+            or any(publisher[key] is not True for key in ("native_sqlite_loaded", "invalid_lease_rejected", "logical_database_unchanged"))):
+        raise ValueError("Invalid monthly publisher proof")
+except (ValueError, TypeError, KeyError, OSError) as error:
+    raise SystemExit("Monthly publisher runtime proof is missing or invalid") from error
 caller = [os.environ.get("SUDO_UID"), os.environ.get("SUDO_GID")]
 if caller == [None, None]:
     uid, gid = os.getuid(), os.getgid()
@@ -111,7 +185,7 @@ try:
                   "missing_bind_source_rejected": True,
                   "legacy_actual_facts": 0, "encrypted_local_restore": True,
                   "independent_host_restore": False, "web_image": web_image,
-                  "worker_image": worker_image}
+                  "worker_image": worker_image, "monthly_publisher": publisher}
         with os.fdopen(os.dup(descriptor), "w", encoding="utf-8") as output:
             json.dump(report, output, separators=(",", ":"))
             output.write("\n")
@@ -135,4 +209,4 @@ finally:
 PY_REPORT
 }
 publish_container_report "$(docker image inspect "$web_image" --format '{{.Id}}')" "$(docker image inspect "$worker_image" --format '{{.Id}}')"
-printf 'Container migration, legacy isolation, encrypted restore and HTTP fixture passed\n'
+printf 'Container migration, fixed Node publisher, legacy isolation, encrypted restore and HTTP fixture passed\n'

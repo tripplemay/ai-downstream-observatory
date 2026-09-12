@@ -25,6 +25,8 @@
 
 标的研究入口为 `/workbench/catalog`：按组合保留结构化来源、资料与持仓披露版本，支持分页和最多四个标的比较。披露不完整时显示覆盖率与重叠上下界，不将未知持仓归一化；目录记录不授予交易权限。实现与剩余核验见 [ETF 标的目录](docs/etf-catalog.md)。
 
+月度评估入口为 `/workbench/evaluations`：人工保存明确的目标权重、容差和时间定义，另行启用未来周期；结果区分无需调整、候选提案和阻断。重试保留原周期与已知时间，不会自动审批、预占资金或下单。当前方法是显式目标比较，不是已经验证有效的 ETF 轮动算法；范围、固定发布器和验收边界见 [月度评估](docs/monthly-evaluations.md)。
+
 ## 开发与验证
 
 需要 Node.js 22、Python 3.11+。先安装 Web 依赖，Python 跨语言 fixture 会调用 Node 迁移工具：
@@ -44,6 +46,8 @@ npm --prefix web run test:workbench:http -- --no-build
 ```
 
 上述两个变量均须指向安装了项目 Python 依赖的解释器；推荐先激活隔离虚拟环境。Web、Node 和 HTTP 集成测试均包含跨语言调用，不能仅为独立 Python 测试选择解释器。
+
+`npm --prefix web test` 会先构建固定月度发布器。独立启动本地 worker 前，可运行 `npm --prefix web run build:evaluation-worker`；产物 `web/dist/monthly-evaluation.mjs` 不进入 Git 或 Docker 构建上下文，镜像从锁定依赖和源码重新构建。生产 worker 内含 Node.js 22 与匹配的 SQLite 原生模块，不从任务载荷接收脚本、结果或数据库路径。
 
 本地真实数据开发需显式配置 `WORKBENCH_DB_PATH`、`WORKBENCH_DATA_DIR`、HTTPS `WORKBENCH_ORIGIN`、密码 hash 与会话 secret。缺少数据库/认证配置会失败，不回退创建另一份空库。优先使用隔离 fixture，不把生产数据拷进源码目录。
 

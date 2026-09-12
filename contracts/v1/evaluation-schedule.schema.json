@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://workbench.example.test/contracts/v1/evaluation-schedule.schema.json",
+  "title": "Explicit monthly evaluation schedule, not investment authorization",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "frequency", "environment", "policy_version_id", "strategy_version_id", "activation_id", "timezone", "start_month", "end_month", "trigger", "deadline_seconds", "max_attempts", "targets"],
+  "properties": {
+    "schema_version": { "const": "evaluation-schedule-v1" },
+    "frequency": { "const": "monthly" },
+    "environment": { "const": "actual" },
+    "policy_version_id": { "$ref": "#/$defs/id" },
+    "strategy_version_id": { "$ref": "#/$defs/id" },
+    "activation_id": { "$ref": "#/$defs/id" },
+    "timezone": { "type": "string", "minLength": 1, "maxLength": 100, "description": "Explicit IANA timezone, additionally validated by the runtime." },
+    "start_month": { "$ref": "#/$defs/month" },
+    "end_month": { "anyOf": [{ "$ref": "#/$defs/month" }, { "type": "null" }] },
+    "trigger": {
+      "type": "object", "additionalProperties": false, "required": ["day", "hour", "minute"],
+      "properties": { "day": { "type": "integer", "minimum": 1, "maximum": 28 }, "hour": { "type": "integer", "minimum": 0, "maximum": 23 }, "minute": { "type": "integer", "minimum": 0, "maximum": 59 } }
+    },
+    "deadline_seconds": { "type": "integer", "minimum": 1, "maximum": 604800 },
+    "max_attempts": { "type": "integer", "minimum": 1, "maximum": 5 },
+    "targets": {
+      "type": "object", "additionalProperties": false,
+      "required": ["method", "weight_basis", "rows", "absolute_tolerance_cny", "weight_tolerance", "tolerance_rule", "unlisted_strategy_positions", "pending_activity", "price_rule", "quantity_rule"],
+      "properties": {
+        "method": { "const": "manual_weight_targets_v1" },
+        "weight_basis": { "const": "portfolio_nav" },
+        "rows": {
+          "type": "array", "minItems": 1, "maxItems": 100,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["account_id", "listing_id", "currency", "weight"],
+            "properties": { "account_id": { "$ref": "#/$defs/id" }, "listing_id": { "$ref": "#/$defs/id" }, "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }, "weight": { "$ref": "#/$defs/weight" } }
+          },
+          "description": "Account/listing keys must be unique. Sum is bounded by the active strategy/policy budget, not implicitly normalized."
+        },
+        "absolute_tolerance_cny": { "$ref": "#/$defs/nonnegative" },
+        "weight_tolerance": { "$ref": "#/$defs/weight" },
+        "tolerance_rule": { "const": "max_absolute_or_weight" },
+        "unlisted_strategy_positions": { "const": "block" },
+        "pending_activity": { "const": "block" },
+        "price_rule": { "const": "close_rounded_to_step" },
+        "quantity_rule": { "const": "floor_to_step" }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "^\\S(?:[\\s\\S]*\\S)?$" },
+    "month": { "type": "string", "pattern": "^(?!0000)[0-9]{4}-(0[1-9]|1[0-2])$" },
+    "nonnegative": { "type": "string", "maxLength": 80, "pattern": "^((0|[1-9][0-9]*)(\\.[0-9]{1,18})?|-0(\\.0{1,18})?)$", "description": "Runtime exact decimal validation enforces at most 38 significant digits and 18 fractional places." },
+    "weight": { "type": "string", "maxLength": 80, "pattern": "^(0(\\.[0-9]{1,18})?|1(\\.0{1,18})?|-0(\\.0{1,18})?)$" }
+  }
+}

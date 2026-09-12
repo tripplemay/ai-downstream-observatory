@@ -70,6 +70,11 @@
       "version": 14,
       "file": "0014_csv_confirmation_attempts.sql",
       "sha256": "058680379536218deae030a1970398515d049699bdc849493000cbb1d2963121"
+    },
+    {
+      "version": 15,
+      "file": "0015_monthly_evaluations.sql",
+      "sha256": "6f67a3f0d08b39c6c6b5f30934ca924a6063de0ee943f3643f5559f39cc1d34c"
     }
   ]
 }

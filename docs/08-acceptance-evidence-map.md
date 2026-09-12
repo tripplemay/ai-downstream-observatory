@@ -12,7 +12,7 @@
 - 目前有合成单元、跨语言、HTTP、浏览器和隔离容器验证，**没有正式 live 数据/账户样本验收、新工作台生产部署验收、真正的治理验证 Worker 或任何 S 门槛验收**。旧站 HTTP 200、远端 fixture 成功、测试中创建的政策和验证记录均不能替代它们。
 - L-0 文档确认保持有效；本表不能宣布 L-1/L-2 全部验收，更不能升级 L-3。D-01 至 D-08 未完成细节继续阻塞相应能力；计划预算不等于实际余额，只有已核实本金及到账事实才能入账。
 - 公开边界已确认：**公开代码和通用示例，个人方案本地隔离，提交前核验 index**。金额精度、并发及性能测试中的明确合成数值仅为 fixture，不是个人投资参数。
-- 当前实现概览为迁移 v13、NAV v4、绩效 v5；在独立分红/公司行动质量证据基础上加入组合私有标的目录、来源/资料/披露版本和重叠上下界。**实现不等于完整验收**。以下历史运行段保留其原版本与时点，不据此声称新版本最终套数、HTTP 或构建已通过。
+- 当前工作区实现为迁移 v15、NAV v4、绩效 v5；在组合私有目录与 v14 会话恢复基础上加入明确授权的月度目标评估。**实现不等于完整验收**。以下历史运行段保留其原版本与时点，不据此声称新版本最终套数、HTTP 或构建已通过。
 - 来源基线是持续变化的工作区，不是单一已签核 release。下列结果需在最终源码冻结后统一重跑，补齐 release SHA、锁文件、schema、环境、fixture、退出码、差异及签核。
 
 ## 2. 证据目录与复现入口
@@ -34,9 +34,10 @@
 | CATALOG | [标的目录边界](etf-catalog.md)；`web/src/server/catalog/`；`web/tests/catalog*.test.ts`；`tests/migrations/catalog.test.mjs`；`worker/research/holdings_overlap.py`；`tests/research/test_holdings_overlap.py` | 组合私有研究版本、独立 CAS/分页/范围、结构化 JSON 来源下载、账户证据摘要、最多 4 标的比较；部分披露不归一化、异期不伪同日，TS/Python 重叠一致；未认证真实 ETF/发行商原件或交易准入 |
 | GOVERNANCE | `web/src/server/governance/`、`governance-commands.ts`；`web/tests/governance{,-commands}.test.ts`、`governance-race-worker.ts` | 人工版本、证据门槛、风控/预留、执行回报/事实关联；正例使用临时库中的显式合成准入 fixture，不是有效政策 |
 | RESEARCH | `worker/research/`；`tests/research/{test_research,test_cli,test_market_index}.py`；`contracts.test.mjs` | 固定权重现金投入研究、PIT 时序、实验登记/冻结/解封、离线 AI 审阅；不含完整月度轮动或持续前向模拟 |
-| JOB | `worker/orchestration/`、`web/src/server/workbench-commands.ts`；`tests/orchestration/{test_jobs,test_research_commands}.py`；`web/tests/{workbench-commands,research-workspace}.test.ts` | 授权请求到 Worker、lease/fencing、重试、结果/outbox 原子写入；没有真实通知传输或自动周期评估 |
+| JOB | `worker/orchestration/`、`web/src/server/workbench-commands.ts`；`tests/orchestration/{test_jobs,test_research_commands,test_evaluations,test_evaluations_bridge}.py` | 授权请求到 Worker、lease/fencing、重试、结果/outbox 原子写入；月度发现有界扫描和固定发布桥；没有真实通知传输 |
+| MONTHLY | [月度评估](monthly-evaluations.md)；`web/src/server/evaluation/`、`web/tests/evaluation*.test.ts` | 显式目标、人工启停、原周期知识边界、独立重试、完整证据方可无需调整；真实 Python/Node/SQLite 进程链及原子候选生成；不是完整轮动或实盘有效性证明 |
 | AUTH | `web/src/server/auth/`；`web/tests/auth.test.ts`、`auth-http.integration.ts` | 服务端会话、撤销、过期、限速、Origin、缺配置拒绝；生产 TLS/代理及运维配置另验 |
-| MIGRATION | `migrations/manifest.json`；`tests/migrations/*.test.mjs`；`tests/deployment/release.test.mjs`；`web/tests/fact-quality.test.ts` | 当前迁移至 v13，新增私有目录外键/不可变版本且保留原事实；旧库拒写/归档、WAL/中断/幂等；旧 v8 镜像演练保留，v13 镜像及最终切换尾差未验 |
+| MIGRATION | `migrations/manifest.json`；`tests/migrations/*.test.mjs`；`tests/deployment/release.test.mjs`；`web/tests/fact-quality.test.ts` | 工作区迁移至 v15，保留事实和旧周期，新调度/周期/尝试固定身份与追加证据；新 v15 镜像及最终切换尾差尚需验证 |
 | RECOVERY | `scripts/{backup-workbench,restore-workbench,archive-legacy}.mjs`；`tests/recovery/backup-restore.test.mjs` | 一致性备份、加密、附件清单、全新目录恢复、只读标记、不覆盖新事实；不是异机 RPO/RTO 验收 |
 | HTTP27 | [报告](../artifacts/verification/workbench-http/2026-09-11T22-47-15-552Z/report.md)及同目录 `manifest.json`；`web/scripts/test-workbench-http.mjs` | 27 个 HTTP 场景的阶段快照，详见下文 |
 | HTTP32 | `artifacts/verification/workbench-http/2026-09-12T00-31-30-306Z/{report.md,manifest.json}`；`web/scripts/test-workbench-http.mjs` | v9 生产构建与新增资金计划 HTTP 场景；仍为本地合成 fixture，详见 2.4 |
@@ -139,7 +140,7 @@ npm run test:workbench:http
 | E-15 / NOT_RUN | 38 位/18 小数约束、Decimal、非有限数/浮点/指数拒绝；代码保留字符串 | LEDGER 精度负例；ACCOUNTING `DecimalBoundaryTests`；MIGRATION contracts；IMPORT strict JSON | 完整原生文件格式解析/来源量子与舍入规则样本；极值跨语言逐步比较、原文隔离和展示的最终证据 |
 | E-16 / BLOCKED | listing 分市场份额；风险核对 index/region/sector/currency 并拒未知所需暴露 | GOVERNANCE 浓度/缺信息检查；ACCOUNTING FX 交叉项；MARKET 标识 | 基金穿透覆盖/披露时效、同指数多产品对照、组合多期资产/FX 金额归因及残差界面未完整实现 |
 | E-17 / NOT_RUN | AI 无写/批准权限；政策/策略严格语义、缺阈值拒绝、候选不自动生效 | GOVERNANCE `E17`、伪造验证任务负例；RESEARCH `AIReviewTests`；HTTP27 `25` | 最终同版对抗固定/预留案例和人工质检；覆盖所有将来 provider/tool 边界，而非只校验离线 JSON |
-| E-18 / BLOCKED | 研究回放保留 unchanged 评估结果，任务幂等 | RESEARCH `test_repeated_evaluations_record_unchanged_and_result_hash_reproducible`；JOB | **完整月度轮动周期状态机未实现**：无动作月初完成、次日排名改变不补调仓、授权例外和跨日重试需单独实现/验收 |
+| E-18 / BLOCKED | 显式月度目标的 unchanged/proposed/blocked、固定月槽位、次日输入变化不重复发现、原知识边界及独立重试；零订单不冒充无需调整 | MONTHLY；JOB；RESEARCH 的旧回放只作历史研究 | 完整轮动算法、排名改变和授权例外、真实行情/日历及原生界面闭环仍需实现/验收，不能从显式目标比较外推 |
 | E-19 / NOT_RUN | 批准/执行前重新读取 ledger、market、policy、账户/预留摘要；变更拒绝 | GOVERNANCE `E19`、`execution preparation rechecks...`；HTTP27 `08/14` | 治理正向 HTTP/浏览器全流程，版本改变/价格窗口/账户变更覆盖矩阵；发布版本与最终镜像复核 |
 | E-20 / NOT_RUN | 合成并发 fixture：两个独立进程争 100000 现金、各预留 60000，最多一个批准；卖出数量预留 | GOVERNANCE 并发进程及 sell tests；ACCOUNTING 预留不减 NAV | 目标部署负载下重复并发/锁等待/故障注入证据；不能以一次正确竞争证明性能或全部组合情形 |
 | E-21 / NOT_RUN | 取消/过期后真实成交仍记账并标偏离；只消费未成交余量，不自动复活建议 | GOVERNANCE `E21`、expiry tests；CORRECTION 来源不复活 | 原生券商迟到文件到导入/执行关联/对账全流程，以及残余目标重算；明确通用事实入口不猜测对应预留 |
@@ -380,3 +381,33 @@ SSR/实际 wrapper 测试通过，但不是原生弹窗、BFCache 或可访问�
 本轮没有公开个人原件或把真实资金/账户放入默认值。上述本地结果不自行证明新提交的
 远程 CI 或生产发布；实际 SHA、镜像和工作流必须另行绑定。P-02、完整 ACC/E/S/G、
 真实券商数据、1 万行后台导入、异机恢复及生产签核仍保持未完整验收。
+
+## 14. 明确授权的月度目标评估：v15 本地候选证据
+
+| 范围 | 本轮结果 |
+|---|---|
+| Web | 498/498，零跳过；含 15 项实际 Python 发现/领取到 Node 发布器测试，以及 3 项固定 bundle 子进程测试 |
+| Python | 284/284；首次运行暴露新增测试的随机队列顺序假设，修复合成 job 的持久化时序后重跑；业务调度规则未改，失败日志保留 |
+| Node | 95/95；包括 v15 不可变调度/周期/尝试迁移，以及新容器运行证明格式的拒绝测试 |
+| 构建与 HTTP | build `YppVpXF8n7Vgh5sOLLvJI`，schema 15，67/67；新增 `HTTP-EV01..04`，366 项源文件前后及随后复核一致 |
+| 其他 | 类型检查、认证 HTTP 与 shellcheck 通过，全量 npm audit 为零已报告漏洞；当前镜像、精确提交 CI、原生界面与生产发布不从本地结果推定 |
+
+日志前缀为 `artifacts/verification/final-regression/monthly-evaluation-v15-release-`；
+Python 通过日志为 `python-retry.log`，首次失败为 `python.log`。
+HTTP 工件：`artifacts/verification/workbench-http/2026-09-12T16-00-40-270Z/`；
+manifest SHA-256：`393a9dc59b39f024e437b5300b84d7f92796f73823869bf66e058895c3cbbc94`。
+
+本切片要求保存调度绑定明确 identity、精确版本和原 UTF-8 哈希回执；客户端异步
+核验后再次检查会话/组合/只读边界，没有自动 POST。月度周期保留原知识时点，
+迟到撤销/自然过期不能抹掉当时待处理活动；全部 NAV 分项价格/FX 向量必须匹配，
+账户、能力和门槛资料不能来自未来。无需调整仍需完整差异与全组合风控证据。
+
+固定 CLI 使用真实时钟的历史 fixture 如实记录截止期阻断；它证明跨语言原子完成，
+不证明过期周期有权建议交易。真实 proposed/unchanged 另有受控时间的发布器正例。
+HTTP 新例主要证明鉴权、严格输入、空默认、全库逻辑零写和恢复边界，不能冒充
+正向策略准入。容器 fixture 新增 Python 固定路径到 Node 22/native SQLite 的实际
+非特权拒绝证明，但仍待本提交 Linux CI 执行；本地 Docker daemon 不可用。
+
+Tabbit 仍返回 `BROWSER_RUNTIME_UNAVAILABLE`，没有新增原生桌面/窄屏/键盘/BFCache
+通过声明。E-18 继续 BLOCKED：显式目标比较不等于完整轮动算法、真实数据/日历、
+持续前向模拟或实盘有效性。个人方案仅存本地；未授权任何策略启用、交易或生产切换。

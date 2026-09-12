@@ -16,6 +16,7 @@ data/
 web/node_modules/
 web/.next/
 web/.next-fixture/
+web/dist/
 web/*.tsbuildinfo
 web/next-env.d.ts
 

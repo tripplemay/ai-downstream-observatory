@@ -27,6 +27,19 @@ test('personal plans and local data stay outside Docker build context and Git pu
     assert.deepEqual(privateFiles, []);
   }
 });
+test('legacy research examples share an impersonal scope and label simulation-only capital', () => {
+  const statement = '- 通用长期研究示例：依据证实/证伪信号而非短期波动调整研究判断，不代表任何用户的个人投资期限或偏好。';
+  for (const path of ['AI下游投资观测台.md', 'worker/themes/ai_downstream.py', 'web/src/lib/seed.ts']) {
+    const source = readFileSync(join(root, path), 'utf8');
+    assert.equal(source.split(statement).length - 1, 1, path);
+    assert.doesNotMatch(source, /本人为|我的投资期限/u, path);
+    assert.ok(source.includes('- 证实信号充分 → 开始建仓'), path);
+    assert.ok(source.includes('- 证实信号不充分 / 证伪信号充分 → 等待，或修正判断本身'), path);
+  }
+  const paper = readFileSync(join(root, 'worker/paper_trade.py'), 'utf8');
+  assert.match(paper, /# Synthetic legacy simulation capital; never an actual-workbench cash default\.\nINITIAL_CASH = /);
+  assert.ok(paper.includes('INSERT INTO paper_accounts'));
+});
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'etf-release-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -196,6 +209,28 @@ test('release workflow remains manual and failure path cannot restore over actua
   const deploy = readFileSync(join(root, 'scripts/deploy-workbench.sh'), 'utf8');
   assert.match(deploy, /RESTORE_PENDING_REVIEW/); assert.doesNotMatch(deploy, /git reset|docker compose down|cp .*etf-workbench\.db/);
   assert.match(deploy, /^compose config --no-env-resolution --quiet$/m);
+});
+
+test('container smoke executes the deployed monthly publisher against SQLite before reporting runtime success', () => {
+  const smoke = readFileSync(join(root, 'tests/deployment/container-smoke.sh'), 'utf8');
+  const probe = smoke.match(/<<'PY_PUBLISHER'\n([\s\S]*?)\nPY_PUBLISHER/)?.[1];
+  assert.ok(probe);
+  const syntax = spawnSync(process.env.WORKBENCH_PYTHON || 'python3', ['-c', 'import ast,sys; ast.parse(sys.stdin.read())'], { input: probe, encoding: 'utf8', timeout: 10000 });
+  assert.equal(syntax.status, 0, syntax.stderr);
+  assert.match(smoke, /monthly_publisher=\$\(compose run --rm --no-deps -T --entrypoint python worker - <<'PY_PUBLISHER'/);
+  assert.ok(smoke.indexOf('compose run --rm --no-deps migrate\n') < smoke.indexOf('monthly_publisher=$('));
+  assert.ok(smoke.indexOf('monthly_publisher=$(') < smoke.indexOf('up -d --no-build --wait'));
+  assert.match(probe, /from worker\.orchestration\.external import _publisher_argv/);
+  assert.match(probe, /argv = _publisher_argv\(lease\)/);
+  assert.match(probe, /Path\("\/app\/worker-bridge\/monthly-evaluation\.mjs"\)/);
+  assert.match(probe, /open_database\(os\.environ\["WORKBENCH_DB_PATH"\]\)/);
+  assert.match(probe, /rejected = subprocess\.run\(argv, stdin=subprocess\.DEVNULL, capture_output=True, text=True, timeout=30, check=False\)/);
+  assert.match(probe, /rejected\.returncode != 1 or rejected\.stdout != "" or rejected\.stderr != "STALE_OR_EXPIRED_LEASE\\n"/);
+  assert.match(probe, /if fingerprint\(connection\) != before:/);
+  assert.match(probe, /\(os\.getuid\(\), os\.getgid\(\)\) != \(10001, 10001\)/);
+  assert.match(probe, /hashlib\.file_digest\(original, "sha256"\)/);
+  assert.match(smoke, /python3 - "\$root" "\$run_id" "\$1" "\$2" "\$monthly_publisher" <<'PY_REPORT'/);
+  assert.match(smoke, /test ! -e \/app\/\.private/);
 });
 
 test('release rechecks recovery after build, before stopping writers, migration and startup', (t) => {

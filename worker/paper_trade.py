@@ -20,6 +20,7 @@ from worker.rules import series, upsert_nav, log  # noqa: E402
 
 ACCOUNT_NAME = "轮动模拟盘"
 THEME_ID = "etf-universe"
+# Synthetic legacy simulation capital; never an actual-workbench cash default.
 INITIAL_CASH = 1_000_000.0
 FEE_BPS = 1.0
 LOT = 100

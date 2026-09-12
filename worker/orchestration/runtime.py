@@ -11,12 +11,14 @@ from worker.research import (
     register_experiment, register_trial, review_context, unseal_holdout,
 )
 from .db import WorkbenchError, content_hash
-from .jobs import JobCommit, enqueue_job, run_one
+from .evaluations import discover_due_cycles, monthly_request_binding
+from .external import publish_monthly
+from .jobs import JobCommit, enqueue_job, enqueue_notification, run_one
 
 
 RESEARCH_COMMANDS = ("research_register", "research_register_trial", "research_trial", "research_freeze",
                      "research_unseal", "research_ai_context", "research_ai_review")
-SUPPORTED_COMMANDS = ("market_ingest", "valuation", "performance", *RESEARCH_COMMANDS)
+SUPPORTED_COMMANDS = ("market_ingest", "valuation", "performance", *RESEARCH_COMMANDS, "monthly_evaluation")
 
 
 def sync_requests(connection, limit=100, now=None):
@@ -26,9 +28,28 @@ def sync_requests(connection, limit=100, now=None):
     requests = connection.execute("""SELECT c.* FROM command_requests c
         LEFT JOIN job_runs j ON j.command_request_id=c.id
         WHERE c.command_type IN (""" + placeholders + """) AND j.id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.dedup_key='monthly-request-invalid:' || c.id
+          AND o.topic='monthly_evaluation.discovery_blocked'
+          AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.code')='MONTHLY_EVALUATION_REQUEST_INVALID'
+          AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.command_request_id')=c.id
+          AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.portfolio_id')=c.portfolio_id)
         ORDER BY c.created_at,c.id LIMIT ?""", (*SUPPORTED_COMMANDS, limit)).fetchall()
     jobs = []
     for request in requests:
+        if request["command_type"] == "monthly_evaluation":
+            try:
+                cycle, definition = monthly_request_binding(connection, request)
+            except (ValueError, TypeError, KeyError):
+                diagnostic = {"command_request_id": request["id"], "portfolio_id": request["portfolio_id"],
+                              "code": "MONTHLY_EVALUATION_REQUEST_INVALID"}
+                enqueue_notification(connection, "monthly-request-invalid:" + request["id"],
+                                     "monthly_evaluation.discovery_blocked", diagnostic, now=now)
+                continue
+            jobs.append(enqueue_job(connection, request["command_type"], request["portfolio_id"],
+                                    cycle["period"], request["id"] + ":" + request["payload_hash"],
+                                    max_attempts=definition["max_attempts"],
+                                    command_request_id=request["id"], now=now))
+            continue
         jobs.append(enqueue_job(connection, request["command_type"], request["portfolio_id"],
                                 request["created_at"][:10], request["id"] + ":" + request["payload_hash"],
                                 command_request_id=request["id"], now=now))
@@ -146,7 +167,7 @@ def _research_command(connection, request, payload, clock, job):
     return {"effect": commit}
 
 
-def command_handler(connection, clock=None):
+def command_handler(connection, clock=None, lease_seconds=300, stop_requested=None):
     clock = (lambda: None) if clock is None else clock
     def handle(job, lease):
         request = connection.execute("SELECT * FROM command_requests WHERE id=?", (job["command_request_id"],)).fetchone()
@@ -155,6 +176,10 @@ def command_handler(connection, clock=None):
         payload = json.loads(request["payload_json"])
         if content_hash(payload) != request["payload_hash"]:
             raise WorkbenchError("COMMAND_PAYLOAD_HASH_MISMATCH")
+        if job["job_type"] == "monthly_evaluation":
+            monthly_request_binding(connection, request)
+            return publish_monthly(connection, job, lease, lease_seconds=lease_seconds, clock=clock,
+                                   stop_requested=stop_requested)
         if job["job_type"] in RESEARCH_COMMANDS:
             return _research_command(connection, request, payload, clock, job)
         if job["job_type"] == "performance":
@@ -186,13 +211,12 @@ def command_handler(connection, clock=None):
     return handle
 
 
-def run_pending_once(connection, owner, lease_seconds=300, clock=None):
+def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery_limit=100, stop_requested=None,
+                     discovery_state=None):
     clock = (lambda: None) if clock is None else clock
+    discover_due_cycles(connection, limit=discovery_limit, now=clock(), state=discovery_state)
     sync_requests(connection, now=clock())
-    # Explicit type filters prevent accidentally claiming another module's jobs.
-    for job_type in SUPPORTED_COMMANDS:
-        result = run_one(connection, owner, command_handler(connection, clock), job_type=job_type,
-                         lease_seconds=lease_seconds, clock=clock)
-        if result is not None:
-            return result
-    return None
+    # One oldest-ready selection avoids starving periodic jobs behind a busy
+    # ingestion stream while still excluding unsupported modules' jobs.
+    return run_one(connection, owner, command_handler(connection, clock, lease_seconds, stop_requested),
+                   job_type=SUPPORTED_COMMANDS, lease_seconds=lease_seconds, clock=clock)

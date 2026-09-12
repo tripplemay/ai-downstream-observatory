@@ -23,6 +23,7 @@ const report = {
   cases: [], source_sha256: {}, limitations: [
     'HTTP client validates rendered HTML but is not browser interaction or TLS/proxy validation.',
     'This suite covers account creation and supported ledger/import API commands, not investment-strategy eligibility.',
+    'Monthly HTTP cases prove negative authorization, immutable empty state and recovery boundaries; authorized proposal publication is covered separately by service and Python-to-Node integration tests.',
   ],
 };
 const sha = (value) => createHash('sha256').update(value).digest('hex');
@@ -195,6 +196,134 @@ async function main() {
       try { assert.equal(db.prepare('SELECT COUNT(*) AS n FROM funding_plan_versions WHERE portfolio_id=?').get(portfolio).n, 0); } finally { db.close(); }
       assert.equal(current.advice_status, 'blocked'); assert.equal(current.valuation_status, 'not_ready');
       return { personal_funding_defaults: false, funding_plan_versions: 0, cash_cny: '0' };
+    });
+    const evaluationPath = '/api/workbench/evaluations';
+    const evaluationPost = (body, extraHeaders = {}) => jsonRequest(evaluationPath, {
+      method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json', ...extraHeaders }, body: JSON.stringify(body),
+    });
+    const evaluationDatabase = () => {
+      const db = new Database(filename, { readonly: true });
+      try {
+        db.defaultSafeIntegers(true);
+        return db.transaction(() => {
+          const tables = db.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+          const logical = tables.map(({ name, sql }) => {
+            const rows = db.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}"`).raw().all().map(row => JSON.stringify(row.map(value =>
+              typeof value === 'bigint' ? ['integer', value.toString()] : Buffer.isBuffer(value) ? ['blob', value.toString('base64')] : [typeof value, value]))).sort();
+            return { name, sql, rows };
+          });
+          return { logical_sha256: sha(JSON.stringify(logical)), row_counts: Object.fromEntries(logical.map(table => [table.name, table.rows.length])) };
+        }).deferred();
+      } finally { db.close(); }
+    };
+    const evaluationBaseline = evaluationDatabase();
+    const evaluationSave = {
+      action: 'save_schedule', command: { portfolio_id: portfolio, expected_revision: 0, expected_schedule_id: null, expected_schedule_revision: 0,
+        idempotency_key: 'synthetic-http-monthly-unapproved', reason: 'Synthetic negative admission fixture; no investment authorization',
+        definition_json: JSON.stringify({ schema_version: 'evaluation-schedule-v1', frequency: 'monthly', environment: 'actual',
+          policy_version_id: 'synthetic-absent-policy', strategy_version_id: 'synthetic-absent-strategy', activation_id: 'synthetic-absent-activation',
+          timezone: 'UTC', start_month: new Date().toISOString().slice(0, 7), end_month: null,
+          trigger: { day: 15, hour: 12, minute: 0 }, deadline_seconds: 3600, max_attempts: 2,
+          targets: { method: 'manual_weight_targets_v1', weight_basis: 'portfolio_nav',
+            rows: [{ account_id: account, listing_id: 'http-listing', currency: 'CNY', weight: '0.25' }],
+            absolute_tolerance_cny: '0', weight_tolerance: '0.01', tolerance_rule: 'max_absolute_or_weight',
+            unlisted_strategy_positions: 'block', pending_activity: 'block', price_rule: 'close_rounded_to_step', quantity_rule: 'floor_to_step' },
+        }),
+      },
+    };
+    await check('HTTP-EV01', 'monthly pages and API authenticate before parsing; authenticated state has no schedule or funding defaults', async () => {
+      assert.equal((await request('/workbench/evaluations')).headers.get('location'), '/login');
+      const anonymousRead = await jsonRequest(`${evaluationPath}?portfolio=a&portfolio=b`);
+      assert.equal(anonymousRead.status, 401); assert.deepEqual(anonymousRead.json, { error: 'UNAUTHENTICATED' });
+      const anonymousWrite = await jsonRequest(evaluationPath, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: '{' });
+      assert.equal(anonymousWrite.status, 401); assert.deepEqual(anonymousWrite.json, { error: 'UNAUTHENTICATED' });
+      for (const selected of [portfolio, otherPortfolio]) {
+        const result = await jsonRequest(`${evaluationPath}?portfolio=${selected}`, { headers: { Cookie: cookie } });
+        assert.equal(result.status, 200); assert.equal(result.json.schema_version, 'monthly-evaluations-v1');
+        assert.equal(result.json.selected_portfolio_id, selected); assert.equal(result.json.ledger_revision, 0); assert.equal(result.json.read_only, false);
+        assert.deepEqual(result.json.schedules, []); assert.deepEqual(result.json.cycles, []);
+        assert.equal(result.json.detail, null); assert.equal(result.json.next_cursor, null); assert.equal(result.json.schedules_truncated, false);
+        assert.equal(result.headers.get('cache-control'), 'private, no-store'); assert.ok(result.headers.get('vary')?.toLowerCase().split(',').map(value => value.trim()).includes('cookie'));
+        assert.equal(result.headers.get('x-content-type-options'), 'nosniff');
+      }
+      const page = await request('/workbench/evaluations', { headers: { Cookie: cookie } });
+      assert.equal(page.status, 200); const html = await page.text(); assert.match(html, /月度策略评估/);
+      assert.doesNotMatch(html, /<select\b[^>]*aria-label="当前组合"/);
+      assert.deepEqual(evaluationDatabase(), evaluationBaseline);
+      assert.equal(evaluationBaseline.row_counts.evaluation_schedules, 0); assert.equal(evaluationBaseline.row_counts.evaluation_cycles, 0);
+      assert.equal(evaluationBaseline.row_counts.funding_plan_versions, 0); assert.equal(evaluationBaseline.row_counts.ledger_events, 0);
+      return { monthly_defaults: false, schedules: 0, cycles: 0, ledger_events: 0, logical_database_unchanged: true, browser_interaction: false };
+    });
+    await check('HTTP-EV02', 'monthly API rejects malformed Origin, UTF-8, JSON, 1 MiB streams and ambiguous queries without writes', async () => {
+      for (const supplied of ['', 'https://evil.example.test']) {
+        const denied = await evaluationPost(evaluationSave, { Origin: supplied });
+        assert.equal(denied.status, 403); assert.equal(denied.json.error, 'INVALID_ORIGIN');
+      }
+      const plain = await evaluationPost(evaluationSave, { 'Content-Type': 'text/plain' });
+      assert.equal(plain.status, 415); assert.equal(plain.json.error, 'JSON_REQUIRED');
+      for (const [body, error] of [[Buffer.from([0x7b, 0xff, 0x7d]), 'INVALID_UTF8'], ['{', 'INVALID_JSON'], ['{"action":"save_schedule","action":"retry_evaluation","command":{}}', 'INVALID_JSON']]) {
+        const result = await jsonRequest(evaluationPath, { method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body });
+        assert.equal(result.status, 400); assert.equal(result.json.error, error);
+      }
+      async function* oversizedEvaluation() { for (let i = 0; i < 17; i++) yield Buffer.alloc(65536, 32); }
+      const tooLarge = await jsonRequest(evaluationPath, { method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: oversizedEvaluation(), duplex: 'half' });
+      assert.equal(tooLarge.status, 413); assert.equal(tooLarge.json.error, 'REQUEST_TOO_LARGE');
+      for (const query of [`portfolio=${portfolio}&portfolio=${otherPortfolio}`, `portfolio=${portfolio}&limit=51`, `portfolio=${portfolio}&unknown=1`, `portfolio=${portfolio}&attempt_cursor=abc`]) {
+        const invalid = await jsonRequest(`${evaluationPath}?${query}`, { headers: { Cookie: cookie } });
+        assert.equal(invalid.status, 400); assert.equal(invalid.json.error, 'EVALUATION_QUERY_INVALID');
+      }
+      for (const cursor of ['not-canonical!', Buffer.from(JSON.stringify({ portfolio_id: otherPortfolio, period: '2026-01', id: 'synthetic-cycle' })).toString('base64url')]) {
+        const invalid = await jsonRequest(`${evaluationPath}?portfolio=${portfolio}&cursor=${encodeURIComponent(cursor)}`, { headers: { Cookie: cookie } });
+        assert.equal(invalid.status, 400); assert.equal(invalid.json.error, 'EVALUATION_CURSOR_INVALID');
+      }
+      assert.deepEqual(evaluationDatabase(), evaluationBaseline);
+      return { limit_bytes: 1048576, streaming_limit_enforced: true, strict_json_and_query: true, logical_database_unchanged: true };
+    });
+    await check('HTTP-EV03', 'monthly HTTP accepts no caller-authored PASS or actor and requires real activation for an otherwise complete schedule', async () => {
+      for (const body of [{ action: 'publish_monthly_evaluation', command: { outcome: 'unchanged', status: 'pass' } },
+        { action: 'complete_evaluation', command: { result: 'PASS' } }, { ...evaluationSave, actor_id: 'synthetic-admin' },
+        { ...evaluationSave, command: { ...evaluationSave.command, actor: { id: 'synthetic-admin', kind: 'human' } } },
+        { ...evaluationSave, command: { ...evaluationSave.command, expected_revision: 0.5 } }]) {
+        const invalid = await evaluationPost(body); assert.equal(invalid.status, 400); assert.equal(invalid.json.error, 'EVALUATION_COMMAND_INVALID');
+      }
+      const absent = await evaluationPost(evaluationSave); assert.equal(absent.status, 400); assert.equal(absent.json.error, 'EVALUATION_ACTIVATION_REQUIRED');
+      const replay = await evaluationPost(evaluationSave); assert.equal(replay.status, 400); assert.deepEqual(replay.json, absent.json);
+      const stale = await evaluationPost({ ...evaluationSave, command: { ...evaluationSave.command, expected_revision: 1 } });
+      assert.equal(stale.status, 409); assert.equal(stale.json.error, 'EVALUATION_LEDGER_CONFLICT');
+      const envelope = { portfolio_id: portfolio, expected_revision: 0, idempotency_key: 'synthetic-http-monthly-missing', reason: 'Synthetic absent schedule/cycle' };
+      const status = await evaluationPost({ action: 'set_schedule_status', command: { ...envelope, schedule_id: 'synthetic-absent-schedule', expected_schedule_revision: 1, status: 'enabled' } });
+      assert.equal(status.status, 404); assert.equal(status.json.error, 'EVALUATION_SCHEDULE_NOT_FOUND');
+      const retry = await evaluationPost({ action: 'retry_evaluation', command: { ...envelope, cycle_id: 'synthetic-absent-cycle', expected_state_revision: 1 } });
+      assert.equal(retry.status, 404); assert.equal(retry.json.error, 'EVALUATION_CYCLE_NOT_FOUND');
+      assert.deepEqual(evaluationDatabase(), evaluationBaseline);
+      return { activation_fabricated: false, caller_results_accepted: false, domain_publications: 0, logical_database_unchanged: true, authorized_positive_flow_tested_here: false };
+    });
+    await check('HTTP-EV04', 'monthly reads remain available under recovery while writes lock and stale session bindings fail before body parsing', async () => {
+      const marker = path.join(directory, 'RESTORE_PENDING_REVIEW'); writeFileSync(marker, 'Synthetic monthly recovery guard\n', { mode: 0o600, flag: 'wx' });
+      try {
+        const read = await jsonRequest(`${evaluationPath}?portfolio=${portfolio}`, { headers: { Cookie: cookie } });
+        assert.equal(read.status, 200); assert.equal(read.json.read_only, true); assert.deepEqual(read.json.schedules, []); assert.deepEqual(read.json.cycles, []);
+        const blocked = await evaluationPost(evaluationSave); assert.equal(blocked.status, 423); assert.equal(blocked.json.error, 'WORKBENCH_READ_ONLY');
+      } finally { rmSync(marker); }
+      const originalProbe = await jsonRequest('/api/auth/session', { headers: { Cookie: cookie } });
+      assert.equal(originalProbe.status, 200); assert.match(originalProbe.json.session_binding, /^[a-f0-9]{64}$/);
+      const secondLogin = await request('/api/auth/login', { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ password }).toString() });
+      assert.equal(secondLogin.status, 303); const secondCookie = secondLogin.headers.get('set-cookie').split(';')[0];
+      try {
+        const secondProbe = await jsonRequest('/api/auth/session', { headers: { Cookie: secondCookie } }); assert.equal(secondProbe.status, 200);
+        assert.notEqual(secondProbe.json.session_binding, originalProbe.json.session_binding);
+        const invalidBody = Buffer.from([0x7b, 0xff, 0x7d]);
+        const stale = await jsonRequest(evaluationPath, { method: 'POST', headers: { Cookie: secondCookie, Origin: origin, 'Content-Type': 'application/json', 'X-Workbench-Session-Binding': originalProbe.json.session_binding }, body: invalidBody });
+        assert.equal(stale.status, 401); assert.equal(stale.json.error, 'SESSION_CHANGED');
+        const current = await jsonRequest(evaluationPath, { method: 'POST', headers: { Cookie: secondCookie, Origin: origin, 'Content-Type': 'application/json', 'X-Workbench-Session-Binding': secondProbe.json.session_binding }, body: invalidBody });
+        assert.equal(current.status, 400); assert.equal(current.json.error, 'INVALID_UTF8');
+      } finally {
+        assert.equal((await request('/api/auth/logout', { method: 'POST', headers: { Cookie: secondCookie, Origin: origin } })).status, 303);
+      }
+      const read = await jsonRequest(`${evaluationPath}?portfolio=${portfolio}`, { headers: { Cookie: cookie } });
+      assert.equal(read.status, 200); assert.equal(read.json.read_only, false);
+      assert.deepEqual(evaluationDatabase(), evaluationBaseline);
+      return { restore_read_only: true, restore_write_status: 423, stale_session_before_parse_status: 401, correct_binding_invalid_utf8_status: 400, logical_database_unchanged: true };
     });
     let opening;
     await check('HTTP-06', 'actual opening and contribution produce exact decimal cash', async () => {

@@ -22,6 +22,11 @@ class JobCommit:
     outcome: str = "succeeded"
 
 
+@dataclass(frozen=True)
+class ExternalCommit:
+    """Only a fixed local publisher may complete this job outside our transaction."""
+
+
 def _positive_int(value, name):
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise WorkbenchError(name + "_MUST_BE_POSITIVE_INTEGER")
@@ -61,6 +66,9 @@ def _expire(connection, current):
         connection.execute("""UPDATE job_runs SET status=?,lease_owner=NULL,lease_until=NULL,
             fencing_token=fencing_token+1,not_before=?,updated_at=?,result_json=? WHERE id=?""",
                            (status, current, current, canonical_json({"code": "LEASE_EXPIRED"}), row["id"]))
+        if row["job_type"] == "monthly_evaluation" and status == "failed":
+            from .evaluations import fail_exhausted_cycle
+            fail_exhausted_cycle(connection, row["id"], current)
 
 
 def claim_job(connection, owner, lease_seconds=60, job_type=None, now=None):
@@ -72,7 +80,12 @@ def claim_job(connection, owner, lease_seconds=60, job_type=None, now=None):
         _expire(connection, current)
         query = "SELECT * FROM job_runs WHERE status IN ('queued','retry_queued') AND not_before<=? AND attempt_count<max_attempts"
         parameters = [current]
-        if job_type is not None:
+        if isinstance(job_type, tuple):
+            if not job_type or any(not isinstance(value, str) or not value for value in job_type):
+                raise WorkbenchError("INVALID_JOB_TYPE_FILTER")
+            query += " AND job_type IN (" + ",".join("?" for _ in job_type) + ")"
+            parameters.extend(job_type)
+        elif job_type is not None:
             query += " AND job_type=?"
             parameters.append(job_type)
         row = connection.execute(query + " ORDER BY not_before,created_at,id LIMIT 1", parameters).fetchone()
@@ -85,6 +98,9 @@ def claim_job(connection, owner, lease_seconds=60, job_type=None, now=None):
                            (owner, until, token, current, attempt, current, row["id"]))
         connection.execute("""INSERT INTO job_attempts(id,job_id,attempt,fencing_token,status,started_at)
             VALUES(?,?,?,?,'running',?)""", (new_id("attempt"), row["id"], attempt, token, current))
+        if row["job_type"] == "monthly_evaluation":
+            from .evaluations import start_cycle
+            start_cycle(connection, row["id"], current)
         return Lease(row["id"], owner, token, attempt, until)
 
 
@@ -162,7 +178,10 @@ def fail_job(connection, lease, error, retryable=True, partial=False, retry_dela
         connection.execute("UPDATE job_attempts SET status=?,finished_at=?,error_json=? WHERE job_id=? AND attempt=?",
                            ("partial" if partial else "failed", current, payload, lease.job_id, lease.attempt))
         connection.execute("""UPDATE job_runs SET status=?,result_json=?,not_before=?,lease_owner=NULL,
-            lease_until=NULL,updated_at=? WHERE id=?""", (status, payload, ready, current, lease.job_id))
+                           lease_until=NULL,updated_at=? WHERE id=?""", (status, payload, ready, current, lease.job_id))
+        if row["job_type"] == "monthly_evaluation" and not retry:
+            from .evaluations import fail_exhausted_cycle
+            fail_exhausted_cycle(connection, lease.job_id, current)
         return status
 
 
@@ -175,9 +194,21 @@ def run_one(connection, owner, handler, job_type=None, lease_seconds=60, clock=N
     row = dict(connection.execute("SELECT * FROM job_runs WHERE id=?", (lease.job_id,)).fetchone())
     try:
         prepared = handler(row, lease)
-        complete_job(connection, lease, prepared.get("result", {}), prepared.get("outcome", "succeeded"),
-                     prepared.get("effect"), prepared.get("notification"), now=clock(), clock=clock)
+        if isinstance(prepared, ExternalCommit):
+            from .external import committed_monthly_job
+            if row["job_type"] != "monthly_evaluation" or committed_monthly_job(connection, lease) is None:
+                raise WorkbenchError("EXTERNAL_COMMIT_RECEIPT_REQUIRED")
+        else:
+            if row["job_type"] == "monthly_evaluation":
+                raise WorkbenchError("MONTHLY_EVALUATION_EXTERNAL_COMMIT_REQUIRED")
+            complete_job(connection, lease, prepared.get("result", {}), prepared.get("outcome", "succeeded"),
+                         prepared.get("effect"), prepared.get("notification"), now=clock(), clock=clock)
     except Exception as exc:
+        if row["job_type"] == "monthly_evaluation":
+            from .external import committed_monthly_job
+            committed = committed_monthly_job(connection, lease)
+            if committed is not None:
+                return committed
         try:
             fail_job(connection, lease, {"code": type(exc).__name__, "message": str(exc)}, now=clock())
         except WorkbenchError as lease_error:

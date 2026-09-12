@@ -13,6 +13,7 @@ export function AppSidebar() {
         <Link href="/workbench/catalog" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">ETF 标的与持仓比较</Link>
         <Link href="/workbench/research" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">策略研究与 AI</Link>
         <Link href="/workbench/governance" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">政策与执行审批</Link>
+        <Link href="/workbench/evaluations" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">月度策略评估</Link>
         <Link href="/legacy" className="block rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-accent">历史研究档案</Link>
       </div>
       <div className="px-5 py-4 text-xs text-muted-foreground">

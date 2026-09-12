@@ -10,8 +10,10 @@ import { ledgerFactQualityAt } from "../ledger/fact-quality-db";
 
 export interface ProposalRow { id: string; portfolio_id: string; environment: string; policy_version_id: string; strategy_version_id: string; ledger_revision: number; market_manifest: string; input_hash: string; expires_at: string; created_at: string }
 export interface ItemRow { id: string; proposal_id: string; account_id: string; listing_id: string; side: "buy" | "sell"; currency: string; quantity: string; limit_price: string; estimated_fees: string }
-interface Publication { scope: string; batch_id: string; manifest_hash: string; revision: number; published_at: string }
-interface Listing { id: string; instrument_id: string; market: "CN" | "HK" | "US"; currency: string; quantity_step: string | null; price_step: string | null; status: string; asset_class: string; index_id: string | null; exposure_json: string; verified_at: string | null }
+export interface Publication { scope: string; batch_id: string; manifest_hash: string; revision: number; published_at: string }
+export interface Listing { id: string; instrument_id: string; market: "CN" | "HK" | "US"; currency: string; quantity_step: string | null; price_step: string | null; status: string; asset_class: string; index_id: string | null; exposure_json: string; verified_at: string | null }
+export interface Capability { rules_json: string; evidence_id: string; approved_by: string }
+export interface Observation { id: string; value: string; unit: string; observed_at: string; published_at: string | null; price_basis: string; provenance: string; time_precision: string; source_timezone: string }
 export interface Balance { account_id: string; currency: string; ledger_account: string; balance: string }
 export interface Position { account_id: string; listing_id: string; currency: string; quantity: string; cost_known: number }
 export interface SecurityTransit extends Omit<Position, "account_id"> { transfer_event_id: string; source_account_id: string; target_account_id: string }
@@ -93,7 +95,7 @@ function listing(db: Database.Database, id: string, policy: Policy, now: string)
   return row;
 }
 function capability(db: Database.Database, account: string, listing: Listing, side: string, now: string) {
-  const row = db.prepare("SELECT * FROM account_capabilities WHERE account_id=? AND market=? AND valid_from<=? AND (valid_to IS NULL OR valid_to>?)").get(account, listing.market, now, now) as { rules_json: string; evidence_id: string; approved_by: string } | undefined;
+  const row = db.prepare("SELECT * FROM account_capabilities WHERE account_id=? AND market=? AND valid_from<=? AND (valid_to IS NULL OR valid_to>?)").get(account, listing.market, now, now) as Capability | undefined;
   if (!row || !row.evidence_id || !row.approved_by) throw new Error("ACCOUNT_CAPABILITY_MISSING");
   const rules = capabilitiesSchema.safeParse(JSON.parse(row.rules_json));
   if (!rules.success || !rules.data.currencies.includes(listing.currency) || !rules.data.listing_ids.includes(listing.id) || (side === "buy" ? !rules.data.buy : !rules.data.sell)) throw new Error("ACCOUNT_CAPABILITY_MISSING");
@@ -102,7 +104,7 @@ function capability(db: Database.Database, account: string, listing: Listing, si
 function observation(db: Database.Database, publications: Publication[], scope: string | undefined, key: string, metric: string, policy: Policy, now: string) {
   const publication = publications.find(row => row.scope === scope);
   if (!publication) throw new Error("MARKET_PUBLICATION_MISSING");
-  const row = db.prepare("SELECT o.* FROM market_batch_members m JOIN market_observations o ON o.id=m.observation_id WHERE m.batch_id=? AND o.series_key=? AND o.metric=? AND o.ingested_at<=? ORDER BY o.observed_at DESC,o.ingested_at DESC,o.id DESC LIMIT 1").get(publication.batch_id, key, metric, now) as { id: string; value: string; unit: string; observed_at: string; published_at: string | null; price_basis: string; provenance: string; time_precision: string; source_timezone: string } | undefined;
+  const row = db.prepare("SELECT o.* FROM market_batch_members m JOIN market_observations o ON o.id=m.observation_id WHERE m.batch_id=? AND o.series_key=? AND o.metric=? AND o.ingested_at<=? ORDER BY o.observed_at DESC,o.ingested_at DESC,o.id DESC LIMIT 1").get(publication.batch_id, key, metric, now) as Observation | undefined;
   if (!row || row.provenance === "reconstructed" || Date.parse(row.observed_at) > Date.parse(now) || (row.published_at && row.published_at > now) || (Date.parse(now) - Date.parse(row.observed_at)) / 1000 > policy.execution.max_price_age_seconds) throw new Error(`MARKET_OBSERVATION_UNAVAILABLE:${metric}`);
   if ((metric === "close" && row.price_basis !== "unadjusted") || (metric !== "close" && row.price_basis !== "not_applicable")) throw new Error("MARKET_PRICE_BASIS_INVALID");
   if (row.time_precision === "date") {
@@ -114,6 +116,13 @@ function observation(db: Database.Database, publications: Publication[], scope: 
 }
 export function checkRisk(db: Database.Database, actor: GovernanceActor, portfolio: string, proposalId: string, options: GovernanceOptions, now: string, excludeOwnReservations = false): RiskResult {
   const { proposal, items, context } = loadProposal(db, portfolio, proposalId);
+  return evaluateRisk(db, actor, proposal, items, context, options, now, excludeOwnReservations);
+}
+export { listing as evaluationListing, capability as evaluationCapability, observation as evaluationObservation };
+
+/** Read-only calculation; virtual empty-item evaluations must also verify their explicit target input scope. */
+export function evaluateRisk(db: Database.Database, actor: GovernanceActor, proposal: ProposalRow, items: ItemRow[], context: ProposalContext, options: GovernanceOptions, now: string, excludeOwnReservations = false): RiskResult {
+  const portfolio = proposal.portfolio_id;
   const state: Record<string, unknown> = { proposal, items, context, ledger_revision: revision(db, portfolio) };
   const budgets: RiskResult["budgets"] = [];
   try {
