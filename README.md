@@ -20,7 +20,7 @@
 - `contracts/v1/`、`migrations/`：共享 JSON Schema 与校验和固定的 SQLite 迁移。
 - `data-workbench/etf-workbench.db`：新工作台库；不会隐式创建初始资金或从预算补余额。
 
-资金计划入口为 `/workbench/funding`，支持日期化来源、投入批次、版本/延期及到账、执行事项关联；保存计划不创建现金或下单。实现边界见 [资金计划](docs/funding-plans.md)。账本支持 [证券转入、转出与在途](docs/security-transfers.md)，估值与绩效分离外部资本、历史成本与收益；缺时点、规则或来源时继续阻断，见 [逐流汇率核算](docs/performance-flow-fx.md)。[通用 CSV 导入](docs/csv-import.md) 支持原件留存、不可变映射、逐行重复核对和原子确认；高级界面需明确映射 JSON，尚未认证具体券商原生格式。当前测试与未完成项见 [开发进度](docs/07-implementation-tracker.md)，不据此宣称生产或策略准入完成。
+资金计划入口为 `/workbench/funding`，支持日期化来源、投入批次、版本/延期及到账、执行事项关联；保存计划不创建现金或下单。实现边界见 [资金计划](docs/funding-plans.md)。账本支持 [证券转入、转出与在途](docs/security-transfers.md)，估值与绩效分离外部资本、历史成本与收益；缺时点、规则或来源时继续阻断，见 [逐流汇率核算](docs/performance-flow-fx.md)。[通用 CSV 导入](docs/csv-import.md) 支持原件零写检查、可视化显式映射、原件留存、不可变版本、逐行重复核对和原子确认，也保留高级 JSON 编辑；尚未认证具体券商原生格式。当前测试与未完成项见 [开发进度](docs/07-implementation-tracker.md)，不据此宣称生产或策略准入完成。
 - 原 `data/observatory.db`：旧主题观测/ETF 模拟研究。原库不被新迁移触碰；通过 Online Backup 归档，旧记录不晋升为真实事实。
 
 标的研究入口为 `/workbench/catalog`：按组合保留结构化来源、资料与持仓披露版本，支持分页和最多四个标的比较。披露不完整时显示覆盖率与重叠上下界，不将未知持仓归一化；目录记录不授予交易权限。实现与剩余核验见 [ETF 标的目录](docs/etf-catalog.md)。

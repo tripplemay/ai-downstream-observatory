@@ -246,7 +246,7 @@ test('E-17/E-22: funding plans and research cannot become real facts via schema 
   migrateWorkbench(path);
   const db = database(t, path);
   seedScopes(db);
-  db.prepare('INSERT INTO funding_plan_versions(id,portfolio_id,version,plan_json,content_hash,actor_id,created_at) VALUES (?,?,?,?,?,?,?)').run('plan', 'p-a', 1, '{"initial_budget":"1500000"}', 'a'.repeat(64), 'user', now);
+  db.prepare('INSERT INTO funding_plan_versions(id,portfolio_id,version,plan_json,content_hash,actor_id,created_at) VALUES (?,?,?,?,?,?,?)').run('plan', 'p-a', 1, '{"initial_budget":"80000"}', 'a'.repeat(64), 'user', now);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_events').get().n, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM account_projections').get().n, 0);
   const research = db.prepare('INSERT INTO research_runs(id,portfolio_id,environment,input_manifest,experiment_plan_json,status,created_at) VALUES (?,?,?,?,?,?,?)');

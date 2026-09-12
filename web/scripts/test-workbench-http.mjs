@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, scryptSync } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
@@ -198,16 +198,16 @@ async function main() {
     });
     let opening;
     await check('HTTP-06', 'actual opening and contribution produce exact decimal cash', async () => {
-      opening = command({ type: 'opening_cash', amount: '1000000' });
+      opening = command({ type: 'opening_cash', amount: '640000' });
       const result = await post({ action: 'record_fact', command: opening }); assert.equal(result.status, 200); revision = result.json.revision;
-      await record({ type: 'deposit', amount: '500000' });
-      const current = await state(); assert.equal(current.revision, 2); assert.equal(cash(current), '1500000');
+      await record({ type: 'deposit', amount: '160000' });
+      const current = await state(); assert.equal(current.revision, 2); assert.equal(cash(current), '800000');
       return { revision, cash_cny: cash(current) };
     });
     await check('HTTP-07', 'idempotency replay is stable and conflicting payload is rejected', async () => {
       const replay = await post({ action: 'record_fact', command: opening }); assert.equal(replay.status, 200); assert.equal(replay.json.duplicate, true);
       const conflict = await post({ action: 'record_fact', command: { ...opening, fact: { ...opening.fact, amount: '1' } } });
-      assert.equal(conflict.status, 409); assert.equal((await state()).revision, revision); assert.equal(cash(await state()), '1500000');
+      assert.equal(conflict.status, 409); assert.equal((await state()).revision, revision); assert.equal(cash(await state()), '800000');
     });
     await check('HTTP-08', 'stale revisions, forged account scope and numeric money fail atomically', async () => {
       assert.equal((await post({ action: 'record_fact', command: command({ type: 'deposit', amount: '1' }, { expected_revision: 0 }) })).status, 409);
@@ -216,13 +216,13 @@ async function main() {
       assert.equal((await post({ action: 'record_fact', command: command({ type: 'transfer_out', target_account_id: foreignAccount, amount: '1' }) })).status, 403);
       assert.equal((await post({ action: 'record_fact', command: command({ type: 'deposit', amount: '1' }, { effective_at: '2099-01-01' }) })).status, 400);
       assert.equal((await post({ action: 'record_fact', command: command({ type: 'buy', listing_id: 'http-listing', quantity: '100', price: '-1', consideration: '100', fee: '0' }) })).status, 400);
-      assert.equal((await state()).revision, revision); assert.equal(cash(await state()), '1500000');
+      assert.equal((await state()).revision, revision); assert.equal(cash(await state()), '800000');
     });
     let goodPreview, rawImport;
     await check('HTTP-09', 'import preview validates without publishing any facts', async () => {
       rawImport = JSON.stringify([importRow('100'), importRow('50')]);
       goodPreview = await preview(rawImport); assert.equal(goodPreview.status, 'preview'); assert.equal(goodPreview.rows.length, 2);
-      assert.equal((await state()).revision, revision); assert.equal(cash(await state()), '1500000');
+      assert.equal((await state()).revision, revision); assert.equal(cash(await state()), '800000');
       const read = await jsonRequest(`/api/workbench?portfolio=${portfolio}&batch=${goodPreview.id}`, { headers: { Cookie: cookie } });
       assert.equal(read.status, 200); assert.equal(read.json.preview_hash, goodPreview.preview_hash);
       assert.equal((await jsonRequest(`/api/workbench?portfolio=${otherPortfolio}&batch=${goodPreview.id}`, { headers: { Cookie: cookie } })).status, 404);
@@ -230,7 +230,7 @@ async function main() {
     await check('HTTP-10', 'import hash check, atomic confirmation and duplicate confirmation', async () => {
       assert.equal((await confirm(goodPreview, { preview_hash: 'tampered' })).status, 409);
       const confirmed = await confirm(goodPreview); assert.equal(confirmed.status, 200); revision = confirmed.json.revision;
-      assert.equal(revision, 4); assert.equal(cash(await state()), '1500150');
+      assert.equal(revision, 4); assert.equal(cash(await state()), '800150');
       const replay = await confirm(goodPreview); assert.equal(replay.status, 200); assert.equal(replay.json.duplicate, true);
       const repeatedPreview = await preview(rawImport); assert.equal(repeatedPreview.id, goodPreview.id); assert.equal(repeatedPreview.duplicate, true);
       assert.equal((await state()).revision, revision);
@@ -239,7 +239,7 @@ async function main() {
       const invalid = await preview(JSON.stringify([importRow('100'), importRow('-50')]));
       assert.equal(invalid.status, 'invalid'); assert.ok(invalid.rows[1].errors.length);
       assert.equal((await confirm(invalid)).status, 400); assert.equal((await state()).revision, revision);
-      assert.equal(cash(await state()), '1500150');
+      assert.equal(cash(await state()), '800150');
     });
     await check('HTTP-12', 'stale preview rejects confirmation and same file can be re-previewed', async () => {
       const raw = JSON.stringify([importRow('100')]);
@@ -250,15 +250,15 @@ async function main() {
       assert.notEqual(refreshed.id, stale.id, 'A stale same-file preview must be refreshable.');
       assert.equal(refreshed.expected_revision, revision);
       const accepted = await confirm(refreshed); assert.equal(accepted.status, 200); revision = accepted.json.revision;
-      assert.equal(cash(await state()), '1500240');
+      assert.equal(cash(await state()), '800240');
     });
     await check('HTTP-13', 'buy recognition and separate settlement cannot double-count cash', async () => {
       const buy = await record({ type: 'buy', listing_id: 'http-listing', quantity: '1000', price: '10', fee: '10' });
       const before = await state();
-      assert.equal(cash(before), '1500240'); assert.equal(before.positions[0].quantity, '1000');
+      assert.equal(cash(before), '800240'); assert.equal(before.positions[0].quantity, '1000');
       assert.equal(before.balances.find(row => row.ledger_account === 'trade_payable').balance, '-10010');
       await record({ type: 'settlement', direction: 'buy', related_event_id: buy.event_id, amount: '10010' });
-      assert.equal(cash(await state()), '1490230');
+      assert.equal(cash(await state()), '790230');
       const excess = await post({ action: 'record_fact', command: command({ type: 'settlement', direction: 'buy', related_event_id: buy.event_id, amount: '1' }) });
       assert.equal(excess.status, 400); assert.equal((await state()).revision, revision);
     });
@@ -267,7 +267,7 @@ async function main() {
       const second = command({ type: 'deposit', amount: '1' });
       const results = await Promise.all([post({ action: 'record_fact', command: first }), post({ action: 'record_fact', command: second })]);
       assert.deepEqual(results.map(result => result.status).sort(), [200, 409]);
-      revision += 1; assert.equal((await state()).revision, revision); assert.equal(cash(await state()), '1490231');
+      revision += 1; assert.equal((await state()).revision, revision); assert.equal(cash(await state()), '790231');
     });
     await check('HTTP-15', 'private workbench renders account facts; response is not cacheable', async () => {
       const response = await request('/workbench', { headers: { Cookie: cookie } });
@@ -281,7 +281,7 @@ async function main() {
     await check('HTTP-18', 'original attachment bytes are retained, scoped and downloadable', async () => {
       const statement = { schema_version: 1, portfolio_id: portfolio, account_id: account, cutoff_at: '2026-01-02T00:00:00Z',
         coverage: { currencies: ['CNY'], ledger_accounts: ['cash_settled', 'trade_receivable', 'trade_payable', 'dividend_receivable', 'transfer_in_transit', 'other_liability', 'cash_hold'], positions_complete: true, balances_complete: true },
-        balances: ['cash_settled', 'trade_receivable', 'trade_payable', 'dividend_receivable', 'transfer_in_transit', 'other_liability', 'cash_hold'].map(ledger_account => ({ currency: 'CNY', ledger_account, balance: ledger_account === 'cash_settled' ? '1490231' : '0' })),
+        balances: ['cash_settled', 'trade_receivable', 'trade_payable', 'dividend_receivable', 'transfer_in_transit', 'other_liability', 'cash_hold'].map(ledger_account => ({ currency: 'CNY', ledger_account, balance: ledger_account === 'cash_settled' ? '790231' : '0' })),
         positions: [{ listing_id: 'http-listing', currency: 'CNY', quantity: '1000' }] };
       const raw = JSON.stringify(statement, null, 2) + '\n';
       const stored = await post({ action: 'store_attachment', portfolio_id: portfolio, account_id: account, raw });
@@ -426,7 +426,7 @@ async function main() {
       const research = await jsonRequest(`/api/workbench?portfolio=${portfolio}&view=research`, { headers: { Cookie: cookie } });
       assert.equal(research.json.trials[0].status, 'succeeded'); assert.equal(research.json.trials[0].data_mode, 'synthetic');
       assert.equal(research.json.live_advice_eligible, false); assert.equal((await state()).revision, revision);
-      assert.equal(cash(await state()), '1490231');
+      assert.equal(cash(await state()), '790231');
       return { research_trial_id: trial.trial_id, real_ledger_unchanged: true, live_advice_eligible: false };
     });
     let fundingPortfolio, fundingAccount, fundingPlan, fundingOpening, fundingLink;
@@ -565,6 +565,58 @@ async function main() {
       return form;
     };
     const csvUpload = (form) => jsonRequest('/api/workbench/csv', { method: 'POST', headers: { Cookie: cookie, Origin: origin }, body: form });
+    const inspectionDialect = { encoding: 'utf-8', delimiter: ',', record_separator: 'either' };
+    const inspectionForm = (bytes = csvBytes, overrides = {}) => {
+      const form = new FormData();
+      form.set('portfolio_id', overrides.portfolio_id ?? csvPortfolio);
+      form.set('account_id', overrides.account_id ?? csvAccount);
+      form.set('expected_revision', String(overrides.expected_revision ?? 3));
+      const dialect = overrides.dialect ?? inspectionDialect;
+      form.set('dialect', typeof dialect === 'string' ? dialect : JSON.stringify(dialect));
+      if (overrides.values !== undefined) form.set('values', typeof overrides.values === 'string' ? overrides.values : JSON.stringify(overrides.values));
+      form.set('file', new Blob([bytes], { type: 'text/csv' }), 'synthetic-inspection.csv');
+      return form;
+    };
+    const inspectUpload = form => jsonRequest('/api/workbench/csv/inspect', { method: 'POST', headers: { Cookie: cookie, Origin: origin }, body: form });
+    const inspectionStorage = () => {
+      const db = new Database(filename, { readonly: true });
+      let tables;
+      try {
+        tables = db.transaction(() => db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({ name }) => {
+          const rows = db.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}"`).all().map(row => JSON.stringify(row)).sort();
+          return { name, rows: rows.length, sha256: sha(JSON.stringify(rows)) };
+        })).deferred();
+      } finally { db.close(); }
+      const inventoryEvidence = relative => {
+        const file = path.join(directory, relative);
+        if (!existsSync(file)) return [];
+        const stat = statSync(file), entry = { path: relative, mode: stat.mode & 0o777, type: stat.isDirectory() ? 'directory' : 'file' };
+        return stat.isDirectory() ? [entry, ...readdirSync(file).sort().flatMap(name => inventoryEvidence(`${relative}/${name}`))] : [{ ...entry, bytes: stat.size, sha256: sha(readFileSync(file)) }];
+      };
+      return { tables, attachments: ['attachments', 'auth/attachments'].flatMap(inventoryEvidence) };
+    };
+    // Send headers but no body: a response proves auth/Origin did not wait for multipart consumption.
+    const inspectBeforeBody = headers => new Promise((resolve, reject) => {
+      const target = new URL(address), socket = net.connect({ host: target.hostname, port: Number(target.port) });
+      let received = '', done = false;
+      const finish = (error, status) => { if (done) return; done = true; socket.destroy(); if (error) reject(error); else resolve(status); };
+      socket.setTimeout(10000, () => finish(new Error('Inspector did not reject before reading the unsent body.')));
+      socket.on('error', error => finish(error));
+      socket.on('end', () => finish(new Error('Inspector closed without a response to request headers.')));
+      socket.on('connect', () => socket.write([
+        'POST /api/workbench/csv/inspect HTTP/1.1', `Host: ${target.host}`,
+        'Content-Type: multipart/form-data; boundary=synthetic-inspection-auth', 'Content-Length: 5242881', 'Connection: close',
+        ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`), '', '',
+      ].join('\r\n')));
+      socket.on('data', chunk => {
+        received += chunk.toString('latin1');
+        if (received.includes('\r\n\r\n')) {
+          const match = /^HTTP\/1\.[01] (\d{3}) /.exec(received);
+          if (!match) finish(new Error('Inspector returned an invalid HTTP status line.'));
+          else finish(null, Number(match[1]));
+        }
+      });
+    });
     const csvReview = batch => ({ acknowledge_unverified_mapping: true, review_hash: batch.csv.review_hash, rows: [] });
     const csvConfirmation = batch => ({ action: 'confirm_import', portfolio_id: csvPortfolio, batch_id: batch.id, preview_hash: batch.preview_hash, expected_revision: batch.expected_revision, csv_review: csvReview(batch) });
     const csvCash = snapshot => snapshot.balances.find(row => row.account_id === csvAccount && row.currency === 'CNY' && row.ledger_account === 'cash_settled')?.balance ?? '0';
@@ -682,20 +734,152 @@ async function main() {
       const refreshed = await csvUpload(csvForm(pendingBytes, { expected_revision: 3 })); assert.equal(refreshed.status, 200); csvPending = refreshed.json;
       assert.notEqual(csvPending.id, pending.json.id); assert.equal(csvPending.expected_revision, 3); assert.equal(csvPending.status, 'preview');
       const current = await state(csvPortfolio); assert.equal(current.revision, 3); assert.equal(current.events.length, 3); assert.equal(csvCash(current), '149.123456789012345678');
-      assert.equal((await state()).revision, revision); assert.equal(cash(await state()), '1490231');
+      assert.equal((await state()).revision, revision); assert.equal(cash(await state()), '790231');
       return { stale_upload_status: 409, stale_confirmation_status: 409, refreshed_preview_without_booking: true, isolated_ledger_revision: 3 };
     });
-    await check('HTTP-CSV08', 'recovery lock preserves CSV downloads but blocks upload and confirmation without touching prior scenarios', async () => {
+    const beforeInspection = inspectionStorage();
+    await check('HTTP-INS01', 'inspector authentication and both Origin checks reject before any multipart body is sent', async () => {
+      assert.equal(await inspectBeforeBody({ Origin: origin }), 401);
+      assert.equal(await inspectBeforeBody({ Cookie: cookie }), 403);
+      assert.equal(await inspectBeforeBody({ Cookie: cookie, Origin: 'https://evil.example.test' }), 403);
+      const wrongType = await jsonRequest('/api/workbench/csv/inspect', { method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: '{}' });
+      assert.equal(wrongType.status, 415); assert.equal(wrongType.json.error, 'CSV_MULTIPART_REQUIRED');
+      assert.match(wrongType.headers.get('cache-control'), /no-store/);
+      return { body_bytes_sent: 0, declared_body_bytes: 5242881, anonymous_status: 401, missing_origin_status: 403, wrong_origin_status: 403 };
+    });
+    await check('HTTP-INS02', 'inspector binds account scope and exact current revision and rejects malformed request fields', async () => {
+      for (const [overrides, status, error] of [
+        [{ account_id: foreignAccount }, 403, 'ACCOUNT_OUT_OF_SCOPE'],
+        [{ portfolio_id: otherPortfolio }, 403, 'ACCOUNT_OUT_OF_SCOPE'],
+        [{ portfolio_id: 'synthetic-absent-portfolio' }, 404, 'PORTFOLIO_NOT_FOUND'],
+        [{ expected_revision: 2 }, 409, 'VERSION_CONFLICT'],
+        [{ expected_revision: 4 }, 409, 'VERSION_CONFLICT'],
+        [{ expected_revision: '3.0' }, 400, 'CSV_INSPECTION_FIELDS_INVALID'],
+        [{ expected_revision: '9007199254740992' }, 400, 'CSV_INSPECTION_FIELDS_INVALID'],
+        [{ dialect: '{bad' }, 400, 'CSV_INSPECTION_DIALECT_INVALID'],
+        [{ dialect: 'auto', values: { column: 'id', trim: false, offset: 0, limit: 1 } }, 400, 'CSV_INSPECTION_FIELDS_INVALID'],
+      ]) {
+        const result = await inspectUpload(inspectionForm(csvBytes, overrides));
+        assert.equal(result.status, status, JSON.stringify(result.json)); assert.equal(result.json.error, error);
+      }
+      for (const change of [form => form.append('account_id', csvAccount), form => form.set('actor_id', 'forged'), form => form.delete('dialect')]) {
+        const form = inspectionForm(); change(form);
+        const result = await inspectUpload(form); assert.equal(result.status, 400); assert.equal(result.json.error, 'CSV_INSPECTION_FIELDS_INVALID');
+      }
+      return { account_scope_status: 403, stale_and_future_revision_status: 409, fractional_revision_status: 400 };
+    });
+    await check('HTTP-INS03', 'inspector bounds streaming uploads, original bytes and values requests without storing rejected evidence', async () => {
+      async function* chunks() { for (let i = 0; i < 85; i++) yield Buffer.alloc(65536, 65); }
+      const streamed = await jsonRequest('/api/workbench/csv/inspect', { method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'multipart/form-data; boundary=synthetic-inspection-limit' }, body: chunks(), duplex: 'half' });
+      assert.equal(streamed.status, 413); assert.equal(streamed.json.error, 'REQUEST_TOO_LARGE'); assert.equal(streamed.headers.get('connection'), 'close');
+      const large = await inspectUpload(inspectionForm(Buffer.alloc(4 * 1024 * 1024 + 1, 65)));
+      assert.equal(large.status, 413); assert.equal(large.json.error, 'CSV_TOO_LARGE');
+      for (const overrides of [
+        { values: { column: 'id', trim: false, offset: 0, limit: 101 } },
+        { values: { column: 'id', trim: false, offset: -1, limit: 100 } },
+        { values: 'x'.repeat(4097) }, { dialect: 'x'.repeat(1025) },
+      ]) {
+        const invalid = await inspectUpload(inspectionForm(csvBytes, overrides));
+        assert.equal(invalid.status, 400); assert.equal(invalid.json.error, 'CSV_INSPECTION_FIELDS_INVALID');
+      }
+      const invalidUtf8 = await inspectUpload(inspectionForm(Buffer.from([0xff])));
+      assert.equal(invalidUtf8.status, 400); assert.equal(invalidUtf8.json.error, 'INVALID_UTF8');
+      return { transport_limit_bytes: 5242880, file_limit_bytes: 4194304, values_page_limit: 100 };
+    });
+    await check('HTTP-INS04', 'inspector auto never selects semantics; explicit dialect preserves BOM, original row bytes and scoped identities', async () => {
+      for (const raw of [csvBytes, Buffer.from('Code\n000001\n'), Buffer.from('Code;Note\n000001;"contains,comma"\n')]) {
+        const automatic = await inspectUpload(inspectionForm(raw, { dialect: 'auto' }));
+        assert.equal(automatic.status, 200, JSON.stringify(automatic.json));
+        assert.deepEqual(automatic.json.candidates.map(item => item.dialect.delimiter), [',', ';', '\t']);
+        assert.equal(automatic.json.selected, null); assert.equal(automatic.json.values, null); assert.equal(automatic.json.content_hash, sha(raw));
+      }
+      const explicit = await inspectUpload(inspectionForm()); assert.equal(explicit.status, 200, JSON.stringify(explicit.json));
+      const inspected = explicit.json;
+      assert.equal(inspected.schema_version, 'csv-inspection-v1'); assert.equal(inspected.parser_version, 'strict-csv-utf8-v1');
+      assert.equal(inspected.portfolio_id, csvPortfolio); assert.equal(inspected.account_id, csvAccount); assert.equal(inspected.ledger_revision, 3);
+      assert.equal(inspected.content_hash, csvPreview.csv.content_hash); assert.equal(inspected.content_hash, sha(csvBytes)); assert.equal(inspected.byte_length, csvBytes.length); assert.equal(inspected.bom, true);
+      assert.equal(inspected.selected.valid, true); assert.deepEqual(inspected.selected.headers, csvMapping.expected_headers); assert.deepEqual(inspected.selected.dialect, inspectionDialect);
+      assert.equal(inspected.selected.row_count, 2); assert.equal(inspected.selected.header_location.byte_start, 3);
+      const first = inspected.selected.sample_rows[0];
+      assert.equal(first.record_number, 2); assert.equal(first.line_start, 2); assert.equal(first.line_end, 3);
+      assert.equal(csvBytes.subarray(first.byte_start, first.byte_end).toString('utf8'), '2026-01-01,100.123456789012345678,csv-http-1,"Synthetic line one\r\n合成凭证"');
+      assert.equal(first.cells[1].value, '100.123456789012345678'); assert.equal(first.cells[3].value, 'Synthetic line one\r\n合成凭证');
+      assert.deepEqual(inspected.context.accounts.items.map(item => item.id), [csvAccount]); assert.equal(inspected.context.accounts.total, 1); assert.equal(inspected.context.accounts.truncated, false);
+      assert.ok(inspected.context.listings.items.some(item => item.id === 'http-listing')); assert.equal(inspected.context.listings.truncated, false);
+      assert.equal(inspected.state_written, false); assert.equal(inspected.broker_format_verified, false); assert.match(explicit.headers.get('cache-control'), /no-store/); assert.equal(explicit.headers.get('x-content-type-options'), 'nosniff');
+      const semicolon = await inspectUpload(inspectionForm(Buffer.from('Code;Note\n000001;"contains,comma"\n'), { dialect: { ...inspectionDialect, delimiter: ';' } }));
+      assert.equal(semicolon.status, 200); assert.equal(semicolon.json.selected.valid, true); assert.deepEqual(semicolon.json.selected.sample_rows[0].cells.map(cell => cell.value), ['000001', 'contains,comma']);
+      return { selected_only_when_explicit: true, original_sha256: sha(csvBytes), revision: 3, other_portfolio_accounts_exposed: 0, state_written: false };
+    });
+    await check('HTTP-INS05', 'inspector full-file values page exactly with leading zeros, duplicate counts and explicit trim', async () => {
+      const originals = Array.from({ length: 205 }, (_, i) => String(i).padStart(6, '0'));
+      const bytes = Buffer.from(['Code', ...originals, '000001'].join('\n')), all = [], offsets = [];
+      let offset = 0;
+      while (offset !== null) {
+        assert.ok(offsets.length < 4, 'Values cursor must progress.'); offsets.push(offset);
+        const result = await inspectUpload(inspectionForm(bytes, { values: { column: 'Code', trim: false, offset, limit: 100 } }));
+        assert.equal(result.status, 200, JSON.stringify(result.json)); assert.equal(result.json.content_hash, sha(bytes)); assert.equal(result.json.ledger_revision, 3);
+        const page = result.json.values;
+        assert.equal(page.total, 205); assert.equal(page.offset, offset); assert.ok(page.items.length > 0 && page.items.length <= 100);
+        if (offset === 0) assert.deepEqual(page.items[1], { value: '000001', count: 2, first_record_number: 3, lookup_compatible: true, formula_like: false });
+        all.push(...page.items.map(item => item.value));
+        if (page.next_offset !== null) assert.equal(page.next_offset, offset + page.items.length);
+        offset = page.next_offset;
+      }
+      assert.deepEqual(all, originals); assert.deepEqual(offsets, [0, 100, 200]);
+      const spaces = Buffer.from('Code\n 001\n001 \n002\n');
+      const untrimmed = await inspectUpload(inspectionForm(spaces, { values: { column: 'Code', trim: false, offset: 0, limit: 100 } }));
+      const trimmed = await inspectUpload(inspectionForm(spaces, { values: { column: 'Code', trim: true, offset: 0, limit: 100 } }));
+      assert.equal(untrimmed.status, 200); assert.equal(trimmed.status, 200);
+      assert.deepEqual(untrimmed.json.values.items.map(item => item.value), [' 001', '001 ', '002']); assert.equal(trimmed.json.values.total, 2); assert.equal(trimmed.json.values.items[0].count, 2);
+      for (const [column, offset, error] of [['missing', 0, 'CSV_COLUMN_NOT_FOUND'], ['Code', 206, 'CSV_INSPECTION_VALUES_INVALID']]) {
+        const invalid = await inspectUpload(inspectionForm(bytes, { values: { column, trim: false, offset, limit: 100 } }));
+        assert.equal(invalid.status, 400); assert.equal(invalid.json.error, error);
+      }
+      const end = await inspectUpload(inspectionForm(bytes, { values: { column: 'Code', trim: false, offset: 205, limit: 100 } }));
+      assert.equal(end.status, 200); assert.deepEqual(end.json.values.items, []); assert.equal(end.json.values.next_offset, null);
+      return { unique_values: 205, duplicate_count: 2, offsets, exact_first_occurrence_order: true };
+    });
+    await check('HTTP-INS06', 'inspector distinguishes truncated samples from exact values and exposes invalid rows beyond the sample', async () => {
+      const formula = '=' + '中'.repeat(300), bytes = Buffer.from(`Code,Note\n000001,${formula}\n`);
+      const result = await inspectUpload(inspectionForm(bytes, { values: { column: 'Note', trim: false, offset: 0, limit: 100 } }));
+      assert.equal(result.status, 200, JSON.stringify(result.json));
+      const cell = result.json.selected.sample_rows[0].cells[1];
+      assert.equal(cell.truncated, true); assert.equal(cell.formula_like, true); assert.equal(cell.byte_length, Buffer.byteLength(formula)); assert.ok(Buffer.byteLength(cell.value) <= 256); assert.equal(cell.value.includes('\ufffd'), false);
+      assert.equal(result.json.values.items[0].value, formula); assert.equal(result.json.values.items[0].lookup_compatible, false); assert.equal(result.json.values.items[0].formula_like, true);
+      const originals = Array.from({ length: 70 }, (_, i) => `${i}:` + 'x'.repeat(6000)), largeValues = Buffer.from(['Code', ...originals].join('\n'));
+      const page1 = await inspectUpload(inspectionForm(largeValues, { values: { column: 'Code', trim: false, offset: 0, limit: 100 } }));
+      assert.equal(page1.status, 200); assert.ok(page1.json.values.items.length > 0 && page1.json.values.items.length < 70); assert.equal(page1.json.values.next_offset, page1.json.values.items.length);
+      const page2 = await inspectUpload(inspectionForm(largeValues, { values: { column: 'Code', trim: false, offset: page1.json.values.next_offset, limit: 100 } }));
+      assert.equal(page2.status, 200); assert.equal(page2.json.values.next_offset, null); assert.deepEqual([...page1.json.values.items, ...page2.json.values.items].map(item => item.value), originals);
+      const malformed = Buffer.from(['Code,Amount', ...Array.from({ length: 6 }, () => '000001,1'), 'bad-tail-only'].join('\n'));
+      const invalid = await inspectUpload(inspectionForm(malformed)); assert.equal(invalid.status, 200); assert.equal(invalid.json.selected.valid, false);
+      assert.equal(invalid.json.selected.sample_rows.length, 5); assert.equal(invalid.json.selected.row_error_count, 1); assert.equal(invalid.json.selected.row_errors[0].record_number, 8);
+      assert.ok(invalid.json.selected.row_errors[0].errors.some(error => error.code === 'CSV_COLUMN_COUNT_MISMATCH'));
+      const unavailable = await inspectUpload(inspectionForm(malformed, { values: { column: 'Code', trim: false, offset: 0, limit: 100 } }));
+      assert.equal(unavailable.status, 400); assert.equal(unavailable.json.error, 'CSV_INSPECTION_VALUES_UNAVAILABLE');
+      return { sample_limit_bytes: 256, values_page_limit_bytes: 262144, large_value_pages: 2, invalid_record_outside_sample: 8 };
+    });
+    await check('HTTP-INS07', 'every successful and rejected inspection leaves all business tables and attachment bytes unchanged', async () => {
+      const after = inspectionStorage(); assert.deepEqual(after, beforeInspection);
+      assert.equal((await state(csvPortfolio)).revision, 3); assert.equal(csvCash(await state(csvPortfolio)), '149.123456789012345678');
+      return { tables_checked: after.tables.length, attachment_entries_checked: after.attachments.length, before_sha256: sha(JSON.stringify(beforeInspection)), after_sha256: sha(JSON.stringify(after)), writes: 0 };
+    });
+    await check('HTTP-CSV08', 'recovery lock permits inspection and CSV downloads but blocks upload and confirmation without touching prior scenarios', async () => {
       const marker = path.join(directory, 'RESTORE_PENDING_REVIEW'); writeFileSync(marker, 'Synthetic CSV recovery fixture\n');
       try {
         assert.equal((await state(csvPortfolio)).read_only, true);
+        const before = inspectionStorage(), inspected = await inspectUpload(inspectionForm());
+        assert.equal(inspected.status, 200, JSON.stringify(inspected.json)); assert.equal(inspected.json.selected.valid, true);
+        assert.equal(inspected.json.ledger_revision, 3); assert.equal(inspected.json.content_hash, sha(csvBytes)); assert.equal(inspected.json.state_written, false);
+        assert.deepEqual(inspectionStorage(), before);
         const upload = await csvUpload(csvForm(csvBytes, { expected_revision: 3 })); assert.equal(upload.status, 423); assert.equal(upload.json.error, 'WORKBENCH_READ_ONLY');
         const confirmation = await post(csvConfirmation(csvPending)); assert.equal(confirmation.status, 423); assert.equal(confirmation.json.error, 'WORKBENCH_READ_ONLY');
         const download = await request(`/api/workbench/attachments/${csvPreview.attachment_id}?portfolio=${csvPortfolio}`, { headers: { Cookie: cookie } });
         assert.equal(download.status, 200); assert.deepEqual(Buffer.from(await download.arrayBuffer()), csvBytes);
       } finally { rmSync(marker); }
       assert.equal((await state(csvPortfolio)).revision, 3); assert.equal(csvCash(await state(csvPortfolio)), '149.123456789012345678');
-      assert.equal((await state()).revision, revision); assert.equal(cash(await state()), '1490231');
+      assert.equal((await state()).revision, revision); assert.equal(cash(await state()), '790231');
     });
     let dividendPortfolio, dividendAccount, dividendRoot, dividendRevision = 0;
     const dividendCommand = (fact) => ({ portfolio_id: dividendPortfolio, expected_revision: dividendRevision, idempotency_key: `dividend-http:${++sourceSequence}`, source_id: 'synthetic-dividend-http', source_event_id: String(sourceSequence), effective_at: '2026-01-02', time_precision: 'date', source_timezone: 'UTC', reason: 'Synthetic dividend HTTP only', fact: { account_id: dividendAccount, currency: 'CNY', ...fact } });
@@ -745,7 +929,7 @@ async function main() {
       for (const suffix of ['&before=0', '&before=01', '&before=-1', '&before=9007199254740992', '&account=duplicate']) assert.equal((await dividendView(suffix)).status, 400);
       const stale = await jsonRequest(`/api/workbench?view=dividends&portfolio=${dividendPortfolio}&account=${dividendAccount}&revision=0`, { headers: { Cookie: cookie } }); assert.equal(stale.status, 409);
       const cross = await jsonRequest(`/api/workbench?view=dividends&portfolio=${portfolio}&account=${dividendAccount}&revision=${revision}`, { headers: { Cookie: cookie } }); assert.equal(cross.status, 403);
-      assert.equal((await state(dividendPortfolio)).revision, dividendRevision); assert.equal(cash(await state()), '1490231');
+      assert.equal((await state(dividendPortfolio)).revision, dividendRevision); assert.equal(cash(await state()), '790231');
       return { malformed_status: 400, stale_status: 409, cross_scope_status: 403, prior_scenario_unchanged: true };
     });
     let catalogPortfolio, catalogRevision = 0, catalogSource, catalogFirstHoldings, catalogSecondHoldings;
@@ -820,7 +1004,7 @@ async function main() {
         const mutation = await catalogPost('store_source', catalogCommand({ reference: 'blocked', document: {} })); assert.equal(mutation.status, 423);
         const comparison = await catalogPost('compare', { portfolio_id: catalogPortfolio, expected_catalog_revision: catalogRevision, selections: [{ listing_id: 'http-listing' }, { listing_id: 'http-listing-2' }] }); assert.equal(comparison.status, 200);
       } finally { rmSync(marker); }
-      assert.equal((await catalogGet()).json.catalog_revision, catalogRevision); assert.equal((await state(catalogPortfolio)).revision, 0); assert.equal(cash(await state()), '1490231');
+      assert.equal((await catalogGet()).json.catalog_revision, catalogRevision); assert.equal((await state(catalogPortfolio)).revision, 0); assert.equal(cash(await state()), '790231');
       return { read_only_mutation_status: 423, prior_ledger_unchanged: true };
     });
     await check('HTTP-16', 'storage errors do not expose paths or SQL', async () => {
@@ -840,7 +1024,7 @@ async function main() {
         assert.equal(db.pragma('quick_check', { simple: true }), 'ok'); assert.deepEqual(db.pragma('foreign_key_check'), []);
         assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_events WHERE portfolio_id=?').get(portfolio).n, revision);
         assert.deepEqual(db.prepare('SELECT DISTINCT actor_id FROM ledger_events').all(), [{ actor_id: 'owner' }]);
-        return { ledger_events: revision, ledger_revision: revision, cash_cny: '1490231', foreign_key_errors: 0, quick_check: 'ok', legacy_database_created: false };
+        return { ledger_events: revision, ledger_revision: revision, cash_cny: '790231', foreign_key_errors: 0, quick_check: 'ok', legacy_database_created: false };
       } finally { db.close(); }
     });
   } finally {

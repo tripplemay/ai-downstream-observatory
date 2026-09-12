@@ -26,7 +26,7 @@
 | CORRECTION | `web/src/server/ledger/corrections.ts`；`web/tests/ledger-corrections.test.ts`；[更正边界](ledger-corrections.md) | 追加冲销/替代、依赖重放、历史视图；支持子集有明确拒绝边界 |
 | DIVIDEND | [分红与公司行动边界](dividends-and-corporate-actions.md)；`web/src/server/ledger/{fact-quality,fact-quality-db,dividend-queries}.ts`；`worker/accounting/fact_quality.py`；`web/tests/{fact-quality,dividend-ledger-engine,dividend-ledger-service,dividend-input,dividend-workspace}.test.ts` | 未知税不当零税；累计税确认不改现金，实际补扣另记；净额/归因分离，公司行动通知/解决及时间范围质量证据；真实资料与完整人工闭环未验收 |
 | SECURITIES | [证券转移](security-transfers.md)；`web/tests/security-transfer-*.test.ts`、`security-transit-reconciliation.test.ts`；Python `test_security_transfers.py` / `test_security_flows.py` | 外部确认市值资本流、内部逐批在途、部分到达/退回/拆分/更正、两端覆盖；合成数据，不是券商实际转仓核验 |
-| CSV | [CSV 导入](csv-import.md)；`web/src/server/ledger/csv*.ts`；`csv-workspace.tsx`；`web/tests/csv*.test.ts` | 有界 multipart 原件上传、不可变映射/逐行预检、人工重复决定、原子确认/重试和来源别名；高级映射 JSON 界面，无真实券商格式认证 |
+| CSV | [CSV 导入](csv-import.md)；`web/src/server/ledger/csv*.ts`；`csv-{workspace,mapping-wizard,mapping-builder}.tsx/ts`；`web/tests/csv*.test.ts` | 零写检查、完整原值分页、可视化显式映射与高级 JSON；有界原件上传、不可变版本/逐行预检、人工重复决定、原子确认/重试和来源别名；无真实券商格式认证 |
 | ACCOUNTING | `worker/accounting/`；`tests/accounting/{test_accounting,test_golden_contract}.py`；`tests/accounting/golden.json` | Decimal 金标准和收益函数；包括固定种子往返属性测试，不等于完整随机业务序列覆盖 |
 | MARKET | `worker/market/`；`tests/market/{test_market,test_valuation_units}.py`、`contracts.test.mjs` | NAV v4、显式批次/发布历史、原币/FX 单位检查与独立事实质量证明；缺资料不输出精确 NAV；没有外部实时采集器验收 |
 | PERFORMANCE | `worker/performance/{pipeline,flows}.py`；`tests/performance/{test_pipeline,test_market_integrity,test_flow_fx,test_security_flows}.py`；`web/tests/valuation-freshness.test.ts` | v5 现金/证券逐事件 FX、fact/posting/event/PIT/发布证据和分红/公司行动点与区间质量证明；迟到事实/修订与重述；Python 产物经 Web 独立复核；完整验收及真实资料未完成 |
@@ -178,7 +178,7 @@ npm run test:workbench:http
 | ACC-15 TWR/Dietz | 纯函数精确分段；真实快照无流量精确，有流量缺前后 NAV 标 Dietz；date-only 标假设。ACCOUNTING、PERFORMANCE；E-06 | 自动生成外部流前后可靠估值；完整精确 TWR 不是任意两端 NAV 都可得到；缺段/重启区间 UI 验收 |
 | ACC-16 XIRR | ACT/365、统一评价时区、同日合并、多根/无根/残差诊断。ACCOUNTING、PERFORMANCE；E-06 | 按真实完整原币流及当时 FX 重放；界面全部异常状态、实际区间与年化文案验收 |
 | ACC-17 回撤/基准/归因 | 单位化快照回撤/修复辅助函数；研究同到账/成本/FX 基准；单段 FX 交叉项。ACCOUNTING、PERFORMANCE、RESEARCH；E-06/16 | **真实组合多期金额归因、影子基准、滚动对照/压力暴露尚不完整**；快照回撤不声称覆盖未观察低点 |
-| ACC-18 导入契约 | JSON/CSV 原件 bytes/hash、不可变映射版本/行校验、逐行人工重复处理、整批确认、来源别名、行到事件链。IMPORT、CSV、CORRECTION；E-07/15/24 | 国内/跨境券商原生格式和可视化字段映射向导；1 万行后台导入能力与性能未验收 |
+| ACC-18 导入契约 | JSON/CSV 原件 bytes/hash、零写检查与可视化显式映射、不可变版本/行校验、逐行人工重复处理、整批确认、来源别名、行到事件链。IMPORT、CSV、CORRECTION；E-07/15/24 | 国内/跨境券商原生格式、向导原生完整交互；1 万行后台导入能力与性能未验收 |
 | ACC-19 对账/更正 | 同账户显式覆盖所有币种/证券/挂账，差异留档；更正重放、旧原件可查、只失效受影响账户且保留 disabled。IMPORT、CORRECTION；E-13/21 | 目前对账不支持任意历史 cutoff；券商可用资金/hold 与账本余额需独立证据；真实样本/全链人工核对仍缺 |
 
 ## 5. P-01 至 P-08 产品需求
@@ -186,7 +186,7 @@ npm run test:workbench:http
 | 编号 / 整体状态 | 当前可用实现子集及证据 | 尚缺产品闭环 |
 |---|---|---|
 | P-01 / BLOCKED | 空组合/账户、开账、未知成本、显式对账和权限；LEDGER、IMPORT、GOVERNANCE、HTTP27 `05/19/20` | D-04/D-07 真实账户与启动资料；实物转入及完整起算确认；权限证据不能由市场名称推定 |
-| P-02 / BLOCKED | 标准 JSON 与通用 CSV 原件、映射封存、逐行重复核对、预览确认、事实/更正、对账、附件；IMPORT、CSV、CORRECTION、HTTP27 `09..12/18/19/24` | 券商原生适配、可视化映射引导、分次费用/执行关联；支持列表之外事件不能编造成已支持 |
+| P-02 / BLOCKED | 标准 JSON 与通用 CSV 原件、零写检查/可视化映射、版本封存、逐行重复核对、预览确认、事实/更正、对账、附件；IMPORT、CSV、CORRECTION、HTTP27 `09..12/18/19/24` | 券商原生适配、向导原生/故障验收及跨导航未决请求恢复、分次费用/执行关联；支持列表之外事件不能编造成已支持 |
 | P-03 / BLOCKED | 原币现金/持仓、CNY NAV 质量、不可变绩效、TWR/Dietz/XIRR/快照回撤；MARKET、PERFORMANCE、UI | 完整真实资金流 FX、归因/影子基准/暴露与压力、全部时间/估算状态 UI；实际数据和账户回归 |
 | P-04 / BLOCKED | 日期化初始/追加来源、计划版本、批次截止/延期/未执行处理、到账匹配与执行关联、可用现金/预留分离、超预算和更正警示；FUNDING、GOVERNANCE、HTTP32 F01..F05、资金浏览器流程 | 用户确认实际年度计划/资料、D-05 投入选择与授权、完整多账户资金依赖及执行闭环验收 |
 | P-05 / BLOCKED | ETF/listing 登记、发布批次、口径与可买性证据；新增 CATALOG 私有研究目录、版本化费率/标签/持仓披露、四标的历史比较、覆盖及重叠上下界，HTTP50 `CAT01..05` | 真实标的提供方/原件认证、身份类型与生命周期、当前费用/流动性/折溢价资料、等价份额识别和完整加权穿透；目录不自动升级未核验 listing，原生比较/窄屏尚待验 |
@@ -233,7 +233,7 @@ npm run test:workbench:http
 ## 8. 后续开发与验收优先级
 
 1. **维持正确性边界与版本绑定**：当前迁移 v13 / NAV v4 / 绩效 v5 的工程同版证据见第 10 节，生产/镜像/完整验收仍须补齐；后续变更须重跑并更新源码工件，不拿旧版本计数替代当前验收。
-2. **补齐 L-1 账本闭环**：在通用 CSV 链上补可视化映射、后台大批量任务与吞吐验证；完成已实现的未知税费/公司行动状态与 UI 的完整验收，核实真实起算规则，取得授权脱敏样例后核验国内/跨境券商适配，不预填真实事实。
+2. **补齐 L-1 账本闭环**：完成新增可视化映射的原生及导航故障验收，补后台大批量任务与吞吐验证；完成已实现的未知税费/公司行动状态与 UI 的完整验收，核实真实起算规则，取得授权脱敏样例后核验国内/跨境券商适配，不预填真实事实。
 3. **补齐产品而非只增接口**：完成已加入的目录分页/比较原生 UI 验收与真实资料采集；补历史查询、真实归因/基准、月度“不操作”周期状态、剩余建议及完整执行/资金闭环；维持实盘门槛关闭。
 4. **完成运行可靠性**：后台大导入、周期调度、通知传输、监控、压力/故障与异机恢复，再做真实生产副本演练及最终发布签核。
 5. **研究最后独立准入**：先明确 D 选择，取得可信数据/费用/可买规则，注册正式实验、稳健性与前向模拟，建立真正受信验证 Worker；逐项取得 S/G 证据及人工批准后才讨论 L-3。任何工程进度都不保证持续盈利。
@@ -248,6 +248,7 @@ npm run test:workbench:http
 | v0.6 | 2026-09-12 | 公开版以通用预算/券商示例替换个人参数；原始六份基线本地隔离、提交前核验 index；更新迁移 v12、NAV v4/绩效 v5 与分红税/公司行动实现索引，不声明新最终回归或升级验收门槛 |
 | v0.7 | 2026-09-12 | v13 组合私有目录、披露覆盖/重叠与 API 工件；公开研究资金参数重新建立通用基准，保留旧原件；浏览器目录验收中断单独记录，不升级 P-05 或发布门槛 |
 | v0.8 | 2026-09-12 | 备份并刷新旧 index，复核实际暂存内容；补 Docker 私有目录排除与路径回归，记录新构建 HTTP50；仅用于公开代码检查点，不升级生产或投资准入 |
+| v0.9 | 2026-09-12 | CSV 零写检查、可视化显式映射、原值分页、跨 revision 未决确认保护及 HTTP57；合成核算/导入 fixture 去关联并重跑，不升级券商认证、完整原生验收或发布门槛 |
 
 ## 9. v12 分红扣税与公开边界：本次同版证据
 
@@ -316,3 +317,34 @@ Docker 现排除根及嵌套 `.private`。路径边界回归已加入 Node 套�
 本节是提交前证据，实际 commit/push/CI 结果以 Git 和工作流记录为准。普通 push
 不触发生产发布。原生目录验收、未完成产品能力、最终镜像/异机恢复、真实数据、
 全部 E/S/G 和生产签核仍保留未完成状态。
+
+## 12. CSV 可视化映射：本次同版证据
+
+| 范围 | 结果与工件 |
+|---|---|
+| Web | 371/371；`artifacts/verification/final-regression/web-csv-wizard-private-safe.log`；新增 inspector、响应校验、纯映射 builder、确认状态及真实服务链 56 项 |
+| Python | 244/244，40.029 秒；`python-csv-wizard-private-safe.log`；F-02 使用重新构造的合成金额，预期入金损益仍为零 |
+| Node | 73/73；`node-csv-wizard-final.log`；资金计划不能变成事实的迁移样例同步使用无关合成预算 |
+| HTTP57 / build | `artifacts/verification/workbench-http/2026-09-12T13-52-56-430Z/{report.md,manifest.json}`；新增 `INS01..07` 并扩展恢复只读检查，57/57 |
+| 其他 | typecheck、认证 HTTP、shellcheck 通过，全量 npm audit 零已报告漏洞 |
+| 原生界面 | 本次没有通过声明：Tabbit 运行时不可用，重启许可尚待用户回复；没有使用其他浏览器绕过，也没有把 API/纯状态测试冒充完整交互验收 |
+
+最终生产构建为 `4XqxSRMTtJj6a_l4Pj0c-`，schema 13；运行时间
+`2026-09-12T13:52:56.430Z` 至 `2026-09-12T13:53:12.686Z`。
+320 项源文件前后及随后复核一致，manifest SHA-256：
+`656e1800ea88946016b27be6be3127abbefcabde7f55b1ec2657ea35cad52b4f`。
+同日较早两次向导 HTTP 运行保留，不改写为本次源码结果。
+
+检查认证/同源校验先于请求体，沿用原 parser 限额；候选不自动选语义，完整原值分页
+与截断样本分开。客户端完整响应校验与本地 SHA-256 绑定后才应用映射，fee/tax
+保持明确输入，失败预览也锁定映射版本。真实服务测试从零写检查经过版本 fork、
+逐行人工决定、原子确认到原件/回执追溯；没有新券商认证、自动交易或收益承诺。
+
+未决确认在同范围 revision 变化后保留原载荷；核对服务器状态确认成功后保留审计。
+普通链接/整页刷新有离页提示，但 Next.js 同文档后退/前进未保证提示及持久恢复，
+页面明确告知这一边界。原生桌面/窄屏/无障碍、真实券商样本、1 万行后台导入与
+确认性能、全部 E/S/G 和生产签核仍未闭环。
+
+本轮再次审查公开集合，替换旧 F-01/F-02、HTTP 和迁移计划样例中的关联现金数值，
+保留本地旧原件并重跑。上节提交前文本扫描不是绝对保证；当前替换不撤回已公开的
+Git 历史或旧 CI 工件，本轮未重写历史。个人规划和真实账户资料仍不进入新提交。

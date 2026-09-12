@@ -54,8 +54,8 @@ class DecimalBoundaryTests(unittest.TestCase):
 
 class LedgerGoldenTests(unittest.TestCase):
     def test_F02_funding_is_not_profit(self):
-        self.assertEqual(cny_nav(CurrencyBalance("1500000")).nav_cny, D("1500000"))
-        self.assertEqual(cashflow_profit("1500000", "1000000", ["500000"]), D("0"))
+        self.assertEqual(cny_nav(CurrencyBalance("80000")).nav_cny, D("80000"))
+        self.assertEqual(cashflow_profit("80000", "64000", ["16000"]), D("0"))
 
     def test_F03_buy_trade_date_and_settlement(self):
         trade = buy(Position(), "1000", "10000", "10")

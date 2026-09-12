@@ -4,7 +4,7 @@
   "synthetic": true,
   "facts_are_decimal_strings": true,
   "fixtures": [
-    {"id": "F-02", "operation": "profit", "nav": "1500000", "opening": "1000000", "flows": ["500000"], "expected": "0"},
+    {"id": "F-02", "operation": "profit", "nav": "80000", "opening": "64000", "flows": ["16000"], "expected": "0"},
     {"id": "F-03", "operation": "buy", "cash": "100000", "quantity": "1000", "principal": "10000", "fee": "10", "price": "10", "expected_nav": "99990", "expected_payable": "10010", "expected_cash": "89990"},
     {"id": "F-04", "operation": "sell", "cash": "89990", "opening_quantity": "1000", "opening_cost": "10000", "quantity": "400", "principal": "4800", "fee": "4", "price": "12", "expected_nav": "101986", "expected_cash": "94786", "expected_realized": "800", "expected_unrealized": "1200"},
     {"id": "F-05", "operation": "dividend", "quantity": "1000", "price": "9.8", "receivable": "180", "expected_nav": "9980"},

@@ -1,12 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type { LedgerCommand } from "@/server/ledger/service";
 import type { CsvCandidateReview, CsvRowResolution } from "@/server/ledger/csv-review";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CsvMappingWizard } from "./csv-mapping-wizard";
+import { csvMappingSchema, type CsvMapping } from "@/server/ledger/csv-schemas";
+import { canClearCsvPreview, canRetryCsvConfirmation, csvContextDisposition, csvScopeKey, isCsvOperationCurrent, retainCsvConfirmedRefresh, sameCsvScope, shouldWarnCsvNavigation,
+  type CsvContext, type CsvOperation, type CsvPendingConfirmation, type CsvScope } from "./csv-workspace-state";
 
-interface Props { portfolioId: string; accountId: string; revision: number; onCommitted: () => void }
+interface Props {
+  portfolioId: string; accountId: string; revision: number; onCommitted: () => void | Promise<void>;
+  readOnly?: boolean;
+  onScopeLockChange?: (locked: boolean) => void;
+  onRestorePendingScope?: (scope: CsvScope) => void | Promise<void>;
+}
 interface CsvSource {
   record_number: number; line_start: number; line_end: number; byte_start: number; byte_end: number;
   cells: string[]; formula_columns?: number[]; warnings?: unknown[];
@@ -67,36 +76,68 @@ function Candidates({ title, values, onPick }: { title: string; values: readonly
   </details>;
 }
 
-export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted }: Props) {
+export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted, readOnly = false, onScopeLockChange, onRestorePendingScope }: Props) {
   const [file, setFile] = useState<File | null>(null), [fileKey, setFileKey] = useState(0);
   const [mapping, setMapping] = useState(""), [mappingFilename, setMappingFilename] = useState("");
+  const [mode, setMode] = useState<"wizard" | "advanced">("wizard");
+  const [wizardBusy, setWizardBusy] = useState(false), [wizardHash, setWizardHash] = useState<string | null>(null);
+  const [knownMapping, setKnownMapping] = useState<{ scope: string; mapping: CsvMapping } | null>(null);
   const [preview, setPreview] = useState<CsvPreview | null>(null), [originalBytes, setOriginalBytes] = useState<Uint8Array | null>(null);
   const [drafts, setDrafts] = useState<Record<number, ResolutionDraft>>({}), [acknowledged, setAcknowledged] = useState(false);
   const [page, setPage] = useState(0), [reviewOnly, setReviewOnly] = useState(false);
   const [busy, setBusy] = useState<"preview" | "confirm" | "mapping" | "status" | null>(null);
-  const [pendingPayload, setPendingPayload] = useState<string | null>(null), [confirmation, setConfirmation] = useState<unknown>(null);
+  const [pending, setPending] = useState<CsvPendingConfirmation | null>(null), [confirmation, setConfirmation] = useState<unknown>(null);
   const [error, setError] = useState(""), [notice, setNotice] = useState("");
-  const scope = `${portfolioId}:${accountId}`, context = `${scope}:${revision}`;
-  const currentContext = useRef(context), previous = useRef({ scope, revision });
-  const operation = useRef<string | null>(null), ownCommit = useRef<{ scope: string; revision: number | null } | null>(null);
+  const scope = csvScopeKey({ portfolioId, accountId }), context: CsvContext = { portfolioId, accountId, revision };
+  const currentContext = useRef(context), previous = useRef(context), mounted = useRef(true), writeLocked = useRef(readOnly);
+  const operation = useRef<CsvOperation | null>(null), ownCommit = useRef<{ scope: string; revision: number | null } | null>(null);
   const previewScope = useRef<string | null>(null);
   const requestNumber = useRef(0);
+  const pendingPayload = pending?.payload ?? null;
+  const pendingElsewhere = !!pending && !sameCsvScope(pending.context, context);
   currentContext.current = context;
+  writeLocked.current = readOnly;
 
   useEffect(() => {
-    if (previous.current.scope === scope && previous.current.revision === revision) return;
-    const scopeChanged = previous.current.scope !== scope;
-    previous.current = { scope, revision };
-    if (!scopeChanged && ownCommit.current?.scope === scope && (ownCommit.current.revision === null || ownCommit.current.revision === revision)) {
+    const disposition = csvContextDisposition(previous.current, currentContext.current, pending);
+    if (disposition === "unchanged") return;
+    const scopeChanged = !sameCsvScope(previous.current, currentContext.current);
+    previous.current = currentContext.current;
+    if (disposition === "retain_pending") {
+      if (scopeChanged) { operation.current = null; setBusy(null); }
+      setNotice(pending && !sameCsvScope(pending.context, currentContext.current)
+        ? "范围已改变，但原账户的未决确认仍保留。请恢复原账户核对状态，或明确放弃本页重试信息；不能在新账户覆盖该请求。"
+        : "账本版本或账户选择已变化；原确认请求、批次和人工决定保持冻结。先核对状态，或重试完全相同的请求，不改写为当前版本。");
+      return;
+    }
+    if (!scopeChanged && retainCsvConfirmedRefresh(ownCommit.current, currentContext.current)) {
       ownCommit.current = null;
       return;
     }
     ownCommit.current = null; operation.current = null; previewScope.current = null;
-    setPreview(null); setOriginalBytes(null); setDrafts({}); setAcknowledged(false); setPendingPayload(null); setConfirmation(null); setPage(0); setReviewOnly(false); setBusy(null); setError("");
+    setPreview(null); setOriginalBytes(null); setDrafts({}); setAcknowledged(false); setConfirmation(null); setPage(0); setReviewOnly(false); setBusy(null); setError("");
     setNotice(scopeChanged ? "账户范围已改变，请重新选择文件与映射。" : "账本版本已改变，旧预览已清除；如刚提交过确认，请先核对事实或重新上传同一原件。");
     if (scopeChanged) { setFile(null); setFileKey(key => key + 1); setMapping(""); setMappingFilename(""); }
-  }, [scope, revision]);
-  useEffect(() => { currentContext.current = context; return () => { currentContext.current = "unmounted"; }; }, [context]);
+  }, [scope, revision, pending]);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; operation.current = null; }; }, []);
+  useEffect(() => { setWizardHash(null); }, [file, scope, revision]);
+  useEffect(() => { onScopeLockChange?.(!!busy || wizardBusy || !!pending); }, [busy, wizardBusy, pending, onScopeLockChange]);
+  useEffect(() => () => { onScopeLockChange?.(false); }, [onScopeLockChange]);
+  useEffect(() => {
+    if (!pending) return;
+    const warning = "确认可能已入账。原请求只保存在当前页面内存；离开或刷新后不能保证恢复。请先核对服务器状态。仍要离开？";
+    const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    const onLink = (event: MouseEvent) => {
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      if (!(event.target instanceof Element)) return;
+      const link = event.target.closest("a[href]");
+      if (!(link instanceof HTMLAnchorElement) || !shouldWarnCsvNavigation(link.href, window.location.href, link.target, link.hasAttribute("download"))) return;
+      if (!window.confirm(warning)) { event.preventDefault(); event.stopPropagation(); }
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    document.addEventListener("click", onLink, true);
+    return () => { window.removeEventListener("beforeunload", beforeUnload); document.removeEventListener("click", onLink, true); };
+  }, [pending]);
 
   const candidates = useMemo(() => new Map(preview?.csv?.candidates.map(candidate => [candidate.row, candidate]) ?? []), [preview]);
   const required = useMemo(() => new Set(preview?.csv?.required_review_rows ?? []), [preview]);
@@ -108,71 +149,110 @@ export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted }: 
   const filteredRows = useMemo(() => preview?.rows.filter(row => !reviewOnly || required.has(row.row)) ?? [], [preview, reviewOnly, required]);
   const pages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE)), currentPage = Math.min(page, pages - 1);
   const visibleRows = filteredRows.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
-  const frozen = !!busy || !!pendingPayload || preview?.status === "confirmed";
-  const canConfirm = !!preview?.csv && previewScope.current === scope && preview.account_id === accountId && preview.expected_revision === revision
+  const frozen = readOnly || !!busy || !!pendingPayload || preview?.status === "confirmed";
+  const editFrozen = !!busy || wizardBusy || !!pendingPayload || !!preview;
+  const invalidateWizard = useCallback(() => setWizardHash(null), []);
+  const applyWizard = useCallback((text: string, hash: string) => {
+    if (busy || pending || preview) return false;
+    if (mapping.trim() && mapping !== text && !window.confirm("用刚核对的向导映射替换当前编辑区映射？已封存版本不会被覆盖。")) return false;
+    setMapping(text); setMappingFilename(""); setWizardHash(hash); setError("");
+    return true;
+  }, [busy, pending, preview, mapping]);
+  const canConfirm = !readOnly && !!preview?.csv && previewScope.current === scope && preview.account_id === accountId && preview.expected_revision === revision
     && preview.status === "preview" && !preview.csv.document_errors.length && preview.rows.length > 0
     && preview.rows.every(row => row.command && !row.errors.length && row.source && Array.isArray(row.source.cells)) && acknowledged && readyRows.length === required.size;
   const attachmentHref = (id: string) => `/api/workbench/attachments/${encodeURIComponent(id)}?portfolio=${encodeURIComponent(portfolioId)}`;
-  const isCurrent = (token: string) => operation.current === token && token.startsWith(`${currentContext.current}\0`);
+  const isCurrent = (token: CsvOperation) => mounted.current && isCsvOperationCurrent(token, operation.current, currentContext.current);
+  const startOperation = (kind: CsvOperation["kind"]): CsvOperation => {
+    const token = { id: ++requestNumber.current, kind, context: { ...currentContext.current } };
+    operation.current = token; setBusy(kind); return token;
+  };
 
-  function clearPreview() {
+  function clearPreview(abandonPending = false) {
+    if (!canClearCsvPreview(pending, abandonPending)) return false;
     previewScope.current = null; ownCommit.current = null;
-    setPreview(null); setOriginalBytes(null); setDrafts({}); setAcknowledged(false); setPage(0); setReviewOnly(false); setPendingPayload(null); setConfirmation(null); setError(""); setNotice("");
+    setPreview(null); setOriginalBytes(null); setDrafts({}); setAcknowledged(false); setPage(0); setReviewOnly(false); setPending(null); setConfirmation(null); setError(""); setNotice("");
+    return true;
   }
   function editAgain() {
-    if (pendingPayload && !window.confirm("确认响应失败不代表未入账。建议先核对批次状态；即使返回编辑，也不要换原件规避重复检查。确定结束此预览？")) return;
-    clearPreview();
+    if (operation.current) return;
+    if (pendingPayload && !window.confirm("确认响应失败不代表未入账。结束后会放弃仅存在本页内存中的原确认请求和人工选择；服务器批次和可能已入账的事实不会撤销。建议先核对状态。确定放弃本页重试信息？")) return;
+    const wasElsewhere = pendingElsewhere;
+    clearPreview(true);
+    if (wasElsewhere) { setFile(null); setFileKey(key => key + 1); setMapping(""); setMappingFilename(""); }
+  }
+  async function restorePendingScope() {
+    if (operation.current || !pending || !onRestorePendingScope) return;
+    const token = startOperation("status"); setError("");
+    try { await onRestorePendingScope({ portfolioId: pending.context.portfolioId, accountId: pending.context.accountId }); }
+    catch (caught) { if (isCurrent(token)) setError(errorMessage(caught)); }
+    finally { if (operation.current === token) { operation.current = null; setBusy(null); } }
   }
   function updateDraft(row: number, changes: Partial<ResolutionDraft>) {
     if (frozen) return;
     setDrafts(current => ({ ...current, [row]: { ...(current[row] ?? emptyDraft()), ...changes } }));
   }
   async function loadMapping(selected: File | null) {
-    if (!selected || operation.current) return;
-    const token = `${context}\0${++requestNumber.current}`; operation.current = token; setBusy("mapping"); setError(""); clearPreview();
+    if (!selected || operation.current || wizardBusy || pending) return;
+    const token = startOperation("mapping"); setError(""); clearPreview();
     try {
       if (selected.size > MAPPING_MAX_BYTES) throw new Error("映射 JSON 最大为 256 KiB。");
       const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await selected.arrayBuffer());
       if (!isCurrent(token)) return;
       setMapping(text); setMappingFilename(selected.name);
+      setWizardHash(null);
+      try { const parsed = csvMappingSchema.safeParse(JSON.parse(text)); if (parsed.success) setKnownMapping({ scope, mapping: parsed.data }); } catch { /* Server validates the original JSON, including duplicate keys. */ }
     } catch (caught) { if (isCurrent(token)) setError(errorMessage(caught)); }
     finally { if (operation.current === token) { operation.current = null; setBusy(null); } }
   }
   async function upload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (operation.current || !file || !mapping.trim() || pendingPayload) return;
-    const token = `${context}\0${++requestNumber.current}`; operation.current = token; setBusy("preview"); clearPreview();
+    if (operation.current || wizardBusy || !file || !mapping.trim() || pendingPayload || readOnly || (mode === "wizard" && !wizardHash)) return;
+    const token = startOperation("preview"); clearPreview();
+    let sent = false;
     try {
       if (!portfolioId || !accountId) throw new Error("请先选择实际组合和账户。");
       if (!file.size || file.size > CSV_MAX_BYTES) throw new Error("CSV 必须非空，且不超过 4 MiB。");
       if (new TextEncoder().encode(mapping).byteLength > MAPPING_MAX_BYTES) throw new Error("映射 JSON 最大为 256 KiB。");
       const bytes = new Uint8Array(await file.arrayBuffer());
+      if (!isCurrent(token) || writeLocked.current) return;
+      const digest = await crypto.subtle.digest("SHA-256", bytes);
+      const contentHash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
+      if (!isCurrent(token) || writeLocked.current) return;
+      if (mode === "wizard" && contentHash !== wizardHash) throw new Error("CSV_WIZARD_FILE_HASH_MISMATCH");
       const data = new FormData(); data.set("portfolio_id", portfolioId); data.set("account_id", accountId); data.set("expected_revision", String(revision)); data.set("mapping", mapping); data.set("file", file);
+      try { const parsed = csvMappingSchema.safeParse(JSON.parse(mapping)); if (parsed.success) setKnownMapping({ scope, mapping: parsed.data }); } catch { /* Preserve raw JSON for authoritative server validation. */ }
+      sent = true;
       const result = csvPreview(await responseJson(await fetch("/api/workbench/csv", { method: "POST", body: data })), accountId);
       if (!isCurrent(token)) return;
+      if (result.csv!.content_hash !== contentHash) throw new Error("CSV_PREVIEW_FILE_HASH_MISMATCH");
       if (result.status !== "confirmed" && result.expected_revision !== revision) throw new Error("CSV_PREVIEW_REVISION_MISMATCH");
       previewScope.current = scope; setPreview(result); setOriginalBytes(bytes);
-      setNotice(result.status === "confirmed" ? "该原件已有已确认批次，以下仅为审计，不重复新增事实。" : "原件和映射已留存，尚未新增任何账本事实。请逐行核对后确认。");
-    } catch (caught) { if (isCurrent(token)) setError(errorMessage(caught)); }
+      setNotice(result.status === "confirmed" ? "该原件已有已确认批次，以下仅为审计，不重复新增事实。" : result.status === "invalid"
+        ? "预览存在错误，未新增账本事实；原件与该映射版本已经封存。修改映射定义必须明确创建新版本，不能覆盖本次版本。"
+        : "原件和映射已留存，尚未新增任何账本事实。请逐行核对后确认。");
+    } catch (caught) { if (isCurrent(token)) setError(errorMessage(caught) + (sent ? " 预览响应失败不证明映射未封存；先以同一原件及映射重试核对，修改定义时明确使用新版本。" : "")); }
     finally { if (operation.current === token) { operation.current = null; setBusy(null); } }
   }
-  async function committed(result: unknown, batch: CsvPreview, token: string) {
+  async function committed(result: unknown, batch: CsvPreview, token: CsvOperation) {
     if (!isCurrent(token)) return;
     const endRevision = result && typeof result === "object" && "revision" in result && Number.isSafeInteger(result.revision) ? Number(result.revision) : null;
     ownCommit.current = { scope, revision: endRevision };
-    setPreview({ ...batch, status: "confirmed" }); setConfirmation(result); setPendingPayload(null); setError("");
+    setPreview({ ...batch, status: "confirmed" }); setConfirmation(result); setPending(null); setError("");
     setNotice("批次已确认。原件与逐行关联已留存；重复来源或人工关联行不会重复入账，账户需重新对账。");
     try { await Promise.resolve(onCommitted()); }
     catch { if (isCurrent(token)) setError("入账已确认，但页面刷新失败。请刷新工作台；不要据此重新记账。"); }
   }
   async function confirm() {
-    if (operation.current || !preview?.csv || previewScope.current !== scope || preview.expected_revision !== revision || (!pendingPayload && !canConfirm)) return;
-    const token = `${context}\0${++requestNumber.current}`, batch = preview;
+    if (operation.current || readOnly || !preview?.csv || previewScope.current !== scope
+      || (pending ? !canRetryCsvConfirmation(pending, currentContext.current, preview, readOnly) : !canConfirm)) return;
+    const batch = preview;
     const payload = pendingPayload ?? JSON.stringify({ action: "confirm_import", portfolio_id: portfolioId, batch_id: batch.id, preview_hash: batch.preview_hash, expected_revision: batch.expected_revision,
       csv_review: { acknowledge_unverified_mapping: true, review_hash: batch.csv!.review_hash, rows: readyRows } });
     if (new TextEncoder().encode(payload).byteLength > CONFIRM_MAX_BYTES) { setError("确认请求超过 5 MiB，请精简逐行原因或结束预览后拆分原件；尚未发送确认请求。"); return; }
     // Preserve the exact first request after any ambiguous transport or HTTP failure.
-    setPendingPayload(payload); operation.current = token; setBusy("confirm"); setError(""); setNotice("");
+    const token = startOperation("confirm");
+    setPending(pending ?? { context: { portfolioId, accountId, revision: batch.expected_revision }, batchId: batch.id, payload }); setError(""); setNotice("");
     try {
       const result = await responseJson(await fetch("/api/workbench", { method: "POST", headers: { "Content-Type": "application/json" }, body: payload }));
       if (!result || typeof result !== "object" || !("revision" in result) || !Number.isSafeInteger(result.revision) || Number(result.revision) < batch.expected_revision
@@ -183,34 +263,45 @@ export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted }: 
   }
   async function checkStatus() {
     if (operation.current || !preview || previewScope.current !== scope) return;
-    const token = `${context}\0${++requestNumber.current}`; operation.current = token; setBusy("status"); setError("");
+    const token = startOperation("status"), batch = preview; setError("");
     try {
       const value = csvPreview(await responseJson(await fetch(`/api/workbench?portfolio=${encodeURIComponent(portfolioId)}&batch=${encodeURIComponent(preview.id)}`, { cache: "no-store" })), accountId);
       if (!isCurrent(token)) return;
+      if (value.id !== batch.id || value.preview_hash !== batch.preview_hash || value.csv!.content_hash !== batch.csv!.content_hash || value.csv!.mapping_hash !== batch.csv!.mapping_hash) throw new Error("CSV_STATUS_RESPONSE_MISMATCH");
       if (value.status === "confirmed") await committed({ status: "confirmed", batch_id: value.id, detail: "服务器确认该批次已提交；下方行结果是封存预检，不代表实际逐行 receipt。" }, value, token);
       else setNotice(`服务器批次状态：${value.status}。已保留原确认请求；版本冲突或预览失效时请结束预览后重新核对。`);
     } catch (caught) { if (isCurrent(token)) setError(errorMessage(caught)); }
     finally { if (operation.current === token) { operation.current = null; setBusy(null); } }
   }
 
-  return <section className="min-w-0 rounded-xl border bg-card p-5 shadow-sm" aria-busy={!!busy}>
-    <h2 className="text-lg font-semibold">高级：通用 CSV 映射导入</h2>
+  return <section className="min-w-0 rounded-xl border bg-card p-5 shadow-sm" aria-busy={!!busy || wizardBusy}>
+    <h2 className="text-lg font-semibold">CSV 原件检查与映射导入</h2>
     <p className="mt-2 text-sm text-muted-foreground">不是已认证的券商格式。由你明确列名、数值格式、费用、时区和账户映射；系统不猜测交易含义，不代替独立对账。预览只保存证据，确认后才记账。</p>
     <p className="mt-2 break-all text-xs text-muted-foreground">当前账户 {accountId || "未选择"} · 账本版本 {revision}。仅支持 UTF-8 CSV；原文件字节、映射和行定位均保留。</p>
     {error && <div role="alert" className="mt-4 break-words rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm">{error}</div>}
     {notice && <p role="status" className="mt-4 break-words rounded-lg border p-3 text-sm">{notice}</p>}
+    {pending && <p className="mt-4 rounded-lg border border-amber-500/40 p-3 text-sm">未决请求仅在本页内存中。请先核对服务器状态再离开；浏览器后退/前进等同文档导航可能不弹出提示，强制刷新后也不能保证恢复。</p>}
+    {readOnly && <p role="status" className="mt-4 rounded-lg border p-3 text-sm">恢复只读：可检查 CSV 与编辑本地映射，但不能保存预览或重试确认；仍可核对已保留批次的服务器状态、查看证据和下载原件。</p>}
+    {pendingElsewhere && pending && <div role="alert" className="mt-4 space-y-3 rounded-lg border border-amber-500/40 p-3 text-sm">
+      <p className="break-all">未决确认属于原组合 {pending.context.portfolioId} / 原账户 {pending.context.accountId}，批次 {pending.batchId}。当前范围不能覆盖或发送该请求。</p>
+      <div className="flex flex-wrap gap-3">{onRestorePendingScope && <Button type="button" variant="outline" disabled={!!busy} onClick={() => void restorePendingScope()}>恢复原账户并核对未决确认</Button>}<Button type="button" variant="outline" disabled={!!busy} onClick={editAgain}>明确放弃本页未决请求信息</Button></div>
+      <details><summary className="cursor-pointer">原确认请求（仅当前页面内存）</summary><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-xs">{pending.payload}</pre></details>
+    </div>}
     <form onSubmit={upload} className="mt-5 space-y-4">
-      <fieldset disabled={!!busy || !!pendingPayload || !!preview} className="grid min-w-0 gap-4 sm:grid-cols-2">
-        <label className={field}>CSV 原文件（最大 4 MiB）<Input key={`csv-${fileKey}`} type="file" accept=".csv,text/csv" aria-label="CSV 原文件" required onChange={event => { setFile(event.target.files?.[0] ?? null); clearPreview(); }} />{file && <span className="break-all text-xs text-muted-foreground">{file.name} · {file.size} bytes</span>}</label>
-        <label className={field}>加载映射 JSON（可选，最大 256 KiB）<Input key={`mapping-${fileKey}`} type="file" accept=".json,application/json" aria-label="加载映射 JSON" onChange={event => void loadMapping(event.target.files?.[0] ?? null)} />{mappingFilename && <span className="break-all text-xs text-muted-foreground">已读取 {mappingFilename}；提交以下编辑区的完整文字。</span>}</label>
-        <label className={`${field} sm:col-span-2`}>映射 JSON 内容<textarea className={textareaClass} aria-label="CSV 映射 JSON 内容" value={mapping} onChange={event => { setMapping(event.target.value); clearPreview(); }} maxLength={MAPPING_MAX_BYTES} required spellCheck={false} placeholder="粘贴经人工核对的 csv-import-mapping-v1 定义。账户、上市标识、费用和时间格式必须明确；不预置券商猜测模板。" /></label>
-        <p className="text-xs text-muted-foreground sm:col-span-2">同一映射标识和版本不可覆盖。修改定义应使用新版本；已确认原件需要更正时走事实更正流程，不能换映射重复导入。</p>
-        <Button disabled={!!busy || !file || !mapping.trim() || !portfolioId || !accountId} className="sm:col-span-2">{busy === "preview" ? "正在核验原件与账本…" : "保存证据并预览（不入账）"}</Button>
+      <fieldset disabled={editFrozen} className="grid min-w-0 gap-4 sm:grid-cols-2">
+        <label className={field}>CSV 原文件（最大 4 MiB）<Input key={`csv-${fileKey}`} type="file" accept=".csv,text/csv" aria-label="CSV 原文件" required onChange={event => { if (editFrozen || !clearPreview()) return; setFile(event.target.files?.[0] ?? null); }} />{file && <span className="break-all text-xs text-muted-foreground">{file.name} · {file.size} bytes</span>}</label>
+        <div className="flex flex-wrap items-end gap-2"><Button type="button" variant={mode === "wizard" ? "default" : "outline"} onClick={() => { if (!editFrozen && clearPreview()) setMode("wizard"); }}>可视化映射向导</Button><Button type="button" variant={mode === "advanced" ? "default" : "outline"} onClick={() => { if (!editFrozen && clearPreview()) setMode("advanced"); }}>高级 JSON 编辑</Button></div>
+        {mode === "advanced" && <><label className={field}>加载映射 JSON（可选，最大 256 KiB）<Input key={`mapping-${fileKey}`} type="file" accept=".json,application/json" aria-label="加载映射 JSON" onChange={event => void loadMapping(event.target.files?.[0] ?? null)} />{mappingFilename && <span className="break-all text-xs text-muted-foreground">已读取 {mappingFilename}；提交以下编辑区的完整文字。</span>}</label>
+          <label className={`${field} sm:col-span-2`}>映射 JSON 内容<textarea className={textareaClass} aria-label="CSV 映射 JSON 内容" value={mapping} onChange={event => { if (editFrozen || !clearPreview()) return; setMapping(event.target.value); setWizardHash(null); }} maxLength={MAPPING_MAX_BYTES} required spellCheck={false} placeholder="粘贴经人工核对的 csv-import-mapping-v1 定义。账户、上市标识、费用和时间格式必须明确；不预置券商猜测模板。" /></label></>}
       </fieldset>
+      <div hidden={mode !== "wizard"}><CsvMappingWizard file={file} portfolioId={portfolioId} accountId={accountId} revision={revision} disabled={!!busy || !!pendingPayload || !!preview || mode !== "wizard"} previousMapping={knownMapping?.scope === scope ? knownMapping.mapping : null} onApply={applyWizard} onInvalidate={invalidateWizard} onBusyChange={setWizardBusy} /></div>
+      <p className="text-xs text-muted-foreground">同一映射标识和版本不可覆盖，失败预览也可能已封存映射。修改定义应明确创建新版本；已确认原件需要更正时走事实更正流程，不能换映射重复导入。</p>
+      {mode === "wizard" && !wizardHash && <p className="text-sm text-muted-foreground">先在向导中核对并生成映射，才能保存预览。</p>}
+      <Button disabled={readOnly || editFrozen || !file || !mapping.trim() || !portfolioId || !accountId || (mode === "wizard" && !wizardHash)}>{busy === "preview" ? "正在核验原件与账本…" : "保存证据并预览（不入账）"}</Button>
     </form>
     {preview?.csv && previewScope.current === scope && <div className="mt-5 space-y-4 border-t pt-5">
       <div className="space-y-2 text-sm"><p className="font-medium">批次 {preview.status} · {preview.rows.length} 行 · 依据账本版本 {preview.expected_revision}</p><p className="break-all">原件：{preview.csv.original_filename}</p><p className="break-all">映射：{preview.csv.mapping_id} / v{preview.csv.mapping_version} · {preview.csv.parser_version} · {preview.csv.mapper_version}</p>
-        <div className="flex flex-wrap gap-4"><a className="underline" href={attachmentHref(preview.attachment_id)}>下载 CSV 原件</a><a className="underline" href={attachmentHref(preview.csv.mapping_attachment_id)}>下载已封存映射原件</a></div>
+        <div className="flex flex-wrap gap-4"><a className="underline" download href={attachmentHref(preview.attachment_id)}>下载 CSV 原件</a><a className="underline" download href={attachmentHref(preview.csv.mapping_attachment_id)}>下载已封存映射原件</a></div>
         <details><summary className="cursor-pointer">批次与完整校验标识</summary><dl className="mt-2 space-y-1 break-all font-mono text-xs"><div><dt>batch_id</dt><dd>{preview.id}</dd></div><div><dt>content_hash</dt><dd>{preview.csv.content_hash}</dd></div><div><dt>mapping_hash</dt><dd>{preview.csv.mapping_hash}</dd></div><div><dt>preview_hash</dt><dd>{preview.preview_hash}</dd></div><div><dt>review_hash</dt><dd>{preview.csv.review_hash}</dd></div></dl></details>
       </div>
       {preview.csv.document_errors.length > 0 && <div role="alert" className="space-y-2 rounded border border-red-500/40 p-3 text-sm"><p className="font-medium">文件级错误阻断整批确认</p>{preview.csv.document_errors.map((issue, index) => <pre key={index} className="whitespace-pre-wrap break-all text-xs">{describe(issue)}</pre>)}</div>}
@@ -251,8 +342,8 @@ export function CsvWorkspace({ portfolioId, accountId, revision, onCommitted }: 
         </article>;
       })}
       {preview.status !== "confirmed" && <label className="flex items-start gap-2 rounded-lg border p-3 text-sm"><input type="checkbox" className="mt-1" checked={acknowledged} disabled={frozen} onChange={event => setAcknowledged(event.target.checked)} /><span>我已核对全部分页中的原文、映射与费用/时间/账户含义，知悉这是未获券商格式认证的高级通用映射；逐行决定由我本人作出。</span></label>}
-      <div className="flex flex-wrap gap-3">{preview.status !== "confirmed" && <Button type="button" disabled={!!busy || (!pendingPayload && !canConfirm)} onClick={() => void confirm()}>{busy === "confirm" ? "正在确认…" : pendingPayload ? "重试完全相同的确认请求" : "确认全部已核对行入账"}</Button>}<Button type="button" variant="outline" disabled={!!busy} onClick={() => void checkStatus()}>核对服务器批次状态</Button><Button type="button" variant="outline" disabled={!!busy} onClick={editAgain}>{preview.status === "confirmed" ? "结束审计展示，准备新预览" : "结束此预览，返回编辑"}</Button></div>
-      {pendingPayload && <details className="rounded border p-3 text-sm"><summary className="cursor-pointer">已冻结的原确认请求（重试不改写）</summary><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-xs">{pendingPayload}</pre></details>}
+      <div className="flex flex-wrap gap-3">{preview.status !== "confirmed" && <Button type="button" disabled={readOnly || !!busy || (!pendingPayload && !canConfirm)} onClick={() => void confirm()}>{busy === "confirm" ? "正在确认…" : pendingPayload ? "重试完全相同的确认请求" : "确认全部已核对行入账"}</Button>}<Button type="button" variant="outline" disabled={!!busy} onClick={() => void checkStatus()}>核对服务器批次状态</Button><Button type="button" variant="outline" disabled={!!busy} onClick={editAgain}>{preview.status === "confirmed" ? "结束审计展示，准备新预览" : "结束此预览，返回编辑"}</Button></div>
+      {pendingPayload && <details className="rounded border p-3 text-sm"><summary className="cursor-pointer">已冻结的原确认请求（重试不改写）</summary><p className="mt-2">仅保存在当前页面内存；离开或刷新后不能保证恢复，不代表服务器尚未入账。</p><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-xs">{pendingPayload}</pre></details>}
       {confirmation !== null && <details className="rounded border p-3 text-sm"><summary className="cursor-pointer">本次确认结果与逐行关联</summary><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(confirmation, null, 2)}</pre></details>}
       <p className="text-xs text-muted-foreground">任何关键错误、未完成的必填行或版本冲突都会阻断整批。疑似重复提示不保证穷尽所有重叠文件；确认响应丢失时不要自行换来源号或文件绕过去重。</p>
     </div>}
