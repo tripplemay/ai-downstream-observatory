@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { migrateWorkbench } from '../../scripts/migrate-workbench.mjs';
+import { probeEarlyRejection } from './http-early-rejection.mjs';
 
 const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const root = path.dirname(web);
@@ -68,8 +69,14 @@ async function main() {
   let sourceSequence = 0;
   const request = (url, init = {}) => fetch(address + url, { ...init, redirect: 'manual' });
   const jsonRequest = async (url, init = {}) => {
-    const response = await request(url, init);
-    const text = await response.text();
+    let response, text;
+    const transport = init.duplex === 'half' ? 'stream' : 'buffered';
+    const failure = (error, phase) => {
+      const code = error?.cause?.code;
+      return new Error(`HTTP_TRANSPORT_FAILED ${init.method ?? 'GET'} ${url.split('?')[0]} ${transport} ${phase} ${typeof code === 'string' && /^[A-Z0-9_]{1,80}$/.test(code) ? code : 'UNKNOWN'}`);
+    };
+    try { response = await request(url, init); } catch (error) { throw failure(error, 'headers'); }
+    try { text = await response.text(); } catch (error) { throw failure(error, 'body'); }
     let json;
     try { json = JSON.parse(text); } catch { throw new Error(`Expected JSON, received HTTP ${response.status}: ${text.slice(0, 100)}`); }
     return { status: response.status, json, headers: response.headers };
@@ -183,10 +190,10 @@ async function main() {
       assert.equal(malformed.status, 400); assert.equal(malformed.json.error, 'INVALID_UTF8');
     });
     await check('HTTP-04', 'chunked request is rejected during streaming at 5 MiB', async () => {
-      async function* oversized() { for (let i = 0; i < 85; i++) yield Buffer.alloc(65536, 32); }
-      const result = await jsonRequest('/api/workbench', { method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: oversized(), duplex: 'half' });
+      const result = await probeEarlyRejection(address + '/api/workbench', { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' });
       assert.equal(result.status, 413); assert.equal(result.json.error, 'REQUEST_TOO_LARGE');
-      return { declared_content_length: false, limit_bytes: 5242880 };
+      assert.equal(result.bytes_sent, 5242881); assert.equal(result.request_ended, false); assert.equal(result.response_complete, true);
+      return { declared_content_length: false, limit_bytes: 5242880, bytes_sent: result.bytes_sent, request_ended: false, response_complete: true };
     });
     await check('HTTP-05', 'new portfolios and accounts contain no personal funding defaults, cash or ledger facts', async () => {
       const p = await post({ action: 'create_portfolio', name: 'Synthetic main portfolio' }); assert.equal(p.status, 200); portfolio = p.json.id;
@@ -960,15 +967,15 @@ async function main() {
       assert.equal(badOrigin.status, 403);
       const wrongType = await jsonRequest('/api/workbench/csv', { method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: '{}' });
       assert.equal(wrongType.status, 415); assert.equal(wrongType.json.error, 'CSV_MULTIPART_REQUIRED');
-      async function* chunks() { for (let i = 0; i < 85; i++) yield Buffer.alloc(65536, 65); }
-      const streamed = await jsonRequest('/api/workbench/csv', { method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': multipart }, body: chunks(), duplex: 'half' });
+      const streamed = await probeEarlyRejection(address + '/api/workbench/csv', { Cookie: cookie, Origin: origin, 'Content-Type': multipart });
       assert.equal(streamed.status, 413); assert.equal(streamed.json.error, 'REQUEST_TOO_LARGE'); assert.equal(streamed.headers.get('connection'), 'close');
       const largeFile = await csvUpload(csvForm(Buffer.alloc(4 * 1024 * 1024 + 1, 65), { expected_revision: 2 }));
       assert.equal(largeFile.status, 413); assert.equal(largeFile.json.error, 'CSV_TOO_LARGE');
       const largeMapping = await csvUpload(csvForm(csvBytes, { expected_revision: 2, mapping: 'x'.repeat(256 * 1024 + 1) }));
       assert.equal(largeMapping.status, 413); assert.equal(largeMapping.json.error, 'CSV_MAPPING_TOO_LARGE');
       assert.equal((await state(csvPortfolio)).revision, 2);
-      return { transport_limit_bytes: 5242880, file_limit_bytes: 4194304, mapping_limit_bytes: 262144, anonymous_oversized_status: 401, wrong_origin_oversized_status: 403 };
+      return { transport_limit_bytes: 5242880, file_limit_bytes: 4194304, mapping_limit_bytes: 262144, anonymous_oversized_status: 401, wrong_origin_oversized_status: 403,
+        streamed_bytes_sent: streamed.bytes_sent, streaming_request_ended: streamed.request_ended, streaming_response_complete: streamed.response_complete };
     });
     await check('HTTP-CSV07', 'CSV account scope and ledger CAS reject cross-account uploads and stale confirmations', async () => {
       assert.equal((await csvUpload(csvForm(csvBytes, { portfolio_id: otherPortfolio, expected_revision: 2 }))).status, 403);
@@ -1016,8 +1023,7 @@ async function main() {
       return { account_scope_status: 403, stale_and_future_revision_status: 409, fractional_revision_status: 400 };
     });
     await check('HTTP-INS03', 'inspector bounds streaming uploads, original bytes and values requests without storing rejected evidence', async () => {
-      async function* chunks() { for (let i = 0; i < 85; i++) yield Buffer.alloc(65536, 65); }
-      const streamed = await jsonRequest('/api/workbench/csv/inspect', { method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'multipart/form-data; boundary=synthetic-inspection-limit' }, body: chunks(), duplex: 'half' });
+      const streamed = await probeEarlyRejection(address + '/api/workbench/csv/inspect', { Cookie: cookie, Origin: origin, 'Content-Type': 'multipart/form-data; boundary=synthetic-inspection-limit' });
       assert.equal(streamed.status, 413); assert.equal(streamed.json.error, 'REQUEST_TOO_LARGE'); assert.equal(streamed.headers.get('connection'), 'close');
       const large = await inspectUpload(inspectionForm(Buffer.alloc(4 * 1024 * 1024 + 1, 65)));
       assert.equal(large.status, 413); assert.equal(large.json.error, 'CSV_TOO_LARGE');
@@ -1031,7 +1037,8 @@ async function main() {
       }
       const invalidUtf8 = await inspectUpload(inspectionForm(Buffer.from([0xff])));
       assert.equal(invalidUtf8.status, 400); assert.equal(invalidUtf8.json.error, 'INVALID_UTF8');
-      return { transport_limit_bytes: 5242880, file_limit_bytes: 4194304, values_page_limit: 100 };
+      return { transport_limit_bytes: 5242880, file_limit_bytes: 4194304, values_page_limit: 100,
+        streamed_bytes_sent: streamed.bytes_sent, streaming_request_ended: streamed.request_ended, streaming_response_complete: streamed.response_complete };
     });
     await check('HTTP-INS04', 'inspector auto never selects semantics; explicit dialect preserves BOM, original row bytes and scoped identities', async () => {
       for (const raw of [csvBytes, Buffer.from('Code\n000001\n'), Buffer.from('Code;Note\n000001;"contains,comma"\n')]) {

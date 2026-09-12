@@ -537,3 +537,28 @@ loader 和文件/origin 后再取二进制 hash，严格报告门槛不变。真
 425 项源码保持一致。新工件为 `artifacts/verification/workbench-http/2026-09-12T19-44-28-183Z/`，
 manifest SHA-256 `05833f18f1520d873191bbf0080a0367993c3d70b2cff138ba8b438ecd604e4b`。
 修正提交仍须新的全量 CI 与 Linux provider 报告，不据本地检查宣布镜像或生产通过。
+
+### 后续镜像通过，HTTP 传输检查仍未闭环
+
+提交 `7fcf136ae4ad894a3b07a479e1be446140ce0687` 的
+[CI 34715193188](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/34715193188)
+已通过 core/provider 两种 Linux 镜像检查，真实 SDK 原生二进制及 adapter 绑定通过；
+报告明确无凭据、无网络、未构造 QuoteContext，不能升级为真实行情许可或数据验收。
+Python 488、Web 559、根目录 Node 128 通过；HTTP 46 项通过后，`HTTP-INS03` 的
+`fetch failed` 导致整次 CI 失败，audit 未运行。425 项源首尾及提交 blob 一致。
+完整日志、原始 ZIP、GitHub metadata 与校验结果在
+`artifacts/verification/github-ci/34715193188/`，不改写上一次失败报告。
+
+旧日志未记录具体网络 cause 或 header/body 阶段。合成 Node 22 实验可复现多种
+相同症状，不能据此断言原 CI 的唯一原因。三个分块超限探针改为 `node:http`：
+无 Content-Length、keep-alive、只写限制加一字节且不结束请求，必须得到完整
+413、精确 JSON 错误和服务端 close；reset、半截响应或超时仍失败，不重试。
+另补安全的请求阶段和错误码诊断；不修改服务端限流或取消逻辑。此测试变更仍须
+新回归与同版 CI，生产、真实资料和完整投资准入仍未验收。
+
+本地最终修正候选：根目录 Node **148/148**、HTTP **77/77**；20 项独立 loopback
+传输测试在 Node 25.7.0 和 22.22.0 均通过，含审查补入的重复/转义键拒绝，不等同
+CI 运行环境。应用代码未改、沿用原构建。最终工件为
+`artifacts/verification/workbench-http/2026-09-12T20-07-03-623Z/manifest.json`，
+SHA-256 `32b77e6ac139e18324d9459b20a79ca64438ba54628bc427d1a106314c6137d0`；
+427 项源码首尾及随后核验一致。原候选及失败日志保留；新提交仍须同版 CI。

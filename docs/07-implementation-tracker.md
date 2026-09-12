@@ -210,6 +210,47 @@ SHA-256 `05833f18f1520d873191bbf0080a0367993c3d70b2cff138ba8b438ecd604e4b`;
 The previous full Python/Web results retain their original source boundary;
 the corrected commit still requires its own complete CI and Linux image result.
 
+### V17 image proof and streaming HTTP diagnosis
+
+The correction commit `7fcf136ae4ad894a3b07a479e1be446140ce0687` ran
+[CI 34715193188](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/34715193188).
+Both core and optional provider container checks passed. The real provider
+report binds the native SDK binary and adapter to this source, CPython 3.11 and
+glibc 2.41; it explicitly records no credentials, no network and no quote context.
+This proves native runtime compatibility, not subscription or real price access.
+Python 488, Web 559 and root Node 128 passed. HTTP stopped after 46 passes at
+`HTTP-INS03` with `fetch failed`; dependency audit was not run. The overall CI
+therefore failed. All 425 HTTP inventory entries matched the exact Git blobs.
+The original artifact ZIPs, API metadata, logs and independent checks remain in
+`artifacts/verification/github-ci/34715193188/`.
+
+The original error omitted both request phase and network cause. A synthetic
+Node 22 experiment reproduced `EPIPE` with an early 413 while uploading the old
+85-chunk request, but also reproduced transport failures without a completed
+server response. This does not establish the original CI's exact cause. Its
+script and result are retained in
+`artifacts/verification/http-transport-diagnostic/`.
+
+The three transport-limit probes now use Node's HTTP parser with a chunked
+request, no declared length, explicit keep-alive and exactly limit-plus-one
+payload bytes, without ending the request. Only a complete 413, exact JSON error
+and server-directed connection close pass. Reset, truncated body, wrong response
+or deadline expiry still fail; there is no retry. Other JSON requests now retain
+safe transport/phase/error-code diagnostics. Application size limits and reader
+cancellation are unchanged. This test change requires fresh regression and CI;
+no production or investment gate is upgraded by the earlier image result.
+
+The final local transport candidate passed root Node 148/148 and HTTP 77/77
+without rebuilding unchanged application code. Twenty dedicated loopback
+transport tests passed on Node 25.7.0 and 22.22.0, including duplicate/escaped
+JSON key rejection added after independent review; the latter is not the exact
+CI Node version. The final HTTP manifest is
+`artifacts/verification/workbench-http/2026-09-12T20-07-03-623Z/manifest.json`,
+SHA-256 `32b77e6ac139e18324d9459b20a79ca64438ba54628bc427d1a106314c6137d0`.
+All 427 source hashes matched before, after and current-file verification. Logs
+use `provider-v17-http-stream-final-{node,http}.log`; earlier candidate logs
+remain distinct. This is local test evidence, not a replacement for new CI.
+
 ### Provider collection worktree (v16)
 
 Historical v16 implementation and local results follow; they are not v17 results.
