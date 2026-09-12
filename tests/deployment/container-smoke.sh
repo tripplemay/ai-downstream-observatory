@@ -62,6 +62,67 @@ for image in "$web_image" "$worker_image"; do
   [[ $(docker image inspect "$image" --format '{{.Config.User}}') == '10001:10001' ]]
   docker run --rm --read-only --entrypoint sh "$image" -c 'test ! -e /app/data/observatory.db && test ! -e /app/config/gateway.json && test ! -e /app/.env'
 done
-mkdir -p artifacts/verification
-printf '{"run_id":"%s","status":"passed","non_root":true,"legacy_actual_facts":0,"encrypted_local_restore":true,"independent_host_restore":false,"web_image":"%s","worker_image":"%s"}\n' "$run_id" "$(docker image inspect "$web_image" --format '{{.Id}}')" "$(docker image inspect "$worker_image" --format '{{.Id}}')" > "artifacts/verification/container-$run_id.json"
+publish_container_report() {
+  python3 - "$root" "$run_id" "$1" "$2" <<'PY_REPORT'
+import json
+import os
+import re
+import stat
+import sys
+
+root, run_id, web_image, worker_image = sys.argv[1:]
+caller = [os.environ.get("SUDO_UID"), os.environ.get("SUDO_GID")]
+if caller == [None, None]:
+    uid, gid = os.getuid(), os.getgid()
+elif any(value is None or not re.fullmatch(r"0|[1-9][0-9]{0,9}", value) for value in caller):
+    raise SystemExit("Invalid report caller identity")
+else:
+    uid, gid = map(int, caller)
+if max(uid, gid) >= 4294967295 or (os.geteuid() != 0 and (uid, gid) != (os.getuid(), os.getgid())):
+    raise SystemExit("Report caller identity is out of scope")
+if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[0-9]+", run_id) or any(not re.fullmatch(r"sha256:[a-f0-9]{64}", value) for value in (web_image, worker_image)):
+    raise SystemExit("Invalid synthetic report metadata")
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+directories = [os.open(root, flags)]
+try:
+    for name in ("artifacts", "verification"):
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=directories[-1])
+        except FileExistsError:
+            pass
+        descriptor = os.open(name, flags, dir_fd=directories[-1])
+        directories.append(descriptor)
+        info = os.fstat(descriptor)
+        if info.st_uid not in (0, uid) or stat.S_IMODE(info.st_mode) & 0o022:
+            raise SystemExit("Unsafe synthetic report directory")
+    name = "container-" + run_id + ".json"
+    descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directories[-1])
+    try:
+        report = {"run_id": run_id, "status": "passed", "non_root": True,
+                  "legacy_actual_facts": 0, "encrypted_local_restore": True,
+                  "independent_host_restore": False, "web_image": web_image,
+                  "worker_image": worker_image}
+        with os.fdopen(os.dup(descriptor), "w", encoding="utf-8") as output:
+            json.dump(report, output, separators=(",", ":"))
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.fchmod(descriptor, 0o600)
+        os.fchown(descriptor, uid, gid)
+        # Hand off only the completed report and root-owned parent directories, never their contents.
+        for directory in reversed(directories[1:]):
+            if os.fstat(directory).st_uid == 0:
+                os.fchown(directory, uid, gid)
+        os.fsync(directories[-1])
+    except BaseException:
+        os.unlink(name, dir_fd=directories[-1])
+        raise
+    finally:
+        os.close(descriptor)
+finally:
+    for directory in reversed(directories):
+        os.close(directory)
+PY_REPORT
+}
+publish_container_report "$(docker image inspect "$web_image" --format '{{.Id}}')" "$(docker image inspect "$worker_image" --format '{{.Id}}')"
 printf 'Container migration, legacy isolation, encrypted restore and HTTP fixture passed\n'

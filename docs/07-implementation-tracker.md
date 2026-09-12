@@ -355,3 +355,16 @@ The candidate is suitable for a public-code checkpoint under
 full product acceptance or strategy admission. The browser runtime remains
 unavailable, so the missing native catalog checks above are still pending.
 No production workflow or application cutover was performed by this audit.
+
+### First published checkpoint and CI follow-up
+
+Public-code commit `2c14c62f5fbe84aa26b02c296fa199d8cb71024f` was pushed normally;
+the remote main SHA matched. GitHub CI run `34694551968` failed overall, despite
+Python 244/244, Web 315/315 and the isolated container smoke passing. The Node
+Compose config fixture depended on a missing host env file (63/64), and the
+container job could not upload its root-owned synthetic report. The follow-up
+isolates the config fixture and hands off only its generated report; production
+runtime configuration and personal-data permissions are not relaxed. The original
+logs remain local. Check the subsequent exact-SHA CI result before treating these
+test-environment corrections as verified; this does not change the outstanding
+product, native-browser, recovery or strategy gates.

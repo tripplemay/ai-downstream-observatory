@@ -123,7 +123,21 @@ test('readiness requires protected configuration and current schema but never se
 });
 
 test('compose tools resolve without secrets and use fail-closed mounts and non-root containers', (t) => {
-  const result = spawnSync('docker', ['compose', '--env-file', '/dev/null', '--profile', 'tools', '-f', join(root, 'docker-compose.yml'), 'config', '--no-env-resolution', '--format', 'json'], { encoding: 'utf8', timeout: 15000 });
+  const directory = fixture(t), runtimeFile = join(directory, 'runtime.env');
+  writeFileSync(runtimeFile, 'WORKBENCH_SESSION_SECRET=synthetic-unresolved-config-fixture\n', { mode: 0o600 });
+  // Some Compose versions stat required env files even with --no-env-resolution.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('WORKBENCH_') && !key.startsWith('COMPOSE_')));
+  Object.assign(env, {
+    WORKBENCH_RUNTIME_ENV_FILE: runtimeFile,
+    WORKBENCH_DATA_DIR_HOST: join(directory, 'data'),
+    WORKBENCH_LEGACY_DATA_DIR: join(directory, 'legacy'),
+    WORKBENCH_BACKUP_DIR_HOST: join(directory, 'backups'),
+    WORKBENCH_RESTORE_PARENT_DIR: join(directory, 'restores'),
+    WORKBENCH_BACKUP_KEY_FILE: join(directory, 'backup.passphrase'),
+    WORKBENCH_RELEASE_SHA: 'config-fixture', WORKBENCH_HTTP_PORT: '5051', WORKBENCH_MODE: 'ledger',
+    WORKBENCH_RESTORE_ARCHIVE_NAME: 'fixture.etfbackup', WORKBENCH_RESTORE_TARGET_NAME: 'fixture-restore',
+  });
+  const result = spawnSync('docker', ['compose', '--env-file', '/dev/null', '-p', 'etf-config-fixture', '--profile', 'tools', '-f', join(root, 'docker-compose.yml'), 'config', '--no-env-resolution', '--format', 'json'], { encoding: 'utf8', env, timeout: 15000 });
   if (result.error?.code === 'ENOENT') return t.skip('Docker Compose CLI not installed; container CI is mandatory');
   assert.equal(result.status, 0, result.stderr);
   const config = JSON.parse(result.stdout);
@@ -133,8 +147,15 @@ test('compose tools resolve without secrets and use fail-closed mounts and non-r
     for (const volume of service.volumes ?? []) assert.equal(volume.bind?.create_host_path, false, name);
   }
   assert.equal(config.services.web.ports[0].host_ip, '127.0.0.1');
+  assert.equal(config.services.web.env_file[0].path, runtimeFile);
+  assert.ok([true, undefined].includes(config.services.web.env_file[0].required));
+  assert.match(readFileSync(join(root, 'docker-compose.yml'), 'utf8'), /env_file:\s*\n\s*- path: \$\{WORKBENCH_RUNTIME_ENV_FILE[^\n]+\n\s*required: true/);
   assert.equal(config.services.web.env_file[0].format, 'raw');
   assert.equal(config.services.web.environment.WORKBENCH_PASSWORD_HASH, undefined);
+  assert.equal(config.services.web.environment.WORKBENCH_SESSION_SECRET, undefined);
+  for (const service of Object.values(config.services)) for (const volume of service.volumes ?? []) {
+    assert.ok(volume.source.startsWith(`${directory}/`), volume.source);
+  }
 });
 
 test('release workflow remains manual and failure path cannot restore over actual facts', () => {
