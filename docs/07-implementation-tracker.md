@@ -1,6 +1,6 @@
 # ETF workbench implementation and release tracker
 
-Updated: 2026-09-12. This is a progress record, not an acceptance certificate.
+Updated: 2026-09-13. This is a progress record, not an acceptance certificate.
 
 ## Objective and authority
 
@@ -170,6 +170,29 @@ This local candidate still requires its actual public index review, exact-commit
 CI and image evidence. It is not production deployment or full E/S acceptance.
 Real providers, continuous forward records, complete performance/fault acceptance,
 trusted verification, native UI and independent-host recovery remain outstanding.
+
+The v2 code checkpoint was published as
+`d6ac32ba330ab80b57b40dcbafdbfc84837086e1` after inspecting all 442 actual index
+blobs (4,046,650 bytes); no protected paths, private-plan bindings or real
+credentials were found. Its [CI run 34706708278](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/34706708278)
+failed overall: Python 358 and the isolated container job passed, but Web was
+512/513. One existing monthly-workspace test injected response 4 before the real
+asynchronous hashing step had produced that request. The later Node/build/HTTP
+and audit steps did not execute. The follow-up must wait for actual request/hash
+completion without weakening receipt validation; no successful rerun or production
+release is inferred from the passing local checkpoint or container job.
+
+The follow-up changes only that test harness and evidence documentation, not
+application behavior. An explicitly held real hashing promise reproduces the
+old `request 4` failure. Tests now observe request/hash completion; incorrect
+hash and version still reject the receipt, retain exact pending bytes and clear
+confirmation without another POST. Local Web 514/514, typecheck and a fresh
+build/HTTP 69/69 passed. Build `sEkIoKGmHirFndk_aAYTy`, schema 15, all 378
+before/end/current source hashes match; evidence is
+`artifacts/verification/workbench-http/2026-09-12T17-06-35-118Z/`, manifest
+SHA-256 `d3a65f80d902076b8e97c88a23759f07e0584d9c764ff92f3c2e9ef9769dd186`.
+Logs use `rotation-v2-ci-followup` under the final-regression directory. These
+are local follow-up results, not a claim that the next exact-commit CI passed.
 
 Previous local v11 CSV checkpoint, retained as historical evidence, not v12 acceptance:
 
