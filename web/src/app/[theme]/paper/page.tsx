@@ -64,9 +64,9 @@ export default async function PaperPage({
   params: Promise<{ theme: string }>;
 }) {
   const { theme } = await params;
-  const t = getTheme(theme);
+  const t = await getTheme(theme);
   if (!t || t.type !== "strategy") notFound();
-  const account = getPaperAccount();
+  const account = await getPaperAccount();
 
   if (!account) {
     return (
@@ -80,11 +80,11 @@ export default async function PaperPage({
     );
   }
 
-  const positions = getPaperPositions(account.id);
-  const trades = getPaperTrades(account.id, 50);
-  const navSeries = getPaperNavSeries(account.initial_cash);
-  const paperAbs = getSeries("paper:nav");
-  const advAbs = getSeries("adv:nav");
+  const positions = await getPaperPositions(account.id);
+  const trades = await getPaperTrades(account.id, 50);
+  const navSeries = await getPaperNavSeries(account.initial_cash);
+  const paperAbs = await getSeries("paper:nav");
+  const advAbs = await getSeries("adv:nav");
   const latestNav = paperAbs.length ? paperAbs[paperAbs.length - 1].v : null;
   const cumRet = latestNav !== null ? latestNav / account.initial_cash - 1 : null;
   const cashPct = latestNav !== null && latestNav > 0 ? account.cash / latestNav : null;

@@ -1,0 +1,480 @@
+{
+  "schema_version": "holdings-overlap-golden-v1",
+  "cases": [
+    {
+      "name": "full_same_date",
+      "snapshot_a": {
+        "schema_version": "holdings-disclosure-v1",
+        "snapshot_id": "d:full:a",
+        "version": 1,
+        "portfolio_id": "p",
+        "listing_id": "listing:d:full:a",
+        "as_of": "2025-12-31",
+        "known_at": "2026-01-10T00:00:00Z",
+        "weight_basis": "net_assets_long_only",
+        "complete": true,
+        "coverage": "1.00",
+        "items": [
+          {
+            "security_id": "ISIN:B",
+            "weight": "0.30"
+          },
+          {
+            "security_id": "ISIN:A",
+            "weight": "0.70"
+          }
+        ],
+        "content_hash": "4fac2e199c9741bbaf2e5eca93b90dbba17aa105f3f8f3be7ed8aa3c0020eb16"
+      },
+      "snapshot_b": {
+        "schema_version": "holdings-disclosure-v1",
+        "snapshot_id": "d:full:b",
+        "version": 1,
+        "portfolio_id": "p",
+        "listing_id": "listing:d:full:b",
+        "as_of": "2025-12-31",
+        "known_at": "2026-01-10T00:00:00Z",
+        "weight_basis": "net_assets_long_only",
+        "complete": true,
+        "coverage": "1.0",
+        "items": [
+          {
+            "security_id": "ISIN:C",
+            "weight": "0.4"
+          },
+          {
+            "security_id": "ISIN:A",
+            "weight": "0.6"
+          }
+        ],
+        "content_hash": "bf67ed67fc068a3d731d5e0c33ae166b5aa406585333f4d3641941f715b6a526"
+      },
+      "comparison_at": "2026-01-15T12:00:00Z",
+      "expected_result": {
+        "schema_version": "holdings-overlap-v1",
+        "method_version": "holdings-overlap-v1",
+        "portfolio_id": "p",
+        "comparison_at": "2026-01-15T12:00:00.000000Z",
+        "weight_basis": "net_assets_long_only",
+        "snapshot_a": {
+          "snapshot_id": "d:full:a",
+          "portfolio_id": "p",
+          "listing_id": "listing:d:full:a",
+          "version": 1,
+          "as_of": "2025-12-31",
+          "known_at": "2026-01-10T00:00:00Z",
+          "content_hash": "4fac2e199c9741bbaf2e5eca93b90dbba17aa105f3f8f3be7ed8aa3c0020eb16",
+          "complete": true
+        },
+        "snapshot_b": {
+          "snapshot_id": "d:full:b",
+          "portfolio_id": "p",
+          "listing_id": "listing:d:full:b",
+          "version": 1,
+          "as_of": "2025-12-31",
+          "known_at": "2026-01-10T00:00:00Z",
+          "content_hash": "bf67ed67fc068a3d731d5e0c33ae166b5aa406585333f4d3641941f715b6a526",
+          "complete": true
+        },
+        "known_overlap": "0.6",
+        "coverage_a": "1",
+        "coverage_b": "1",
+        "uncovered_a": "0",
+        "uncovered_b": "0",
+        "conservative_upper_bound": "0.6",
+        "quality": "exact",
+        "same_date": true,
+        "bound_scope": "the_two_disclosed_date_vectors",
+        "common_holdings": [
+          {
+            "security_id": "ISIN:A",
+            "weight_a": "0.7",
+            "weight_b": "0.6",
+            "overlap_weight": "0.6"
+          }
+        ],
+        "issues": [],
+        "binding_id": "fbb7086fecdbe4d8f0a18c80480dd004ac6e0ca1d053d878fe273a60e5ef7b21"
+      }
+    },
+    {
+      "name": "partial_same_date",
+      "snapshot_a": {
+        "schema_version": "holdings-disclosure-v1",
+        "snapshot_id": "d:partial:a",
+        "version": 1,
+        "portfolio_id": "p",
+        "listing_id": "listing:d:partial:a",
+        "as_of": "2025-12-31",
+        "known_at": "2026-01-10T00:00:00Z",
+        "weight_basis": "net_assets_long_only",
+        "complete": false,
+        "coverage": "0.8",
+        "items": [
+          {
+            "security_id": "ISIN:A",
+            "weight": "0.4"
+          },
+          {
+            "security_id": "ISIN:B",
+            "weight": "0.4"
+          }
+        ],
+        "content_hash": "20a5647ac39b3dc3f1e49d9f254952dad8db81ae777a8fb94886a94e637436f6"
+      },
+      "snapshot_b": {
+        "schema_version": "holdings-disclosure-v1",
+        "snapshot_id": "d:partial:b",
+        "version": 1,
+        "portfolio_id": "p",
+        "listing_id": "listing:d:partial:b",
+        "as_of": "2025-12-31",
+        "known_at": "2026-01-10T00:00:00Z",
+        "weight_basis": "net_assets_long_only",
+        "complete": false,
+        "coverage": "0.9",
+        "items": [
+          {
+            "security_id": "ISIN:A",
+            "weight": "0.2"
+          },
+          {
+            "security_id": "ISIN:C",
+            "weight": "0.7"
+          }
+        ],
+        "content_hash": "5ad55b8bded7aefeb92aa1bd051f408b0415482f6c4f6f1a4eab6c13bc0f73ec"
+      },
+      "comparison_at": "2026-01-15T12:00:00Z",
+      "expected_result": {
+        "schema_version": "holdings-overlap-v1",
+        "method_version": "holdings-overlap-v1",
+        "portfolio_id": "p",
+        "comparison_at": "2026-01-15T12:00:00.000000Z",
+        "weight_basis": "net_assets_long_only",
+        "snapshot_a": {
+          "snapshot_id": "d:partial:a",
+          "portfolio_id": "p",
+          "listing_id": "listing:d:partial:a",
+          "version": 1,
+          "as_of": "2025-12-31",
+          "known_at": "2026-01-10T00:00:00Z",
+          "content_hash": "20a5647ac39b3dc3f1e49d9f254952dad8db81ae777a8fb94886a94e637436f6",
+          "complete": false
+        },
+        "snapshot_b": {
+          "snapshot_id": "d:partial:b",
+          "portfolio_id": "p",
+          "listing_id": "listing:d:partial:b",
+          "version": 1,
+          "as_of": "2025-12-31",
+          "known_at": "2026-01-10T00:00:00Z",
+          "content_hash": "5ad55b8bded7aefeb92aa1bd051f408b0415482f6c4f6f1a4eab6c13bc0f73ec",
+          "complete": false
+        },
+        "known_overlap": "0.2",
+        "coverage_a": "0.8",
+        "coverage_b": "0.9",
+        "uncovered_a": "0.2",
+        "uncovered_b": "0.1",
+        "conservative_upper_bound": "0.5",
+        "quality": "lower_bound",
+        "same_date": true,
+        "bound_scope": "the_two_disclosed_date_vectors",
+        "common_holdings": [
+          {
+            "security_id": "ISIN:A",
+            "weight_a": "0.4",
+            "weight_b": "0.2",
+            "overlap_weight": "0.2"
+          }
+        ],
+        "issues": [
+          "PARTIAL_DISCLOSURE:A",
+          "PARTIAL_DISCLOSURE:B"
+        ],
+        "binding_id": "d71213a7af5d6349a5bf4161da61cdbb8ca60db2b047fdfab885c240abc588be"
+      }
+    },
+    {
+      "name": "different_dates",
+      "snapshot_a": {
+        "schema_version": "holdings-disclosure-v1",
+        "snapshot_id": "d:dates:a",
+        "version": 1,
+        "portfolio_id": "p",
+        "listing_id": "listing:d:dates:a",
+        "as_of": "2025-12-31",
+        "known_at": "2026-01-10T00:00:00Z",
+        "weight_basis": "net_assets_long_only",
+        "complete": true,
+        "coverage": "1",
+        "items": [
+          {
+            "security_id": "ID:A",
+            "weight": "1"
+          }
+        ],
+        "content_hash": "deefb7dd9f665e03d30da158de72e73440a3479d355e3bfe47a4d8a6539efb1e"
+      },
+      "snapshot_b": {
+        "schema_version": "holdings-disclosure-v1",
+        "snapshot_id": "d:dates:b",
+        "version": 1,
+        "portfolio_id": "p",
+        "listing_id": "listing:d:dates:b",
+        "as_of": "2026-01-01",
+        "known_at": "2026-01-10T00:00:00.123456Z",
+        "weight_basis": "net_assets_long_only",
+        "complete": true,
+        "coverage": "1",
+        "items": [
+          {
+            "security_id": "ID:A",
+            "weight": "1"
+          }
+        ],
+        "content_hash": "b33ec72ca755a1580b6a194c315e004fdbba8c6cf9579f9a39be4993842d1623"
+      },
+      "comparison_at": "2026-01-15T12:00:00Z",
+      "expected_result": {
+        "schema_version": "holdings-overlap-v1",
+        "method_version": "holdings-overlap-v1",
+        "portfolio_id": "p",
+        "comparison_at": "2026-01-15T12:00:00.000000Z",
+        "weight_basis": "net_assets_long_only",
+        "snapshot_a": {
+          "snapshot_id": "d:dates:a",
+          "portfolio_id": "p",
+          "listing_id": "listing:d:dates:a",
+          "version": 1,
+          "as_of": "2025-12-31",
+          "known_at": "2026-01-10T00:00:00Z",
+          "content_hash": "deefb7dd9f665e03d30da158de72e73440a3479d355e3bfe47a4d8a6539efb1e",
+          "complete": true
+        },
+        "snapshot_b": {
+          "snapshot_id": "d:dates:b",
+          "portfolio_id": "p",
+          "listing_id": "listing:d:dates:b",
+          "version": 1,
+          "as_of": "2026-01-01",
+          "known_at": "2026-01-10T00:00:00.123456Z",
+          "content_hash": "b33ec72ca755a1580b6a194c315e004fdbba8c6cf9579f9a39be4993842d1623",
+          "complete": true
+        },
+        "known_overlap": "1",
+        "coverage_a": "1",
+        "coverage_b": "1",
+        "uncovered_a": "0",
+        "uncovered_b": "0",
+        "conservative_upper_bound": "1",
+        "quality": "different_dates",
+        "same_date": false,
+        "bound_scope": "the_two_disclosed_date_vectors",
+        "common_holdings": [
+          {
+            "security_id": "ID:A",
+            "weight_a": "1",
+            "weight_b": "1",
+            "overlap_weight": "1"
+          }
+        ],
+        "issues": [
+          "DISCLOSURE_DATES_DIFFER"
+        ],
+        "binding_id": "0fa61f368f564d70fbe7fd86276bf413f09ba5579535d7cd5109513457ad1c97"
+      }
+    },
+    {
+      "name": "empty_partial",
+      "snapshot_a": {
+        "schema_version": "holdings-disclosure-v1",
+        "snapshot_id": "d:empty:a",
+        "version": 1,
+        "portfolio_id": "p",
+        "listing_id": "listing:d:empty:a",
+        "as_of": "2025-12-31",
+        "known_at": "2026-01-10T00:00:00Z",
+        "weight_basis": "net_assets_long_only",
+        "complete": false,
+        "coverage": "0",
+        "items": [],
+        "content_hash": "c664c51623c5d1cdf2d3e87d2b728ae072702d95025bb0b4f85ae9fe14d4f1a2"
+      },
+      "snapshot_b": {
+        "schema_version": "holdings-disclosure-v1",
+        "snapshot_id": "d:empty:b",
+        "version": 1,
+        "portfolio_id": "p",
+        "listing_id": "listing:d:empty:b",
+        "as_of": "2025-12-31",
+        "known_at": "2026-01-10T00:00:00Z",
+        "weight_basis": "net_assets_long_only",
+        "complete": false,
+        "coverage": "0",
+        "items": [],
+        "content_hash": "752952b87bd6a8d97130c2973ec4d28f2adae92fade6cfe9c280460acbe9906b"
+      },
+      "comparison_at": "2026-01-15T12:00:00Z",
+      "expected_result": {
+        "schema_version": "holdings-overlap-v1",
+        "method_version": "holdings-overlap-v1",
+        "portfolio_id": "p",
+        "comparison_at": "2026-01-15T12:00:00.000000Z",
+        "weight_basis": "net_assets_long_only",
+        "snapshot_a": {
+          "snapshot_id": "d:empty:a",
+          "portfolio_id": "p",
+          "listing_id": "listing:d:empty:a",
+          "version": 1,
+          "as_of": "2025-12-31",
+          "known_at": "2026-01-10T00:00:00Z",
+          "content_hash": "c664c51623c5d1cdf2d3e87d2b728ae072702d95025bb0b4f85ae9fe14d4f1a2",
+          "complete": false
+        },
+        "snapshot_b": {
+          "snapshot_id": "d:empty:b",
+          "portfolio_id": "p",
+          "listing_id": "listing:d:empty:b",
+          "version": 1,
+          "as_of": "2025-12-31",
+          "known_at": "2026-01-10T00:00:00Z",
+          "content_hash": "752952b87bd6a8d97130c2973ec4d28f2adae92fade6cfe9c280460acbe9906b",
+          "complete": false
+        },
+        "known_overlap": "0",
+        "coverage_a": "0",
+        "coverage_b": "0",
+        "uncovered_a": "1",
+        "uncovered_b": "1",
+        "conservative_upper_bound": "1",
+        "quality": "lower_bound",
+        "same_date": true,
+        "bound_scope": "the_two_disclosed_date_vectors",
+        "common_holdings": [],
+        "issues": [
+          "PARTIAL_DISCLOSURE:A",
+          "PARTIAL_DISCLOSURE:B"
+        ],
+        "binding_id": "701839272f4857a452e0b539e5e3a6a7a41d088013170be2db50af67143a6da4"
+      }
+    },
+    {
+      "name": "decimal_and_zero",
+      "snapshot_a": {
+        "schema_version": "holdings-disclosure-v1",
+        "snapshot_id": "d:decimal:a",
+        "version": 1,
+        "portfolio_id": "p",
+        "listing_id": "listing:d:decimal:a",
+        "as_of": "2025-12-31",
+        "known_at": "2026-01-10T00:00:00Z",
+        "weight_basis": "net_assets_long_only",
+        "complete": true,
+        "coverage": "1.000000000000000000",
+        "items": [
+          {
+            "security_id": "ID:a",
+            "weight": "0.000000000000000001"
+          },
+          {
+            "security_id": "ID:Z",
+            "weight": "0.999999999999999999"
+          },
+          {
+            "security_id": "ID:zero",
+            "weight": "0"
+          }
+        ],
+        "content_hash": "cedcf52bf78aa4794d3eaa2ffa9d5849a29b08a4be7f70367ce6fa04a89470fe"
+      },
+      "snapshot_b": {
+        "schema_version": "holdings-disclosure-v1",
+        "snapshot_id": "d:decimal:b",
+        "version": 1,
+        "portfolio_id": "p",
+        "listing_id": "listing:d:decimal:b",
+        "as_of": "2025-12-31",
+        "known_at": "2026-01-10T00:00:00Z",
+        "weight_basis": "net_assets_long_only",
+        "complete": true,
+        "coverage": "1.000000000000000000",
+        "items": [
+          {
+            "security_id": "ID:Z",
+            "weight": "0.000000000000000001"
+          },
+          {
+            "security_id": "ID:a",
+            "weight": "0.999999999999999999"
+          },
+          {
+            "security_id": "ID:zero",
+            "weight": "0.000"
+          }
+        ],
+        "content_hash": "01c2351425cda07709802d5a950948ea47643090432327150a3ba7d1e61e862a"
+      },
+      "comparison_at": "2026-01-15T12:00:00Z",
+      "expected_result": {
+        "schema_version": "holdings-overlap-v1",
+        "method_version": "holdings-overlap-v1",
+        "portfolio_id": "p",
+        "comparison_at": "2026-01-15T12:00:00.000000Z",
+        "weight_basis": "net_assets_long_only",
+        "snapshot_a": {
+          "snapshot_id": "d:decimal:a",
+          "portfolio_id": "p",
+          "listing_id": "listing:d:decimal:a",
+          "version": 1,
+          "as_of": "2025-12-31",
+          "known_at": "2026-01-10T00:00:00Z",
+          "content_hash": "cedcf52bf78aa4794d3eaa2ffa9d5849a29b08a4be7f70367ce6fa04a89470fe",
+          "complete": true
+        },
+        "snapshot_b": {
+          "snapshot_id": "d:decimal:b",
+          "portfolio_id": "p",
+          "listing_id": "listing:d:decimal:b",
+          "version": 1,
+          "as_of": "2025-12-31",
+          "known_at": "2026-01-10T00:00:00Z",
+          "content_hash": "01c2351425cda07709802d5a950948ea47643090432327150a3ba7d1e61e862a",
+          "complete": true
+        },
+        "known_overlap": "0.000000000000000002",
+        "coverage_a": "1",
+        "coverage_b": "1",
+        "uncovered_a": "0",
+        "uncovered_b": "0",
+        "conservative_upper_bound": "0.000000000000000002",
+        "quality": "exact",
+        "same_date": true,
+        "bound_scope": "the_two_disclosed_date_vectors",
+        "common_holdings": [
+          {
+            "security_id": "ID:Z",
+            "weight_a": "0.999999999999999999",
+            "weight_b": "0.000000000000000001",
+            "overlap_weight": "0.000000000000000001"
+          },
+          {
+            "security_id": "ID:a",
+            "weight_a": "0.000000000000000001",
+            "weight_b": "0.999999999999999999",
+            "overlap_weight": "0.000000000000000001"
+          },
+          {
+            "security_id": "ID:zero",
+            "weight_a": "0",
+            "weight_b": "0",
+            "overlap_weight": "0"
+          }
+        ],
+        "issues": [],
+        "binding_id": "79713beb4a4f973b166692e326a2c01196c3bf4581df36738626ea23ef40fbc4"
+      }
+    }
+  ]
+}

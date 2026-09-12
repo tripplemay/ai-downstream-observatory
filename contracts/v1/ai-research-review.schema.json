@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/ai-research-review.schema.json",
+  "type": "object",
+  "required": ["schema_version", "facts", "inferences", "supporting_evidence", "counter_evidence", "risks", "recommendation", "reason", "unknowns", "invalidation_conditions"],
+  "properties": {
+    "schema_version": {"const": "ai-research-review-v1"},
+    "facts": {"type": "array", "maxItems": 100, "items": {"type": "object", "required": ["evidence_id", "metric", "value", "as_of"], "properties": {"evidence_id": {"$ref": "common.schema.json#/$defs/id"}, "metric": {"type": "string", "minLength": 1}, "value": {"$ref": "#/$defs/derived_decimal"}, "as_of": {"$ref": "common.schema.json#/$defs/instant"}}, "additionalProperties": false}},
+    "inferences": {"type": "array", "maxItems": 100, "items": {"type": "object", "required": ["text", "evidence_ids"], "properties": {"text": {"type": "string", "maxLength": 4000}, "evidence_ids": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/id"}}}, "additionalProperties": false}},
+    "supporting_evidence": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/id"}},
+    "counter_evidence": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/id"}},
+    "risks": {"type": "array", "maxItems": 100, "items": {"type": "string", "maxLength": 4000}},
+    "recommendation": {"enum": ["maintain_research", "review", "research_hypothesis"]},
+    "reason": {"type": "string", "minLength": 1, "maxLength": 4000},
+    "unknowns": {"type": "array", "maxItems": 100, "items": {"type": "string", "maxLength": 4000}},
+    "invalidation_conditions": {"type": "array", "maxItems": 100, "items": {"type": "string", "maxLength": 4000}}
+  },
+  "$defs": {
+    "derived_decimal": {"type": "string", "maxLength": 256, "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$", "description": "Exact derived metric text; not an input money fact. Preserve calculation precision rather than round evidence to the ledger fact scale."}
+  },
+  "additionalProperties": false
+}

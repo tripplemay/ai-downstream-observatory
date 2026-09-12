@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/ledger-reversal.schema.json",
+  "type": "object",
+  "required": ["kind", "original_event_id", "original_payload_hash", "correction_id", "attachment_id", "reason"],
+  "properties": {
+    "kind": {"const": "ledger_reversal"},
+    "original_event_id": {"$ref": "common.schema.json#/$defs/id"},
+    "original_payload_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "correction_id": {"$ref": "common.schema.json#/$defs/id"},
+    "attachment_id": {"$ref": "common.schema.json#/$defs/id"},
+    "reason": {"type": "string", "minLength": 1, "maxLength": 2000}
+  },
+  "additionalProperties": false
+}

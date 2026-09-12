@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/performance-input-v5.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "mode",
+    "ledger_revision",
+    "evaluation_timezone",
+    "market_heads",
+    "valuations",
+    "flow_fx_rules",
+    "flow_fx_rules_hash",
+    "external_flow_evidence",
+    "ledger_fact_quality",
+    "period_fact_quality"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "performance-input-v5"
+    },
+    "mode": {
+      "enum": [
+        "as_known",
+        "restated"
+      ]
+    },
+    "ledger_revision": {
+      "$ref": "common.schema.json#/$defs/revision"
+    },
+    "evaluation_timezone": {
+      "$ref": "common.schema.json#/$defs/timezone"
+    },
+    "market_heads": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "common.schema.json#/$defs/id"
+      },
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "object",
+            "required": [
+              "revision",
+              "manifest_hash"
+            ],
+            "properties": {
+              "revision": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "manifest_hash": {
+                "$ref": "common.schema.json#/$defs/hash"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "valuations": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "content_hash"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "common.schema.json#/$defs/id"
+          },
+          "content_hash": {
+            "$ref": "common.schema.json#/$defs/hash"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "flow_fx_rules": {
+      "anyOf": [
+        {
+          "$ref": "flow-fx-rules.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "flow_fx_rules_hash": {
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/hash"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "external_flow_evidence": {
+      "type": "array",
+      "items": {
+        "$ref": "flow-fx-evidence-v2.schema.json"
+      }
+    },
+    "ledger_fact_quality": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 10000,
+      "items": {
+        "$ref": "ledger-fact-quality.schema.json"
+      },
+      "description": "Point proofs in exactly the same order as valuations, each with period_start null."
+    },
+    "period_fact_quality": {
+      "$ref": "ledger-fact-quality.schema.json",
+      "description": "Single bounded-size interval proof from the first through final valuation cutoff."
+    }
+  },
+  "additionalProperties": false
+}

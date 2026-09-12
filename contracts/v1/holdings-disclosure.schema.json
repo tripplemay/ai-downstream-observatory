@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/holdings-disclosure.schema.json",
+  "title": "Portfolio-private disclosed long-only NAV weight vector",
+  "description": "Source decimal spellings are preserved. Hash excludes content_hash, recursively sorts keys and sorts items by ASCII security_id. Semantic validation requires unique security IDs, coverage equal to the exact weight sum, sum <= 1, and complete only when sum = 1 with nonempty items. No implied trading authorization or extrapolation to another date.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "snapshot_id", "portfolio_id", "listing_id", "version", "as_of", "known_at", "weight_basis", "complete", "coverage", "items", "content_hash"],
+  "properties": {
+    "schema_version": {"const": "holdings-disclosure-v1"},
+    "snapshot_id": {"$ref": "common.schema.json#/$defs/id"},
+    "portfolio_id": {"$ref": "common.schema.json#/$defs/id"},
+    "listing_id": {"$ref": "common.schema.json#/$defs/id"},
+    "version": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "as_of": {"type": "string", "format": "date", "pattern": "^(?!0000)[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+    "known_at": {"type": "string", "format": "date-time", "pattern": "^(?!0000)[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?Z$"},
+    "weight_basis": {"const": "net_assets_long_only"},
+    "complete": {"type": "boolean"},
+    "coverage": {"$ref": "#/$defs/fraction"},
+    "items": {
+      "type": "array", "maxItems": 10000,
+      "items": {"type": "object", "additionalProperties": false, "required": ["security_id", "weight"], "properties": {
+        "security_id": {"type": "string", "maxLength": 193, "pattern": "^[A-Z][A-Z0-9_]{0,31}:[A-Za-z0-9._:/-]{1,160}$"},
+        "weight": {"$ref": "#/$defs/fraction"}
+      }}
+    },
+    "content_hash": {"$ref": "common.schema.json#/$defs/hash"}
+  },
+  "$defs": {
+    "fraction": {"allOf": [
+      {"$ref": "common.schema.json#/$defs/decimal"},
+      {"type": "string", "pattern": "^(?:0(?:\\.[0-9]{1,18})?|1(?:\\.0{1,18})?|-0(?:\\.0{1,18})?)$"}
+    ]}
+  }
+}

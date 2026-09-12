@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/ledger-fact.schema.json",
+  "type": "object",
+  "required": ["type", "account_id", "currency"],
+  "properties": {
+    "type": {"enum": ["opening_cash", "opening_position", "deposit", "withdrawal", "buy", "sell", "settlement", "dividend_accrual", "dividend_payment", "dividend", "dividend_net", "dividend_breakdown", "dividend_tax_assessment", "dividend_tax_payment", "corporate_action_notice", "corporate_action_resolution", "fee", "fx", "transfer_out", "transfer_in", "split", "security_in", "security_out", "security_transfer_out", "security_transfer_in", "security_transfer_return"]},
+    "account_id": {"$ref": "common.schema.json#/$defs/id"},
+    "currency": {"$ref": "common.schema.json#/$defs/currency"}
+  },
+  "oneOf": [
+    {
+      "properties": {"type": {"const": "security_in"}, "listing_id": {"$ref": "common.schema.json#/$defs/id"}, "quantity": {"$ref": "common.schema.json#/$defs/decimal"}, "cost_amount": {"$ref": "common.schema.json#/$defs/decimal"}, "market_value": {"$ref": "common.schema.json#/$defs/decimal"}, "value_evidence": {"$ref": "security-transfer-value.schema.json"}},
+      "required": ["listing_id", "quantity", "market_value", "value_evidence"]
+    },
+    {
+      "properties": {"type": {"const": "security_out"}, "listing_id": {"$ref": "common.schema.json#/$defs/id"}, "quantity": {"$ref": "common.schema.json#/$defs/decimal"}, "market_value": {"$ref": "common.schema.json#/$defs/decimal"}, "value_evidence": {"$ref": "security-transfer-value.schema.json"}},
+      "required": ["listing_id", "quantity", "market_value", "value_evidence"]
+    },
+    {
+      "properties": {"type": {"const": "security_transfer_out"}, "listing_id": {"$ref": "common.schema.json#/$defs/id"}, "quantity": {"$ref": "common.schema.json#/$defs/decimal"}, "target_account_id": {"$ref": "common.schema.json#/$defs/id"}},
+      "required": ["listing_id", "quantity", "target_account_id"]
+    },
+    {
+      "properties": {"type": {"enum": ["security_transfer_in", "security_transfer_return"]}, "listing_id": {"$ref": "common.schema.json#/$defs/id"}, "quantity": {"$ref": "common.schema.json#/$defs/decimal"}, "related_event_id": {"$ref": "common.schema.json#/$defs/id"}},
+      "required": ["listing_id", "quantity", "related_event_id"]
+    },
+    {
+      "properties": {"type": {"enum": ["opening_cash", "deposit", "withdrawal", "fee"]}, "amount": {"$ref": "common.schema.json#/$defs/decimal"}},
+      "required": ["amount"]
+    },
+    {
+      "properties": {"type": {"const": "opening_position"}, "listing_id": {"$ref": "common.schema.json#/$defs/id"}, "quantity": {"$ref": "common.schema.json#/$defs/decimal"}, "cost_amount": {"$ref": "common.schema.json#/$defs/decimal"}},
+      "required": ["listing_id", "quantity"]
+    },
+    {
+      "properties": {"type": {"enum": ["buy", "sell"]}, "listing_id": {"$ref": "common.schema.json#/$defs/id"}, "quantity": {"$ref": "common.schema.json#/$defs/decimal"}, "price": {"$ref": "common.schema.json#/$defs/decimal"}, "consideration": {"$ref": "common.schema.json#/$defs/decimal"}, "fee": {"$ref": "common.schema.json#/$defs/decimal"}},
+      "required": ["listing_id", "quantity"],
+      "anyOf": [{"properties": {"price": {}}, "required": ["price"]}, {"properties": {"consideration": {}}, "required": ["consideration"]}]
+    },
+    {
+      "properties": {"type": {"const": "settlement"}, "direction": {"enum": ["buy", "sell"]}, "related_event_id": {"$ref": "common.schema.json#/$defs/id"}, "amount": {"$ref": "common.schema.json#/$defs/decimal"}},
+      "required": ["direction", "related_event_id", "amount"]
+    },
+    {
+      "properties": {"type": {"enum": ["dividend_accrual", "dividend"]}, "amount": {"$ref": "common.schema.json#/$defs/decimal"}, "tax": {"$ref": "common.schema.json#/$defs/decimal"}, "tax_status": {"enum": ["unknown", "estimated", "confirmed"]}, "listing_id": {"$ref": "common.schema.json#/$defs/id"}},
+      "required": ["amount"],
+      "allOf": [
+        {"if": {"required": ["tax_status"], "properties": {"tax_status": {"const": "unknown"}}}, "then": {"not": {"properties": {"tax": {}}, "required": ["tax"]}}},
+        {"if": {"required": ["tax_status"], "properties": {"tax_status": {"enum": ["estimated", "confirmed"]}}}, "then": {"properties": {"tax": {"$ref": "common.schema.json#/$defs/decimal"}}, "required": ["tax"]}}
+      ]
+    },
+    {
+      "properties": {"type": {"const": "dividend_payment"}, "related_event_id": {"$ref": "common.schema.json#/$defs/id"}, "amount": {"$ref": "common.schema.json#/$defs/decimal"}, "listing_id": {"$ref": "common.schema.json#/$defs/id"}},
+      "required": ["related_event_id", "amount"]
+    },
+    {
+      "properties": {"type": {"const": "transfer_in"}, "related_event_id": {"$ref": "common.schema.json#/$defs/id"}, "amount": {"$ref": "common.schema.json#/$defs/decimal"}},
+      "required": ["related_event_id", "amount"]
+    },
+    {
+      "properties": {"type": {"const": "dividend_net"}, "amount": {"$ref": "common.schema.json#/$defs/decimal"}, "net_status": {"enum": ["final", "provisional"]}, "listing_id": {"$ref": "common.schema.json#/$defs/id"}},
+      "required": ["amount", "net_status"]
+    },
+    {
+      "properties": {"type": {"const": "dividend_breakdown"}, "related_event_id": {"$ref": "common.schema.json#/$defs/id"}, "gross_amount": {"$ref": "common.schema.json#/$defs/decimal"}, "tax": {"$ref": "common.schema.json#/$defs/decimal"}, "evidence_reference": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S"}, "listing_id": {"$ref": "common.schema.json#/$defs/id"}},
+      "required": ["related_event_id", "gross_amount", "tax", "evidence_reference"]
+    },
+    {
+      "properties": {"type": {"const": "dividend_tax_assessment"}, "related_event_id": {"$ref": "common.schema.json#/$defs/id"}, "tax": {"$ref": "common.schema.json#/$defs/decimal"}, "tax_status": {"enum": ["estimated", "confirmed"]}, "evidence_reference": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S"}, "listing_id": {"$ref": "common.schema.json#/$defs/id"}},
+      "required": ["related_event_id", "tax", "tax_status", "evidence_reference"]
+    },
+    {
+      "properties": {"type": {"const": "dividend_tax_payment"}, "related_event_id": {"$ref": "common.schema.json#/$defs/id"}, "amount": {"$ref": "common.schema.json#/$defs/decimal"}, "evidence_reference": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S"}, "listing_id": {"$ref": "common.schema.json#/$defs/id"}},
+      "required": ["related_event_id", "amount", "evidence_reference"]
+    },
+    {
+      "properties": {"type": {"const": "corporate_action_notice"}, "action_kind": {"enum": ["dividend_entitlement", "merger", "liquidation", "return_of_capital", "other"]}, "evidence_reference": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S"}, "listing_id": {"$ref": "common.schema.json#/$defs/id"}},
+      "required": ["action_kind", "evidence_reference"]
+    },
+    {
+      "properties": {"type": {"const": "corporate_action_resolution"}, "related_event_id": {"$ref": "common.schema.json#/$defs/id"}, "resolution": {"enum": ["not_applicable", "recorded"]}, "supporting_event_ids": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/id"}, "maxItems": 1000, "uniqueItems": true}, "evidence_reference": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S"}, "listing_id": {"$ref": "common.schema.json#/$defs/id"}},
+      "required": ["related_event_id", "resolution", "supporting_event_ids", "evidence_reference"],
+      "allOf": [{"if": {"properties": {"resolution": {"const": "not_applicable"}}, "required": ["resolution"]}, "then": {"properties": {"supporting_event_ids": {"type": "array", "maxItems": 0}}}, "else": {"properties": {"supporting_event_ids": {"type": "array", "minItems": 1}}}}]
+    },
+    {
+      "properties": {"type": {"const": "fx"}, "target_currency": {"$ref": "common.schema.json#/$defs/currency"}, "target_account_id": {"$ref": "common.schema.json#/$defs/id"}, "amount": {"$ref": "common.schema.json#/$defs/decimal"}, "received_amount": {"$ref": "common.schema.json#/$defs/decimal"}, "fee": {"$ref": "common.schema.json#/$defs/decimal"}},
+      "required": ["target_currency", "amount", "received_amount"]
+    },
+    {
+      "properties": {"type": {"const": "transfer_out"}, "target_account_id": {"$ref": "common.schema.json#/$defs/id"}, "amount": {"$ref": "common.schema.json#/$defs/decimal"}, "fee": {"$ref": "common.schema.json#/$defs/decimal"}},
+      "required": ["target_account_id", "amount"]
+    },
+    {
+      "properties": {"type": {"const": "split"}, "listing_id": {"$ref": "common.schema.json#/$defs/id"}, "split_numerator": {"$ref": "common.schema.json#/$defs/decimal"}, "split_denominator": {"$ref": "common.schema.json#/$defs/decimal"}},
+      "required": ["listing_id", "split_numerator", "split_denominator"]
+    }
+  ],
+  "unevaluatedProperties": false
+}

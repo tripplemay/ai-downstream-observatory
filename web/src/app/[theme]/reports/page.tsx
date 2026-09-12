@@ -16,8 +16,8 @@ export default async function ReportsPage({
   params: Promise<{ theme: string }>;
 }) {
   const { theme } = await params;
-  if (!getTheme(theme)) notFound();
-  const reports = getReports(theme);
+  if (!(await getTheme(theme))) notFound();
+  const reports = await getReports(theme);
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">

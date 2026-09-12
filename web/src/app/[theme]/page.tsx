@@ -32,16 +32,16 @@ export default async function ThemeDashboardPage({
   params: Promise<{ theme: string }>;
 }) {
   const { theme } = await params;
-  const themeRow = getTheme(theme);
+  const themeRow = await getTheme(theme);
   if (!themeRow) notFound();
   if (themeRow.type === "strategy") return <StrategyDashboard themeId={theme} />;
-  const overview = getOverview(theme);
-  const lastObs = getLastObservation(theme);
-  const counts = getStatusCounts(theme);
-  const lastReport = getLastReport(theme);
-  const lastStatus = lastJobStatus();
-  const scissor = getScissorData(theme);
-  const strength = getStrengthData(theme);
+  const overview = await getOverview(theme);
+  const lastObs = await getLastObservation(theme);
+  const counts = await getStatusCounts(theme);
+  const lastReport = await getLastReport(theme);
+  const lastStatus = await lastJobStatus();
+  const scissor = await getScissorData(theme);
+  const strength = await getStrengthData(theme);
   const light = overview?.light ?? "red";
   const failed = lastStatus?.includes("FAILED") ?? false;
 

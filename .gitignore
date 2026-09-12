@@ -15,5 +15,24 @@ data/
 # Next.js web
 web/node_modules/
 web/.next/
+web/.next-fixture/
 web/*.tsbuildinfo
 web/next-env.d.ts
+
+# Local validation evidence and private environment overrides
+.private/
+artifacts/
+.env
+.env.*
+web/.env
+web/.env.*
+data-workbench/
+backups-workbench/
+restores-workbench/
+release-evidence/
+releases/
+incoming/
+**/*.etfbackup
+**/*.passphrase
+**/recovery-session.env
+**/RESTORE_PENDING_REVIEW

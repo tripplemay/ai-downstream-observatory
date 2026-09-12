@@ -1,0 +1,21 @@
+{
+  "schema_version": "accounting-golden-v1",
+  "source": "docs/04-data-and-accounting.md",
+  "synthetic": true,
+  "facts_are_decimal_strings": true,
+  "fixtures": [
+    {"id": "F-02", "operation": "profit", "nav": "1500000", "opening": "1000000", "flows": ["500000"], "expected": "0"},
+    {"id": "F-03", "operation": "buy", "cash": "100000", "quantity": "1000", "principal": "10000", "fee": "10", "price": "10", "expected_nav": "99990", "expected_payable": "10010", "expected_cash": "89990"},
+    {"id": "F-04", "operation": "sell", "cash": "89990", "opening_quantity": "1000", "opening_cost": "10000", "quantity": "400", "principal": "4800", "fee": "4", "price": "12", "expected_nav": "101986", "expected_cash": "94786", "expected_realized": "800", "expected_unrealized": "1200"},
+    {"id": "F-05", "operation": "dividend", "quantity": "1000", "price": "9.8", "receivable": "180", "expected_nav": "9980"},
+    {"id": "F-06", "operation": "transfer", "cash": "69990", "in_transit": "30000", "expected_nav": "99990"},
+    {"id": "F-07", "operation": "fx", "usd": "1000", "cny_per_usd": "7", "opening": "7007", "expected_nav": "7000", "expected_profit": "-7"},
+    {"id": "F-08", "operation": "returns", "opening": "100", "before_flow": "110", "flow": "50", "closing": "176", "expected_twr": "0.21", "expected_dietz": "0.208", "expected_profit": "26"},
+    {"id": "F-09", "operation": "xirr", "flows": [["2025-01-01", "-100000"], ["2026-01-01", "110000"]], "expected_status": "ok", "expected_roots": ["0.1"]},
+    {"id": "F-10", "operation": "xirr", "flows": [["2025-01-01", "-100"], ["2026-01-01", "230"], ["2027-01-01", "-132"]], "expected_status": "ambiguous", "expected_roots": ["0.1", "0.2"]},
+    {"id": "F-11", "operation": "drawdown", "values": ["1", "1.2", "0.9", "1.08"], "expected": "-0.25", "expected_recovered_at": null},
+    {"id": "F-13", "operation": "split", "quantity": "100", "cost": "2000", "numerator": "2", "denominator": "1", "expected_quantity": "200", "expected_unit_cost": "10"},
+    {"id": "F-14", "operation": "fx_return", "local_return": "0.1", "fx_return": "0.02", "expected_cny_return": "0.122", "expected_cross_return": "0.002"},
+    {"id": "F-16", "operation": "missing_price", "listing_id": "CN:UNKNOWN", "quantity": "1", "price": null, "expected_nav": null, "expected_quality": "blocked"}
+  ]
+}

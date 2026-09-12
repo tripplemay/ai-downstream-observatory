@@ -12,9 +12,9 @@ export default async function SignalsPage({
   params: Promise<{ theme: string }>;
 }) {
   const { theme } = await params;
-  const t = getTheme(theme);
+  const t = await getTheme(theme);
   if (!t || t.type === "strategy") notFound();
-  const groups = getSignalGroups(theme);
+  const groups = await getSignalGroups(theme);
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/ledger-event.schema.json",
+  "type": "object",
+  "required": ["id", "portfolio_id", "account_id", "environment", "event_type", "effective_at", "time_precision", "source_timezone", "recorded_at", "source_id", "idempotency_key", "payload_hash", "payload", "schema_version", "ledger_revision", "actor_id", "reason"],
+  "properties": {
+    "id": {"$ref": "common.schema.json#/$defs/id"},
+    "portfolio_id": {"$ref": "common.schema.json#/$defs/id"},
+    "account_id": {"$ref": "common.schema.json#/$defs/id"},
+    "environment": {"const": "actual"},
+    "event_type": {"type": "string", "minLength": 1},
+    "effective_at": {"type": "string"},
+    "time_precision": {"enum": ["date", "second"]},
+    "source_timezone": {"$ref": "common.schema.json#/$defs/timezone"},
+    "recorded_at": {"$ref": "common.schema.json#/$defs/instant"},
+    "source_id": {"$ref": "common.schema.json#/$defs/id"},
+    "source_event_id": {"$ref": "common.schema.json#/$defs/id"},
+    "idempotency_key": {"$ref": "common.schema.json#/$defs/id"},
+    "payload_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "payload": {"oneOf": [{"$ref": "ledger-command.schema.json"}, {"$ref": "ledger-reversal.schema.json"}]},
+    "reversal_of": {"$ref": "common.schema.json#/$defs/id"},
+    "transfer_group_id": {"$ref": "common.schema.json#/$defs/id"},
+    "execution_item_id": {"$ref": "common.schema.json#/$defs/id"},
+    "import_batch_id": {"$ref": "common.schema.json#/$defs/id"},
+    "schema_version": {"const": 1},
+    "ledger_revision": {"type": "integer", "minimum": 1},
+    "actor_id": {"$ref": "common.schema.json#/$defs/id"},
+    "reason": {"type": "string", "minLength": 1}
+  },
+  "allOf": [
+    {"if": {"properties": {"time_precision": {"const": "date"}}}, "then": {"properties": {"effective_at": {"$ref": "common.schema.json#/$defs/date"}}}, "else": {"properties": {"effective_at": {"$ref": "common.schema.json#/$defs/instant"}}}},
+    {"if": {"properties": {"event_type": {"const": "reversal"}}}, "then": {"required": ["reversal_of"], "properties": {"reversal_of": {"$ref": "common.schema.json#/$defs/id"}, "payload": {"$ref": "ledger-reversal.schema.json"}}}, "else": {"not": {"properties": {"reversal_of": {}}, "required": ["reversal_of"]}, "properties": {"payload": {"$ref": "ledger-command.schema.json"}}}}
+  ],
+  "additionalProperties": false
+}

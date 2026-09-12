@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/common.schema.json",
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"},
+    "decimal": {
+      "type": "string",
+      "pattern": "^-?(?=(?:[0-9]\\.?){1,38}$)(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,18})?$",
+      "description": "Exact base-10 text, at most 38 digits and 18 decimal places. No exponent, grouping separator, whitespace, NaN or Infinity. Financial operations enforce sign and quantum separately."
+    },
+    "currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+    "date": {"type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+    "instant": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "revision": {"type": "integer", "minimum": 0},
+    "timezone": {"type": "string", "minLength": 1, "maxLength": 80},
+    "quality": {"enum": ["complete", "provisional", "blocked"]}
+  }
+}

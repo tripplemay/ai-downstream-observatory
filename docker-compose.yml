@@ -1,18 +1,129 @@
+x-hardened: &hardened
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: [/tmp:mode=1777]
+  user: "10001:10001"
+
+x-web-image: &web-image
+  image: etf-workbench-web:${WORKBENCH_RELEASE_SHA:-development}
+  build:
+    context: .
+    dockerfile: Dockerfile.web
+    args:
+      RELEASE_SHA: ${WORKBENCH_RELEASE_SHA:-development}
+
+x-data: &data
+  type: bind
+  source: ${WORKBENCH_DATA_DIR_HOST:-./data-workbench}
+  target: /app/data
+  bind:
+    create_host_path: false
+
+x-key: &key
+  type: bind
+  source: ${WORKBENCH_BACKUP_KEY_FILE:-/etc/etf-workbench/backup.passphrase}
+  target: /run/secrets/backup-passphrase
+  read_only: true
+  bind:
+    create_host_path: false
+
+x-runtime: &runtime
+  WORKBENCH_DB_PATH: /app/data/etf-workbench.db
+  WORKBENCH_DATA_DIR: /app/data
+  WORKBENCH_MODE: ${WORKBENCH_MODE:-ledger}
+
 services:
   web:
-    build:
-      context: .
-      dockerfile: Dockerfile.web
+    <<: [*hardened, *web-image]
     restart: unless-stopped
+    env_file:
+      - path: ${WORKBENCH_RUNTIME_ENV_FILE:-/etc/etf-workbench/runtime.env}
+        required: true
+        format: raw
+    environment: *runtime
     ports:
-      - "127.0.0.1:5051:3000"
-    volumes:
-      - ./data:/app/data
+      - "127.0.0.1:${WORKBENCH_HTTP_PORT:-5051}:3000"
+    volumes: [*data]
 
   worker:
-    build: .
+    <<: *hardened
+    image: etf-workbench-worker:${WORKBENCH_RELEASE_SHA:-development}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        RELEASE_SHA: ${WORKBENCH_RELEASE_SHA:-development}
     restart: unless-stopped
-    command: ["python", "worker/scheduler.py"]
+    environment: *runtime
+    volumes: [*data]
+    depends_on:
+      web:
+        condition: service_healthy
+
+  migrate:
+    <<: [*hardened, *web-image]
+    profiles: [tools]
+    environment: *runtime
+    entrypoint: [node, /app/scripts/migrate-workbench.mjs]
+    command: [--db, /app/data/etf-workbench.db]
+    volumes: [*data]
+
+  backup:
+    <<: [*hardened, *web-image]
+    profiles: [tools]
+    environment:
+      <<: *runtime
+      WORKBENCH_BACKUP_DIR: /app/backups
+      WORKBENCH_BACKUP_PASSPHRASE_FILE: /run/secrets/backup-passphrase
+      WORKBENCH_RELEASE_REF: ${WORKBENCH_RELEASE_SHA:-development}
+    entrypoint: [node, /app/scripts/backup-workbench.mjs]
     volumes:
-      - ./data:/app/data
-      - ./config:/app/config:ro
+      - *data
+      - *key
+      - type: bind
+        source: ${WORKBENCH_BACKUP_DIR_HOST:-./backups-workbench}
+        target: /app/backups
+        bind:
+          create_host_path: false
+
+  restore:
+    <<: [*hardened, *web-image]
+    profiles: [tools]
+    environment:
+      WORKBENCH_BACKUP_PASSPHRASE_FILE: /run/secrets/backup-passphrase
+      WORKBENCH_RESTORE_ARCHIVE: /app/backups/${WORKBENCH_RESTORE_ARCHIVE_NAME:-not-selected.etfbackup}
+      WORKBENCH_RESTORE_TARGET_DIR: /restore/${WORKBENCH_RESTORE_TARGET_NAME:-restored-new}
+    entrypoint: [node, /app/scripts/restore-workbench.mjs]
+    volumes:
+      - *key
+      - type: bind
+        source: ${WORKBENCH_BACKUP_DIR_HOST:-./backups-workbench}
+        target: /app/backups
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${WORKBENCH_RESTORE_PARENT_DIR:-./restores-workbench}
+        target: /restore
+        bind:
+          create_host_path: false
+
+  archive-legacy:
+    <<: [*hardened, *web-image]
+    profiles: [tools]
+    environment:
+      <<: *runtime
+      WORKBENCH_LEGACY_SOURCE: /legacy/observatory.db
+      WORKBENCH_LEGACY_ARCHIVE_DIR: /app/data/legacy-archives
+      WORKBENCH_RELEASE_REF: ${WORKBENCH_RELEASE_SHA:-development}
+    entrypoint: [node, /app/scripts/archive-legacy.mjs]
+    volumes:
+      - *data
+      - type: bind
+        source: ${WORKBENCH_LEGACY_DATA_DIR:-./data}
+        target: /legacy
+        read_only: true
+        bind:
+          create_host_path: false

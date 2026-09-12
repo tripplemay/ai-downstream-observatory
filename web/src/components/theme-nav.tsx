@@ -6,7 +6,7 @@ import { ThemeLinks } from "@/components/theme-links";
  * 避免构建期访问数据库。 */
 export async function ThemeNav() {
   await connection();
-  const themes = getThemes();
+  const themes = await getThemes();
   return (
     <div className="pb-3">
       <div className="px-5 pb-1 text-xs font-medium text-muted-foreground">主题</div>

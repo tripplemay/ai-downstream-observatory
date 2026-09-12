@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/research-command.schema.json",
+  "type": "object",
+  "required": ["command_type", "payload"],
+  "properties": {
+    "command_type": {"enum": ["research_register", "research_register_trial", "research_trial", "research_freeze", "research_unseal", "research_ai_context", "research_ai_review"]},
+    "payload": {"type": "object"}
+  },
+  "oneOf": [
+    {"properties": {"command_type": {"const": "research_register"}, "payload": {"$ref": "#/$defs/register"}}},
+    {"properties": {"command_type": {"const": "research_register_trial"}, "payload": {"$ref": "#/$defs/register_trial"}}},
+    {"properties": {"command_type": {"const": "research_trial"}, "payload": {"$ref": "#/$defs/trial"}}},
+    {"properties": {"command_type": {"const": "research_freeze"}, "payload": {"$ref": "#/$defs/freeze"}}},
+    {"properties": {"command_type": {"const": "research_unseal"}, "payload": {"$ref": "#/$defs/unseal"}}},
+    {"properties": {"command_type": {"const": "research_ai_context"}, "payload": {"$ref": "#/$defs/ai_context"}}},
+    {"properties": {"command_type": {"const": "research_ai_review"}, "payload": {"$ref": "#/$defs/ai_review"}}}
+  ],
+  "$defs": {
+    "register": {
+      "type": "object", "required": ["experiment_id", "plan", "dataset"],
+      "properties": {
+        "experiment_id": {"$ref": "common.schema.json#/$defs/id"},
+        "plan": {"$ref": "research-plan.schema.json"},
+        "dataset": {"$ref": "research-dataset.schema.json"}
+      }, "additionalProperties": false
+    },
+    "register_trial": {
+      "type": "object", "required": ["experiment_id", "phase", "parameters"],
+      "properties": {
+        "experiment_id": {"$ref": "common.schema.json#/$defs/id"},
+        "phase": {"enum": ["train", "validation", "holdout"]},
+        "parameters": {"$ref": "research-parameters.schema.json"}
+      }, "additionalProperties": false
+    },
+    "trial": {
+      "type": "object", "required": ["trial_id"],
+      "properties": {"trial_id": {"$ref": "common.schema.json#/$defs/id"}}, "additionalProperties": false
+    },
+    "freeze": {
+      "type": "object", "required": ["experiment_id", "validation_trial_id", "reason"],
+      "properties": {
+        "experiment_id": {"$ref": "common.schema.json#/$defs/id"},
+        "validation_trial_id": {"$ref": "common.schema.json#/$defs/id"},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 4000}
+      }, "additionalProperties": false
+    },
+    "unseal": {
+      "type": "object", "required": ["experiment_id", "reason"],
+      "properties": {
+        "experiment_id": {"$ref": "common.schema.json#/$defs/id"},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 4000}
+      }, "additionalProperties": false
+    },
+    "ai_context": {
+      "type": "object", "required": ["run_id"],
+      "properties": {"run_id": {"$ref": "common.schema.json#/$defs/id"}}, "additionalProperties": false
+    },
+    "ai_review": {
+      "type": "object", "required": ["run_id", "model", "raw_output"],
+      "properties": {
+        "run_id": {"$ref": "common.schema.json#/$defs/id"},
+        "model": {"type": "string", "minLength": 1, "maxLength": 200},
+        "raw_output": {"type": "string", "maxLength": 131072, "description": "Untrusted provider text for offline validation only; worker additionally enforces a 128 KiB UTF-8 limit."}
+      }, "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

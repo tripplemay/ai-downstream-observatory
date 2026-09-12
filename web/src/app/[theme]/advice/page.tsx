@@ -25,9 +25,9 @@ export default async function AdvicePage({
 }) {
   const { theme } = await params;
   if (theme !== THEME) notFound();
-  const current = getAdviceCurrent();
-  const navSeries = getAdviceNavSeries();
-  const history = getAdviceHistory(50);
+  const current = await getAdviceCurrent();
+  const navSeries = await getAdviceNavSeries();
+  const history = await getAdviceHistory(50);
   const latestNav = [...navSeries].reverse().find((r) => r.adv !== null)?.adv ?? null;
   const latestBm = [...navSeries].reverse().find((r) => r.bm !== null)?.bm ?? null;
   const cash = current ? Math.max(0, 1 - current.basket.reduce((s, b) => s + b.weight, 0)) : 1;

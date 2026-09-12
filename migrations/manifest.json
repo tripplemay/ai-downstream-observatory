@@ -1,0 +1,70 @@
+{
+  "format_version": 1,
+  "migrations": [
+    {
+      "version": 1,
+      "file": "0001_workbench.sql",
+      "sha256": "08f4be5f6218dff204434af97a8fe65cd4a89ac9a4d55948fe020c1b07f77d96"
+    },
+    {
+      "version": 2,
+      "file": "0002_research_runtime.sql",
+      "sha256": "dad285dbcf9d5c03d21c7e3cd62666887a8ddad8faa3b088919cee376fab08f2"
+    },
+    {
+      "version": 3,
+      "file": "0003_integrity_guards.sql",
+      "sha256": "ac8cc0a05b9c7aff65a7d761869d4e3f71a3d9119a21ada25ebacec5dd52af9f"
+    },
+    {
+      "version": 4,
+      "file": "0004_market_batch_history.sql",
+      "sha256": "73b35d1dabb8fef9ede425892bd662316c808cfd9aa4db092eb7dedec5410f2e"
+    },
+    {
+      "version": 5,
+      "file": "0005_unclassified_income.sql",
+      "sha256": "f7af6604a8de418b8ceefe434f4c865d1afac0d7789bf34f68c1f870c608cda4"
+    },
+    {
+      "version": 6,
+      "file": "0006_ledger_lookup_indexes.sql",
+      "sha256": "c2edb1fc45eec8de3b7d55de534a75b302d5a78c3b6004b391fd3e7da14bdd6c"
+    },
+    {
+      "version": 7,
+      "file": "0007_research_experiments.sql",
+      "sha256": "103ed1a8f2693afc11dac159baebfad656c1c242d7db925684e65aafbb6cc52c"
+    },
+    {
+      "version": 8,
+      "file": "0008_governance_verification.sql",
+      "sha256": "87666f1398983ab130db273910b9cbc64ded4e709ed02b4ad54f67f4d04cd32a"
+    },
+    {
+      "version": 9,
+      "file": "0009_funding_plans.sql",
+      "sha256": "7efff0b9b6a40b5bf0d22682522c8ad53dbb240fa9a2ff5132219a7402f6c55d"
+    },
+    {
+      "version": 10,
+      "file": "0010_security_transfers.sql",
+      "sha256": "4b0a0cef5337b257062e8c0fe13112d99496a7b080bf9e49da6d8f2f5dbf42a4"
+    },
+    {
+      "version": 11,
+      "file": "0011_csv_import_evidence.sql",
+      "sha256": "4d14a01683591ced051136a734d67cd3fc2d169149dc5989b7f721d859f0e54e"
+    },
+    {
+      "version": 12,
+      "file": "0012_dividend_tax_payable.sql",
+      "sha256": "72db560f47e10f73f42905d5fc5baa097ae5409fbfc91cf0fddfd92fdaf46575"
+    },
+    {
+      "version": 13,
+      "file": "0013_etf_catalog.sql",
+      "sha256": "d570a9cc2be57e73555b36a430f7b9a9c70f6d8e017ce7bb5446ad7cf451f9d4"
+    }
+  ]
+}

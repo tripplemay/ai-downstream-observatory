@@ -26,13 +26,13 @@ import {
   getStrategyParamsHistory,
 } from "@/lib/queries";
 
-export function StrategyDashboard({ themeId }: { themeId: string }) {
-  const overview = getOverview(themeId);
-  const advice = getAdviceCurrent();
-  const navFull = getNavCompareFull();
-  const width = getMarketWidth();
-  const params = getStrategyParams(themeId);
-  const paramsHistory = getStrategyParamsHistory(themeId);
+export async function StrategyDashboard({ themeId }: { themeId: string }) {
+  const overview = await getOverview(themeId);
+  const advice = await getAdviceCurrent();
+  const navFull = await getNavCompareFull();
+  const width = await getMarketWidth();
+  const params = await getStrategyParams(themeId);
+  const paramsHistory = await getStrategyParamsHistory(themeId);
   const light = overview?.light ?? "red";
   const cash = advice ? Math.max(0, 1 - advice.basket.reduce((s, b) => s + b.weight, 0)) : 1;
 

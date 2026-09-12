@@ -12,7 +12,7 @@ export default async function ThesisPage({
   params: Promise<{ theme: string }>;
 }) {
   const { theme } = await params;
-  if (!getTheme(theme)) notFound();
-  const pages = getPages(theme);
+  if (!(await getTheme(theme))) notFound();
+  const pages = await getPages(theme);
   return <ThesisForm thesis={pages.thesis ?? ""} rules={pages.rules ?? ""} themeId={theme} />;
 }

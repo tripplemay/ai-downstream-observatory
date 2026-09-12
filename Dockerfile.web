@@ -1,28 +1,41 @@
-# Next.js web 端（web/）— standalone 输出，容器内监听 3000
-# 构建上下文为仓库根目录：docker build -f Dockerfile.web .
-
-FROM node:22-alpine AS deps
+FROM node:22-alpine AS dependencies
 WORKDIR /app/web
-# better-sqlite3 原生模块：优先预编译二进制，musl 无预编译时回退源码编译
 RUN apk add --no-cache python3 make g++
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
-FROM node:22-alpine AS builder
+FROM dependencies AS production-dependencies
+RUN npm prune --omit=dev --no-audit --no-fund
+
+FROM dependencies AS builder
 WORKDIR /app/web
-COPY --from=deps /app/web/node_modules ./node_modules
+COPY contracts/ /app/contracts/
+COPY migrations/ /app/migrations/
+COPY scripts/ /app/scripts/
 COPY web/ ./
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 FROM node:22-alpine AS runner
-WORKDIR /app
+ARG RELEASE_SHA=development
+LABEL org.opencontainers.image.revision=$RELEASE_SHA
+WORKDIR /app/web
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \
     HOSTNAME=0.0.0.0 \
-    DB_PATH=/app/data/observatory.db
-COPY --from=builder /app/web/.next/standalone ./
-COPY --from=builder /app/web/.next/static ./.next/static
+    WORKBENCH_DB_PATH=/app/data/etf-workbench.db \
+    WORKBENCH_DATA_DIR=/app/data
+RUN addgroup -g 10001 workbench && adduser -D -u 10001 -G workbench workbench
+COPY --from=builder --chown=10001:10001 /app/web/.next/standalone ./
+COPY --from=builder --chown=10001:10001 /app/web/.next/static ./.next/static
+# Operational tools use the same pinned production modules as the server.
+COPY --from=production-dependencies --chown=10001:10001 /app/web/node_modules ./node_modules/
+COPY --chown=10001:10001 web/package.json ./package.json
+COPY --chown=10001:10001 contracts/ /app/contracts/
+COPY --chown=10001:10001 migrations/ /app/migrations/
+COPY --chown=10001:10001 scripts/migrate-workbench.mjs scripts/backup-workbench.mjs scripts/restore-workbench.mjs scripts/archive-legacy.mjs scripts/check-workbench-runtime.mjs /app/scripts/
+USER 10001:10001
 EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD ["node", "/app/scripts/check-workbench-runtime.mjs", "--http"]
 CMD ["node", "server.js"]

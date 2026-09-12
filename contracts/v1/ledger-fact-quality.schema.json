@@ -1,0 +1,292 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/ledger-fact-quality.schema.json",
+  "type": "object",
+  "description": "Immutable independently recomputable fact-quality evidence. Point period_start is null. Period evidence retains end-state lots under period date eligibility while top-level qualities/issues/event hashes cover the entire interval; point snapshots remain separately required.",
+  "required": [
+    "schema_version",
+    "binding_id",
+    "portfolio_id",
+    "ledger_revision",
+    "cutoff_at",
+    "knowledge_at",
+    "mode",
+    "period_start",
+    "nav_quality",
+    "performance_quality",
+    "attribution_quality",
+    "issues",
+    "dividends",
+    "corporate_actions",
+    "event_hashes"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "ledger-fact-quality-v1"
+    },
+    "binding_id": {
+      "$ref": "common.schema.json#/$defs/hash"
+    },
+    "portfolio_id": {
+      "$ref": "common.schema.json#/$defs/id"
+    },
+    "ledger_revision": {
+      "$ref": "common.schema.json#/$defs/revision"
+    },
+    "cutoff_at": {
+      "$ref": "common.schema.json#/$defs/instant"
+    },
+    "knowledge_at": {
+      "$ref": "common.schema.json#/$defs/instant"
+    },
+    "mode": {
+      "enum": [
+        "as_known",
+        "restated"
+      ]
+    },
+    "period_start": {
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/instant"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nav_quality": {
+      "$ref": "#/$defs/quality"
+    },
+    "performance_quality": {
+      "$ref": "#/$defs/quality"
+    },
+    "attribution_quality": {
+      "$ref": "#/$defs/quality"
+    },
+    "issues": {
+      "$ref": "#/$defs/issues"
+    },
+    "dividends": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/dividend"
+      }
+    },
+    "corporate_actions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/corporateAction"
+      }
+    },
+    "event_hashes": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "common.schema.json#/$defs/id"
+      },
+      "additionalProperties": {
+        "$ref": "common.schema.json#/$defs/hash"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "quality": {
+      "enum": [
+        "complete",
+        "provisional",
+        "blocked"
+      ]
+    },
+    "decimal": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+      "maxLength": 256
+    },
+    "decimalOrNull": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/decimal"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "idOrNull": {
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/id"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ids": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/id"
+      },
+      "uniqueItems": true
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2048
+      },
+      "uniqueItems": true
+    },
+    "dividend": {
+      "type": "object",
+      "required": [
+        "event_id",
+        "account_id",
+        "listing_id",
+        "currency",
+        "gross_amount",
+        "recognized_tax",
+        "tax_status",
+        "net_status",
+        "cash_received",
+        "receivable",
+        "tax_payable",
+        "assessment_event_id",
+        "breakdown_event_id",
+        "child_event_ids",
+        "nav_quality",
+        "performance_quality",
+        "attribution_quality",
+        "issues"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "common.schema.json#/$defs/id"
+        },
+        "account_id": {
+          "$ref": "common.schema.json#/$defs/id"
+        },
+        "listing_id": {
+          "$ref": "#/$defs/idOrNull"
+        },
+        "currency": {
+          "$ref": "common.schema.json#/$defs/currency"
+        },
+        "gross_amount": {
+          "$ref": "#/$defs/decimalOrNull"
+        },
+        "recognized_tax": {
+          "$ref": "#/$defs/decimalOrNull"
+        },
+        "tax_status": {
+          "enum": [
+            "unknown",
+            "estimated",
+            "confirmed"
+          ]
+        },
+        "net_status": {
+          "enum": [
+            null,
+            "final",
+            "provisional"
+          ]
+        },
+        "cash_received": {
+          "$ref": "#/$defs/decimal"
+        },
+        "receivable": {
+          "$ref": "#/$defs/decimal"
+        },
+        "tax_payable": {
+          "$ref": "#/$defs/decimal"
+        },
+        "assessment_event_id": {
+          "$ref": "#/$defs/idOrNull"
+        },
+        "breakdown_event_id": {
+          "$ref": "#/$defs/idOrNull"
+        },
+        "child_event_ids": {
+          "$ref": "#/$defs/ids"
+        },
+        "nav_quality": {
+          "$ref": "#/$defs/quality"
+        },
+        "performance_quality": {
+          "$ref": "#/$defs/quality"
+        },
+        "attribution_quality": {
+          "$ref": "#/$defs/quality"
+        },
+        "issues": {
+          "$ref": "#/$defs/issues"
+        }
+      },
+      "additionalProperties": false
+    },
+    "corporateAction": {
+      "type": "object",
+      "required": [
+        "event_id",
+        "account_id",
+        "listing_id",
+        "currency",
+        "action_kind",
+        "resolution_event_id",
+        "resolution",
+        "supporting_event_ids",
+        "status",
+        "issues"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "common.schema.json#/$defs/id"
+        },
+        "account_id": {
+          "$ref": "common.schema.json#/$defs/id"
+        },
+        "listing_id": {
+          "$ref": "#/$defs/idOrNull"
+        },
+        "currency": {
+          "$ref": "common.schema.json#/$defs/currency"
+        },
+        "action_kind": {
+          "enum": [
+            "dividend_entitlement",
+            "merger",
+            "liquidation",
+            "return_of_capital",
+            "other"
+          ]
+        },
+        "resolution_event_id": {
+          "$ref": "#/$defs/idOrNull"
+        },
+        "resolution": {
+          "enum": [
+            null,
+            "not_applicable",
+            "recorded"
+          ]
+        },
+        "supporting_event_ids": {
+          "$ref": "#/$defs/ids"
+        },
+        "status": {
+          "enum": [
+            "unresolved",
+            "resolved"
+          ]
+        },
+        "issues": {
+          "$ref": "#/$defs/issues"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

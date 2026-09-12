@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/market-observation.schema.json",
+  "type": "object",
+  "required": ["id", "batch_id", "source_id", "series_key", "metric", "value", "unit", "observed_at", "ingested_at", "source_timezone", "time_precision", "price_basis", "revision_id", "raw_hash", "parser_version", "provenance"],
+  "properties": {
+    "id": {"$ref": "common.schema.json#/$defs/id"},
+    "batch_id": {"$ref": "common.schema.json#/$defs/id"},
+    "source_id": {"$ref": "common.schema.json#/$defs/id"},
+    "listing_id": {"$ref": "common.schema.json#/$defs/id"},
+    "series_key": {"$ref": "common.schema.json#/$defs/id"},
+    "metric": {"type": "string", "minLength": 1},
+    "value": {"$ref": "common.schema.json#/$defs/decimal"},
+    "unit": {"type": "string", "minLength": 1},
+    "observed_at": {"type": "string"},
+    "published_at": {"$ref": "common.schema.json#/$defs/instant"},
+    "ingested_at": {"$ref": "common.schema.json#/$defs/instant"},
+    "source_timezone": {"$ref": "common.schema.json#/$defs/timezone"},
+    "time_precision": {"enum": ["date", "second"]},
+    "price_basis": {"enum": ["unadjusted", "forward_adjusted", "backward_adjusted", "total_return", "not_applicable"]},
+    "revision_id": {"$ref": "common.schema.json#/$defs/id"},
+    "raw_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "parser_version": {"$ref": "common.schema.json#/$defs/id"},
+    "provenance": {"enum": ["live_observed", "historical_point_in_time", "reconstructed"]}
+  },
+  "allOf": [
+    {"if": {"properties": {"time_precision": {"const": "date"}}}, "then": {"properties": {"observed_at": {"$ref": "common.schema.json#/$defs/date"}}}, "else": {"properties": {"observed_at": {"$ref": "common.schema.json#/$defs/instant"}}}}
+  ],
+  "additionalProperties": false
+}

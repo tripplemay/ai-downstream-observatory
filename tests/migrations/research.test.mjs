@@ -1,0 +1,44 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { migrateWorkbench, verifyWorkbenchSchema } from "../../scripts/migrate-workbench.mjs";
+
+const require = createRequire(new URL("../../web/package.json", import.meta.url));
+const Database = require("better-sqlite3");
+const now = "2026-01-01T00:00:00.000Z";
+const hash = "a".repeat(64);
+
+test("research registry migration preserves portfolio scope, append-only history and terminal results", t => {
+  const directory = mkdtempSync(join(tmpdir(), "etf-research-schema-"));
+  const path = join(directory, "workbench.db");
+  migrateWorkbench(path);
+  const db = new Database(path);
+  db.pragma("foreign_keys=ON");
+  t.after(() => { db.close(); rmSync(directory, { recursive: true, force: true }); });
+  assert.ok(verifyWorkbenchSchema(db).version >= 7);
+  for (const id of ["p", "other"]) db.prepare("INSERT INTO portfolios(id,name,created_at) VALUES(?,?,?)").run(id, id, now);
+  db.prepare("INSERT INTO research_experiments VALUES('exp','p',?,?,?,?,?,?)").run("{}", hash, "{}", hash, "human", now);
+  const createRun = db.prepare("INSERT INTO research_runs(id,portfolio_id,environment,input_manifest,experiment_plan_json,status,created_at) VALUES(?,?,'research','{}','{}','queued',?)");
+  createRun.run("run", "p", now);
+  createRun.run("wrong", "other", now);
+  const createTrial = db.prepare("INSERT INTO research_trials VALUES(?,'exp',?,1,'validation','{}',?,?,?)");
+  assert.throws(() => createTrial.run("bad", "wrong", hash, "wrong", now), /portfolio mismatch/);
+  createTrial.run("trial", "run", hash, "key", now);
+  assert.throws(() => db.prepare("UPDATE research_experiments SET plan_json='[]'").run(), /immutable/);
+  assert.throws(() => db.prepare("DELETE FROM research_trials").run(), /immutable/);
+  const holdout = db.prepare("INSERT INTO research_holdout_events VALUES(?,'exp','trial',?,?,?,'{}',?)");
+  assert.throws(() => holdout.run("early", "unseal", hash, "human", now), /frozen candidate/);
+  holdout.run("freeze", "freeze_candidate", hash, "human", now);
+  assert.throws(() => holdout.run("different", "unseal", "b".repeat(64), "human", now), /frozen candidate/);
+  holdout.run("unseal", "unseal", hash, "human", now);
+  assert.throws(() => db.prepare("UPDATE research_holdout_events SET parameters_hash='bad'").run(), /immutable/);
+  assert.throws(() => db.prepare("UPDATE research_runs SET input_manifest='[]' WHERE id='run'").run(), /immutable/);
+  assert.throws(() => db.prepare("UPDATE research_runs SET status='succeeded' WHERE id='run'").run(), /immutable/);
+  db.prepare("UPDATE research_runs SET status='running' WHERE id='run'").run();
+  db.prepare("UPDATE research_runs SET status='succeeded',result_json='{}' WHERE id='run'").run();
+  assert.throws(() => db.prepare("UPDATE research_runs SET result_json='[]' WHERE id='run'").run(), /immutable/);
+  assert.deepEqual(db.pragma("foreign_key_check"), []);
+});

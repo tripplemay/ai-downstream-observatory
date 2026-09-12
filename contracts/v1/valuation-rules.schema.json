@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/valuation-rules.schema.json",
+  "type": "object",
+  "required": ["schema_version", "approved", "price_scope_by_market", "expected_sessions", "corporate_actions_complete", "max_fx_age_seconds"],
+  "properties": {
+    "schema_version": {"const": "valuation-rules-v1"},
+    "approved": {"type": "boolean"},
+    "approval_evidence": {"type": "string", "minLength": 1, "maxLength": 2048},
+    "price_scope_by_market": {
+      "type": "object",
+      "properties": {
+        "CN": {"$ref": "common.schema.json#/$defs/id"},
+        "HK": {"$ref": "common.schema.json#/$defs/id"},
+        "US": {"$ref": "common.schema.json#/$defs/id"}
+      },
+      "additionalProperties": false
+    },
+    "expected_sessions": {
+      "type": "object",
+      "properties": {
+        "CN": {"$ref": "common.schema.json#/$defs/date"},
+        "HK": {"$ref": "common.schema.json#/$defs/date"},
+        "US": {"$ref": "common.schema.json#/$defs/date"}
+      },
+      "additionalProperties": false
+    },
+    "corporate_actions_complete": {
+      "type": "object",
+      "propertyNames": {"$ref": "common.schema.json#/$defs/id"},
+      "additionalProperties": {"type": "boolean"}
+    },
+    "fx_scope": {"$ref": "common.schema.json#/$defs/id"},
+    "max_fx_age_seconds": {"type": "integer", "minimum": 0, "maximum": 2592000}
+  },
+  "allOf": [
+    {"if": {"properties": {"approved": {"const": true}}}, "then": {"required": ["approval_evidence"], "properties": {"approval_evidence": {}}}}
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/security-transfer-value.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "reference",
+    "effective_at",
+    "time_precision",
+    "source_timezone"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "security-transfer-value-v1"
+    },
+    "reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "effective_at": {
+      "type": "string"
+    },
+    "time_precision": {
+      "enum": [
+        "date",
+        "second"
+      ]
+    },
+    "source_timezone": {
+      "$ref": "common.schema.json#/$defs/timezone"
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "time_precision": {
+            "const": "date"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "effective_at": {
+            "$ref": "common.schema.json#/$defs/date"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "effective_at": {
+            "$ref": "common.schema.json#/$defs/instant"
+          }
+        }
+      }
+    }
+  ]
+}

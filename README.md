@@ -1,96 +1,68 @@
-# 投资观测台
+# ETF 投资工作台
 
-多主题的投资信号观测工作台：每个主题以一套判断框架（thesis）为前提，持续跟踪证实/证伪信号，
-由 AI 定时自动拉取公开数据、更新信号状态、生成分析报告，辅助长期建仓决策。
-当前主题：AI 下游应用（AI 下游应用终将产生利润、利润归属平台；C1–C11 / F1–F5）、
-全行业 ETF 轮动（规则驱动：全市场权益 ETF 监测 + 20 日动量/200 日线轮动建议）。
+面向 A 股、港股、美股 ETF 的个人组合工作台：真实事实账本、原件留存、对账、数据质量、估值与收益核算，以及隔离的策略研究和人工决策流程。AI 辅助研究，不代表交易授权；软件正确性不保证持续盈利。
 
-> 个人研究工具，所有内容不构成投资建议。
+## 设计基线
 
-## 功能
+1. [投资目标与约束模板](docs/01-investment-mandate.md)：在本地填写资金金额、预计到账日期、投资期限和账户约束；计划不等于资金已到账。
+2. [产品需求](docs/02-product-requirements.md)：组合、账户、投入计划与人工执行闭环。
+3. [策略治理](docs/03-decision-policy.md)：策略、AI、风控、批准与权限边界。
+4. [数据与核算](docs/04-data-and-accounting.md)：事实、结算、多币种、收益口径。
+5. [架构与迁移](docs/05-architecture-and-migration.md)：版本化新库、旧研究隔离、备份恢复。
+6. [验证与验收](docs/06-validation-and-acceptance.md)：工程与投资有效性分别验收。
 
-- **多主题**：主题为独立判断体系（信号、thesis、标的池、报告各自隔离）；跨主题首页 + 侧栏切换
-- **总览**：红黄绿信号灯 + 三层判断状态 + 操作建议 + 最近自动运行
-- **信号管理**：证实/证伪信号的状态维护，变更留痕
-- **数据快照**：全局指标仓库（SEC EDGAR 季报与 10-Q 分部数据、Yahoo Finance 行情与财报、TWSE 月营收），按主题订阅 + 趋势图
-- **规则引擎**：可量化信号（C4 剪刀差、C7 相对强弱、F1 压制、C5/F2 推理成本等）按定量规则确定性判定，数据落库即评估
-- **AI 报告**：月度纪要、季度深度分析（复核规则判定 + 定性信号判定 + 操作建议 + 人工核查清单）
-- **邮件告警**：灯号变化、信号状态变化时推送（`config/alerts.json`，参考 `config/alerts.example.json`）
-- **观测记录 / 判断与规则 / 标的池**：全在线编辑
-- **标的池体检**：QDII 溢价、基金规模、持仓纯度（主题相关持仓占比）自动监控，预警邮件；季度 AI 复核纯度并扫描新标的候选
-- **全行业 ETF 轮动**（etf-universe 主题）：约 800 只权益 ETF 每日监测（动量/均线/估值分位/规模），
-  轮动建议（MOM20 + MA200 过滤前 3 等权、月末调仓、回测验证）留痕并跟踪建议净值，
-  每周六 AI 行业周报；监测与建议页在主题内「监测」「建议」
+公开文档定义通用产品规格，不携带个人已确认的资金计划或投资授权。个人约束、账户与资金计划仅在本地填写和保存，不随源码发布；具体目录、Git、Docker 与 CI 边界见 [公开与本地资料规则](docs/publication-privacy.md)。实现和验证证据另行记录，不能把设计规格当成已通过验收；实际账户数据、行情授权、参数批准和异机灾难恢复仍须按对应门槛完成。
 
-## 架构
+## 工程结构
 
-```
-scheduler(容器内)
-   → worker/fetch_data.py   数据采集（按全部启用主题的指标订阅并集，写入全局 snapshots 仓库）
-   → worker/rules.py        规则引擎（定量信号确定性判定）
-   → worker/analyze.py      AIGC 网关模型逐主题分析（OpenAI 兼容接口，prompt 注入主题 thesis/rules）
-   → worker/notify.py       邮件告警（灯号/信号变化）
-   → SQLite (data/observatory.db)
-   → Next.js (standalone)   Web 呈现（宿主 nginx 反代 + certbot TLS）
-```
+- `web/`：Next.js、认证、Web 唯一真实账本写入入口、附件和操作界面。
+- `worker/accounting/`、`market/`、`performance/`、`research/`、`orchestration/`：Decimal 核算、数据批次/估值、收益、研究及持久任务；研究不写真实资金。
+- `contracts/v1/`、`migrations/`：共享 JSON Schema 与校验和固定的 SQLite 迁移。
+- `data-workbench/etf-workbench.db`：新工作台库；不会隐式创建初始资金或从预算补余额。
 
-分层约定：数据层（metrics 注册表 + snapshots 仓库）全局共享、主题无感知；判断层
-（signals/overview/pool/pages/observations/ai_reports）按 theme_id 隔离；
-`theme_metrics` 订阅表是两层之间唯一的连接。
+资金计划入口为 `/workbench/funding`，支持日期化来源、投入批次、版本/延期及到账、执行事项关联；保存计划不创建现金或下单。实现边界见 [资金计划](docs/funding-plans.md)。账本支持 [证券转入、转出与在途](docs/security-transfers.md)，估值与绩效分离外部资本、历史成本与收益；缺时点、规则或来源时继续阻断，见 [逐流汇率核算](docs/performance-flow-fx.md)。[通用 CSV 导入](docs/csv-import.md) 支持原件留存、不可变映射、逐行重复核对和原子确认；高级界面需明确映射 JSON，尚未认证具体券商原生格式。当前测试与未完成项见 [开发进度](docs/07-implementation-tracker.md)，不据此宣称生产或策略准入完成。
+- 原 `data/observatory.db`：旧主题观测/ETF 模拟研究。原库不被新迁移触碰；通过 Online Backup 归档，旧记录不晋升为真实事实。
 
-## 新增主题
+标的研究入口为 `/workbench/catalog`：按组合保留结构化来源、资料与持仓披露版本，支持分页和最多四个标的比较。披露不完整时显示覆盖率与重叠上下界，不将未知持仓归一化；目录记录不授予交易权限。实现与剩余核验见 [ETF 标的目录](docs/etf-catalog.md)。
 
-1. 在 `worker/themes/` 下复制 `ai_downstream.py` 为新模块，填写主题定义
-   （id/name/description、指标订阅 metrics、signals、overview、pool、pages、initial_observation）；
-2. 在 `worker/themes/__init__.py` 的 `ALL_THEMES` 登记；
-3. 运行任意 worker（如 `python worker/fetch_data.py`）即自动灌库（幂等），Web 端自动出现新主题。
+## 开发与验证
 
-## 本地开发
+需要 Node.js 22、Python 3.11+。先安装 Web 依赖，Python 跨语言 fixture 会调用 Node 迁移工具：
 
 ```bash
-cp config/gateway.example.json config/gateway.json  # 填入你的网关信息（worker 用）
-cd web && npm ci && npm run dev                      # http://localhost:3000
+npm --prefix web ci
+python3 -m pip install -r requirements-workbench.txt
+export WORKBENCH_PYTHON="$(command -v python3)"
+export WORKBENCH_TEST_PYTHON="$WORKBENCH_PYTHON"
+node --test tests/*/*.test.mjs
+python3 -m unittest discover -s tests -p 'test_*.py' -v
+npm --prefix web test
+npm --prefix web run typecheck
+npm --prefix web run build
+npm --prefix web run test:auth:http
+npm --prefix web run test:workbench:http -- --no-build
 ```
 
-技术栈：Next.js 15（App Router）+ React + TypeScript + shadcn/ui + Tailwind + better-sqlite3（web/ 目录）；
-采集与分析 worker 为 Python（worker/ 目录，db.py 为其共享数据层）。
+上述两个变量均须指向安装了项目 Python 依赖的解释器；推荐先激活隔离虚拟环境。Web、Node 和 HTTP 集成测试均包含跨语言调用，不能仅为独立 Python 测试选择解释器。
 
-## Docker 部署（VPS）
+本地真实数据开发需显式配置 `WORKBENCH_DB_PATH`、`WORKBENCH_DATA_DIR`、HTTPS `WORKBENCH_ORIGIN`、密码 hash 与会话 secret。缺少数据库/认证配置会失败，不回退创建另一份空库。优先使用隔离 fixture，不把生产数据拷进源码目录。
 
-```bash
-cp config/gateway.example.json config/gateway.json  # 填入网关信息
-docker compose up -d --build
-```
+## Docker 与生产发布
 
-域名与 TLS：VPS 宿主 nginx 反代（模板 `deploy/nginx/etf.vpanel.cc.conf`，含安装步骤注释），certbot 签发证书。web 容器只监听 127.0.0.1:5051。
+**不要直接在旧部署目录执行 `docker compose up --build`，不要上传本地数据库覆盖生产。**
 
-### 从单主题旧版本升级（数据库迁移）
+- 自动 CI：`.github/workflows/ci.yml`，push/PR 只测试，不自动发布。
+- 人工发布：`.github/workflows/deploy.yml`，`workflow_dispatch` 输入准确已审 SHA，CI 后进入 `production` 审批环境。
+- 发布脚本：`scripts/deploy-workbench.sh` 默认只显示计划，只有 `--execute` 才切换。
+- 工具容器：`migrate`、`archive-legacy`、`backup`、`restore`；新目录 UID/GID 10001、0700，文件 0600；秘密使用主机受控文件，不进镜像。
+- 失败后保留新事实并进入恢复只读，不用旧备份自动覆盖新库。
 
-旧库（无 themes 表）需先迁移再启动新版容器：
+完整配置、秘密初始化、实际旧库一致性归档、发布门槛和操作命令见 [生产发布手册](docs/production-release-runbook.md)、[验证记录](docs/production-release-verification.md)、[恢复操作说明](docs/recovery-operations.md)。
 
-```bash
-docker compose down
-.venv/bin/python worker/migrate_multi_theme.py   # 自动备份并迁移 data/observatory.db（幂等）
-docker compose up -d --build
-```
+Linux Docker 隔离验证：`sudo bash tests/deployment/container-smoke.sh`。它只使用临时目录、独立 project/tag、随机测试凭据与 loopback 端口，测试后清理自身容器；不访问生产库。
 
-VPS 上无 .venv 时可先在本地按同版本代码迁移好库文件再上传，或临时 `python3 worker/migrate_multi_theme.py`
-（脚本只依赖标准库）。
+## 旧观测台
 
-## 定时任务
+旧 AI 下游主题、全行业 ETF 轮动、报告和模拟账户仅保留为历史研究入口。`worker/scheduler.py`、旧 `jobs/`、旧 `config/gateway.json` / `alerts.json` 不由新工作台 worker 自动运行。不得沿用旧定时任务写新账本，旧主题信号也不是新组合的实盘建议。
 
-- 容器内 `worker/scheduler.py`：每日 16:35 日频采集 + 规则引擎（daily）；每周六 10:05 估值采集 +
-  全行业周报（weekly）；每月 11 日月度快照；2/5/8/11 月 15 日季度核对
-- 手动执行：`./jobs/run_job.sh daily|weekly|monthly|quarterly`，日志 `data/jobs.log`
-- 邮件告警：复制 `config/alerts.example.json` 为 `config/alerts.json` 填入 SMTP 信息并置
-  `enabled: true`（已 gitignore）；`python worker/notify.py --test` 验证
-- 宇宙价格历史回填（首次部署或新增大量标的时）：`python worker/backfill_etf_prices.py`（幂等续传）
-
-## CI/CD
-
-push 到 `main` → GitHub Actions 语法检查 → SSH 到 VPS `git reset --hard + docker compose up -d --build`。
-需要在仓库 Secrets 配置：`VPS_HOST`、`VPS_USER`、`VPS_SSH_KEY`、`VPS_PATH`。
-
-## 安全说明
-
-`config/gateway.json`（AI 网关密钥）、`config/alerts.json`（SMTP 密钥）与 `data/`（个人数据）均已 gitignore，不会进入仓库与镜像层。
+数据、认证库、原始附件、备份、恢复 secret、环境文件和本地验证证据均不应进入 Git 或镜像。当前发布工具仅提供受控交付路径，不表示生产已经发布，也不表示 RPO/RTO 或投资有效性已经达标。

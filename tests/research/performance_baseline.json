@@ -1,0 +1,26 @@
+{
+  "reference_snapshot_sha256": "f29a1864471d9335ec1c794af110e4903f9c23a384bd4b9753f81137daa14306",
+  "reference_oracle_sha256": "2913f2cddad4037346bfebd5cd436ab1017064cfba2dceeef0f930ac2ca061b5",
+  "cases": {
+    "short": {
+      "result_hash": "4098f9a0a6688389833ba10fd6cc3c0eac5cd0a1c419209a77805c4f47e45c71",
+      "dataset_hash": "34a830754f014d58e39fa4023c5cea4229db3a91f6c9c283335986b6d3be6c7e",
+      "plan_hash": "e9de6fb7e336a25647041ca76f75362be6198683680339157f2abebffe77cdc0",
+      "ending_nav_cny": "100",
+      "twr": "0",
+      "sessions": 13,
+      "original_elapsed_seconds": 0.008587
+    },
+    "multi90": {
+      "baseline_basis": "generic_synthetic_rerun_of_original_oracle",
+      "measured_at": "2026-09-12T03:30:41.632052Z",
+      "result_hash": "258960030ab1972e2f82a0422de1ce7d68caf824b629db1a48791c29f7802a1e",
+      "dataset_hash": "d1199d91559cfa07ea149fbb5b81770ef2e0f852676265c3e2757651dc6ccec3",
+      "plan_hash": "30e21e0af0c4d6b6909ad4544f0281a8eea006ea4ff65bde64789e250a01720a",
+      "ending_nav_cny": "240568.53",
+      "twr": "0.002368875",
+      "sessions": 270,
+      "original_elapsed_seconds": 2.418951
+    }
+  }
+}

@@ -18,8 +18,8 @@ export default async function SnapshotsPage({
   params: Promise<{ theme: string }>;
 }) {
   const { theme } = await params;
-  if (!getTheme(theme)) notFound();
-  const groups = getMetricGroups(theme);
+  if (!(await getTheme(theme))) notFound();
+  const groups = await getMetricGroups(theme);
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">

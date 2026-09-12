@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/ledger-command.schema.json",
+  "type": "object",
+  "required": ["portfolio_id", "expected_revision", "idempotency_key", "source_id", "effective_at", "time_precision", "source_timezone", "reason", "fact"],
+  "properties": {
+    "portfolio_id": {"$ref": "common.schema.json#/$defs/id"},
+    "expected_revision": {"$ref": "common.schema.json#/$defs/revision"},
+    "idempotency_key": {"$ref": "common.schema.json#/$defs/id"},
+    "source_id": {"$ref": "common.schema.json#/$defs/id"},
+    "source_event_id": {"$ref": "common.schema.json#/$defs/id"},
+    "effective_at": {"type": "string"},
+    "time_precision": {"enum": ["date", "second"]},
+    "source_timezone": {"$ref": "common.schema.json#/$defs/timezone"},
+    "reason": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "fact": {"$ref": "ledger-fact.schema.json"}
+  },
+  "allOf": [
+    {"if": {"properties": {"time_precision": {"const": "date"}}}, "then": {"properties": {"effective_at": {"$ref": "common.schema.json#/$defs/date"}}}, "else": {"properties": {"effective_at": {"$ref": "common.schema.json#/$defs/instant"}}}}
+  ],
+  "additionalProperties": false
+}

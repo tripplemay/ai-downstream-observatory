@@ -1,0 +1,198 @@
+"""Dispatch explicit authenticated command requests; never synthesize trades."""
+
+import json
+import sqlite3
+
+from worker.market import ingest_document, persist_valuation, prepare_valuation
+from worker.market.contracts import validate_contract
+from worker.performance import persist_performance, prepare_performance
+from worker.research import (
+    freeze_candidate, persist_trial, prepare_trial, record_review, record_trial_failure,
+    register_experiment, register_trial, review_context, unseal_holdout,
+)
+from .db import WorkbenchError, content_hash
+from .jobs import JobCommit, enqueue_job, run_one
+
+
+RESEARCH_COMMANDS = ("research_register", "research_register_trial", "research_trial", "research_freeze",
+                     "research_unseal", "research_ai_context", "research_ai_review")
+SUPPORTED_COMMANDS = ("market_ingest", "valuation", "performance", *RESEARCH_COMMANDS)
+
+
+def sync_requests(connection, limit=100, now=None):
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+        raise WorkbenchError("INVALID_DISPATCH_LIMIT")
+    placeholders = ",".join("?" for _ in SUPPORTED_COMMANDS)
+    requests = connection.execute("""SELECT c.* FROM command_requests c
+        LEFT JOIN job_runs j ON j.command_request_id=c.id
+        WHERE c.command_type IN (""" + placeholders + """) AND j.id IS NULL
+        ORDER BY c.created_at,c.id LIMIT ?""", (*SUPPORTED_COMMANDS, limit)).fetchall()
+    jobs = []
+    for request in requests:
+        jobs.append(enqueue_job(connection, request["command_type"], request["portfolio_id"],
+                                request["created_at"][:10], request["id"] + ":" + request["payload_hash"],
+                                command_request_id=request["id"], now=now))
+    return jobs
+
+
+def _research_scope(connection, portfolio_id, payload):
+    if "experiment_id" in payload:
+        found = connection.execute("SELECT 1 FROM research_experiments WHERE id=? AND portfolio_id=?",
+                                   (payload["experiment_id"], portfolio_id)).fetchone()
+        if found is None:
+            raise WorkbenchError("RESEARCH_RESOURCE_OUT_OF_SCOPE")
+    if "trial_id" in payload or "validation_trial_id" in payload:
+        trial_id = payload.get("trial_id", payload.get("validation_trial_id"))
+        found = connection.execute("""SELECT 1 FROM research_trials t JOIN research_experiments e ON e.id=t.experiment_id
+            JOIN research_runs r ON r.id=t.run_id WHERE t.id=? AND e.portfolio_id=? AND r.portfolio_id=?""",
+                                   (trial_id, portfolio_id, portfolio_id)).fetchone()
+        if found is None:
+            raise WorkbenchError("RESEARCH_RESOURCE_OUT_OF_SCOPE")
+    if "run_id" in payload:
+        found = connection.execute("""SELECT 1 FROM research_runs r JOIN research_trials t ON t.run_id=r.id
+            JOIN research_experiments e ON e.id=t.experiment_id
+            WHERE r.id=? AND r.portfolio_id=? AND e.portfolio_id=? AND r.environment='research'""",
+                                   (payload["run_id"], portfolio_id, portfolio_id)).fetchone()
+        if found is None:
+            raise WorkbenchError("RESEARCH_RESOURCE_OUT_OF_SCOPE")
+
+
+def _research_summary(trial_id, run):
+    report = json.loads(run["result_json"]) if run["result_json"] else {}
+    result = {"trial_id": trial_id, "research_run_id": run["id"], "status": run["status"],
+              "live_advice_eligible": False}
+    if report.get("result_hash"):
+        result["result_hash"] = report["result_hash"]
+    if report.get("error"):
+        result["error"], result["code"] = report["error"], report.get("code")
+    return JobCommit(result, "succeeded" if run["status"] == "succeeded" else "skipped" if run["status"] == "cancelled" else "failed")
+
+
+def _research_error(error):
+    return JobCommit({"error": type(error).__name__, "code": str(error), "live_advice_eligible": False}, "failed")
+
+
+def _research_command(connection, request, payload, clock, job):
+    command, portfolio_id, actor_id = request["command_type"], request["portfolio_id"], request["actor_id"]
+    try:
+        if not isinstance(actor_id, str) or not actor_id.strip():
+            raise WorkbenchError("RESEARCH_AUTHENTICATED_ACTOR_REQUIRED")
+        validate_contract({"command_type": command, "payload": payload}, "research-command.schema.json")
+        if command != "research_register":
+            _research_scope(connection, portfolio_id, payload)
+    except ValueError as error:
+        failed = _research_error(error)
+        return {"result": failed.result, "outcome": failed.outcome}
+
+    if command == "research_trial":
+        def defer_failure(error):
+            # Capturing the exception object explicitly also survives Python's
+            # exception-variable cleanup before this deferred effect executes.
+            def failed_trial(db, failure=error):
+                _research_scope(db, portfolio_id, payload)
+                run = record_trial_failure(db, payload["trial_id"], failure, now=clock())
+                return _research_summary(payload["trial_id"], run)
+            return {"effect": failed_trial}
+        try:
+            prepared = prepare_trial(connection, payload["trial_id"])
+        except (ValueError, ArithmeticError) as error:
+            return defer_failure(error)
+        except Exception as error:
+            if job["attempt_count"] >= job["max_attempts"]:
+                return defer_failure(error)
+            raise
+        def persist(db):
+            _research_scope(db, portfolio_id, payload)
+            return _research_summary(payload["trial_id"], persist_trial(db, prepared, now=clock()))
+        return {"effect": persist}
+
+    if command == "research_ai_context":
+        try:
+            return {"result": review_context(connection, payload["run_id"])}
+        except ValueError as error:
+            failed = _research_error(error)
+            return {"result": failed.result, "outcome": failed.outcome}
+
+    def commit(db):
+        try:
+            if command != "research_register":
+                _research_scope(db, portfolio_id, payload)
+            if command == "research_register":
+                result = register_experiment(db, payload["experiment_id"], portfolio_id, payload["plan"], payload["dataset"], actor_id, now=clock())
+                return JobCommit({"experiment_id": result["id"], "plan_hash": result["plan_hash"],
+                                  "dataset_hash": result["dataset_hash"], "live_advice_eligible": False})
+            if command == "research_register_trial":
+                # The authenticated request is itself immutable and idempotent;
+                # no actor, implementation manifest, or prepared result comes
+                # from an external or AI-generated payload.
+                result = register_trial(db, payload["experiment_id"], payload["phase"], payload["parameters"], request["id"], actor_id, now=clock())
+                return JobCommit({"trial_id": result["id"], "research_run_id": result["run_id"], "phase": result["phase"],
+                                  "parameters_hash": result["parameters_hash"], "status": "queued", "live_advice_eligible": False})
+            if command == "research_freeze":
+                result = freeze_candidate(db, payload["experiment_id"], payload["validation_trial_id"], actor_id, payload["reason"], now=clock())
+            elif command == "research_unseal":
+                result = unseal_holdout(db, payload["experiment_id"], actor_id, payload["reason"], now=clock())
+            elif command == "research_ai_review":
+                result = record_review(db, payload["run_id"], payload["model"], payload["raw_output"], now=clock())
+                return JobCommit({"ai_run_id": result["id"], "research_run_id": payload["run_id"], "status": result["status"],
+                                  "investment_gate_passed": False, "output_executed": False},
+                                 "succeeded" if result["status"] == "valid" else "failed")
+            else:
+                raise WorkbenchError("UNSUPPORTED_RESEARCH_COMMAND")
+            return JobCommit({"experiment_id": result["experiment_id"], "event_id": result["id"],
+                              "action": result["action"], "parameters_hash": result["parameters_hash"], "live_advice_eligible": False})
+        except (ValueError, sqlite3.IntegrityError) as error:
+            return _research_error(error)
+    return {"effect": commit}
+
+
+def command_handler(connection, clock=None):
+    clock = (lambda: None) if clock is None else clock
+    def handle(job, lease):
+        request = connection.execute("SELECT * FROM command_requests WHERE id=?", (job["command_request_id"],)).fetchone()
+        if request is None or request["portfolio_id"] != job["scope"] or request["command_type"] != job["job_type"]:
+            raise WorkbenchError("COMMAND_JOB_SCOPE_MISMATCH")
+        payload = json.loads(request["payload_json"])
+        if content_hash(payload) != request["payload_hash"]:
+            raise WorkbenchError("COMMAND_PAYLOAD_HASH_MISMATCH")
+        if job["job_type"] in RESEARCH_COMMANDS:
+            return _research_command(connection, request, payload, clock, job)
+        if job["job_type"] == "performance":
+            prepared = prepare_performance(connection, request["portfolio_id"], payload, now=clock())
+            def persist(db):
+                result = persist_performance(db, prepared, now=clock())
+                return JobCommit({"performance_id": result["id"], "quality": result["quality"], "method": result["method"]})
+            return {"effect": persist}
+        if job["job_type"] == "valuation":
+            if not isinstance(payload, dict) or set(payload) - {"cutoff_at", "rules", "mode"} or not {"cutoff_at", "rules"} <= set(payload):
+                raise WorkbenchError("INVALID_VALUATION_COMMAND")
+            prepared = prepare_valuation(connection, request["portfolio_id"], payload["cutoff_at"], payload["rules"],
+                                         payload.get("mode", "as_known"), now=clock())
+            def persist(db):
+                result = persist_valuation(db, prepared, now=clock())
+                return JobCommit({"valuation_id": result["id"], "quality": result["quality"], "nav_cny": result["nav_cny"]})
+            return {"effect": persist}
+        if job["job_type"] == "market_ingest":
+            if not isinstance(payload, dict) or set(payload) != {"document", "publish"} or not isinstance(payload["publish"], bool):
+                raise WorkbenchError("INVALID_MARKET_INGEST_COMMAND")
+            validate_contract(payload["document"])
+            def ingest(db):
+                result = ingest_document(db, payload["document"], publish=payload["publish"], now=clock())
+                outcome = "succeeded" if result["status"] in ("validated", "published") else result["status"]
+                return JobCommit({"batch_id": result["id"], "batch_status": result["status"],
+                                  "manifest_hash": result["manifest_hash"]}, outcome)
+            return {"effect": ingest}
+        raise WorkbenchError("UNSUPPORTED_WORKER_COMMAND")
+    return handle
+
+
+def run_pending_once(connection, owner, lease_seconds=300, clock=None):
+    clock = (lambda: None) if clock is None else clock
+    sync_requests(connection, now=clock())
+    # Explicit type filters prevent accidentally claiming another module's jobs.
+    for job_type in SUPPORTED_COMMANDS:
+        result = run_one(connection, owner, command_handler(connection, clock), job_type=job_type,
+                         lease_seconds=lease_seconds, clock=clock)
+        if result is not None:
+            return result
+    return None

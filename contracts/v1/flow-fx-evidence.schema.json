@@ -1,0 +1,281 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/flow-fx-evidence.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "binding_id",
+    "portfolio_id",
+    "event_id",
+    "posting_id",
+    "event_payload_hash",
+    "event_hash",
+    "posting_hash",
+    "event_ledger_revision",
+    "currency",
+    "amount_native",
+    "effective_at",
+    "time_precision",
+    "source_timezone",
+    "flow_time",
+    "evaluation_date",
+    "mode",
+    "knowledge_at",
+    "rules_hash",
+    "publication",
+    "observation",
+    "observation_hash",
+    "source_validation_hash",
+    "source_mode",
+    "source_evidence",
+    "fx_rate",
+    "amount_cny",
+    "quality",
+    "issues"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "flow-fx-evidence-v1"
+    },
+    "binding_id": {
+      "$ref": "common.schema.json#/$defs/hash"
+    },
+    "portfolio_id": {
+      "$ref": "common.schema.json#/$defs/id"
+    },
+    "event_id": {
+      "$ref": "common.schema.json#/$defs/id"
+    },
+    "posting_id": {
+      "$ref": "common.schema.json#/$defs/id"
+    },
+    "event_payload_hash": {
+      "$ref": "common.schema.json#/$defs/hash"
+    },
+    "event_hash": {
+      "$ref": "common.schema.json#/$defs/hash"
+    },
+    "posting_hash": {
+      "$ref": "common.schema.json#/$defs/hash"
+    },
+    "event_ledger_revision": {
+      "$ref": "common.schema.json#/$defs/revision"
+    },
+    "currency": {
+      "$ref": "common.schema.json#/$defs/currency"
+    },
+    "amount_native": {
+      "$ref": "common.schema.json#/$defs/decimal"
+    },
+    "effective_at": {
+      "type": "string"
+    },
+    "time_precision": {
+      "enum": [
+        "date",
+        "second"
+      ]
+    },
+    "source_timezone": {
+      "$ref": "common.schema.json#/$defs/timezone"
+    },
+    "flow_time": {
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/instant"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "evaluation_date": {
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/date"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "mode": {
+      "enum": [
+        "as_known",
+        "restated"
+      ]
+    },
+    "knowledge_at": {
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/instant"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "rules_hash": {
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/hash"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "publication": {
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "scope",
+            "revision",
+            "batch_id",
+            "manifest_hash",
+            "published_at"
+          ],
+          "properties": {
+            "scope": {
+              "$ref": "common.schema.json#/$defs/id"
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "batch_id": {
+              "$ref": "common.schema.json#/$defs/id"
+            },
+            "manifest_hash": {
+              "$ref": "common.schema.json#/$defs/hash"
+            },
+            "published_at": {
+              "$ref": "common.schema.json#/$defs/instant"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "observation": {
+      "anyOf": [
+        {
+          "$ref": "market-observation.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "observation_hash": {
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/hash"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source_validation_hash": {
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/hash"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source_mode": {
+      "anyOf": [
+        {
+          "enum": [
+            "manual_verified",
+            "synthetic"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source_evidence": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 2048
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "fx_rate": {
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/decimal"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "amount_cny": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "maxLength": 256
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "quality": {
+      "enum": [
+        "complete",
+        "blocked"
+      ]
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "time_precision": {
+            "const": "date"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "effective_at": {
+            "$ref": "common.schema.json#/$defs/date"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "effective_at": {
+            "$ref": "common.schema.json#/$defs/instant"
+          }
+        }
+      }
+    }
+  ]
+}

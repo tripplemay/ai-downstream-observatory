@@ -27,8 +27,8 @@ export default async function UniversePage({
 }) {
   const { theme } = await params;
   if (theme !== THEME) notFound();
-  const rows = getUniverseMonitor();
-  const advice = getAdviceCurrent();
+  const rows = await getUniverseMonitor();
+  const advice = await getAdviceCurrent();
 
   const above = rows.filter((r) => r.aboveMa200 === true).length;
   const abovePct = rows.length ? above / rows.length : null;

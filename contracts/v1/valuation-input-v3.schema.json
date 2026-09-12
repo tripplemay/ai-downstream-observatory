@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/valuation-input-v3.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "mode",
+    "rules_hash",
+    "rules",
+    "publications",
+    "ledger_fact_quality"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "valuation-input-v3"
+    },
+    "mode": {
+      "enum": [
+        "as_known",
+        "restated"
+      ]
+    },
+    "rules_hash": {
+      "$ref": "common.schema.json#/$defs/hash"
+    },
+    "rules": {
+      "$ref": "valuation-rules.schema.json"
+    },
+    "publications": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "common.schema.json#/$defs/id"
+      },
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "object",
+            "required": [
+              "scope",
+              "revision",
+              "batch_id",
+              "manifest_hash",
+              "published_at"
+            ],
+            "properties": {
+              "scope": {
+                "$ref": "common.schema.json#/$defs/id"
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "batch_id": {
+                "$ref": "common.schema.json#/$defs/id"
+              },
+              "manifest_hash": {
+                "$ref": "common.schema.json#/$defs/hash"
+              },
+              "published_at": {
+                "$ref": "common.schema.json#/$defs/instant"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "ledger_fact_quality": {
+      "$ref": "ledger-fact-quality.schema.json"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/flow-fx-rules.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "approved",
+    "fx_scope",
+    "max_fx_age_seconds",
+    "time_policy"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "flow-fx-rules-v1"
+    },
+    "approved": {
+      "type": "boolean"
+    },
+    "fx_scope": {
+      "$ref": "common.schema.json#/$defs/id"
+    },
+    "max_fx_age_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2592000
+    },
+    "time_policy": {
+      "const": "event_second_strict"
+    },
+    "approval_evidence": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "approved": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "approval_evidence"
+        ],
+        "properties": {
+          "approval_evidence": {}
+        }
+      }
+    }
+  ]
+}

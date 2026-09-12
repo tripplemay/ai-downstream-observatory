@@ -1,0 +1,82 @@
+name: workbench-ci
+
+on:
+  push:
+  pull_request:
+  workflow_call:
+    inputs:
+      release_sha:
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: install Web dependencies before cross-language fixtures
+        working-directory: web
+        run: npm ci
+      - name: install workbench Python dependencies
+        run: pip install -r requirements-workbench.txt
+      - name: Python accounting, market, worker and performance tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Web unit and ledger integration tests
+        working-directory: web
+        run: npm test
+      - name: schema, market, recovery and release fixtures
+        run: node --test tests/*/*.test.mjs
+      - name: shell release checks
+        run: shellcheck scripts/deploy-workbench.sh tests/deployment/container-smoke.sh
+      - name: Web typecheck
+        working-directory: web
+        run: npm run typecheck
+      - name: Web production build
+        working-directory: web
+        run: npm run build
+      - name: authentication HTTP regression
+        working-directory: web
+        run: npm run test:auth:http
+      - name: workbench HTTP regression
+        working-directory: web
+        env:
+          WORKBENCH_TEST_PYTHON: python
+        run: npm run test:workbench:http -- --no-build
+      - name: dependency audit
+        working-directory: web
+        run: npm audit --audit-level=high
+      - name: preserve validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workbench-validation-${{ inputs.release_sha || github.sha }}
+          path: artifacts/verification/
+          if-no-files-found: ignore
+  containers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_sha || github.sha }}
+      - name: isolated non-root container migration and recovery smoke
+        run: sudo --preserve-env=PATH bash tests/deployment/container-smoke.sh
+      - name: preserve container evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workbench-containers-${{ inputs.release_sha || github.sha }}
+          path: artifacts/verification/container-*.json
+          if-no-files-found: ignore

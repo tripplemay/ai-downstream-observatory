@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/performance-command.schema.json",
+  "type": "object",
+  "required": ["valuation_ids", "evaluation_timezone"],
+  "properties": {
+    "valuation_ids": {"type": "array", "minItems": 2, "maxItems": 10000, "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/id"}},
+    "evaluation_timezone": {"type": "string", "minLength": 1, "maxLength": 100},
+    "flow_fx_rules": {"$ref": "flow-fx-rules.schema.json"}
+  },
+  "additionalProperties": false
+}

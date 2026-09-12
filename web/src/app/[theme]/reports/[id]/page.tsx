@@ -17,8 +17,8 @@ export default async function ReportDetailPage({
   params: Promise<{ theme: string; id: string }>;
 }) {
   const { theme, id } = await params;
-  if (!getTheme(theme)) notFound();
-  const report = getReport(theme, Number(id));
+  if (!(await getTheme(theme))) notFound();
+  const report = await getReport(theme, Number(id));
   if (!report) notFound();
 
   return (

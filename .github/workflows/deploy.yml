@@ -1,39 +1,102 @@
-name: ci-cd
+name: workbench-release-manual
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact reviewed 40-character commit SHA on main
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workbench-production-release
+  cancel-in-progress: false
 
 jobs:
-  test:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - name: install deps
-        run: pip install -r requirements.txt
-      - name: syntax check
-        run: python -m compileall app.py db.py worker/
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: web build
-        run: cd web && npm ci && npm run build
-
-  deploy:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
-      - name: pull and rebuild on VPS
+          fetch-depth: 0
+      - name: require exact approved mainline commit
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
         run: |
-          ssh -o StrictHostKeyChecking=accept-new ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
-            "cd ${{ secrets.VPS_PATH }} \
-             && git fetch origin main \
-             && git reset --hard origin/main \
-             && docker compose up -d --build --remove-orphans"
+          [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git cat-file -e "$RELEASE_SHA^{commit}"
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
+  verify:
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+    with:
+      release_sha: ${{ inputs.release_sha }}
+  release:
+    needs: verify
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_sha }}
+      - name: prepare exact source archive and pinned SSH trust
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PATH: ${{ secrets.VPS_PATH }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_HOST_KEY: ${{ secrets.VPS_SSH_HOST_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$VPS_HOST" =~ ^[a-zA-Z0-9.-]+$ && "$VPS_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "$VPS_PATH" =~ ^/[a-zA-Z0-9._/-]+$ && "$VPS_PATH" != *'/../'* && "$VPS_PATH" != */.. && "$VPS_PATH" != '/' ]]
+          [[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" ]]
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$VPS_SSH_HOST_KEY" > ~/.ssh/known_hosts
+          [[ -s ~/.ssh/id_ed25519 && -s ~/.ssh/known_hosts ]]
+          git archive --format=tar.gz --output=release.tar.gz "$RELEASE_SHA"
+          sha256sum release.tar.gz > release.tar.gz.sha256
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" "umask 077; mkdir -p '$VPS_PATH/incoming/$RELEASE_SHA'"
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes release.tar.gz release.tar.gz.sha256 "$VPS_USER@$VPS_HOST:$VPS_PATH/incoming/$RELEASE_SHA/"
+      - name: stage immutable source and run guarded cutover
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PATH: ${{ secrets.VPS_PATH }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" bash -s -- "$VPS_PATH" "$RELEASE_SHA" <<'REMOTE'
+          set -euo pipefail
+          umask 077
+          root=$1
+          sha=$2
+          incoming="$root/incoming/$sha"
+          release="$root/releases/$sha"
+          cd "$incoming"
+          sha256sum --check --quiet release.tar.gz.sha256
+          if [[ -e "$release" ]]; then
+            cmp release.tar.gz.sha256 "$release/.release-tar.sha256"
+            (cd "$release" && sha256sum --check --quiet .release-files.sha256)
+          else
+            mkdir -p "$root/releases"
+            stage=$(mktemp -d "$root/releases/.stage-$sha-XXXXXX")
+            tar --extract --gzip --file release.tar.gz --directory "$stage" --no-same-owner
+            printf '%s\n' "$sha" > "$stage/.release-sha"
+            cp release.tar.gz.sha256 "$stage/.release-tar.sha256"
+            (cd "$stage" && find . -type f ! -name .release-files.sha256 -print0 | sort -z | xargs -0 sha256sum > .release-files.sha256)
+            mv -T "$stage" "$release"
+          fi
+          bash "$release/scripts/deploy-workbench.sh" --release "$sha" --release-dir "$release" --config /etc/etf-workbench/release.env --execute
+          REMOTE
+      - name: remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519

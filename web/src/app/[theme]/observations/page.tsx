@@ -15,9 +15,9 @@ export default async function ObservationsPage({
   params: Promise<{ theme: string }>;
 }) {
   const { theme } = await params;
-  const t = getTheme(theme);
+  const t = await getTheme(theme);
   if (!t || t.type === "strategy") notFound();
-  const observations = getObservations(theme);
+  const observations = await getObservations(theme);
   const today = new Date().toISOString().slice(0, 10);
   return (
     <div className="space-y-4">

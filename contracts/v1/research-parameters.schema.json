@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/research-parameters.schema.json",
+  "type": "object", "required": ["weights", "deployment_fraction", "allocation"],
+  "properties": {
+    "weights": {"type": "object", "minProperties": 1, "propertyNames": {"$ref": "common.schema.json#/$defs/id"}, "additionalProperties": {"$ref": "common.schema.json#/$defs/decimal"}},
+    "deployment_fraction": {"$ref": "common.schema.json#/$defs/decimal"},
+    "allocation": {"enum": ["repair_underweight", "fixed_split"]}
+  }, "additionalProperties": false
+}
