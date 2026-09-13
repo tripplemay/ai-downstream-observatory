@@ -280,3 +280,18 @@ test("A-B-A scope race ignores obsolete unauthorized responses and pagination re
   assert.equal(f.postRequests().length, 0);
   await f.respond(next + 1, { ...initial("p2"), session_binding: binding }); assert.doesNotMatch(f.text(), /SYNTHETIC ETF/);
 });
+
+test("directory identity, blocked codes and selection buttons retain wrapping without hiding content", async t => {
+  const f = mount(t), state = initial();
+  const row = state.rows[0]; row.name = "SYNTHETIC".repeat(16); row.identity.ticker = "SYNTHETIC".repeat(3); row.identity_hash = hash(row.identity);
+  row.issues = ["LISTING_REVIEW_PRODUCT_STRUCTURE_UNKNOWN", "LISTING_REVIEW_RISK_CLASSIFICATION_MISSING", "LISTING_REVIEW_TRADING_UNITS_MISSING"];
+  await f.ready(state);
+  const card = f.control("div", node => f.text(node).includes(row.name));
+  assert.match(String(card.props.className), /min-w-0/);
+  assert.match(String(card.props.className), /\[overflow-wrap:anywhere\]/);
+  const select = f.control("button", node => f.text(node).replace(/\s+/g, " ").trim() === `选择 ${row.identity.ticker}`);
+  assert.match(String(select.props.className), /max-w-full/);
+  assert.match(String(select.props.className), /whitespace-normal/);
+  for (const issue of row.issues) assert.ok(f.text(card).includes(issue));
+  assert.doesNotMatch(String(card.props.className), /truncate|overflow-hidden/);
+});

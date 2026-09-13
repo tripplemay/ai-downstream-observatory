@@ -201,3 +201,11 @@ portal and BFCache acceptance are not replaced by callback or HTTP tests.
 Live providers/calendars, complete rotation/forward simulation, trusted gate
 verification and production deployment remain separate unfinished work. None
 of these counts approves personal targets or guarantees returns.
+
+## Listing-review boundary upgrade (schema 20)
+
+New cycles freeze an immutable portfolio listing-review sequence watermark in
+their creation transaction. Preparations, commits and retries use that same
+boundary, including equal timestamps; current eligibility remains independently
+checked. Pre-v20 cycles retain their historical evidence but have no invented
+watermark. See [the boundary and migration rules](monthly-listing-boundaries.md).

@@ -22,7 +22,7 @@ replacing personal parameters with public templates does not reduce scope.
 
 | Workstream | Current implementation | Remaining work / release evidence |
 |---|---|---|
-| Contracts and new database | Versioned migrations through v19 in the current worktree; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, private catalog and identity-review versions, monthly schedule/cycle/attempt identity, human-reviewed private market references, bounded HTTP/SDK captures and daily collection authorization/slots | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
+| Contracts and new database | Versioned migrations through v20 in the current worktree; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, private catalog and identity-review versions, monthly cycle listing-review sequence boundaries, human-reviewed private market references, bounded HTTP/SDK captures and daily collection authorization/slots | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
 | Authentication | Sealed sessions, persistent revocation/rate limit, server-side guards, strict Origin; authenticated HTTP and native login/logout checked; initialization/login share UTF-8 password bounds | Production TLS/proxy, operator configuration and real owner login |
 | Financial ledger | Exact decimal facts, cash/trades/settlement/dividends/FX/transfers/splits; unknown/estimated/confirmed tax, net-only receipts, cumulative tax assessment and actual withholding kept separate; corporate-action notice/resolution isolation; securities transit and append-only dependent corrections | Real dividend/tax/corporate-action and security-transfer evidence, full acceptance matrix |
 | Import and reconciliation | JSON and raw CSV attachment/preview/atomic confirmation; zero-write CSV inspection and visual explicit mapping; immutable mappings and row evidence; explicit duplicate review and persistent source aliases; scoped downloads and encrypted recovery; explicit balance/tax-payable/settled/transit reconciliation and unresolved-fact guards | Domestic/cross-border broker samples, native wizard acceptance, large background imports and full throughput/fault acceptance |
@@ -33,7 +33,7 @@ replacing personal parameters with public templates does not reduce scope.
 | Strategy and AI | Preregistered v1 contribution-only research plus explicit v2 monthly momentum/MA rotation and fixed-rebalance benchmark; exact PIT ranking, simulated sales/settlement/fixed buys, costs and bounded read-only summaries; frozen inputs/implementation and independent research windows | Live providers/models, continuous forward simulation, complete long-history workflow performance and genuine S-gate evidence; v2 does not activate actual schedules |
 | Governance and execution | Human version/capability APIs, risk/approval CAS, independent-process cash/share reservation race tests, execution reports separate from facts; trusted verification import rejects user PASS claims; private listing-review inputs invalidate old approvals on change/expiry; price reads bind listing identity and exact knowledge time | Actual trusted verification Worker, formal evidence and runtime manifest binding; executable liquidity inputs and complete look-through; actual D/G/S approvals remain absent |
 | Product UI | Account, funding, catalog, research, governance, monthly evaluation, private market-reference and listing-review workspaces; typed securities and dividend/tax/corporate-action preview/confirm; visual CSV mapping and server-backed, current-session, read-only confirmation recovery | Native listing-review/market-reference/monthly/wizard/recovery/BFCache and full catalog comparison/positive governance acceptance; complete accessibility and readonly UX |
-| Deployment | Manual-only release, encrypted backup/restore, exact-SHA CI-verified non-root v18 core/provider images and local restore; full historical real legacy-copy archive/recovery rehearsal; old production unchanged | New v19 source-bound image checks, independent-host restore, protected credentials/configuration, release and post-release checks |
+| Deployment | Manual-only release, encrypted backup/restore, exact-SHA CI-verified non-root v19 core/provider images and local restore; full historical real legacy-copy archive/recovery rehearsal; old production unchanged | New v20 source-bound image checks, independent-host restore, protected credentials/configuration, release and post-release checks |
 
 ### v18 exact-commit CI checkpoint
 
@@ -97,6 +97,101 @@ session/identity/CAS enforcement, immutable supersession and read-only recovery;
 all use synthetic originals and leave global approvals and financial facts
 unchanged. Native browser checks, exact-new-commit Linux CI/container evidence
 and the full release gates remain outstanding. This is not a production cutover.
+
+### Published v19 CI and subsequent native review
+
+Commit `2244c7779e7faee0a4ef7cf08fd228ffbcf55c95` was pushed normally and passed
+[CI 34733804426](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/34733804426).
+Terminal job metadata, full logs and both artifact ZIP digests were verified:
+Python 553, Web 657, Node 176 and HTTP 84 passed, alongside typecheck/build,
+authentication, shell checks and zero-vulnerability dependency audit. Both
+Linux core/provider images passed on schema 19; the non-root monthly publisher
+bundle hash is retained in the container report, and all 465 HTTP source hashes matched this
+exact commit. Evidence: `artifacts/verification/github-ci/34733804426/verification-result.json`
+(SHA-256 `6a28f4582ca12538a9d3b856a07a63b195874f6fe929ec0fd8e77bf23f1e311e`).
+This is synthetic same-host engineering verification, not production, actual
+provider/account validation or independent-host recovery.
+
+Tabbit subsequently became available. In a separate synthetic schema-19 dev
+fixture, actual UI actions published three private review versions, verified
+refresh/history, portfolio isolation, suspension/unknown blocking, recovery
+read-only and logout/back denial. The baseline was **10 PASS / 1 FAIL**: long
+blocking codes overflowed a 390-pixel viewport. An additional long-name fixture
+reproduced the same issue with a 200-character name and 40-character code/exchange.
+The layout patch wraps rather than truncates content; same-fixture native
+retests have page scroll width equal to viewport width at both 390 and 1440,
+and the blocked-code paragraph now has equal client/scroll widths. A new
+callback regression first failed on the baseline and the focused suite passed
+13/13 after the fix; callback tests are not the visual evidence.
+
+The original failure, seven inspected screenshots, exact component hashes and
+synthetic database checks are retained in
+`artifacts/verification/browser-listing-v19/verification-result.json`
+(SHA-256 `7e80c0e399d55b10a8f8369bd3fe164ad9ed7e0bf5d1b862f669c416c4402f34`).
+The fixture was stopped cleanly. Its schema-19/UI result does not verify the new
+schema-20 migration or a production build. Cross-tab in-flight session races,
+keyboard/screen-reader and demonstrated BFCache restoration remain pending.
+The published v19 CI predates this layout patch and the cycle-boundary correction;
+both require a new source-bound regression and commit.
+
+Read-only GitHub preflight also found no configured `production` Environment
+and no repository `VPS_SSH_HOST_KEY` secret. No secret values were read, no
+security settings were changed and no production workflow was dispatched.
+Protected host configuration, independent-host restore and all remaining
+product/investment gates must still be independently satisfied.
+
+### v20 original-cycle listing-review boundary correction
+
+A normal-service, real Python discovery/claim and Node publisher reproduction
+found that a review written after cycle creation with exactly the same
+`known_at` as `cycle.knowledge_at` could enter first preparation or a fresh retry.
+The existing prepare/commit comparison correctly rejected an in-call change,
+and existing proposal approvals still failed with `APPROVAL_STALE`; the defect
+was loss of the original cycle's review knowledge boundary, not an approval bypass.
+
+Migration 0020 adds immutable review transaction sequences and captures the
+portfolio's sequence watermark inside the cycle INSERT transaction. Monthly
+selection requires both the original timestamp cutoff and this immutable upper
+bound, and independently checks current review validity even when both clocks
+are equal. Every preparation, publication recheck and human retry uses the same
+cycle boundary. Reviews already present at that exact timestamp remain usable;
+later same-timestamp reviews cannot complete or repair the old period's inputs.
+Ordinary review queries and execution approval checks keep their existing
+semantics. The boundary and proof are part of monthly inputs and risk hashes.
+
+Existing cycles receive an explicit `legacy_missing` marker, not reconstructed
+sequence evidence. Their saved history remains readable; a new evaluation of
+such a cycle is blocked rather than silently rebaselined. This sequence covers
+listing-review membership in a cycle, not every market/account/strategy PIT
+requirement or physical ordering within an unobserved clock interval.
+Independent review and the frozen-source local regression passed: Python
+**553/553** (117.583 s), Web **675/675** (30.532 s), root Node **188/188**
+(13.824 s), no failures or skipped tests. These totals include 12 new migration
+cases, 12 cycle-boundary cases, five risk-path cases and the layout regression;
+they are not additional counts to add again. The risk cases exercise normally
+booked/reconciled/valued security transit, ordinary holdings, normally approved
+buy reservations and cross-scope/forged boundary DTOs, not only empty portfolios.
+Typecheck, production build, authentication HTTP, shellcheck and full npm audit
+passed; audit reported zero vulnerabilities.
+
+HTTP **84/84**, schema 20, build `bGn--Ekiglyo7VgG4U0oW`, ran from
+`2026-09-13T03:20:05.384Z` through `2026-09-13T03:21:03.028Z`. All 470 inventoried
+sources matched at start, end and subsequent verification. Manifest:
+`artifacts/verification/workbench-http/2026-09-13T03-20-05-384Z/manifest.json`,
+SHA-256 `260027271abeebeec9b0d6fb2d2b7bbfd40f8bbdfe863bc5870a72855c198858`.
+Migration 0020 SHA-256 is
+`a143cf7a6578b3329d8800cf927bf55729edcc78d9cd4085e30ee16e9d4c0d3d`;
+logs use `listing-boundary-v20` under `artifacts/verification/final-regression/`.
+
+A fresh schema-20 native dev fixture additionally passed **5/5** scoped checks:
+UI review publication, exact history after reload, 390-pixel layout and logout/
+back isolation. SQLite confirmed the automatic review sequence and no ledger
+events. Evidence: `artifacts/verification/browser-listing-v20/verification-result.json`,
+SHA-256 `5e31e4ed9e063300f238e727f3f908c4300fc131e1499d7df0559b941a99a5bf`.
+The fixture stopped cleanly. This native smoke has no evaluation cycles and
+does not certify cycle logic, BFCache, keyboard/screen-reader, actual providers
+or production-build equivalence. The v20 exact-commit CI/images, full release
+and investment gates still need their own evidence; no production cutover ran.
 
 Latest published checkpoint before the v15 monthly work is commit
 `1b06926ac0d9f98a016d6e690be4a73e6a572f2e`; its

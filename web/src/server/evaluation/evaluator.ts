@@ -11,6 +11,7 @@ import { currentPublications, requireValuation, evaluateRisk, evaluationListing,
 import { evaluationScheduleSchema, type EvaluationScheduleDefinition } from "./schemas";
 import { verifyEvaluationAuthorization } from "./service";
 import { compareManualTargets, type TargetMeasurement, type TargetComparison, type EvaluationItem } from "./targets";
+import { readEvaluationListingBoundary } from "./listing-boundary";
 
 export interface EvaluationLease { job_id: string; owner: string; fencing_token: number; attempt: number }
 export interface EvaluationCycle {
@@ -93,6 +94,8 @@ export function prepareMonthlyEvaluation(db: Database.Database, lease: Evaluatio
   try {
     if (evaluationStamp(now) >= evaluationStamp(cycle.deadline_at)) throw new Error("EVALUATION_DEADLINE_MISSED");
     if (evaluationStamp(cycle.scheduled_at) > now || evaluationStamp(cycle.cutoff_at) !== evaluationStamp(cycle.scheduled_at) || evaluationStamp(cycle.knowledge_at) !== evaluationStamp(cycle.scheduled_at)) throw new Error("EVALUATION_TIME_INVALID");
+    const reviewBoundary = readEvaluationListingBoundary(db, cycle);
+    input.listing_review_boundary = reviewBoundary;
     known(binding.version.created_at, cycle.knowledge_at);
     const active = activation(db, portfolio, definition.activation_id, riskNow);
     const original = activation(db, portfolio, definition.activation_id, riskKnowledge);
@@ -183,7 +186,7 @@ export function prepareMonthlyEvaluation(db: Database.Database, lease: Evaluatio
         if (!expected || selected.id !== expected) throw new Error("EVALUATION_VALUATION_PRICE_VECTOR_MISMATCH");
       };
       if (item.listing_id) {
-        const listing = evaluationListing(db, String(item.listing_id), policy, now, portfolio, cycle.knowledge_at);
+        const listing = evaluationListing(db, String(item.listing_id), policy, now, portfolio, cycle.knowledge_at, reviewBoundary.watermark_sequence);
         checkVector(policy.price_scope_by_market[listing.market], listing.id, "close", evidence.price_observation_id);
       }
       if (item.currency !== "CNY") checkVector(policy.fx_scope, `FX:${item.currency}`, "fx_cny_per_unit", evidence.fx_observation_id);
@@ -193,7 +196,7 @@ export function prepareMonthlyEvaluation(db: Database.Database, lease: Evaluatio
     const rows: TargetMeasurement[] = [];
     for (const target of definition.targets.rows) {
       if (!policy.account_ids.includes(target.account_id) || !strategy.universe.includes(target.listing_id)) throw new Error("EVALUATION_TARGET_SCOPE_INCOMPLETE");
-      const info = evaluationListing(db, target.listing_id, policy, now, portfolio, cycle.knowledge_at); listings.push(info);
+      const info = evaluationListing(db, target.listing_id, policy, now, portfolio, cycle.knowledge_at, reviewBoundary.watermark_sequence); listings.push(info);
       known(info.verified_at, cycle.knowledge_at);
       if (info.currency !== target.currency) throw new Error("INVALID_LISTING_CURRENCY");
       for (const side of ["buy", "sell"]) {
@@ -234,7 +237,7 @@ export function prepareMonthlyEvaluation(db: Database.Database, lease: Evaluatio
     const context: ProposalContext = { activation_id: definition.activation_id, valuation_id: valuation.id, publications };
     const virtual: ProposalRow = { id: `evaluation:${cycle.id}`, portfolio_id: portfolio, environment: "actual", policy_version_id: active.policy.id, strategy_version_id: active.strategy.id,
       ledger_revision: revision(db, portfolio), market_manifest: canonical(context), input_hash: hash({ cycle: cycle.id, definition_hash: binding.version.content_hash, context, items: comparison.items }), expires_at: expiry, created_at: binding.started_at };
-    const risk = evaluateRisk(db, actor, virtual, comparison.items.map((item, i) => ({ ...item, id: `evaluation-item:${i}`, proposal_id: virtual.id })), context, options, riskNow);
+    const risk = evaluateRisk(db, actor, virtual, comparison.items.map((item, i) => ({ ...item, id: `evaluation-item:${i}`, proposal_id: virtual.id })), context, options, riskNow, false, reviewBoundary);
     input.risk_input_hash = risk.input_hash; result.risk = risk;
     if (risk.status !== "pass") { result.reason_codes = risk.checks.map(check => check.code); }
     else { result.outcome = comparison.items.length ? "proposed" : "unchanged"; result.reason_codes = [comparison.items.length ? "EXPLICIT_TARGET_DIFFERENCES" : "EXPLICIT_TARGETS_WITHIN_TOLERANCE"]; }

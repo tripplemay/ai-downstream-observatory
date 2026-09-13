@@ -614,3 +614,53 @@ missed 记录，不用今日 daily feed 冒充历史观察。每次控制结束�
 
 P/ACC/E/S 原范围保持不变。实际权威资料、合法流动性输入、完整穿透、投资准入、
 同提交 Linux 镜像、异机恢复及生产发布仍需各自证据，不能据此将未决门槛改为通过。
+
+### v19 同提交 CI 与后续原生问题修复
+
+`2244c7779e7faee0a4ef7cf08fd228ffbcf55c95` 的
+[CI 34733804426](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/34733804426)
+已终态通过：Python 553、Web 657、Node 176、HTTP 84，两种 Linux 镜像为 schema 19；
+465 个 HTTP 源码 hash 与准确提交一致，日志、GitHub metadata 及两个 ZIP digest 已核验。
+这关闭该提交的工程 CI/镜像项，不关闭真实数据、投资准入、异机恢复或生产门槛。
+
+浏览器服务后来恢复。合成 schema-19 开发 fixture 原生基线 **10 PASS / 1 FAIL**，
+实际发布三个人审版本，并验证历史、组合隔离、只读和退出后返回。失败是 390px 下
+长阻断码溢出；额外 200 字符名称及 40 字符代码/交易所也复现同类问题。布局补丁后
+同 fixture 原生复测 390/1440 均无页面溢出，内容完整换行；新增 callback 防回退
+测试先 RED 后 GREEN，定向 **13/13**。原失败记录未改写成通过。
+
+证据在 `artifacts/verification/browser-listing-v19/verification-result.json`，
+SHA-256 `7e80c0e399d55b10a8f8369bd3fe164ad9ed7e0bf5d1b862f669c416c4402f34`；
+七张截图均已查看，最终合成库完整性正常、外键异常 0、账本事件 0，fixture 已停止。
+该复测不是 schema-20、生产构建、跨标签在途会话竞态、键盘/读屏或 BFCache 完整验收。
+上述 CI 早于布局和周期知识边界修复，修复后的源码仍需新的完整回归与提交绑定。
+
+## 19. 原周期证券审核知识边界 v20
+
+正常服务和真实 Python discovery/claim 到 Node publisher 的定向复现发现：周期创建后
+写入与知识截止恰好同时间戳的新审核，能进入第一次准备或重新准备。既有批准仍报
+`APPROVAL_STALE`，prepare/commit 间的变化仍报 `EVALUATION_INPUT_CHANGED`；原缺口
+在于后一次调用没有持久化的原周期审核版本上界，不能据这两个旧保护宣称已经覆盖。
+
+0020 为审核建立不可覆盖的事务序列，在周期 INSERT 同事务冻结组合水位；月度消费
+同时限制知识时间与序列，并重核当前版本，包含零目标和重试。同一时间戳但先于周期
+创建的合法资料仍可用，后写版本不可吸入；不以一律拒绝同刻资料替代正常闭环。
+旧周期只记 `legacy_missing`、保留原历史，不伪造其水位。新输入及风险 hash 绑定原
+边界，普通审核历史查询和实际批准的语义不变。
+
+这仅修复证券审核的周期知识边界，不能代表全部输入的 PIT、完整 E/S、真实行情、
+投资准入或生产发布通过。独立审查及冻结源码本地回归已通过：Python **553/553**、
+Web **675/675**、根目录 Node **188/188**，无失败/跳过；类型、生产构建、认证 HTTP、
+shellcheck 和完整 npm audit 通过，漏洞为 0。新迁移 12 项、边界 12 项、风险分支 5 项
+及布局防回退已包含在总数中，不重复累计。风险分支实际包含已记账/对账/估值的在途、
+普通持仓、正常批准产生的买入预留和跨组合/伪造边界，不将零持仓测试外推到这些路径。
+
+HTTP **84/84**、schema 20、build `bGn--Ekiglyo7VgG4U0oW`，470 个源码 hash 首尾及随后
+一致；工件为 `artifacts/verification/workbench-http/2026-09-13T03-20-05-384Z/manifest.json`，
+SHA-256 `260027271abeebeec9b0d6fb2d2b7bbfd40f8bbdfe863bc5870a72855c198858`。
+新建 schema-20 原生开发 fixture 另有 **5/5 PASS**，验证 UI 发布、刷新精确历史、390px
+布局和退出隔离，并核自动审核 sequence、账本事件 0、完整性正常。证据在
+`artifacts/verification/browser-listing-v20/verification-result.json`，SHA-256
+`5e31e4ed9e063300f238e727f3f908c4300fc131e1499d7df0559b941a99a5bf`，fixture 已停止。
+此原生 smoke 没有周期，不能替代周期逻辑、BFCache、键盘/读屏或生产构建验收。
+v20 同提交 CI/镜像、全部发布和投资门槛仍需独立证据，本轮没有生产切换。

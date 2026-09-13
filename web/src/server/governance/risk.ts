@@ -10,6 +10,7 @@ import { ledgerFactQualityAt } from "../ledger/fact-quality-db";
 import { verifiedMarketSource } from "../market-source";
 import { verifiedPriceCalendarSession } from "../market-price-source";
 import { reviewedListingAt } from "../listing-reviews/service";
+import { readEvaluationListingBoundary, type EvaluationListingBoundary } from "../evaluation/listing-boundary";
 import { referenceInstant } from "../market-references/service";
 
 export interface ProposalRow { id: string; portfolio_id: string; environment: string; policy_version_id: string; strategy_version_id: string; ledger_revision: number; market_manifest: string; input_hash: string; expires_at: string; created_at: string }
@@ -98,12 +99,12 @@ function reviewTime(value: string): string {
   const normalized = `${match[1]}.${(match[2] ?? "").padEnd(6, "0")}Z`;
   referenceInstant(normalized); return normalized;
 }
-function listing(db: Database.Database, id: string, policy: Policy, now: string, portfolio: string, knowledgeAt = now): Listing {
+function listing(db: Database.Database, id: string, policy: Policy, now: string, portfolio: string, knowledgeAt = now, reviewSequenceWatermark?: number): Listing {
   if (!policy.listing_ids.includes(id)) throw new Error("LISTING_NOT_AUTHORIZED");
   const checkedAt = reviewTime(now), knowledge = reviewTime(knowledgeAt);
-  const proof = reviewedListingAt(db, { portfolio_id: portfolio, listing_id: id, knowledge_at: knowledge, now: checkedAt });
+  const proof = reviewedListingAt(db, { portfolio_id: portfolio, listing_id: id, knowledge_at: knowledge, now: checkedAt, review_sequence_watermark: reviewSequenceWatermark });
   if (proof.quality !== "complete" || !proof.row || !proof.document || !proof.proof_hash) throw new Error(proof.issues[0] ?? "LISTING_REVIEW_MISSING");
-  if (knowledge !== checkedAt) {
+  if (knowledge !== checkedAt || reviewSequenceWatermark !== undefined) {
     const current = reviewedListingAt(db, { portfolio_id: portfolio, listing_id: id, knowledge_at: checkedAt, now: checkedAt });
     if (current.quality !== "complete") throw new Error(current.issues[0] ?? "LISTING_REVIEW_MISSING");
     if (current.proof_hash !== proof.proof_hash) throw new Error("LISTING_REVIEW_CHANGED");
@@ -170,16 +171,26 @@ export function checkRisk(db: Database.Database, actor: GovernanceActor, portfol
 export { listing as evaluationListing, capability as evaluationCapability, observation as evaluationObservation };
 
 /** Read-only calculation; virtual empty-item evaluations must also verify their explicit target input scope. */
-export function evaluateRisk(db: Database.Database, actor: GovernanceActor, proposal: ProposalRow, items: ItemRow[], context: ProposalContext, options: GovernanceOptions, now: string, excludeOwnReservations = false): RiskResult {
+export function evaluateRisk(db: Database.Database, actor: GovernanceActor, proposal: ProposalRow, items: ItemRow[], context: ProposalContext, options: GovernanceOptions, now: string, excludeOwnReservations = false,
+  reviewBoundary?: EvaluationListingBoundary): RiskResult {
   const portfolio = proposal.portfolio_id;
   const state: Record<string, unknown> = { proposal, items, context, ledger_revision: revision(db, portfolio) };
   const budgets: RiskResult["budgets"] = [];
   try {
     // Preserve sub-millisecond input boundaries when the legacy governance clock normalized the same instant.
     const inputNow = reviewTime(options.now && Date.parse(options.now) === Date.parse(now) ? options.now : now);
+    if (reviewBoundary) {
+      if (reviewBoundary.portfolio_id !== portfolio) throw new Error("LISTING_REVIEW_OUT_OF_SCOPE");
+      try {
+        const boundary = readEvaluationListingBoundary(db, { id: reviewBoundary.cycle_id, portfolio_id: portfolio, knowledge_at: reviewBoundary.knowledge_at });
+        if (canonical(boundary) !== canonical(reviewBoundary)) throw new Error("LISTING_REVIEW_EVIDENCE_INVALID");
+      } catch { throw new Error("LISTING_REVIEW_EVIDENCE_INVALID"); }
+      state.listing_review_boundary = reviewBoundary;
+    }
     if (proposal.expires_at <= now) throw new Error("PROPOSAL_EXPIRED");
     if (proposal.ledger_revision !== state.ledger_revision) throw new Error("PROPOSAL_LEDGER_CHANGED");
     const active = activation(db, portfolio, context.activation_id, now), policy = active.policy.value, strategy = active.strategy.value;
+    const riskListing = (id: string) => listing(db, id, policy, inputNow, portfolio, reviewBoundary?.knowledge_at ?? inputNow, reviewBoundary?.watermark_sequence);
     state.activation = active;
     if (active.policy.id !== proposal.policy_version_id || active.strategy.id !== proposal.strategy_version_id) throw new Error("GOVERNANCE_VERSION_CHANGED");
     verifyGateEvidence(db, actor, portfolio, JSON.parse(active.row.evidence_json).gate_attachments, active.policy, active.strategy, options, now);
@@ -206,7 +217,7 @@ export function evaluateRisk(db: Database.Database, actor: GovernanceActor, prop
     const projected = new Map<string, { value: Decimal; info: Listing }>();
     for (const position of ownedSecurityPositions(positions, transits).filter(row => !amount(row.quantity).isZero())) {
       if (!policy.account_ids.includes(position.account_id) || !position.cost_known || amount(position.quantity).lt(0)) throw new Error("POSITION_INPUT_INCOMPLETE");
-      const info = listing(db, position.listing_id, policy, inputNow, portfolio), price = observation(db, publications, policy.price_scope_by_market[info.market], info.id, "close", policy, inputNow, portfolio);
+      const info = riskListing(position.listing_id), price = observation(db, publications, policy.price_scope_by_market[info.market], info.id, "close", policy, inputNow, portfolio);
       if (position.currency !== info.currency || price.unit !== info.currency || !amount(price.value).gt(0)) throw new Error("MARKET_UNITS_INVALID");
       (state.listings as unknown[]).push(info); (state.observations as unknown[]).push(price);
       const value = amount(position.quantity).mul(amount(price.value)).mul(fx(position.currency));
@@ -214,7 +225,7 @@ export function evaluateRisk(db: Database.Database, actor: GovernanceActor, prop
     }
     // Pending approved buys already consume concentration and strategy budget, not just cash.
     for (const row of countedReservations.filter(row => row.side === "buy")) {
-      const info = listing(db, row.listing_id, policy, inputNow, portfolio);
+      const info = riskListing(row.listing_id);
       (state.listings as unknown[]).push(info);
       projected.set(info.id, { value: (projected.get(info.id)?.value ?? amount("0")).add(amount(row.amount).mul(fx(row.currency))), info });
     }
@@ -225,7 +236,7 @@ export function evaluateRisk(db: Database.Database, actor: GovernanceActor, prop
       if (seen.has(key)) throw new Error("PROPOSAL_NOT_NETTED"); seen.add(key);
       if (!strategy.universe.includes(item.listing_id)) throw new Error("STRATEGY_UNIVERSE_MISMATCH");
       validateAccount(db, portfolio, item.account_id, policy, now);
-      const info = listing(db, item.listing_id, policy, inputNow, portfolio); (state.listings as unknown[]).push(info);
+      const info = riskListing(item.listing_id); (state.listings as unknown[]).push(info);
       const permission = capability(db, item.account_id, info, item.side, now); (state.capabilities as unknown[]).push(permission);
       readJsonAttachment(db, actor, portfolio, permission.evidence_id, { ...options, accountId: item.account_id });
       if (item.currency !== info.currency) throw new Error("INVALID_LISTING_CURRENCY");

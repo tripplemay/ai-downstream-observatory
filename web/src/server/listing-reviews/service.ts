@@ -79,12 +79,18 @@ export function readListingReviewVersion(db: Database.Database, portfolio: strin
     return { row, document, source, identity, proof_hash };
   } catch { throw invalid(); }
 }
-export function reviewedListingAt(db: Database.Database, input: { portfolio_id: string; listing_id: string; knowledge_at: string; now: string }): ReviewedListing {
-  const { portfolio_id: portfolio, listing_id: listing, knowledge_at: known, now } = input;
+export function reviewedListingAt(db: Database.Database, input: { portfolio_id: string; listing_id: string; knowledge_at: string; now: string; review_sequence_watermark?: number }): ReviewedListing {
+  const { portfolio_id: portfolio, listing_id: listing, knowledge_at: known, now, review_sequence_watermark: watermark } = input;
+  if (watermark !== undefined && (!Number.isSafeInteger(watermark) || watermark < 0)) throw new Error("LISTING_REVIEW_INVALID_QUERY");
   try { if (referenceInstant(known) > referenceInstant(now)) throw invalid(); } catch { throw new Error("LISTING_REVIEW_INVALID_CLOCK"); }
   return db.transaction((): ReviewedListing => {
     const identity = currentListingIdentity(db, portfolio, listing); headFor(db, portfolio, listing);
-    const selected = db.prepare("SELECT id FROM listing_review_versions WHERE portfolio_id=? AND listing_id=? AND known_at<=? ORDER BY revision DESC LIMIT 1").get(portfolio, listing, known) as { id: string } | undefined;
+    if (watermark !== undefined && db.prepare(`SELECT 1 FROM listing_review_versions r LEFT JOIN listing_review_sequences s ON s.version_id=r.id
+      WHERE r.portfolio_id=? AND r.listing_id=? AND (s.sequence IS NULL OR s.portfolio_id!=r.portfolio_id) LIMIT 1`).get(portfolio, listing)) throw invalid();
+    const selected = (watermark === undefined
+      ? db.prepare("SELECT id FROM listing_review_versions WHERE portfolio_id=? AND listing_id=? AND known_at<=? ORDER BY revision DESC LIMIT 1").get(portfolio, listing, known)
+      : db.prepare(`SELECT r.id FROM listing_review_versions r JOIN listing_review_sequences s ON s.version_id=r.id AND s.portfolio_id=r.portfolio_id
+        WHERE r.portfolio_id=? AND r.listing_id=? AND r.known_at<=? AND s.sequence<=? ORDER BY r.revision DESC LIMIT 1`).get(portfolio, listing, known, watermark)) as { id: string } | undefined;
     const base = { portfolio_id: portfolio, listing_id: listing, knowledge_at: known, checked_at: now };
     if (!selected) return { ...base, quality: "blocked", issues: ["LISTING_REVIEW_MISSING"], row: null, document: null, source: null, identity, proof_hash: null };
     const proof = readListingReviewVersion(db, portfolio, listing, selected.id), facts = proof.document.facts, issues: string[] = [];

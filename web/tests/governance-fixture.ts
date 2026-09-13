@@ -18,7 +18,7 @@ import { publishListingReview } from "../src/server/listing-reviews/service";
 
 export const human: GovernanceActor = { id: "SYNTHETIC-HUMAN-ONLY", kind: "human" };
 export const now = "2026-01-05T12:00:00.000Z";
-export function governanceFixture(patch?: (policy: Policy) => void, positionQuantity = "0", cash = "100000", activate = true, currency = "CNY", laterPrice?: string) {
+export function governanceFixture(patch?: (policy: Policy) => void, positionQuantity = "0", cash = "100000", activate = true, currency = "CNY", laterPrice?: string, skipListingReviews: string[] = []) {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "etf-governance-")), filename = path.join(dataDir, "workbench.db");
   migrateWorkbench(filename);
   const db = openWorkbench(filename), portfolio = createPortfolio(db, human, "SYNTHETIC TEST - NOT LIVE AUTHORIZATION", now);
@@ -45,7 +45,7 @@ export function governanceFixture(patch?: (policy: Policy) => void, positionQuan
       expected_identity_hash: hash(identity), source_id: source.id, source_hash: source.content_hash, facts, review_until: reviewUntil,
       reason: "SYNTHETIC TEST ONLY: not live verification or investment permission", acknowledgement: true, idempotency_key: key }, { now: at });
   };
-  for (const id of ["l", "l2"]) reviewListing(id);
+  for (const id of ["l", "l2"]) if (!skipListingReviews.includes(id)) reviewListing(id);
   const command = (fact: LedgerCommand["fact"], date = "2026-01-01"): LedgerCommand => ({ ...envelope(), source_id: "synthetic-broker", source_event_id: `fact-${counter}`, effective_at: date, time_precision: "date", source_timezone: "Asia/Shanghai", fact });
   recordFact(db, human, command({ type: "opening_cash", account_id: account, currency, amount: cash }), now);
   if (amount(positionQuantity).gt(0)) recordFact(db, human, command({ type: "opening_position", account_id: account, currency, listing_id: "l", quantity: positionQuantity, cost_amount: exact(amount(positionQuantity).mul(100)) }), now);
