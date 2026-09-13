@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/listing-review.schema.json",
+  "title": "Portfolio-private human review of listing identity, not investment or broker authorization",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "portfolio_id", "listing_id", "revision", "source_id", "source_hash", "source_known_at", "identity_snapshot", "identity_hash", "known_at", "created_by", "review_until", "reason", "review_basis", "facts"],
+  "properties": {
+    "schema_version": { "const": "listing-review-v1" },
+    "id": { "$ref": "common.schema.json#/$defs/id" },
+    "portfolio_id": { "$ref": "common.schema.json#/$defs/id" },
+    "listing_id": { "$ref": "common.schema.json#/$defs/id" },
+    "revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "source_id": { "$ref": "common.schema.json#/$defs/id" },
+    "source_hash": { "$ref": "common.schema.json#/$defs/hash" },
+    "source_known_at": { "$ref": "#/$defs/instant" },
+    "identity_snapshot": { "$ref": "#/$defs/identity" },
+    "identity_hash": { "$ref": "common.schema.json#/$defs/hash" },
+    "known_at": { "$ref": "#/$defs/instant" },
+    "created_by": { "allOf": [{ "$ref": "common.schema.json#/$defs/id" }, { "type": "string", "not": { "pattern": "^system:" } }] },
+    "review_until": { "$ref": "#/$defs/instant" },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S" },
+    "review_basis": { "const": "human_reviewed_not_provider_verified" },
+    "facts": { "$ref": "#/$defs/facts" }
+  },
+  "$defs": {
+    "instant": { "type": "string", "format": "date-time", "pattern": "^(?!0000)[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{6}Z$" },
+    "date": { "type": "string", "format": "date", "pattern": "^(?!0000)[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+    "positive_decimal": {
+      "allOf": [
+        { "$ref": "common.schema.json#/$defs/decimal" },
+        { "type": "string", "pattern": "^(?!-)(?!0(?:\\.0+)?$)" }
+      ]
+    },
+    "nullable_label": { "anyOf": [{ "type": "null" }, { "type": "string", "minLength": 1, "maxLength": 160, "pattern": "\\S" }] },
+    "identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["listing_id", "instrument_id", "market", "exchange", "ticker", "currency"],
+      "properties": {
+        "listing_id": { "$ref": "common.schema.json#/$defs/id" },
+        "instrument_id": { "$ref": "common.schema.json#/$defs/id" },
+        "market": { "enum": ["CN", "HK", "US"] },
+        "exchange": { "type": "string", "minLength": 1, "maxLength": 40, "pattern": "\\S" },
+        "ticker": { "type": "string", "minLength": 1, "maxLength": 40, "pattern": "\\S" },
+        "currency": { "$ref": "common.schema.json#/$defs/currency" }
+      }
+    },
+    "facts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["instrument_kind", "lifecycle_status", "quantity_step", "price_step", "source_effective_date", "fund_identifier", "share_class_identifier", "risk_classification", "product_structure"],
+      "properties": {
+        "instrument_kind": { "enum": ["ETF", "ETN", "equity", "fund", "other", "unknown"] },
+        "lifecycle_status": { "enum": ["active", "suspended", "delisted", "unknown"] },
+        "quantity_step": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/positive_decimal" }] },
+        "price_step": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/positive_decimal" }] },
+        "source_effective_date": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/date" }] },
+        "fund_identifier": { "$ref": "#/$defs/nullable_label" },
+        "share_class_identifier": { "$ref": "#/$defs/nullable_label" },
+        "product_structure": {
+          "type": "object", "additionalProperties": false,
+          "required": ["leverage", "direction"],
+          "properties": {
+            "leverage": { "enum": ["unleveraged", "leveraged", "unknown"] },
+            "direction": { "enum": ["long_only", "inverse", "unknown"] }
+          }
+        },
+        "risk_classification": {
+          "type": "object", "additionalProperties": false,
+          "description": "Source-supported whole-fund categorical tags, not holdings look-through, allocation weights or permission.",
+          "required": ["index_id", "region", "sector"],
+          "properties": {
+            "index_id": { "$ref": "#/$defs/nullable_label" },
+            "region": { "$ref": "#/$defs/nullable_label" },
+            "sector": { "$ref": "#/$defs/nullable_label" }
+          }
+        }
+      }
+    }
+  },
+  "description": "The server binds identity_snapshot to global listing identity and source bytes to the same portfolio. Source knowledge must precede review knowledge; source_effective_date cannot exceed the listing market's local date at known_at (CN Asia/Shanghai, HK Asia/Hong_Kong, US America/New_York); review_until must be later than known_at. Runtime checks enforce these relations, canonical hashes and current-head selection. The publishing command must supply expected_identity_hash matching the server identity hash. An active ETF with null steps may be recorded but remains blocked. Latest unknown, expired or ineligible reviews do not permit falling back to an older approval. Historical ledger and valuation facts are not changed by this review."
+}

@@ -88,6 +88,22 @@ test("unchanged requires a complete explicit target comparison and risk pass, no
   assert.equal(count(f, "proposals"), 0); assert.equal(count(f, "reservations"), 0);
 });
 
+test("a listing review changed after the original cycle cannot silently rebase an unchanged result", t => {
+  const f = fixture(t, "0", "80000", "0");
+  f.reviewListing("l", { price_step: "0.02" }, started);
+  const result = prepareMonthlyEvaluation(f.db, f.lease, f.evaluationOptions);
+  assert.equal(result.outcome, "blocked"); assert.deepEqual(result.reason_codes, ["LISTING_REVIEW_CHANGED"]);
+  noPublication(f);
+});
+
+test("review expiry is checked at evaluation time rather than only at the original cycle", t => {
+  const f = fixture(t, "0", "80000", "0");
+  f.reviewListing("l", {}, "2026-01-05T12:00:00.000000Z", "2026-01-05T12:01:00.999999Z");
+  const result = prepareMonthlyEvaluation(f.db, f.lease, f.evaluationOptions);
+  assert.equal(result.outcome, "blocked"); assert.deepEqual(result.reason_codes, ["LISTING_REVIEW_EXPIRED"]);
+  noPublication(f);
+});
+
 test("out-of-tolerance dust becomes a terminal blocked attempt, never unchanged", t => {
   const f = fixture(t, "0", "80000", "0.01"), result = publishMonthlyEvaluation(f.db, f.lease, f.evaluationOptions);
   assert.equal(result.outcome, "blocked"); assert.equal(result.proposal_id, null);

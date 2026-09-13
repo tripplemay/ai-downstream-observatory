@@ -29,6 +29,7 @@ const report = {
     'Collection HTTP cases patch only the independent test Python transport with synthetic XML; no app request can provide a URL, body, credential or provider clock, and no CI provider network request is made.',
     'Recurring collection cases use an actual UTC trigger and loopback HTTP pause, but do not certify production uptime, real provider freshness or native browser behavior.',
     'Price collection cases use human-reviewed synthetic references and SDK projections in an independent test transport; they do not verify exchange calendars, subscriptions, real market data or broker buyability.',
+    'Listing reviews use synthetic private human assertions, not issuer verification, live trading authority or weighted holdings look-through; HTTP page output is not native browser interaction acceptance.',
   ],
 };
 const sha = (value) => createHash('sha256').update(value).digest('hex');
@@ -1883,6 +1884,91 @@ catch(error) { console.log(JSON.stringify({error:error.message})); } finally {db
       assert.equal(rotationSnapshot(), before);
       return { current_old_reference_rejected: true, as_known_snapshot_preserved: true, stale_queue: 409, financial_tables_unchanged: true };
     });
+    let identityPortfolio, identityListing, identityCommand, identityReceipt;
+    const identityPath = '/api/workbench/listing-reviews';
+    const identityGet = (query = `portfolio=${identityPortfolio}&listing=${identityListing}`) => jsonRequest(`${identityPath}?${query}`, { headers: { Cookie: cookie, ...collectionHeaders() } });
+    const identityPost = (command, extraHeaders = {}) => jsonRequest(identityPath, { method: 'POST', headers: {
+      Cookie: cookie, Origin: origin, 'Content-Type': 'application/json', ...collectionHeaders(), ...extraHeaders,
+    }, body: JSON.stringify({ action: 'publish', command }) });
+    const identityStorage = () => {
+      const db = new Database(filename, { readonly: true });
+      try { return sha(JSON.stringify(['listing_review_versions', 'listing_review_heads', 'market_reference_sources', 'audit_events', 'command_dedup', 'instruments', 'listings']
+        .map(table => [table, db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]))); } finally { db.close(); }
+    };
+    const identityFacts = { instrument_kind: 'ETF', lifecycle_status: 'active', quantity_step: '100', price_step: '0.001',
+      source_effective_date: null, fund_identifier: null, share_class_identifier: null,
+      product_structure: { leverage: 'unleveraged', direction: 'long_only' },
+      risk_classification: { index_id: 'SYNTHETIC-INDEX', region: 'SYNTHETIC-REGION', sector: 'SYNTHETIC-BROAD' } };
+    await check('HTTP-LR01', 'normal listing registration and private source review produce a scoped immutable identity without changing ledger or global approval flags', async () => {
+      const created = await post({ action: 'create_portfolio', name: 'Synthetic identity review HTTP scope' }); assert.equal(created.status, 200); identityPortfolio = created.json.id;
+      const registered = await post({ action: 'register_listing', command: { portfolio_id: identityPortfolio, expected_revision: 0, idempotency_key: 'http-identity-register',
+        name: 'Synthetic identity ETF', market: 'CN', exchange: 'SSE', ticker: 'SYNTH-ID19', currency: 'CNY', asset_class: 'unknown', source_evidence: 'Synthetic initial registration, not issuer verification' } });
+      assert.equal(registered.status, 200, JSON.stringify(registered.json)); assert.equal(registered.json.status, 'unverified'); identityListing = registered.json.listing_id;
+      const added = await catalogPost('add_entry', { portfolio_id: identityPortfolio, listing_id: identityListing, expected_catalog_revision: 0, idempotency_key: 'http-identity-member' });
+      assert.equal(added.status, 200, JSON.stringify(added.json));
+      const empty = await identityGet(); assert.equal(empty.status, 200, JSON.stringify(empty.json)); assert.equal(empty.json.selected.review_revision, 0);
+      assert.deepEqual(empty.json.selected.issues, ['LISTING_REVIEW_MISSING']);
+      const raw = JSON.stringify({ synthetic: true, fixture: 'Not an issuer or exchange original', facts: identityFacts }, null, 2) + '\n';
+      const source = await marketPost({ action: 'store_source', command: { portfolio_id: identityPortfolio, idempotency_key: 'http-identity-source',
+        reference: 'Synthetic identity source, not live approval', content_text: raw } });
+      assert.equal(source.status, 200, JSON.stringify(source.json)); assert.equal(source.json.content_hash, sha(raw));
+      identityCommand = { portfolio_id: identityPortfolio, listing_id: identityListing, expected_review_revision: 0,
+        expected_identity_hash: empty.json.selected.identity_hash, source_id: source.json.id, source_hash: source.json.content_hash,
+        facts: identityFacts, review_until: new Date(Date.now() + 3600000).toISOString().replace(/(\.\d{3})Z$/, '$1000Z'),
+        reason: 'Synthetic human review only, no account or strategy approval', acknowledgement: true, idempotency_key: 'http-identity-review' };
+      const financial = rotationSnapshot(), db = new Database(filename, { readonly: true });
+      let globals;
+      try { globals = db.prepare('SELECT * FROM listings WHERE id=?').get(identityListing); } finally { db.close(); }
+      const reviewed = await identityPost(identityCommand); assert.equal(reviewed.status, 200, JSON.stringify(reviewed.json)); identityReceipt = reviewed.json;
+      assert.equal(identityReceipt.revision, 1); assert.equal(identityReceipt.review_basis, 'human_reviewed_not_provider_verified');
+      const current = await identityGet(); assert.equal(current.status, 200); assert.equal(current.json.selected.quality, 'complete');
+      assert.equal(current.json.selected.current.document.id, identityReceipt.id); assert.equal(current.json.selected.current.document.created_by, 'owner');
+      assert.equal(current.json.selected.current.content_hash, identityReceipt.content_hash); assert.match(identityReceipt.known_at, /\.\d{6}Z$/);
+      assert.equal(current.json.sources.find(row => row.id === source.json.id).content_hash, sha(raw)); assert.doesNotMatch(JSON.stringify(current.json), /content_text|"raw_body"/);
+      assert.match(current.headers.get('cache-control'), /private.*no-store/); assert.match(current.headers.get('vary'), /Cookie/i);
+      const after = new Database(filename, { readonly: true });
+      try { assert.deepEqual(after.prepare('SELECT * FROM listings WHERE id=?').get(identityListing), globals); } finally { after.close(); }
+      assert.equal(rotationSnapshot(), financial); assert.equal((await state(identityPortfolio)).revision, 0);
+      const page = await request('/workbench/market/listings', { headers: { Cookie: cookie } }); assert.equal(page.status, 200); assert.match(await page.text(), /证券身份/);
+      return { normal_registration: true, private_review_revision: 1, source_sha256: source.json.content_hash, global_approval_unchanged: true, ledger_revision: 0, human_review_not_provider_verification: true };
+    });
+    await check('HTTP-LR02', 'identity review requires current auth, same session, exact identity, explicit CAS and private original scope', async () => {
+      const before = identityStorage(), financial = rotationSnapshot();
+      assert.equal((await jsonRequest(identityPath)).status, 401);
+      assert.equal((await jsonRequest(identityPath, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: '{}' })).status, 401);
+      assert.equal((await identityPost(identityCommand, { Origin: 'https://synthetic-invalid-origin.invalid' })).status, 403);
+      assert.equal((await identityPost(identityCommand, { 'X-Workbench-Session-Binding': '0'.repeat(64) })).status, 401);
+      assert.equal((await identityGet(`portfolio=${identityPortfolio}&portfolio=${identityPortfolio}`)).status, 400);
+      const retried = await identityPost(identityCommand); assert.equal(retried.status, 200); assert.deepEqual(retried.json, identityReceipt);
+      assert.equal((await identityPost({ ...identityCommand, expected_review_revision: 1 })).status, 409);
+      assert.equal((await identityPost({ ...identityCommand, idempotency_key: 'http-identity-stale-cas' })).status, 409);
+      const next = { ...identityCommand, expected_review_revision: 1, idempotency_key: 'http-identity-invalid-next' };
+      assert.equal((await identityPost({ ...next, expected_identity_hash: '0'.repeat(64) })).status, 409);
+      assert.equal((await identityPost({ ...next, source_id: priceSource.id, source_hash: priceSource.content_hash })).status, 403);
+      for (const extra of [{ known_at: identityReceipt.known_at }, { created_by: 'system:claimed-human' }, { review_basis: 'provider_verified' }]) {
+        assert.equal((await identityPost({ ...next, ...extra })).status, 400);
+      }
+      assert.equal((await identityGet(`portfolio=${otherPortfolio}&listing=${identityListing}`)).status, 403);
+      assert.equal(identityStorage(), before); assert.equal(rotationSnapshot(), financial);
+      return { auth: 401, origin: 403, stale_session: 401, stale_cas: 409, identity_change: 409, private_source: 403, exact_retry: true, no_mutation: true };
+    });
+    await check('HTTP-LR03', 'a sourced suspension supersedes an old active review and recovery prevents writes while preserving readable private history', async () => {
+      const financial = rotationSnapshot(), facts = { ...identityFacts, lifecycle_status: 'suspended' };
+      const stored = await marketPost({ action: 'store_source', command: { portfolio_id: identityPortfolio, idempotency_key: 'http-identity-suspended-source',
+        reference: 'Synthetic suspended listing notice', content_text: JSON.stringify({ synthetic: true, facts }) } }); assert.equal(stored.status, 200);
+      const next = { ...identityCommand, expected_review_revision: 1, source_id: stored.json.id, source_hash: stored.json.content_hash, facts, idempotency_key: 'http-identity-suspended' };
+      const updated = await identityPost(next); assert.equal(updated.status, 200, JSON.stringify(updated.json)); assert.equal(updated.json.revision, 2);
+      const detail = await identityGet(); assert.equal(detail.status, 200); assert.equal(detail.json.selected.quality, 'blocked'); assert.deepEqual(detail.json.selected.issues, ['LISTING_REVIEW_NOT_ACTIVE']);
+      assert.equal(detail.json.history.length, 2); assert.equal(detail.json.history.find(row => row.document.revision === 1).document.id, identityReceipt.id);
+      const marker = path.join(directory, 'RESTORE_PENDING_REVIEW'), before = identityStorage();
+      writeFileSync(marker, 'Synthetic identity recovery test\n');
+      try {
+        const read = await identityGet(); assert.equal(read.status, 200); assert.equal(read.json.read_only, true);
+        assert.equal((await identityPost({ ...next, expected_review_revision: 2, idempotency_key: 'http-identity-readonly' })).status, 423);
+      } finally { rmSync(marker); }
+      assert.equal(identityStorage(), before); assert.equal(rotationSnapshot(), financial);
+      return { revision: 2, blocked_issue: 'LISTING_REVIEW_NOT_ACTIVE', historical_versions_preserved: 2, recovery_write: 423, financial_tables_unchanged: true };
+    });
     await check('HTTP-16', 'storage errors do not expose paths or SQL', async () => {
       renameSync(filename, `${filename}.held`);
       try {
@@ -1895,6 +1981,7 @@ catch(error) { console.log(JSON.stringify({error:error.message})); } finally {db
       assert.equal((await jsonRequest('/api/workbench', { headers: { Cookie: cookie } })).status, 401);
       assert.equal((await catalogGet()).status, 401);
       assert.equal((await marketGet()).status, 401);
+      assert.equal((await identityGet()).status, 401);
       const deniedCatalog = await jsonRequest('/api/workbench/catalog', { method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: 'x'.repeat(2 * 1024 * 1024 + 1) }); assert.equal(deniedCatalog.status, 401);
       const db = new Database(filename, { readonly: true });
       try {

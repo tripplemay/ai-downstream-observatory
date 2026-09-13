@@ -90,6 +90,11 @@
       "version": 18,
       "file": "0018_collection_schedules.sql",
       "sha256": "60315ed2e47d5b89c787cd179317148900a4405f380ca4fb1ffd91aecf14ed62"
+    },
+    {
+      "version": 19,
+      "file": "0019_listing_identity_reviews.sql",
+      "sha256": "6f93b6c94da0fc934ac1c600144824015c7c63ebada82cffc1f0c93010bea552"
     }
   ]
 }

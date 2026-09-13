@@ -12,6 +12,9 @@ import { activatePolicy, approveAccountCapability, approveProposal, createPolicy
 import type { Policy, Strategy } from "../src/server/governance/schemas";
 import { registerCompletedVerification } from "../src/server/governance/verification";
 import { ledgerFactQualityAt } from "../src/server/ledger/fact-quality-db";
+import { addCatalogEntry, catalogRevision } from "../src/server/catalog/service";
+import { storeMarketReferenceSource } from "../src/server/market-references/service";
+import { publishListingReview } from "../src/server/listing-reviews/service";
 
 export const human: GovernanceActor = { id: "SYNTHETIC-HUMAN-ONLY", kind: "human" };
 export const now = "2026-01-05T12:00:00.000Z";
@@ -23,8 +26,26 @@ export function governanceFixture(patch?: (policy: Policy) => void, positionQuan
   const account = createAccount(db, human, portfolio, "Synthetic", "No actual broker", currency, now), options = { dataDir, now, releaseHash: hash(sourceManifest) };
   let counter = 0;
   const envelope = () => ({ portfolio_id: portfolio, expected_revision: revision(db, portfolio), idempotency_key: `synthetic-${++counter}`, reason: "SYNTHETIC TEST DATA: does not certify real G/S readiness" });
-  db.prepare("INSERT INTO instruments(id,name,asset_class,index_id,exposure_json,created_at) VALUES('i','Synthetic ETF','ETF','synthetic-index',?,?)").run(canonical({ region: "CN", sector: "broad" }), now);
-  for (const id of ["l", "l2"]) db.prepare("INSERT INTO listings(id,instrument_id,market,exchange,ticker,currency,quantity_step,price_step,status,verified_at,created_at) VALUES(?,'i','CN','SSE',?,?,'100','0.01','active',?,?)").run(id, id, currency, now, now);
+  db.prepare("INSERT INTO instruments(id,name,created_at) VALUES('i','Synthetic ETF',?)").run(now);
+  for (const id of ["l", "l2"]) {
+    db.prepare("INSERT INTO listings(id,instrument_id,market,exchange,ticker,currency,created_at) VALUES(?,'i','CN','SSE',?,?,?)").run(id, id, currency, now);
+    addCatalogEntry(db, human, { portfolio_id: portfolio, listing_id: id, expected_catalog_revision: catalogRevision(db, portfolio), idempotency_key: `synthetic-member:${id}` }, options);
+  }
+  const reviewFacts = { instrument_kind: "ETF", lifecycle_status: "active", quantity_step: "100" as string | null, price_step: "0.01" as string | null,
+    source_effective_date: "2026-01-05" as string | null, fund_identifier: null as string | null, share_class_identifier: null as string | null,
+    product_structure: { leverage: "unleveraged", direction: "long_only" },
+    risk_classification: { index_id: "synthetic-index" as string | null, region: "CN" as string | null, sector: "broad" as string | null } };
+  const reviewListing = (listingId: string, patch: Partial<typeof reviewFacts> = {}, at = "2026-01-05T12:00:00.000000Z", reviewUntil = "2026-02-01T00:00:00.000000Z") => {
+    const facts = { ...reviewFacts, ...patch }, key = `synthetic-review:${++counter}`;
+    const source = storeMarketReferenceSource(db, human, { portfolio_id: portfolio, idempotency_key: key,
+      reference: "SYNTHETIC identity review, not an issuer or exchange verification", content_text: JSON.stringify({ synthetic: true, facts }) }, { now: at });
+    const head = db.prepare("SELECT revision FROM listing_review_heads WHERE portfolio_id=? AND listing_id=?").get(portfolio, listingId) as { revision: number } | undefined;
+    const identity = db.prepare("SELECT id listing_id,instrument_id,market,exchange,ticker,currency FROM listings WHERE id=?").get(listingId);
+    return publishListingReview(db, human, { portfolio_id: portfolio, listing_id: listingId, expected_review_revision: head?.revision ?? 0,
+      expected_identity_hash: hash(identity), source_id: source.id, source_hash: source.content_hash, facts, review_until: reviewUntil,
+      reason: "SYNTHETIC TEST ONLY: not live verification or investment permission", acknowledgement: true, idempotency_key: key }, { now: at });
+  };
+  for (const id of ["l", "l2"]) reviewListing(id);
   const command = (fact: LedgerCommand["fact"], date = "2026-01-01"): LedgerCommand => ({ ...envelope(), source_id: "synthetic-broker", source_event_id: `fact-${counter}`, effective_at: date, time_precision: "date", source_timezone: "Asia/Shanghai", fact });
   recordFact(db, human, command({ type: "opening_cash", account_id: account, currency, amount: cash }), now);
   if (amount(positionQuantity).gt(0)) recordFact(db, human, command({ type: "opening_position", account_id: account, currency, listing_id: "l", quantity: positionQuantity, cost_amount: exact(amount(positionQuantity).mul(100)) }), now);
@@ -103,5 +124,5 @@ export function governanceFixture(patch?: (policy: Policy) => void, positionQuan
   const proposal = (quantity = "600", side: "buy" | "sell" = "buy", extra: Record<string, unknown> = {}) => createProposal(db, human, { ...envelope(), activation_id: activated!.id, valuation_id: valuationId, expires_at: "2026-01-05T12:30:00.000Z", items: [{ account_id: account, listing_id: "l", side, currency, quantity, limit_price: "100", estimated_fees: "0", ...extra }] }, options);
   const approvalCommand = (proposal: ReturnType<typeof createProposal>) => ({ ...envelope(), proposal_id: proposal.id, risk_run_id: proposal.risk.id, expected_input_hash: proposal.risk.input_hash });
   const approve = (p: ReturnType<typeof createProposal>) => approveProposal(db, human, approvalCommand(p), options);
-  return { db, filename, dataDir, account, portfolio, options, envelope, command, attach, sourceEvidence, policy, policyVersion, strategy, strategyVersion, valuationId, gates, gateDocument, seedVerification, activationCommand, activated, proposal, approvalCommand, approve, publish, close: () => { db.close(); rmSync(dataDir, { force: true, recursive: true }); } };
+  return { db, filename, dataDir, account, portfolio, options, envelope, command, attach, sourceEvidence, policy, policyVersion, strategy, strategyVersion, valuationId, gates, gateDocument, seedVerification, activationCommand, activated, proposal, approvalCommand, approve, publish, reviewListing, close: () => { db.close(); rmSync(dataDir, { force: true, recursive: true }); } };
 }

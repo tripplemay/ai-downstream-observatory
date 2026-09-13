@@ -183,7 +183,7 @@ export function prepareMonthlyEvaluation(db: Database.Database, lease: Evaluatio
         if (!expected || selected.id !== expected) throw new Error("EVALUATION_VALUATION_PRICE_VECTOR_MISMATCH");
       };
       if (item.listing_id) {
-        const listing = evaluationListing(db, String(item.listing_id), policy, riskKnowledge);
+        const listing = evaluationListing(db, String(item.listing_id), policy, now, portfolio, cycle.knowledge_at);
         checkVector(policy.price_scope_by_market[listing.market], listing.id, "close", evidence.price_observation_id);
       }
       if (item.currency !== "CNY") checkVector(policy.fx_scope, `FX:${item.currency}`, "fx_cny_per_unit", evidence.fx_observation_id);
@@ -193,7 +193,7 @@ export function prepareMonthlyEvaluation(db: Database.Database, lease: Evaluatio
     const rows: TargetMeasurement[] = [];
     for (const target of definition.targets.rows) {
       if (!policy.account_ids.includes(target.account_id) || !strategy.universe.includes(target.listing_id)) throw new Error("EVALUATION_TARGET_SCOPE_INCOMPLETE");
-      const info = evaluationListing(db, target.listing_id, policy, riskKnowledge); listings.push(info);
+      const info = evaluationListing(db, target.listing_id, policy, now, portfolio, cycle.knowledge_at); listings.push(info);
       known(info.verified_at, cycle.knowledge_at);
       if (info.currency !== target.currency) throw new Error("INVALID_LISTING_CURRENCY");
       for (const side of ["buy", "sell"]) {

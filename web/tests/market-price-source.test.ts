@@ -9,12 +9,25 @@ import { canonical, hash } from "../src/server/ledger/service";
 import { verifiedMarketSource } from "../src/server/market-source";
 import { verifiedPriceCalendarSession, verifiedSdkMarketSource, priceInstant } from "../src/server/market-price-source";
 import { publishMarketReference, readMarketReferenceVersion } from "../src/server/market-references/service";
+import { currentPublications, evaluationObservation } from "../src/server/governance/risk";
+import type { Policy } from "../src/server/governance/schemas";
 
 const script = String.raw`
 import json,sys,sqlite3
+from datetime import timedelta,timezone
+from unittest.mock import patch
+import tests.market.test_price_collection as price_tests
 from tests.market.test_price_collection import PriceCollectionTests
 from worker.orchestration.db import stamp,content_hash
-t=PriceCollectionTests(); t.setUp()
+t=PriceCollectionTests()
+if sys.argv[2]=='current':
+ today=price_tests.utc_now().astimezone(timezone(timedelta(hours=8))).date()
+ dates=[(today-timedelta(days=n)).isoformat() for n in (2,1,0)]
+ calendar={'market':'CN','exchange':'TEST','timezone':'Asia/Shanghai','range_start':dates[0],'range_end':dates[2],
+  'days':[{'date':day,'kind':'full' if i<2 else 'closed','close_at':day+'T07:00:00.000000Z' if i<2 else None} for i,day in enumerate(dates)]}
+ with patch.object(price_tests,'calendar',return_value=calendar): t.setUp()
+ t.payload.update(start_date=dates[0],end_date=dates[1])
+else: t.setUp()
 try:
  financial={table:content_hash([dict(row) for row in t.db.execute('SELECT * FROM '+table)]) for table in ('ledger_events','approval_events','activations','reservations')}
  prepared,lease=t.prepare(); result=t.commit(prepared,lease)
@@ -23,14 +36,29 @@ try:
  print(json.dumps(result))
 finally:t.doCleanups()
 `;
-function fixture() {
+function fixture(current = false) {
   const directory = mkdtempSync(path.join(os.tmpdir(), "sdk-price-web-")), filename = path.join(directory, "workbench.db");
   try {
-    const result = JSON.parse(execFileSync(process.env.WORKBENCH_TEST_PYTHON ?? process.env.PYTHON ?? "python3", ["-c", script, filename], { cwd: path.resolve(process.cwd(), ".."), encoding: "utf8", maxBuffer: 1048576 })) as { batch_id: string; capture_id: string; receipt_hash: string; known_at: string; mapping_id: string; calendar_id: string; financial_before: Record<string, string> };
+    const result = JSON.parse(execFileSync(process.env.WORKBENCH_TEST_PYTHON ?? process.env.PYTHON ?? "python3", ["-c", script, filename, current ? "current" : "historical"], { cwd: path.resolve(process.cwd(), ".."), encoding: "utf8", maxBuffer: 1048576 })) as { batch_id: string; capture_id: string; receipt_hash: string; known_at: string; mapping_id: string; calendar_id: string; financial_before: Record<string, string> };
     const db = openWorkbench(filename);
     return { db, result, directory, close() { db.close(); rmSync(directory, { recursive: true, force: true }); } };
   } catch (error) { rmSync(directory, { recursive: true, force: true }); throw error; }
 }
+test("governance consumes the actual SDK PRICE key through listing identity, without inventing liquidity", () => {
+  const f = fixture(true); try {
+    const { scope } = f.db.prepare("SELECT scope FROM market_batches WHERE id=?").get(f.result.batch_id) as { scope: string };
+    const policy = { price_scope_by_market: { CN: scope }, fx_scope: "unused", execution: { max_price_age_seconds: 3 * 86400 } } as Policy;
+    const publications = currentPublications(f.db, policy, f.result.known_at, "p");
+    const close = evaluationObservation(f.db, publications, scope, "CN:TEST", "close", policy, f.result.known_at, "p");
+    assert.equal(close.value, "10.100000000000000001"); assert.equal(close.published_at, null); assert.equal(close.time_precision, "date");
+    assert.equal(close.observed_at, verifiedPriceCalendarSession(f.db, f.result.batch_id, "p", "CN:TEST", f.result.known_at, f.result.known_at));
+    for (const metric of ["spread_bps", "premium_bps", "turnover", "volume"]) assert.throws(() => evaluationObservation(f.db, publications, scope, "CN:TEST", metric, policy, f.result.known_at, "p"), new RegExp(`MARKET_OBSERVATION_UNAVAILABLE:${metric}`));
+    assert.throws(() => evaluationObservation(f.db, publications, scope, "PRICE:CN:TEST", "close", policy, f.result.known_at, "p"), /MARKET_OBSERVATION_UNAVAILABLE:close/);
+    assert.throws(() => evaluationObservation(f.db, publications, scope, "CN:OTHER", "close", policy, f.result.known_at, "p"), /MARKET_OBSERVATION_UNAVAILABLE:close/);
+    assert.throws(() => evaluationObservation(f.db, publications, scope, "CN:TEST", "close", policy, f.result.known_at, "other"), /PRICE_CALENDAR/);
+    for (const [table, before] of Object.entries(f.result.financial_before)) assert.equal(hash(f.db.prepare(`SELECT * FROM ${table}`).all()), before);
+  } finally { f.close(); }
+});
 test("actual human Web review and Python SDK-capture chain independently verify exact projections and private portfolio origin", () => {
   const f = fixture(); try {
     const source = verifiedSdkMarketSource(f.db, f.result.batch_id, f.result.known_at);

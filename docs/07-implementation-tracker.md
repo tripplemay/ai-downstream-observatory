@@ -22,18 +22,81 @@ replacing personal parameters with public templates does not reduce scope.
 
 | Workstream | Current implementation | Remaining work / release evidence |
 |---|---|---|
-| Contracts and new database | Versioned migrations through v18 in the current worktree; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, private catalog versions, monthly schedule/cycle/attempt identity, human-reviewed private market references, bounded HTTP/SDK captures and daily collection authorization/slots | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
+| Contracts and new database | Versioned migrations through v19 in the current worktree; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, private catalog and identity-review versions, monthly schedule/cycle/attempt identity, human-reviewed private market references, bounded HTTP/SDK captures and daily collection authorization/slots | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
 | Authentication | Sealed sessions, persistent revocation/rate limit, server-side guards, strict Origin; authenticated HTTP and native login/logout checked; initialization/login share UTF-8 password bounds | Production TLS/proxy, operator configuration and real owner login |
 | Financial ledger | Exact decimal facts, cash/trades/settlement/dividends/FX/transfers/splits; unknown/estimated/confirmed tax, net-only receipts, cumulative tax assessment and actual withholding kept separate; corporate-action notice/resolution isolation; securities transit and append-only dependent corrections | Real dividend/tax/corporate-action and security-transfer evidence, full acceptance matrix |
 | Import and reconciliation | JSON and raw CSV attachment/preview/atomic confirmation; zero-write CSV inspection and visual explicit mapping; immutable mappings and row evidence; explicit duplicate review and persistent source aliases; scoped downloads and encrypted recovery; explicit balance/tax-payable/settled/transit reconciliation and unresolved-fact guards | Domestic/cross-border broker samples, native wizard acceptance, large background imports and full throughput/fault acceptance |
 | Accounting and performance | Immutable NAV v4/performance v5; source-owned transit NAV and per-event external-flow FX; independent Python/Web fact-quality proofs for NAV, after-tax performance and attribution, including intermediate-period unresolved states | Actual historical FX/provider and dividend evidence, full attribution/benchmark/history workflows; implementation is not complete acceptance |
 | Funding plans | Dated multi-currency sources and tranches, version editing/deferral, partial receipt matching, execution association, cash/reservation separation, over-budget acknowledgement, correction review and full audit history | User-confirmed dated plan, broker evidence, D-05 allocation choices and full execution/funding workflow acceptance |
-| ETF research directory | Portfolio-private membership/source/profile/disclosure versions; independent CAS, stable pagination, account-evidence summaries and up-to-four version-bound comparisons; TS/Python exact-decimal overlap bounds with coverage and date semantics | Verified provider originals, identity-kind/lifecycle migration, current fees/liquidity/premiums and weighted exposures; full P-05 and native comparison/mobile acceptance |
+| ETF research directory | Portfolio-private membership/source/profile/disclosure versions; independent CAS, stable pagination, account-evidence summaries and up-to-four version-bound comparisons; TS/Python exact-decimal overlap bounds; v19 sourced human identity/lifecycle/product-structure/trading-unit reviews with expiry and independent proofs | Issuer/provider originals and actual identity/lifecycle verification, current fees/liquidity/premiums and weighted exposures; full P-05 and native comparison/mobile acceptance |
 | Market and orchestration | Immutable paged batches, validate/publish CAS, as-known/restated valuation, leases/fencing/retry/outbox; monthly discovery and fixed Node publisher; ECB reference-FX plus explicit daily collection schedules; LongPort day-price SDK publication bound to private human-reviewed mapping/calendar versions; separate core/provider roles | Actual A/HK/US permissions/data, authoritative exchange references, recurring price collection, full fault/load tests and current-image verification |
 | Strategy and AI | Preregistered v1 contribution-only research plus explicit v2 monthly momentum/MA rotation and fixed-rebalance benchmark; exact PIT ranking, simulated sales/settlement/fixed buys, costs and bounded read-only summaries; frozen inputs/implementation and independent research windows | Live providers/models, continuous forward simulation, complete long-history workflow performance and genuine S-gate evidence; v2 does not activate actual schedules |
-| Governance and execution | Human version/capability APIs, risk/approval CAS, independent-process cash/share reservation race tests, execution reports separate from facts; trusted verification import rejects user PASS claims; Web/API integration | Actual trusted verification Worker, formal evidence and runtime manifest binding; actual D/G/S approvals remain absent |
-| Product UI | Account, funding, catalog, research, governance, monthly evaluation and private market-reference workspaces; typed securities and dividend/tax/corporate-action preview/confirm; visual CSV mapping and server-backed, current-session, read-only confirmation recovery | Native market-reference/monthly/wizard/recovery/BFCache and full catalog comparison/positive governance acceptance; complete accessibility and readonly UX |
-| Deployment | Manual-only release, encrypted backup/restore, exact-SHA CI-verified non-root v17 core/provider images and local restore; full historical real legacy-copy archive/recovery rehearsal; old production unchanged | New v18 source-bound image checks, independent-host restore, protected credentials/configuration, release and post-release checks |
+| Governance and execution | Human version/capability APIs, risk/approval CAS, independent-process cash/share reservation race tests, execution reports separate from facts; trusted verification import rejects user PASS claims; private listing-review inputs invalidate old approvals on change/expiry; price reads bind listing identity and exact knowledge time | Actual trusted verification Worker, formal evidence and runtime manifest binding; executable liquidity inputs and complete look-through; actual D/G/S approvals remain absent |
+| Product UI | Account, funding, catalog, research, governance, monthly evaluation, private market-reference and listing-review workspaces; typed securities and dividend/tax/corporate-action preview/confirm; visual CSV mapping and server-backed, current-session, read-only confirmation recovery | Native listing-review/market-reference/monthly/wizard/recovery/BFCache and full catalog comparison/positive governance acceptance; complete accessibility and readonly UX |
+| Deployment | Manual-only release, encrypted backup/restore, exact-SHA CI-verified non-root v18 core/provider images and local restore; full historical real legacy-copy archive/recovery rehearsal; old production unchanged | New v19 source-bound image checks, independent-host restore, protected credentials/configuration, release and post-release checks |
+
+### v18 exact-commit CI checkpoint
+
+Commit `0890ff9392a4c599a12307ad0b0da960df801ca4` passed
+[CI 34719063590](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/34719063590),
+rechecked against the terminal GitHub run in this v19 work round: Python 525,
+Web 598, Node 165, HTTP 81, authentication, typecheck/build, shell checks and
+dependency audit (zero reported vulnerabilities). Both Linux core/provider
+container jobs passed on schema 18; all 446 HTTP-inventoried source hashes matched
+that exact commit. The retained local verification result is
+`artifacts/verification/github-ci/34719063590/verification-result.json`.
+
+This closes the previously pending v18 synthetic image check, not a production
+cutover, real provider validation or independent-host RPO/RTO. These counts and
+images do not certify the newer v19 source changes.
+
+### v19 private listing-review implementation
+
+The [identity-review workflow](listing-identity-reviews.md) now connects ordinary
+registration/catalog/source APIs to private, expiring human review versions and
+independent TS/Python verification. No global metadata is promoted to approval.
+Explicit product-structure facts keep leveraged, inverse and unknown products
+outside v1 eligibility. Risk fingerprints bind the review, identity, source and
+audit proof; an update or expiry invalidates old approval use without changing
+ledger facts, positions, reservations or prior valuations. Monthly evaluation
+checks both the original known version and its current validity.
+
+Migration 0019 SHA-256:
+`6f93b6c94da0fc934ac1c600144824015c7c63ebada82cffc1f0c93010bea552`.
+The prior 18 SQL files and manifest prefix are unchanged. Empty upgrade,
+scoped source/member keys, exact audit/identity/decimal bindings, append-only
+versions and all unique-key replacement guards are covered by migration tests.
+
+An actual SDK-capture code path first reproduced the `PRICE:<listing_id>` lookup
+failure. Risk now reads by explicit listing identity, preserves arbitrary legal
+source series names and rejects conflicting same-time values. A second review
+found mixed UTC precision admitting a future microsecond; exact observation and
+publication comparisons now reject it without silently falling back to an older
+bar. Missing spread, premium, turnover and volume remain blocked; their lawful
+ingestion and real feed coverage are still unfinished, not filled with zeros.
+
+The native Tabbit diagnostic was rerun and again returned
+`BROWSER_RUNTIME_UNAVAILABLE`. Callback/HTTP tests are not native browser,
+mobile, accessibility or BFCache acceptance. Production and strategy gates remain
+open.
+
+Frozen-source local verification: Python **553/553** (95.879 s), Web **657/657**
+(26.226 s), root Node **176/176** (6.722 s), with no failures or skipped tests.
+Typecheck, production build, authentication HTTP and shellcheck passed; full npm
+audit reported zero vulnerabilities. Logs are under
+`artifacts/verification/final-regression/` with `listing-v19` names; the `final`
+Python/Web/build runs supersede earlier local attempts, not their retained logs.
+
+HTTP **84/84**, schema 19, build `84JnvqtajOFVmJ_on4c97`, ran from
+`2026-09-12T22:12:44.065Z` to `2026-09-12T22:14:03.128Z`. All 465 inventoried
+source files matched at start, end and subsequent verification. Manifest:
+`artifacts/verification/workbench-http/2026-09-12T22-12-44-065Z/manifest.json`,
+SHA-256 `743d023d10b08af5229636cdff37bde52bcffcef38029eae3f56b636f3d28e53`.
+`HTTP-LR01..03` cover ordinary registration through private review, current
+session/identity/CAS enforcement, immutable supersession and read-only recovery;
+all use synthetic originals and leave global approvals and financial facts
+unchanged. Native browser checks, exact-new-commit Linux CI/container evidence
+and the full release gates remain outstanding. This is not a production cutover.
 
 Latest published checkpoint before the v15 monthly work is commit
 `1b06926ac0d9f98a016d6e690be4a73e6a572f2e`; its

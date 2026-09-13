@@ -140,7 +140,7 @@ npm run test:workbench:http
 | E-13 / NOT_RUN | 冲销/替代追加不可改；后续成本及结算依赖重放；与干净顺序基线比较 | CORRECTION `corrected average-cost history equals...`、import provenance；HTTP27 `24` | 最终同版多事件随机序列/跨语言全投影对照、历史报告人工核对；混合精度/跨时区日期/超过 5000 步仍需受限范围签核 |
 | E-14 / BLOCKED | 未知成本保留未知，不将卖出全额当利润；外部证券确认市值与成本分离、内部在途仅计一次；区间新增开账不制造收益 | LEDGER；SECURITIES；CORRECTION；PERFORMANCE | 真实转仓凭证、经核对期初市值/绩效起点及全生命周期验收；日期外部证券流仍阻断收益，不能声称全生命周期盈利 |
 | E-15 / NOT_RUN | 38 位/18 小数约束、Decimal、非有限数/浮点/指数拒绝；代码保留字符串 | LEDGER 精度负例；ACCOUNTING `DecimalBoundaryTests`；MIGRATION contracts；IMPORT strict JSON | 完整原生文件格式解析/来源量子与舍入规则样本；极值跨语言逐步比较、原文隔离和展示的最终证据 |
-| E-16 / BLOCKED | listing 分市场份额；风险核对 index/region/sector/currency 并拒未知所需暴露 | GOVERNANCE 浓度/缺信息检查；ACCOUNTING FX 交叉项；MARKET 标识 | 基金穿透覆盖/披露时效、同指数多产品对照、组合多期资产/FX 金额归因及残差界面未完整实现 |
+| E-16 / BLOCKED | listing 分市场份额；风险使用私有人审 index/region/sector 分类与 currency，并拒缺失分类；分类不是加权穿透 | GOVERNANCE 浓度/缺信息检查及 listing-review 输入指纹；ACCOUNTING FX 交叉项；MARKET 标识 | 基金穿透覆盖/披露时效、同指数多产品对照、组合多期资产/FX 金额归因及残差界面未完整实现 |
 | E-17 / NOT_RUN | AI 无写/批准权限；政策/策略严格语义、缺阈值拒绝、候选不自动生效 | GOVERNANCE `E17`、伪造验证任务负例；RESEARCH `AIReviewTests`；HTTP27 `25` | 最终同版对抗固定/预留案例和人工质检；覆盖所有将来 provider/tool 边界，而非只校验离线 JSON |
 | E-18 / BLOCKED | 显式月度目标的 unchanged/proposed/blocked、固定月槽位、次日输入变化不重复发现、原知识边界及独立重试；零订单不冒充无需调整 | MONTHLY；JOB；RESEARCH 的旧回放只作历史研究 | 完整轮动算法、排名改变和授权例外、真实行情/日历及原生界面闭环仍需实现/验收，不能从显式目标比较外推 |
 | E-19 / NOT_RUN | 批准/执行前重新读取 ledger、market、policy、账户/预留摘要；变更拒绝 | GOVERNANCE `E19`、`execution preparation rechecks...`；HTTP27 `08/14` | 治理正向 HTTP/浏览器全流程，版本改变/价格窗口/账户变更覆盖矩阵；发布版本与最终镜像复核 |
@@ -166,7 +166,7 @@ npm run test:workbench:http
 |---|---|---|
 | ACC-01 规划/事实/投影分层 | 资金计划版本/来源/批次/关联独立于现金；批准不记成交；actual/research 隔离。FUNDING、LEDGER、GOVERNANCE、MIGRATION；E-01/02/22 | 真实计划及各类历史投影全链验收；不能以合成研究替换真实历史 |
 | ACC-02 组合范围 | 多账户/币种、期初现金/持仓和未知成本，查询按组合。LEDGER、PERFORMANCE；E-05/14/22 | 真实启动日与起算权益核对、证券实物外部流和新增账户边界；D-04 未完成 |
-| ACC-03 证券标识 | instrument/listing、市场/交易所/字符串代码；整手/价步与显式账户权限；MARKET、GOVERNANCE；E-10/15/16 | 完整来源别名有效期、生命周期、份额差异与历史可买性；原生券商映射/穿透资料 |
+| ACC-03 证券标识 | instrument/listing、市场/交易所/字符串代码；新增组合私有身份/挂牌/产品结构/整手/价步的人审版本、来源与身份哈希、过期和双时点检查；与账户权限分离；MARKET、GOVERNANCE；E-10/15/16 | 实际发行人/交易所身份与生命周期核验、完整来源别名有效期、份额差异与历史可买性；原生券商映射/穿透资料 |
 | ACC-04 精度 | 财务字符串、Decimal >=50 位、边界/非有限数拒绝、half-even 参考测试。LEDGER、ACCOUNTING、contracts；E-15 | 原生来源解析与每券商确认量子、舍入差异审计；未支持格式不得宽松转 number |
 | ACC-05 时间语义 | UTC/来源时区/date 精度、系统实际获取时间、as_known/restated、修订不当成收益。MARKET、CORRECTION、PERFORMANCE、RESEARCH；E-12 | 真实来源披露时间核验；全部旧档案 PIT 可信性；混合精度歧义仍需拒绝而非伪造顺序 |
 | ACC-06 事件/分录 | 逐币种平衡、独立数量、不可变事件、head/幂等/审计同事务；更正追加。LEDGER、CORRECTION；E-03/13 | 完整随机混合序列/故障下跨语言投影对照，所有将来事件类型及迁移后的真实对账 |
@@ -192,7 +192,7 @@ npm run test:workbench:http
 | P-02 / BLOCKED | 标准 JSON 与通用 CSV 原件、零写检查/可视化映射、版本封存、逐行重复核对、预览确认、事实/更正、对账、附件及当前会话原请求恢复；IMPORT、CSV、CORRECTION、HTTP27 `09..12/18/19/24` | 券商原生适配、向导/恢复/BFCache 原生故障验收、分次费用/执行关联；支持列表之外事件不能编造成已支持 |
 | P-03 / BLOCKED | 原币现金/持仓、CNY NAV 质量、不可变绩效、TWR/Dietz/XIRR/快照回撤；MARKET、PERFORMANCE、UI | 完整真实资金流 FX、归因/影子基准/暴露与压力、全部时间/估算状态 UI；实际数据和账户回归 |
 | P-04 / BLOCKED | 日期化初始/追加来源、计划版本、批次截止/延期/未执行处理、到账匹配与执行关联、可用现金/预留分离、超预算和更正警示；FUNDING、GOVERNANCE、HTTP32 F01..F05、资金浏览器流程 | 用户确认实际年度计划/资料、D-05 投入选择与授权、完整多账户资金依赖及执行闭环验收 |
-| P-05 / BLOCKED | ETF/listing 登记、发布批次、口径与可买性证据；新增 CATALOG 私有研究目录、版本化费率/标签/持仓披露、四标的历史比较、覆盖及重叠上下界，HTTP50 `CAT01..05` | 真实标的提供方/原件认证、身份类型与生命周期、当前费用/流动性/折溢价资料、等价份额识别和完整加权穿透；目录不自动升级未核验 listing，原生比较/窄屏尚待验 |
+| P-05 / BLOCKED | ETF/listing 登记、发布批次、口径与可买性证据；CATALOG 私有目录、版本化费率/标签/持仓披露、四标的比较、重叠上下界；v19 新增有来源/期限的身份与生命周期人审，不再靠全局 fixture 核验字段通行 | 真实提供方/原件及身份生命周期认证、当前费用/流动性/折溢价资料、等价份额识别和完整加权穿透；人审不冒充提供方或投资批准，原生审核/比较/窄屏尚待验 |
 | P-06 / BLOCKED | 人工标准载荷候选、风险、审批/预占、执行前重查、回报与真实事实分开；GOVERNANCE、UI | 周期不操作/阻断状态机、多策略净额聚合、自动剩余目标重算、资金依赖、多步向导/替代方案；完整合成券商执行闭环验收 |
 | P-07 / BLOCKED | 研究预注册/预算/冻结/解封、不可变结果、同口径基准、离线 AI 结构/来源核验；RESEARCH、JOB、HTTP27 `26` | S-01..10 全未验收；真实数据/模型、稳健性矩阵、持续前向模拟、正式阈值与有限预算批准 |
 | P-08 / BLOCKED | 服务端认证、审计、数据质量阻断、CAS/预留、lease/fencing/outbox、恢复只读；AUTH、JOB、RECOVERY、IMAGE | 通知传输、生产节奏/监控告警、暂停恢复业务流程、目标负载/故障与异机恢复、生产配置和最终部署验收 |
@@ -590,3 +590,27 @@ missed 记录，不用今日 daily feed 冒充历史观察。每次控制结束�
 
 以上仅市场采集子路径的工程检查，不升级原 P/ACC/E/S 全部门槛，不取得投资批准
 或盈利证明。个人方案、真实账户/供应商原件与凭据仍不得进入公开源、镜像或 CI 工件。
+
+## 18. 私有证券身份与交易规格审核 v19
+
+正常登记、加入组合目录、保存原件、人工审核版本现在可经公开服务/API 连成完整
+路径。输入绑定当前 identity hash、组合私有 source hash 和 review CAS；回执可
+独立重算，历史原件与审计不可覆盖。未知、过期、停牌、非 ETF、杠杆/反向或不完整
+规格不能回退到旧版全局标记。人工审核不等于发行人/供应商认证、账户权限或策略
+准入，也不是成分股权重穿透。详见 [身份审核说明](listing-identity-reviews.md)。
+
+- 最终本地 Python **553/553**、Web **657/657**、根目录 Node **176/176**，无失败或
+  跳过；类型、生产构建、认证 HTTP、shellcheck 与完整 npm audit 通过，漏洞为 0。
+- HTTP **84/84**，schema 19、build `84JnvqtajOFVmJ_on4c97`，465 项源码首尾及随后
+  核验一致。`HTTP-LR01..03` 实际走认证 HTTP：普通登记到私有人审、不改全局批准或
+  账本；错误会话/身份/CAS/私有来源拒绝；新停牌版本使旧资格失效，恢复锁仍可读
+  历史且不可写。所有原件和账户均为合成测试材料。
+- 工件：`artifacts/verification/workbench-http/2026-09-12T22-12-44-065Z/manifest.json`；
+  SHA-256 `743d023d10b08af5229636cdff37bde52bcffcef38029eae3f56b636f3d28e53`。
+  风控定向回归另覆盖 SDK `PRICE:<listing_id>` 消费、合法非固定 series 名称、冲突
+  同刻观察、未来一微秒拒绝和审核变更/到期使旧批准失效；缺失流动性仍然阻断。
+- Tabbit 当前诊断仍是 `BROWSER_RUNTIME_UNAVAILABLE`，没有原生浏览器验收、生产
+  切换或真实供应商数据验证。组件 callback 不替代桌面/移动端、无障碍或 BFCache。
+
+P/ACC/E/S 原范围保持不变。实际权威资料、合法流动性输入、完整穿透、投资准入、
+同提交 Linux 镜像、异机恢复及生产发布仍需各自证据，不能据此将未决门槛改为通过。

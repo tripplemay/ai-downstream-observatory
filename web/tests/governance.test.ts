@@ -241,8 +241,8 @@ test("missing AI review, suspended listing and unknown fee assumptions fail clos
   finally { ai.close(); }
   const f = governanceFixture();
   try {
-    f.db.prepare("UPDATE listings SET status='suspended' WHERE id='l'").run();
-    assert.equal(f.proposal("100").risk.checks[0].code, "LISTING_NOT_TRADABLE");
+    f.reviewListing("l", { lifecycle_status: "suspended" });
+    assert.equal(f.proposal("100").risk.checks[0].code, "LISTING_REVIEW_NOT_ACTIVE");
   } finally { f.close(); }
 });
 

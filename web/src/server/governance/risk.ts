@@ -9,13 +9,15 @@ import { valuationFreshness } from "../valuation-freshness";
 import { ledgerFactQualityAt } from "../ledger/fact-quality-db";
 import { verifiedMarketSource } from "../market-source";
 import { verifiedPriceCalendarSession } from "../market-price-source";
+import { reviewedListingAt } from "../listing-reviews/service";
+import { referenceInstant } from "../market-references/service";
 
 export interface ProposalRow { id: string; portfolio_id: string; environment: string; policy_version_id: string; strategy_version_id: string; ledger_revision: number; market_manifest: string; input_hash: string; expires_at: string; created_at: string }
 export interface ItemRow { id: string; proposal_id: string; account_id: string; listing_id: string; side: "buy" | "sell"; currency: string; quantity: string; limit_price: string; estimated_fees: string }
 export interface Publication { scope: string; batch_id: string; manifest_hash: string; revision: number; published_at: string }
-export interface Listing { id: string; instrument_id: string; market: "CN" | "HK" | "US"; currency: string; quantity_step: string | null; price_step: string | null; status: string; asset_class: string; index_id: string | null; exposure_json: string; verified_at: string | null }
+export interface Listing { id: string; instrument_id: string; market: "CN" | "HK" | "US"; currency: string; quantity_step: string | null; price_step: string | null; status: string; asset_class: string; index_id: string | null; exposure_json: string; verified_at: string | null; review: { id: string; revision: number; content_hash: string; proof_hash: string; identity_hash: string; source_id: string; source_hash: string; known_at: string; review_until: string; review_basis: string } }
 export interface Capability { rules_json: string; evidence_id: string; approved_by: string }
-export interface Observation { id: string; source_id: string; value: string; unit: string; observed_at: string; published_at: string | null; price_basis: string; provenance: string; time_precision: string; source_timezone: string }
+export interface Observation { id: string; source_id: string; listing_id: string | null; series_key: string; revision_id: string; value: string; unit: string; observed_at: string; published_at: string | null; ingested_at: string; price_basis: string; provenance: string; time_precision: string; source_timezone: string }
 export interface Balance { account_id: string; currency: string; ledger_account: string; balance: string }
 export interface Position { account_id: string; listing_id: string; currency: string; quantity: string; cost_known: number }
 export interface SecurityTransit extends Omit<Position, "account_id"> { transfer_event_id: string; source_account_id: string; target_account_id: string }
@@ -62,7 +64,7 @@ export function currentPublications(db: Database.Database, policy: Policy, now: 
       const source = verifiedMarketSource(db, row.batch_id, now);
       if (source.mode === "provider_observed" && source.provider === "longport" && source.portfolio_id !== portfolioId) throw new Error("PRIVATE_PRICE_SOURCE_OUT_OF_SCOPE");
     } catch { throw new Error("ACTUAL_DATA_NOT_VERIFIED"); }
-    if (row.published_at > now) throw new Error("FUTURE_MARKET_PUBLICATION");
+    if (marketTimeKey(row.published_at) > marketTimeKey(now)) throw new Error("FUTURE_MARKET_PUBLICATION");
     rows.push({ scope: row.scope, batch_id: row.batch_id, manifest_hash: row.manifest_hash, revision: row.revision, published_at: row.published_at });
   }
   return rows;
@@ -90,14 +92,29 @@ export function validateAccount(db: Database.Database, portfolio: string, accoun
   if (quality.dividends.some(row => row.account_id === accountId && (row.nav_quality !== "complete" || row.performance_quality !== "complete"))
     || quality.corporate_actions.some(row => row.account_id === accountId && row.status !== "resolved")) throw new Error("ACCOUNT_RECONCILIATION_REQUIRED");
 }
-function listing(db: Database.Database, id: string, policy: Policy, now: string): Listing {
-  const row = db.prepare("SELECT l.*,i.asset_class,i.index_id,i.exposure_json FROM listings l JOIN instruments i ON i.id=l.instrument_id WHERE l.id=?").get(id) as Listing | undefined;
-  if (!row || !policy.listing_ids.includes(id) || row.asset_class !== "ETF") throw new Error("LISTING_NOT_AUTHORIZED");
-  if (row.status !== "active" || !row.verified_at || row.verified_at > now || !row.quantity_step || !row.price_step || !amount(row.quantity_step).gt(0) || !amount(row.price_step).gt(0)) throw new Error("LISTING_NOT_TRADABLE");
-  if (!row.index_id) throw new Error("EXPOSURE_UNVERIFIED");
-  const exposure = JSON.parse(row.exposure_json);
-  if (typeof exposure?.region !== "string" || !exposure.region || typeof exposure?.sector !== "string" || !exposure.sector) throw new Error("EXPOSURE_UNVERIFIED");
-  return row;
+function reviewTime(value: string): string {
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?Z$/.exec(value);
+  if (!match) throw new Error("INVALID_CLOCK");
+  const normalized = `${match[1]}.${(match[2] ?? "").padEnd(6, "0")}Z`;
+  referenceInstant(normalized); return normalized;
+}
+function listing(db: Database.Database, id: string, policy: Policy, now: string, portfolio: string, knowledgeAt = now): Listing {
+  if (!policy.listing_ids.includes(id)) throw new Error("LISTING_NOT_AUTHORIZED");
+  const checkedAt = reviewTime(now), knowledge = reviewTime(knowledgeAt);
+  const proof = reviewedListingAt(db, { portfolio_id: portfolio, listing_id: id, knowledge_at: knowledge, now: checkedAt });
+  if (proof.quality !== "complete" || !proof.row || !proof.document || !proof.proof_hash) throw new Error(proof.issues[0] ?? "LISTING_REVIEW_MISSING");
+  if (knowledge !== checkedAt) {
+    const current = reviewedListingAt(db, { portfolio_id: portfolio, listing_id: id, knowledge_at: checkedAt, now: checkedAt });
+    if (current.quality !== "complete") throw new Error(current.issues[0] ?? "LISTING_REVIEW_MISSING");
+    if (current.proof_hash !== proof.proof_hash) throw new Error("LISTING_REVIEW_CHANGED");
+  }
+  const d = proof.document, facts = d.facts;
+  // Explicit whole-fund classification is not constituent-level look-through evidence.
+  return { id, instrument_id: d.identity_snapshot.instrument_id, market: d.identity_snapshot.market, currency: d.identity_snapshot.currency,
+    quantity_step: facts.quantity_step, price_step: facts.price_step, status: facts.lifecycle_status, asset_class: facts.instrument_kind,
+    index_id: facts.risk_classification.index_id, exposure_json: canonical({ region: facts.risk_classification.region, sector: facts.risk_classification.sector }), verified_at: d.known_at,
+    review: { id: d.id, revision: d.revision, content_hash: proof.row.content_hash, proof_hash: proof.proof_hash, identity_hash: d.identity_hash, source_id: d.source_id, source_hash: d.source_hash,
+      known_at: d.known_at, review_until: d.review_until, review_basis: d.review_basis } };
 }
 function capability(db: Database.Database, account: string, listing: Listing, side: string, now: string) {
   const row = db.prepare("SELECT * FROM account_capabilities WHERE account_id=? AND market=? AND valid_from<=? AND (valid_to IS NULL OR valid_to>?)").get(account, listing.market, now, now) as Capability | undefined;
@@ -106,11 +123,35 @@ function capability(db: Database.Database, account: string, listing: Listing, si
   if (!rules.success || !rules.data.currencies.includes(listing.currency) || !rules.data.listing_ids.includes(listing.id) || (side === "buy" ? !rules.data.buy : !rules.data.sell)) throw new Error("ACCOUNT_CAPABILITY_MISSING");
   return row;
 }
+function marketTimeKey(value: string, subtractSeconds = 0): string {
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?Z$/.exec(value);
+  if (!match || value.startsWith("0000")) throw new Error("MARKET_OBSERVATION_TIME_INVALID");
+  const millis = Date.parse(`${match[1]}Z`);
+  if (!Number.isFinite(millis) || new Date(millis).toISOString().slice(0, 19) !== match[1] || !Number.isSafeInteger(subtractSeconds)) throw new Error("MARKET_OBSERVATION_TIME_INVALID");
+  // Trim insignificant zeros, not precision: lexicographic order then equals exact UTC order.
+  return `${new Date(millis - subtractSeconds * 1000).toISOString().slice(0, 19)}.${(match[2] ?? "").replace(/0+$/, "")}`;
+}
 function observation(db: Database.Database, publications: Publication[], scope: string | undefined, key: string, metric: string, policy: Policy, now: string, portfolioId?: string) {
   const publication = publications.find(row => row.scope === scope);
   if (!publication) throw new Error("MARKET_PUBLICATION_MISSING");
-  const row = db.prepare("SELECT o.* FROM market_batch_members m JOIN market_observations o ON o.id=m.observation_id WHERE m.batch_id=? AND o.series_key=? AND o.metric=? AND o.ingested_at<=? ORDER BY o.observed_at DESC,o.ingested_at DESC,o.id DESC LIMIT 1").get(publication.batch_id, key, metric, now) as Observation | undefined;
-  if (!row || row.provenance === "reconstructed" || Date.parse(row.observed_at) > Date.parse(now) || (row.published_at && row.published_at > now) || (Date.parse(now) - Date.parse(row.observed_at)) / 1000 > policy.execution.max_price_age_seconds) throw new Error(`MARKET_OBSERVATION_UNAVAILABLE:${metric}`);
+  // A provider series name is not a listing ID. Never match one security through another's alias.
+  const fx = metric === "fx_cny_per_unit";
+  const candidates = db.prepare(`SELECT o.* FROM market_batch_members m JOIN market_observations o ON o.id=m.observation_id
+    WHERE m.batch_id=? AND ${fx ? "o.series_key=? AND o.listing_id IS NULL" : "o.listing_id=?"} AND o.metric=?`).iterate(publication.batch_id, key, metric) as Iterable<Observation>;
+  const known = marketTimeKey(now), staleBefore = marketTimeKey(now, policy.execution.max_price_age_seconds);
+  let row: Observation | undefined, best: string[] = [], ambiguous = false;
+  const observedKey = (value: Observation) => marketTimeKey(value.time_precision === "date" ? `${value.observed_at}T00:00:00Z` : value.observed_at);
+  const equivalent = (value: Observation) => canonical([value.source_id, value.revision_id, value.value, value.unit, value.price_basis, value.provenance, value.time_precision, value.source_timezone]);
+  for (const candidate of candidates) {
+    const received = marketTimeKey(candidate.ingested_at);
+    if (received > known) continue;
+    const order = [observedKey(candidate), marketTimeKey(candidate.published_at ?? candidate.ingested_at), received];
+    const different = row ? order.findIndex((value, index) => value !== best[index]) : 0;
+    if (!row || (different >= 0 && order[different] > best[different])) { row = candidate; best = order; ambiguous = false; }
+    else if (different === -1) { ambiguous ||= equivalent(candidate) !== equivalent(row); if (candidate.id < row.id) row = candidate; }
+  }
+  if (ambiguous) throw new Error("MARKET_OBSERVATION_AMBIGUOUS");
+  if (!row || row.provenance === "reconstructed" || best[0] > known || (row.published_at && marketTimeKey(row.published_at) > known) || best[0] < staleBefore) throw new Error(`MARKET_OBSERVATION_UNAVAILABLE:${metric}`);
   if ((metric === "close" && row.price_basis !== "unadjusted") || (metric !== "close" && row.price_basis !== "not_applicable")) throw new Error("MARKET_PRICE_BASIS_INVALID");
   if (row.time_precision === "date") {
     const parts = new Intl.DateTimeFormat("en-CA", { timeZone: row.source_timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(now));
@@ -134,13 +175,15 @@ export function evaluateRisk(db: Database.Database, actor: GovernanceActor, prop
   const state: Record<string, unknown> = { proposal, items, context, ledger_revision: revision(db, portfolio) };
   const budgets: RiskResult["budgets"] = [];
   try {
+    // Preserve sub-millisecond input boundaries when the legacy governance clock normalized the same instant.
+    const inputNow = reviewTime(options.now && Date.parse(options.now) === Date.parse(now) ? options.now : now);
     if (proposal.expires_at <= now) throw new Error("PROPOSAL_EXPIRED");
     if (proposal.ledger_revision !== state.ledger_revision) throw new Error("PROPOSAL_LEDGER_CHANGED");
     const active = activation(db, portfolio, context.activation_id, now), policy = active.policy.value, strategy = active.strategy.value;
     state.activation = active;
     if (active.policy.id !== proposal.policy_version_id || active.strategy.id !== proposal.strategy_version_id) throw new Error("GOVERNANCE_VERSION_CHANGED");
     verifyGateEvidence(db, actor, portfolio, JSON.parse(active.row.evidence_json).gate_attachments, active.policy, active.strategy, options, now);
-    const publications = currentPublications(db, policy, now, portfolio); state.publications = publications;
+    const publications = currentPublications(db, policy, inputNow, portfolio); state.publications = publications;
     if (canonical(publications) !== canonical(context.publications)) throw new Error("PROPOSAL_MARKET_CHANGED");
     const valuation = requireValuation(db, portfolio, context.valuation_id, policy, publications, now); state.valuation = valuation;
     const balances = db.prepare("SELECT a.account_id,a.currency,a.ledger_account,a.balance FROM account_projections a JOIN accounts b ON b.id=a.account_id WHERE b.portfolio_id=? ORDER BY a.account_id,a.currency,a.ledger_account").all(portfolio) as Balance[];
@@ -155,7 +198,7 @@ export function evaluateRisk(db: Database.Database, actor: GovernanceActor, prop
     for (const accountId of policy.account_ids) validateAccount(db, portfolio, accountId, policy, now);
     const rates = new Map<string, Decimal>([["CNY", amount("1")]]);
     const fx = (currency: string): Decimal => {
-      if (!rates.has(currency)) { const row = observation(db, publications, policy.fx_scope, `FX:${currency}`, "fx_cny_per_unit", policy, now); if (row.unit !== "CNY_per_unit_currency" || !amount(row.value).gt(0)) throw new Error("INVALID_FX_RATE"); rates.set(currency, amount(row.value)); (state.observations as unknown[]).push(row); }
+      if (!rates.has(currency)) { const row = observation(db, publications, policy.fx_scope, `FX:${currency}`, "fx_cny_per_unit", policy, inputNow); if (row.unit !== "CNY_per_unit_currency" || !amount(row.value).gt(0)) throw new Error("INVALID_FX_RATE"); rates.set(currency, amount(row.value)); (state.observations as unknown[]).push(row); }
       return rates.get(currency)!;
     };
     for (const balance of balances) if (!amount(balance.balance).isZero() && !policy.account_ids.includes(balance.account_id)) throw new Error("ACCOUNT_SCOPE_INCOMPLETE");
@@ -163,7 +206,7 @@ export function evaluateRisk(db: Database.Database, actor: GovernanceActor, prop
     const projected = new Map<string, { value: Decimal; info: Listing }>();
     for (const position of ownedSecurityPositions(positions, transits).filter(row => !amount(row.quantity).isZero())) {
       if (!policy.account_ids.includes(position.account_id) || !position.cost_known || amount(position.quantity).lt(0)) throw new Error("POSITION_INPUT_INCOMPLETE");
-      const info = listing(db, position.listing_id, policy, now), price = observation(db, publications, policy.price_scope_by_market[info.market], info.id, "close", policy, now, portfolio);
+      const info = listing(db, position.listing_id, policy, inputNow, portfolio), price = observation(db, publications, policy.price_scope_by_market[info.market], info.id, "close", policy, inputNow, portfolio);
       if (position.currency !== info.currency || price.unit !== info.currency || !amount(price.value).gt(0)) throw new Error("MARKET_UNITS_INVALID");
       (state.listings as unknown[]).push(info); (state.observations as unknown[]).push(price);
       const value = amount(position.quantity).mul(amount(price.value)).mul(fx(position.currency));
@@ -171,7 +214,7 @@ export function evaluateRisk(db: Database.Database, actor: GovernanceActor, prop
     }
     // Pending approved buys already consume concentration and strategy budget, not just cash.
     for (const row of countedReservations.filter(row => row.side === "buy")) {
-      const info = listing(db, row.listing_id, policy, now);
+      const info = listing(db, row.listing_id, policy, inputNow, portfolio);
       (state.listings as unknown[]).push(info);
       projected.set(info.id, { value: (projected.get(info.id)?.value ?? amount("0")).add(amount(row.amount).mul(fx(row.currency))), info });
     }
@@ -182,14 +225,14 @@ export function evaluateRisk(db: Database.Database, actor: GovernanceActor, prop
       if (seen.has(key)) throw new Error("PROPOSAL_NOT_NETTED"); seen.add(key);
       if (!strategy.universe.includes(item.listing_id)) throw new Error("STRATEGY_UNIVERSE_MISMATCH");
       validateAccount(db, portfolio, item.account_id, policy, now);
-      const info = listing(db, item.listing_id, policy, now); (state.listings as unknown[]).push(info);
+      const info = listing(db, item.listing_id, policy, inputNow, portfolio); (state.listings as unknown[]).push(info);
       const permission = capability(db, item.account_id, info, item.side, now); (state.capabilities as unknown[]).push(permission);
       readJsonAttachment(db, actor, portfolio, permission.evidence_id, { ...options, accountId: item.account_id });
       if (item.currency !== info.currency) throw new Error("INVALID_LISTING_CURRENCY");
       const quantity = amount(item.quantity), price = amount(item.limit_price), fee = amount(item.estimated_fees);
       if (!quantity.gt(0) || !price.gt(0) || fee.lt(0)) throw new Error("INVALID_PROPOSAL_AMOUNTS");
       if (!quantity.mod(amount(info.quantity_step)).isZero() || !price.mod(amount(info.price_step)).isZero()) throw new Error("INVALID_TRADING_INCREMENT");
-      const read = (metric: string) => { const row = observation(db, publications, policy.price_scope_by_market[info.market], info.id, metric, policy, now, portfolio); (state.observations as unknown[]).push(row); return row; };
+      const read = (metric: string) => { const row = observation(db, publications, policy.price_scope_by_market[info.market], info.id, metric, policy, inputNow, portfolio); (state.observations as unknown[]).push(row); return row; };
       const close = read("close"), spread = read("spread_bps"), premium = read("premium_bps"), turnover = read("turnover"), volume = read("volume");
       if (close.unit !== info.currency || turnover.unit !== info.currency || volume.unit !== "shares" || spread.unit !== "bps" || premium.unit !== "bps" || !amount(close.value).gt(0) || !amount(volume.value).gt(0)) throw new Error("MARKET_UNITS_INVALID");
       if (price.sub(close.value).abs().div(close.value).mul(10000).gt(policy.execution.max_price_deviation_bps)) throw new Error("PRICE_DEVIATION_EXCEEDED");
