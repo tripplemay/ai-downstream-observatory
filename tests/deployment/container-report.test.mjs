@@ -15,6 +15,10 @@ const manifest = readFileSync(join(root, 'migrations/manifest.json'), 'utf8');
 const publisherProof = { schema_version: 'monthly-publisher-smoke-v1', publisher_path: '/app/worker-bridge/monthly-evaluation.mjs',
   bundle_sha256: 'b'.repeat(64), node_version: 'v22.0.0', sqlite_schema_version: JSON.parse(manifest).migrations.length,
   runtime_uid: 10001, native_sqlite_loaded: true, invalid_lease_rejected: true, logical_database_unchanged: true };
+const csvPublisherProof = { ...publisherProof, schema_version: 'csv-background-publisher-smoke-v1',
+  publisher_path: '/app/worker-bridge/csv-background.mjs', bundle_sha256: 'f'.repeat(64),
+  normal_csv_execution_verified: false, os_network_namespace_isolation: false };
+const publisherEnvelope = { monthly: publisherProof, csv: csvPublisherProof };
 const verifierProof = { schema_version: 'verification-container-smoke-v1', status: 'passed', runtime_uid: 10001,
   sqlite_schema_version: JSON.parse(manifest).migrations.length, source_manifest_sha256: 'c'.repeat(64),
   bundle_path: '/app/web/dist/governance-fixture.mjs', bundle_sha256: 'd'.repeat(64), sidecar_sha256: 'e'.repeat(64), source_file_count: 100,
@@ -29,7 +33,7 @@ function fixture(t) {
   mkdirSync(join(directory, 'migrations'), { mode: 0o700 });
   writeFileSync(join(directory, 'migrations/manifest.json'), manifest, { mode: 0o600 });
   const report = join(directory, 'artifacts', 'verification', `container-${runId}.json`);
-  const run = (extra = {}, id = runId, webImage = image, publisher = JSON.stringify(publisherProof), verifier = JSON.stringify(verifierProof)) => {
+  const run = (extra = {}, id = runId, webImage = image, publisher = JSON.stringify(publisherEnvelope), verifier = JSON.stringify(verifierProof)) => {
     const env = { ...process.env }; delete env.SUDO_UID; delete env.SUDO_GID;
     return spawnSync(process.env.WORKBENCH_PYTHON || 'python3', ['-c', code, directory, id, webImage, image, publisher, verifier], { env: { ...env, ...extra }, encoding: 'utf8' });
   };
@@ -44,7 +48,7 @@ test('container report handoff gives the caller a bounded 0600 JSON without expo
   assert.equal(mode(join(f.directory, 'artifacts')), 0o700); assert.equal(mode(dirname(f.report)), 0o700); assert.equal(mode(f.report), 0o600);
   assert.equal(statSync(f.report).uid, process.getuid()); assert.equal(statSync(f.report).gid, process.getgid());
   assert.equal(mode(secrets), 0o700); assert.equal(mode(secret), 0o600);
-  assert.deepEqual(JSON.parse(readFileSync(f.report, 'utf8')), { run_id: runId, status: 'passed', non_root: true, missing_bind_source_rejected: true, legacy_actual_facts: 0, encrypted_local_restore: true, independent_host_restore: false, web_image: image, worker_image: image, monthly_publisher: publisherProof, governance_verifier: verifierProof });
+  assert.deepEqual(JSON.parse(readFileSync(f.report, 'utf8')), { run_id: runId, status: 'passed', non_root: true, missing_bind_source_rejected: true, legacy_actual_facts: 0, encrypted_local_restore: true, independent_host_restore: false, web_image: image, worker_image: image, monthly_publisher: publisherProof, csv_publisher: csvPublisherProof, governance_verifier: verifierProof });
   assert.doesNotMatch(readFileSync(f.report, 'utf8'), /SYNTHETIC-NOT-A-REAL-KEY/);
 });
 
@@ -76,13 +80,49 @@ test('container reports require complete current-schema runtime proof rather tha
     ...['native_sqlite_loaded', 'invalid_lease_rejected', 'logical_database_unchanged'].flatMap(key => [
       { ...publisherProof, [key]: false }, { ...publisherProof, [key]: 1 },
     ])]) {
-    const result = f.run({}, runId, image, JSON.stringify(proof));
+    const result = f.run({}, runId, image, JSON.stringify({ ...publisherEnvelope, monthly: proof }));
     assert.notEqual(result.status, 0, JSON.stringify(proof));
     assert.match(result.stderr, /runtime proof is missing or invalid/);
     assert.equal(existsSync(join(f.directory, 'artifacts')), false);
   }
   for (const raw of ['', '{', ' '.repeat(4097)]) {
     assert.notEqual(f.run({}, runId, image, raw).status, 0);
+    assert.equal(existsSync(join(f.directory, 'artifacts')), false);
+  }
+});
+
+test('container publisher envelope cannot omit either fixed publisher or silently accept the old monthly-only format', t => {
+  const f = fixture(t);
+  for (const envelope of [null, {}, publisherProof, { monthly: publisherProof }, { csv: csvPublisherProof }, { ...publisherEnvelope, extra: true }]) {
+    const result = f.run({}, runId, image, JSON.stringify(envelope));
+    assert.notEqual(result.status, 0, JSON.stringify(envelope));
+    assert.match(result.stderr, /runtime proof is missing or invalid/);
+    assert.equal(existsSync(join(f.directory, 'artifacts')), false);
+  }
+});
+
+test('CSV container proof requires exact identity, current runtime and honest unverified execution boundaries', t => {
+  const f = fixture(t);
+  const missing = Object.keys(csvPublisherProof).map(key => { const proof = { ...csvPublisherProof }; delete proof[key]; return proof; });
+  for (const proof of [null, {}, ...missing, { ...csvPublisherProof, extra: true },
+    { ...csvPublisherProof, schema_version: publisherProof.schema_version },
+    { ...csvPublisherProof, publisher_path: publisherProof.publisher_path },
+    { ...csvPublisherProof, publisher_path: '/tmp/untrusted-csv-publisher.mjs' },
+    { ...csvPublisherProof, bundle_sha256: 'invalid' }, { ...csvPublisherProof, bundle_sha256: 'F'.repeat(64) },
+    { ...csvPublisherProof, node_version: 'v20.0.0' }, { ...csvPublisherProof, node_version: 'v22.0.1' },
+    { ...csvPublisherProof, sqlite_schema_version: csvPublisherProof.sqlite_schema_version - 1 },
+    { ...csvPublisherProof, sqlite_schema_version: String(csvPublisherProof.sqlite_schema_version) },
+    { ...csvPublisherProof, runtime_uid: 0 }, { ...csvPublisherProof, runtime_uid: '10001' },
+    ...['native_sqlite_loaded', 'invalid_lease_rejected', 'logical_database_unchanged'].flatMap(key => [
+      { ...csvPublisherProof, [key]: false }, { ...csvPublisherProof, [key]: 1 }, { ...csvPublisherProof, [key]: 'true' },
+    ]),
+    ...['normal_csv_execution_verified', 'os_network_namespace_isolation'].flatMap(key => [
+      { ...csvPublisherProof, [key]: true }, { ...csvPublisherProof, [key]: 0 }, { ...csvPublisherProof, [key]: 'false' },
+    ]),
+  ]) {
+    const result = f.run({}, runId, image, JSON.stringify({ ...publisherEnvelope, csv: proof }));
+    assert.notEqual(result.status, 0, JSON.stringify(proof));
+    assert.match(result.stderr, /runtime proof is missing or invalid/);
     assert.equal(existsSync(join(f.directory, 'artifacts')), false);
   }
 });
@@ -94,7 +134,7 @@ test('container report cannot omit verifier runtime proof or upgrade synthetic e
     { ...verifierProof, credentials_present: true }, { ...verifierProof, network_disabled: false },
     { ...verifierProof, source_file_count: '100' }, { ...verifierProof, source_manifest_sha256: 'invalid' },
     { ...verifierProof, bundle_path: '/app/worker-bridge/governance-fixture.mjs' }, { ...verifierProof, sqlite_schema_version: 20 }]) {
-    const result = f.run({}, runId, image, JSON.stringify(publisherProof), JSON.stringify(proof));
+    const result = f.run({}, runId, image, JSON.stringify(publisherEnvelope), JSON.stringify(proof));
     assert.notEqual(result.status, 0, JSON.stringify(proof)); assert.match(result.stderr, /Governance verifier runtime proof is missing or invalid/);
     assert.equal(existsSync(join(f.directory, 'artifacts')), false);
   }

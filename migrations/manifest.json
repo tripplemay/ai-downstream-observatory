@@ -110,6 +110,11 @@
       "version": 22,
       "file": "0022_price_collection_schedules.sql",
       "sha256": "58831cb37a04549e6473c8d7767fbe7fa8de6841c9865c86ae9c74a9a25a114b"
+    },
+    {
+      "version": 23,
+      "file": "0023_csv_background_imports.sql",
+      "sha256": "21f42a17fb990d8f097e92b54c4219d4c383ad195d33e225f76acff2b902dfd7"
     }
   ]
 }

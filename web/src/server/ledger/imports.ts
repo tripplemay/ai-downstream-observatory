@@ -101,8 +101,13 @@ export function confirmImport(db: Database.Database, actor: Actor, portfolioId: 
   assertWritableDatabase(db);
   return db.transaction(() => {
     assertWritableDatabase(db);
+    const metadata = db.prepare("SELECT parser_version FROM import_batches WHERE id=? AND portfolio_id=?").get(batchId, portfolioId) as { parser_version: string } | undefined;
+    if (!metadata) throw new Error("IMPORT_NOT_FOUND");
+    if (metadata.parser_version === "csv-v1" && db.prepare("SELECT 1 FROM csv_background_requests WHERE batch_id=? UNION ALL SELECT 1 FROM csv_background_results WHERE batch_id=? LIMIT 1").get(batchId, batchId)) throw new Error("CSV_BACKGROUND_CONFIRM_REQUIRED");
     const batch = getImportPreview(db, actor, portfolioId, batchId);
-    if (batch.parser_version === "csv-v1") return confirmCsvImport(db, actor, portfolioId, batchId, previewHash, expectedRevision, now, options, csvReview);
+    if (batch.parser_version === "csv-v1") {
+      return confirmCsvImport(db, actor, portfolioId, batchId, previewHash, expectedRevision, now, options, csvReview);
+    }
     if (csvReview !== undefined) throw new Error("CSV_REVIEW_NOT_APPLICABLE");
     if (!batch.attachment_id) throw new Error("IMPORT_ATTACHMENT_REQUIRED");
     readJsonAttachment(db, actor, portfolioId, batch.attachment_id, { ...options, accountId: batch.account_id });

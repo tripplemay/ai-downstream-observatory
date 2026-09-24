@@ -7,6 +7,7 @@ COPY contracts/ ./contracts/
 COPY migrations/ ./migrations/
 COPY web/src/server/ ./web/src/server/
 COPY web/scripts/build-evaluation-worker.mjs web/scripts/monthly-evaluation.ts ./web/scripts/
+COPY web/scripts/build-csv-background.mjs web/scripts/csv-background.ts ./web/scripts/
 COPY web/scripts/build-governance-fixture.mjs web/scripts/governance-fixture.ts ./web/scripts/
 COPY web/tsconfig.json ./web/tsconfig.json
 COPY worker/accounting/ ./worker/accounting/
@@ -18,7 +19,7 @@ COPY worker/governance_verification/ ./worker/governance_verification/
 COPY requirements-workbench.txt ./
 COPY scripts/migrate-workbench.mjs scripts/verification-source.mjs ./scripts/
 COPY tests/deployment/build-verification-smoke.mjs tests/deployment/verification-container-bridge.ts ./tests/deployment/
-RUN npm --prefix web run build:evaluation-worker && npm --prefix web run build:verification-worker && node tests/deployment/build-verification-smoke.mjs
+RUN npm --prefix web run build:evaluation-worker && npm --prefix web run build:csv-worker && npm --prefix web run build:verification-worker && node tests/deployment/build-verification-smoke.mjs
 
 FROM python:3.11-slim-bookworm
 
@@ -30,6 +31,7 @@ WORKDIR /app
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libstdc++6 libatomic1 tzdata && rm -rf /var/lib/apt/lists/*
 COPY --from=evaluation-builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=evaluation-builder /build/web/dist/monthly-evaluation.mjs ./worker-bridge/monthly-evaluation.mjs
+COPY --from=evaluation-builder /build/web/dist/csv-background.mjs ./worker-bridge/csv-background.mjs
 # The bundle contains all JS dependencies except SQLite's native module loader.
 COPY --from=evaluation-builder /build/web/node_modules/better-sqlite3/ ./worker-bridge/node_modules/better-sqlite3/
 COPY --from=evaluation-builder /build/web/node_modules/bindings/ ./worker-bridge/node_modules/bindings/

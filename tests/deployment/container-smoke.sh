@@ -63,6 +63,7 @@ import subprocess
 
 from worker.orchestration.db import open_database
 from worker.orchestration.external import _publisher_argv
+from worker.orchestration.csv_imports import _publisher_argv as csv_publisher_argv
 from worker.orchestration.jobs import Lease
 
 if (os.getuid(), os.getgid()) != (10001, 10001):
@@ -96,15 +97,28 @@ try:
         raise SystemExit("Monthly publisher did not reject the nonexistent lease at its database boundary")
     if fingerprint(connection) != before:
         raise SystemExit("Rejected monthly publisher changed the isolated database")
+    csv_argv = csv_publisher_argv(lease)
+    csv_publisher = Path("/app/worker-bridge/csv-background.mjs")
+    if len(csv_argv) != 10 or csv_argv[1] != str(csv_publisher):
+        raise SystemExit("CSV publisher bridge did not select the fixed deployed bundle")
+    csv_rejected = subprocess.run(csv_argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30, check=False)
+    if csv_rejected.returncode != 1 or csv_rejected.stdout != "" or csv_rejected.stderr != "CSV_BACKGROUND_STALE_LEASE\n":
+        raise SystemExit("CSV publisher did not reject the nonexistent lease after loading native SQLite")
+    if fingerprint(connection) != before:
+        raise SystemExit("Rejected CSV publisher changed the isolated database")
 finally:
     connection.close()
 with publisher.open("rb") as original:
     bundle_hash = hashlib.file_digest(original, "sha256").hexdigest()
-print(json.dumps({"schema_version": "monthly-publisher-smoke-v1", "publisher_path": str(publisher),
+monthly = {"schema_version": "monthly-publisher-smoke-v1", "publisher_path": str(publisher),
                   "bundle_sha256": bundle_hash, "node_version": node.stdout.strip(),
                   "sqlite_schema_version": schema_version, "runtime_uid": os.getuid(),
                   "native_sqlite_loaded": True, "invalid_lease_rejected": True,
-                  "logical_database_unchanged": True}, separators=(",", ":")))
+                  "logical_database_unchanged": True}
+csv = {**monthly, "schema_version": "csv-background-publisher-smoke-v1", "publisher_path": str(csv_publisher),
+       "bundle_sha256": hashlib.sha256(csv_publisher.read_bytes()).hexdigest(), "normal_csv_execution_verified": False,
+       "os_network_namespace_isolation": False}
+print(json.dumps({"monthly": monthly, "csv": csv}, separators=(",", ":")))
 PY_PUBLISHER
 )
 web_verification_source=$(docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
@@ -144,7 +158,10 @@ root, run_id, web_image, worker_image, publisher_json, verifier_json = sys.argv[
 if len(publisher_json.encode("utf-8")) > 4096:
     raise SystemExit("Monthly publisher proof is oversized")
 try:
-    publisher = json.loads(publisher_json)
+    publishers = json.loads(publisher_json)
+    if not isinstance(publishers, dict) or set(publishers) != {"monthly", "csv"}:
+        raise ValueError("Invalid fixed publisher proofs")
+    publisher, csv_publisher = publishers["monthly"], publishers["csv"]
     with open(os.path.join(root, "migrations", "manifest.json"), encoding="utf-8") as source:
         schema_version = len(json.load(source)["migrations"])
     keys = {"schema_version", "publisher_path", "bundle_sha256", "node_version", "sqlite_schema_version",
@@ -158,6 +175,14 @@ try:
             or type(publisher["runtime_uid"]) is not int or publisher["runtime_uid"] != 10001
             or any(publisher[key] is not True for key in ("native_sqlite_loaded", "invalid_lease_rejected", "logical_database_unchanged"))):
         raise ValueError("Invalid monthly publisher proof")
+    if (not isinstance(csv_publisher, dict) or set(csv_publisher) != keys | {"normal_csv_execution_verified", "os_network_namespace_isolation"}
+            or csv_publisher["schema_version"] != "csv-background-publisher-smoke-v1"
+            or csv_publisher["publisher_path"] != "/app/worker-bridge/csv-background.mjs"
+            or not isinstance(csv_publisher["bundle_sha256"], str) or not re.fullmatch(r"[a-f0-9]{64}", csv_publisher["bundle_sha256"])
+            or any(csv_publisher[key] != publisher[key] for key in ("node_version", "sqlite_schema_version", "runtime_uid"))
+            or any(csv_publisher[key] is not True for key in ("native_sqlite_loaded", "invalid_lease_rejected", "logical_database_unchanged"))
+            or csv_publisher["normal_csv_execution_verified"] is not False or csv_publisher["os_network_namespace_isolation"] is not False):
+        raise ValueError("Invalid CSV publisher proof")
 except (ValueError, TypeError, KeyError, OSError) as error:
     raise SystemExit("Monthly publisher runtime proof is missing or invalid") from error
 if len(verifier_json.encode("utf-8")) > 4096:
@@ -216,7 +241,7 @@ try:
                   "missing_bind_source_rejected": True,
                   "legacy_actual_facts": 0, "encrypted_local_restore": True,
                   "independent_host_restore": False, "web_image": web_image,
-                  "worker_image": worker_image, "monthly_publisher": publisher, "governance_verifier": verifier}
+                  "worker_image": worker_image, "monthly_publisher": publisher, "csv_publisher": csv_publisher, "governance_verifier": verifier}
         with os.fdopen(os.dup(descriptor), "w", encoding="utf-8") as output:
             json.dump(report, output, separators=(",", ":"))
             output.write("\n")

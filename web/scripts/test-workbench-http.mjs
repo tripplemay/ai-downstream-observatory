@@ -11,6 +11,7 @@ import { migrateWorkbench } from '../../scripts/migrate-workbench.mjs';
 import { probeEarlyRejection } from './http-early-rejection.mjs';
 import { verificationHttpCases } from './verification-http-cases.mjs';
 import { priceScheduleHttpCases } from './price-schedule-http-cases.mjs';
+import { csvBackgroundHttpCases } from './csv-background-http-cases.mjs';
 
 const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const root = path.dirname(web);
@@ -21,7 +22,7 @@ const output = path.join(root, 'artifacts', 'verification', 'workbench-http', no
 mkdirSync(output, { recursive: true });
 const report = {
   suite: 'workbench-http', version: 1, started_at: now, completed_at: null,
-  case_selection: process.argv.includes('--verification-only') ? 'controlled-verification' : process.argv.includes('--price-schedules-only') ? 'price-schedules' : 'full',
+  case_selection: process.argv.includes('--verification-only') ? 'controlled-verification' : process.argv.includes('--price-schedules-only') ? 'price-schedules' : process.argv.includes('--csv-background-only') ? 'csv-background' : 'full',
   status: 'RUNNING', build_id: null, build_performed: !process.argv.includes('--no-build'),
   fixture: 'temporary migrated database and random credentials; no production or real accounts',
   cases: [], source_sha256: {}, limitations: [
@@ -34,6 +35,7 @@ const report = {
     'Price collection cases use human-reviewed synthetic references and SDK projections in an independent test transport; they do not verify exchange calendars, subscriptions, real market data or broker buyability.',
     'Listing reviews use synthetic private human assertions, not issuer verification, live trading authority or weighted holdings look-through; HTTP page output is not native browser interaction acceptance.',
     'Controlled verification executes only E-02.cash-contribution-neutrality.v1 against an isolated synthetic ledger; it is not full E-02, G-03/G-04 acceptance, investment approval or native browser verification.',
+    'Background CSV cases use real authenticated HTTP and fixed Python-to-Node execution on synthetic data; bounded pages do not certify bounded proof CPU, 10k-row concurrent-writer SLA, native UI or production acceptance.',
   ],
 };
 const sha = (value) => createHash('sha256').update(value).digest('hex');
@@ -220,6 +222,10 @@ async function main() {
     }
     if (process.argv.includes('--price-schedules-only')) {
       await priceScheduleHttpCases({ check, request, jsonRequest, filename, directory, root, output, origin, address, password, Database });
+      return;
+    }
+    if (process.argv.includes('--csv-background-only')) {
+      await csvBackgroundHttpCases({ check, request, jsonRequest, filename, directory, root, origin, address, password, Database });
       return;
     }
     const evaluationPath = '/api/workbench/evaluations';
@@ -1983,6 +1989,7 @@ catch(error) { console.log(JSON.stringify({error:error.message})); } finally {db
       return { revision: 2, blocked_issue: 'LISTING_REVIEW_NOT_ACTIVE', historical_versions_preserved: 2, recovery_write: 423, financial_tables_unchanged: true };
     });
     await verificationHttpCases({ check, request, jsonRequest, filename, directory, root, output, origin, password, Database });
+    await csvBackgroundHttpCases({ check, request, jsonRequest, filename, directory, root, origin, address, password, Database });
     await check('HTTP-16', 'storage errors do not expose paths or SQL', async () => {
       renameSync(filename, `${filename}.held`);
       try {

@@ -20,17 +20,20 @@ replacing personal parameters with public templates does not reduce scope.
 
 ## Implementation sequence and current evidence
 
-The v22 increment adds reviewed ETF daily-price schedules and optional provider
-release wiring. See [the v22 contract](price-collection-schedules.md). Historical
+The current v23 increment adds explicitly authorized background CSV preview and
+confirmation, plus bounded private query APIs. See [the v23 contract](csv-background-imports.md).
+The main CSV UI is not yet converted and concurrent-write performance remains
+an open requirement. The preceding v22 increment added reviewed ETF daily-price
+schedules and optional provider release wiring. Historical
 checkpoints below retain their original scope; none is a release or investment
 acceptance claim for a later increment.
 
 | Workstream | Current implementation | Remaining work / release evidence |
 |---|---|---|
-| Contracts and new database | Versioned migrations through v22; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, private catalog and identity-review versions, monthly cycle listing-review sequence boundaries, human-reviewed private market references, bounded HTTP/SDK captures, FX and price schedule authorization/slots and controlled verification evidence | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
+| Contracts and new database | Versioned migrations through v23; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, durable human CSV authorization/cancellation/results, private catalog and identity-review versions, monthly cycle listing-review sequence boundaries, human-reviewed private market references, bounded HTTP/SDK captures, FX and price schedule authorization/slots and controlled verification evidence | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
 | Authentication | Sealed sessions, persistent revocation/rate limit, server-side guards, strict Origin; authenticated HTTP and native login/logout checked; initialization/login share UTF-8 password bounds | Production TLS/proxy, operator configuration and real owner login |
 | Financial ledger | Exact decimal facts, cash/trades/settlement/dividends/FX/transfers/splits; unknown/estimated/confirmed tax, net-only receipts, cumulative tax assessment and actual withholding kept separate; corporate-action notice/resolution isolation; securities transit and append-only dependent corrections | Real dividend/tax/corporate-action and security-transfer evidence, full acceptance matrix |
-| Import and reconciliation | JSON and raw CSV attachment/preview/atomic confirmation; zero-write CSV inspection and visual explicit mapping; immutable mappings and row evidence; explicit duplicate review and persistent source aliases; scoped downloads and encrypted recovery; explicit balance/tax-payable/settled/transit reconciliation and unresolved-fact guards | Domestic/cross-border broker samples, native wizard acceptance, large background imports and full throughput/fault acceptance |
+| Import and reconciliation | JSON and raw CSV attachment/preview/atomic confirmation; zero-write CSV inspection and visual explicit mapping; immutable mappings and row evidence; explicit duplicate review and persistent source aliases; scoped downloads and encrypted recovery; v23 fixed Python/Node background execution with independent receipt proof and bounded private pages; explicit balance/tax-payable/settled/transit reconciliation and unresolved-fact guards | Domestic/cross-border broker samples, background UI conversion/native wizard acceptance, shorter writer transactions and full throughput/fault acceptance |
 | Accounting and performance | Immutable NAV v4/performance v5; source-owned transit NAV and per-event external-flow FX; independent Python/Web fact-quality proofs for NAV, after-tax performance and attribution, including intermediate-period unresolved states | Actual historical FX/provider and dividend evidence, full attribution/benchmark/history workflows; implementation is not complete acceptance |
 | Funding plans | Dated multi-currency sources and tranches, version editing/deferral, partial receipt matching, execution association, cash/reservation separation, over-budget acknowledgement, correction review and full audit history | User-confirmed dated plan, broker evidence, D-05 allocation choices and full execution/funding workflow acceptance |
 | ETF research directory | Portfolio-private membership/source/profile/disclosure versions; independent CAS, stable pagination, account-evidence summaries and up-to-four version-bound comparisons; TS/Python exact-decimal overlap bounds; v19 sourced human identity/lifecycle/product-structure/trading-unit reviews with expiry and independent proofs | Issuer/provider originals and actual identity/lifecycle verification, current fees/liquidity/premiums and weighted exposures; full P-05 and native comparison/mobile acceptance |
@@ -39,6 +42,65 @@ acceptance claim for a later increment.
 | Governance and execution | Human version/capability APIs, risk/approval CAS, independent-process cash/share reservation race tests, execution reports separate from facts; private listing-review inputs invalidate old approvals on change/expiry; price reads bind listing identity and exact knowledge time; v21 controlled runner executes one fixed source-bound synthetic cash subcheck with independent Python/TS proof | Full E/S adapters, formal gate evidence and release/runtime binding beyond this subcheck; executable liquidity inputs and complete look-through; actual D/G/S approvals remain absent |
 | Product UI | Account, funding, catalog, research, governance, monthly evaluation, private market-reference, listing-review, controlled-verification and daily-price schedule workspaces; typed securities and dividend/tax/corporate-action preview/confirm; visual CSV mapping and server-backed, current-session, read-only confirmation recovery | Native listing-review/market-reference/monthly/wizard/recovery/BFCache and full catalog comparison/positive governance acceptance; complete accessibility and readonly UX; enumeration of old price versions without slots |
 | Deployment | Manual-only release, encrypted backup/restore, historical exact-SHA core/provider/verifier CI and local restore; separate credential-free/network-free verifier; opt-in provider release with a separate private env file and label-scoped old-provider stop even when disabling it; no current production cutover | Final-release image rerun, independent-host restore, protected credentials/configuration, release and post-release checks |
+
+### v23 background CSV backend checkpoint
+
+Preview and confirmation now require separate explicit durable delegations.
+The fixed Python dispatcher and Node publisher reuse the existing CSV/ledger
+engines, with one atomic whole-batch commit and independent Python/TypeScript
+receipt proof. Archiving a confirmation does not authorize execution. Logout
+revokes HTTP access but does not revoke already accepted work; a newly logged-in
+owner can inspect bounded private history or cancel pending work, not recover the
+old session's original payload. Background batches reject legacy synchronous
+confirmation. No principal/session secret is passed to the worker.
+
+The private API extracts rows and receipts with SQL LIMIT and binds all domain
+pages to the immutable result and review identity. Independent review reproduced
+an extra-field projection defect and fixed both rows and receipts to reject the
+unexpected wrapper keys rather than spread them into responses. Separate worker
+review reproduced and fixed boolean/integer confusion, a regressed ledger head
+and a legal Unicode-trim discrepancy. The complete final evidence proof and
+post-proof lease/deadline/recovery checks remain in place.
+
+Local regression passed Python **636/636**, Web **826/826**, Node **232/232**
+(including the opt-in fixture lifecycle), and migration checks **139/139**.
+Typecheck, production build, authentication HTTP and shellcheck passed; npm audit
+reported zero vulnerabilities. The full production-build HTTP suite passed
+**102/102**, schema 23, build `PlToWRxOkh4U2SONqGhzT`; all 555 inventoried source
+files remained unchanged. Manifest:
+`artifacts/verification/workbench-http/2026-09-24T21-11-56-711Z/manifest.json`,
+SHA256 `a7ef20542c25a3ac6f021cbedde7a61395c0346f2d26f2fa792aaebba2c9f19d`.
+Logs and the scoped aggregate are under `artifacts/verification/csv-background-v23/`.
+An initial migration run used the wrong Python environment; an initial Node run
+found obsolete container-report fixture envelopes; and the first focused HTTP
+run became stale while a test file was changing. Their original logs are retained
+alongside the corrected reruns, not relabeled as passes.
+
+The source-frozen full-size measurement used 10 accounts, 1,000 listings,
+2,000,000 reconstructed market rows and 50,000 synthetic historical facts.
+10,000-row preview and confirmation took 8.928 and 9.316 seconds, with exact
+10,000 unique receipts and cash reconciliation. However, two concurrent writes
+failed on the database lock. Active-import and idle samples are now separated;
+neither the combined p95 nor one import run certifies the full workload SLA.
+See the [retained measurement and limitations](csv-background-imports.md).
+
+The main CSV UI remains on the prior compatibility path. Background UI conversion,
+shorter writer occupancy, repeated full-load measurements, native workflow checks,
+the final image and production cutover remain open. Local Docker was unavailable;
+container wiring and report-parser tests are not actual image execution.
+
+### v22 published checkpoint
+
+The preceding increment was published as
+`3c77ac9d3478c23e2bad0cb180cf6b4b099a5ea3`; both `test` and `containers` passed
+[CI 36050164145](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/36050164145).
+CI passed Python 619, Web 792, Node 225 with one default opt-in lifecycle skip,
+and HTTP 96. The local enabled lifecycle run passed Node 226/226. The original
+ZIPs were independently rehashed and all 536 HTTP source files matched the
+commit. Aggregate evidence:
+`artifacts/verification/github-ci/36050164145/verification-result.json`, SHA256
+`08d061432d5022f2e4663715d695cb8631c35431b5338a676cc1ad4b4152e6ba`.
+No production cutover occurred; this historical success does not certify v23.
 
 ### v22 recurring reviewed ETF prices
 

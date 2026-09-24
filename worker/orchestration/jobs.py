@@ -219,26 +219,32 @@ def run_one(connection, owner, handler, job_type=None, lease_seconds=60, clock=N
     if lease is None:
         return None
     row = dict(connection.execute("SELECT * FROM job_runs WHERE id=?", (lease.job_id,)).fetchone())
+    from .csv_imports import CSV_COMMANDS, CSV_TERMINAL_CODES, committed_csv_job
+    from .external import committed_monthly_job
+    external_checker = (committed_monthly_job if row["job_type"] == "monthly_evaluation"
+                        else committed_csv_job if row["job_type"] in CSV_COMMANDS else None)
     try:
         prepared = handler(row, lease)
         if isinstance(prepared, ExternalCommit):
-            from .external import committed_monthly_job
-            if row["job_type"] != "monthly_evaluation" or committed_monthly_job(connection, lease) is None:
+            if external_checker is None or external_checker(connection, lease) is None:
                 raise WorkbenchError("EXTERNAL_COMMIT_RECEIPT_REQUIRED")
         else:
             if row["job_type"] == "monthly_evaluation":
                 raise WorkbenchError("MONTHLY_EVALUATION_EXTERNAL_COMMIT_REQUIRED")
+            if row["job_type"] in CSV_COMMANDS:
+                raise WorkbenchError("CSV_BACKGROUND_EXTERNAL_COMMIT_REQUIRED")
             complete_job(connection, lease, prepared.get("result", {}), prepared.get("outcome", "succeeded"),
                          prepared.get("effect"), prepared.get("notification"), now=clock(), clock=clock)
     except Exception as exc:
-        if row["job_type"] == "monthly_evaluation":
-            from .external import committed_monthly_job
-            committed = committed_monthly_job(connection, lease)
+        if external_checker is not None:
+            committed = external_checker(connection, lease)
             if committed is not None:
                 return committed
         try:
             retryable = True
-            if row["job_type"] == "market_collect" and isinstance(exc, WorkbenchError):
+            if row["job_type"] in CSV_COMMANDS and isinstance(exc, WorkbenchError):
+                retryable = str(exc) not in CSV_TERMINAL_CODES
+            elif row["job_type"] == "market_collect" and isinstance(exc, WorkbenchError):
                 from .collections import COLLECTION_TERMINAL_CODES
                 scheduled = connection.execute("SELECT 1 FROM collection_schedule_slots WHERE command_request_id=?", (row["command_request_id"],)).fetchone()
                 retryable = not (str(exc) in COLLECTION_TERMINAL_CODES and (scheduled or str(exc) == "COLLECTION_BINDING_INVALID"))

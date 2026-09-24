@@ -34,6 +34,9 @@ jobs:
       - name: build fixed monthly evaluation publisher
         working-directory: web
         run: npm run build:evaluation-worker
+      - name: build fixed background CSV publisher
+        working-directory: web
+        run: npm run build:csv-worker
       - name: build hash-bound synthetic governance fixture before Python checks
         working-directory: web
         run: npm run build:verification-worker

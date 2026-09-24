@@ -20,12 +20,13 @@ from .price_collections import (
     PRICE_COLLECTION_TERMINAL_CODES, price_collection_request_binding, discover_due_price_collections,
 )
 from .external import publish_monthly
+from .csv_imports import CSV_COMMANDS, csv_request_binding, publish_csv
 from .jobs import JobCommit, enqueue_job, enqueue_notification, run_one
 
 
 RESEARCH_COMMANDS = ("research_register", "research_register_trial", "research_trial", "research_freeze",
                      "research_unseal", "research_ai_context", "research_ai_review")
-CORE_COMMANDS = ("market_ingest", "market_collect", "valuation", "performance", *RESEARCH_COMMANDS, "monthly_evaluation")
+CORE_COMMANDS = ("market_ingest", "market_collect", "valuation", "performance", *RESEARCH_COMMANDS, "monthly_evaluation", *CSV_COMMANDS)
 PRICE_COMMANDS = ("market_collect_prices",)
 VERIFIER_COMMANDS = ("governance_verification_v2",)
 SUPPORTED_COMMANDS = (*CORE_COMMANDS, *PRICE_COMMANDS, *VERIFIER_COMMANDS)
@@ -70,9 +71,23 @@ def sync_requests(connection, limit=100, now=None, command_types=None):
           AND o.topic='price_collection_schedule.request_invalid'
           AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.command_request_id')=c.id
           AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.portfolio_id')=c.portfolio_id)
+        AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.dedup_key='csv-background-request-invalid:' || c.id
+          AND o.topic='csv_background.request_invalid'
+          AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.code')='CSV_BACKGROUND_EVIDENCE_INVALID'
+          AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.command_request_id')=c.id
+          AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.portfolio_id')=c.portfolio_id)
         ORDER BY c.created_at,c.id LIMIT ?""", (*supported, limit)).fetchall()
     jobs = []
     for request in requests:
+        if request["command_type"] in CSV_COMMANDS:
+            try:
+                csv_request_binding(connection, request)
+            except WorkbenchError:
+                enqueue_notification(connection, "csv-background-request-invalid:" + request["id"],
+                                     "csv_background.request_invalid",
+                                     {"code": "CSV_BACKGROUND_EVIDENCE_INVALID", "command_request_id": request["id"],
+                                      "portfolio_id": request["portfolio_id"]}, now=now)
+                continue
         if request["command_type"] == "market_collect_prices":
             try:
                 binding = price_collection_request_binding(connection, request)
@@ -264,6 +279,8 @@ def command_handler(connection, clock=None, lease_seconds=300, stop_requested=No
             monthly_request_binding(connection, request)
             return publish_monthly(connection, job, lease, lease_seconds=lease_seconds, clock=clock,
                                    stop_requested=stop_requested)
+        if job["job_type"] in CSV_COMMANDS:
+            return publish_csv(connection, job, lease, clock=clock, stop_requested=stop_requested)
         if job["job_type"] in RESEARCH_COMMANDS:
             return _research_command(connection, request, payload, clock, job)
         if job["job_type"] == "market_collect_prices":

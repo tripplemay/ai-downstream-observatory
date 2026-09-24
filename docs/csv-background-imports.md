@@ -1,0 +1,213 @@
+# Background CSV import contract
+
+Status: implementation in progress. This does not certify full P-03/P-08,
+ACC-01..19, E-01..32, performance, native UI or production acceptance.
+
+## Authorization and lifecycle
+
+The preview and confirmation commands are separate explicit human requests.
+Neither an uploaded file nor a saved `csv_confirmation_attempts` row authorizes
+execution. The new submission must acknowledge durable background execution.
+An authenticated same-origin request, current session binding, immutable input,
+authorization audit and command request are bound in one database transaction.
+Confirmation additionally binds the original UTF-8 confirmation request archived
+by the existing recovery service. Archival can succeed without authorization;
+the dispatcher must never discover archive rows as executable work.
+
+Accepted work continues after closing the page, logout or session expiry. This
+must be visible before either submission. Logout immediately rejects further
+HTTP operations with that session and clears private client state; it is not a
+revocation of a previously accepted delegation. The worker receives no session
+token, password, cookie, auth database or authentication secret.
+
+The current authenticated owner can read bounded summaries/pages for their
+portfolio and explicitly cancel unfinished work, including work submitted in an
+older session. Original request recovery and exact replay stay bound to their
+original session. A new session does not silently acquire or retry those bytes.
+Cancellation is append-only in the workbench database. Cancellation and the
+final financial transaction serialize: cancellation committed first prevents
+execution; completed work cannot be retrospectively cancelled. A late cancel
+returns a conflict, not a claim that facts were removed.
+
+Requests expire 15 minutes after acceptance. The deadline is server chosen and
+immutable; exact retries never renew it. Each job has at most three attempts.
+Failed/stale work requires explicit new human review/submission; GET never
+dispatches, approves, retries or reauthorizes anything.
+
+## Inputs and immutable bindings
+
+Commands are `csv_import_preview_v1` and `csv_import_confirm_v1` on the core
+worker. Their canonical payload is exactly:
+
+```json
+{"schema_version":"csv-background-command-v1","request_id":"UUID","input_hash":"SHA256"}
+```
+
+The command actor is reserved `system:csv-background`; its ID and idempotency
+key equal the background request ID. The human identity is independently bound
+by the request and authorization audit, never inferred from the system actor.
+The job scope is the portfolio, period is the request's UTC creation date and
+input version is `command_id:command_payload_hash`, with three maximum attempts.
+
+`csv_background_requests` retains actor, creating-session hash, portfolio,
+account, operation, idempotency key, expected revision, exact input JSON, its
+canonical hash, optional CSV bytes, optional confirmation attempt and batch,
+command request, authorization audit, creation and expiry timestamps.
+
+`input_hash = hash({operation, portfolio_id, account_id, expected_revision,
+input: JSON.parse(input_json)})` using the existing canonical hash algorithm.
+Preview input JSON is exactly `{filename, mapping, csv_sha256}`: mapping is the
+original mapping string and the SHA binds the original file bytes. Multipart
+transport boundaries are not part of the logical identity; the original file
+and mapping bytes, filename, scope and revision are. Confirmation input JSON is
+exactly `{payload_hash}` and references the separate immutable confirmation
+attempt, whose original payload bytes are revalidated by the executor.
+
+Idempotency uniqueness is `(actor_id, session_hash, portfolio_id, operation,
+idempotency_key)`. Identical retries return the original request; any changed
+logical input conflicts. Limits remain 4 MiB CSV, 256 KiB mapping, 10,000 rows,
+5 MiB confirmation payload. Queue retention additionally bounds each creating
+session to 128 requests and 64 MiB of stored request input/file bytes.
+
+## Execution and atomic publication
+
+The Python dispatcher creates one ordinary fenced job for each valid command.
+Only a fixed Node executable bundle may perform CSV ledger execution. It uses
+the existing parser, mapping, duplicate review, preview and confirmation engines;
+there is no alternate accounting implementation or caller-provided result.
+The child receives a minimal environment and fixed lease arguments, not shell
+commands, configurable script paths, provider credentials or `NODE_OPTIONS`.
+No network call is needed or permitted by its application code; this is not a
+claim of OS network namespace isolation for the network-capable core container.
+
+The child is bounded to 120 seconds; it may start only with at least 150 seconds
+remaining on the lease. No competing SQLite writer heartbeat is issued during
+the child's whole-batch transaction. Startup, final commit and parent receipt
+checks bind request, audit, command, job, attempt and fencing token. Finalization
+rechecks deadline, cancellation, lease and filesystem recovery lock with the
+transaction still held. Expiry, stale revision, invalid evidence or cancellation
+cannot leave partial facts/outcomes or a successful job.
+
+Preview publishes its original batch/rows/manifest but rolls back all dry-run
+financial effects. Confirmation publishes all ledger facts, outcomes, audit,
+background result and job/attempt success atomically. There is no per-chunk
+financial commit. A crash after commit is resolved from the database receipt,
+never from child stdout or exit status. Recovery mode permits private reads but
+does not start or finalize new work.
+
+Background-owned batches cannot use the old synchronous confirmation endpoint;
+it must fail with `CSV_BACKGROUND_CONFIRM_REQUIRED`. The executor uses the
+existing inner confirmation engine within its own fenced transaction. Existing
+unrelated synchronous import/recovery behavior remains unchanged during UI
+migration; this compatibility phase is not completion of the background UI.
+
+## Results and queries
+
+`csv_background_results` binds request, job, successful attempt and real batch
+to a canonical `csv-background-result-v1` summary:
+
+```text
+request_id, operation, input_hash, batch_id, preview_hash, expected_revision,
+batch_status, row_count, error_count, review_hash, required_review_count,
+confirmed_revision (nullable), receipts_hash (nullable)
+```
+
+The ordinary job result is a small envelope with exactly `schema_version:
+csv-background-job-result-v1`, `request_id`, `operation`, `batch_id` and
+`result_hash`. The last hash binds the separate full summary and actual domain
+evidence; stdout is not a substitute for that proof.
+
+The result never treats queue acceptance as import completion. Summary queries
+report actual request/job state and attempt count without inventing percentages.
+Two explicit confirmations accepted before a batch completes may resolve to the
+same independently verified, same-review historical receipts. The later request
+does not book those facts again. `succeeded` means processing completed, not that
+new events were created; `row_count` counts source rows, not new events from this
+request. Multiple request results must not be summed as imported financial facts.
+Rows, duplicate candidates and actual receipts use bounded server-side pages,
+bound to the immutable request/result/batch/review identity. Queries do not return
+the raw original confirmation payload or the original upload buffer. Page reads
+are owner/portfolio scoped and require the current session binding; no global
+latest-batch fallback is permitted. Invalid result/domain evidence fails closed.
+
+## HTTP transport and bounded pages
+
+The endpoint is `/api/workbench/csv/jobs`. Every GET and POST requires the current
+`X-Workbench-Session-Binding`; mutations additionally require the authenticated
+same origin. Responses are `private, no-store` and vary on Cookie. An accepted
+request returns HTTP 200 with a queued acceptance receipt, not a completed batch.
+An exact replay returns that original receipt even if execution has since ended;
+the status GET is authoritative for execution state.
+
+- Preview POST is multipart with exactly `portfolio_id`, `account_id`,
+  `expected_revision`, `mapping` and `file`. It additionally requires
+  `X-CSV-Idempotency-Key` and `X-CSV-Background-Acknowledged: true`.
+  The outer transport limit is 5 MiB; inner CSV and mapping bounds still apply.
+- Confirmation POST is JSON `{action:"confirm", command:{portfolio_id,
+  account_id, idempotency_key, payload_text,
+  acknowledge_background_execution:true}}`. The original confirmation text is
+  bounded to 5 MiB UTF-8. The JSON transport limit is 31 MiB to permit six-byte
+  JSON escaping of every original byte plus bounded envelope overhead; this does
+  not raise the inner payload limit.
+- Cancellation POST is JSON `{action:"cancel", command:{portfolio_id,
+  request_id, reason}}`. Neither action accepts caller identity, a result or a
+  replacement deadline.
+- GET `?portfolio=P` lists requests. Adding `request=R` reads one status;
+  `view=rows|candidates|receipts` reads a page. Candidate queries also require a
+  source `row` and `kind` (`exact_event_ids`, `possible_event_ids`,
+  `exact_prior_rows` or `possible_prior_rows`). Unknown/duplicate query fields
+  are rejected, not silently ignored.
+
+The page schema is `csv-background-page-v1`. List, row, candidate and receipt
+limits are respectively 20, 25, 100 and 25, with an 8 MiB response ceiling.
+Domain-page cursors bind actor, portfolio, request, immutable result hash, view
+and candidate row/kind. List cursors use stable creation-time/ID ordering.
+Rows and receipts use SQL-limited extraction; candidate arrays are sliced only
+after validating their immutable manifest. The existing full-domain result proof
+still runs before page extraction. Bounded response size therefore does not mean
+bounded proof CPU or establish the query latency target.
+
+## Acceptance remaining
+
+Required regression covers authenticated input freezing, strict fields/limits,
+exact and conflicting retries, archive-without-approval, cross-session limited
+recovery, real dispatch/child completion, lease expiry/stale worker, queued cancel,
+cancel/commit race, deadline/recovery lock, partial failure rollback, process
+restart, committed-response loss, legacy-path rejection and pagination isolation.
+
+The final performance run still uses 10 accounts, 1,000 securities, 2 million
+market rows and 50,000 facts with concurrent work and the full 10,000-row preview
+and confirmation. Record environment, cold/warm latency, p50/p95/p99, failures,
+lock waits and resources. Mapper microbenchmarks or backgrounding a long write
+transaction do not prove the 60-second import or 1-second atomic-command goals.
+Native desktop/mobile UI and production deployment remain separate gates.
+
+### Retained v23 full-size measurement
+
+`artifacts/verification/csv-background-v23/benchmark-fullscale-2.json` records a
+frozen-source, isolated synthetic run on macOS arm64, Node v25.7.0, 10 logical
+CPUs and 16 GiB RAM. Its SHA256 is
+`5543b89ce8f229b385c4fd63050dee2d07c25d44ac1e9455d30fc432aceaa148`.
+The database contained exactly 10 accounts, 1,000 listings, 2,000,000 reconstructed
+market observations and 50,000 actual synthetic ledger events before the import.
+One 10,000-row preview took 8.928 seconds and one confirmation took 9.316 seconds,
+including the real Python dispatcher, fixed Node child and parent receipt check.
+All 10,000 unique import receipts and the exact resulting cash balance matched.
+Both application and measurement source inventories remained unchanged.
+
+This is **not performance acceptance**: concurrent unrelated-portfolio writes
+still produced two `database is locked` errors, each after about 5.42 seconds.
+Only 61 and 92 read/write probe pairs occurred during preview and confirmation;
+847 additional pairs ran while idle. Their distributions are recorded separately,
+not combined into a claim of 1,000 concurrent samples. Import operations were not
+repeated for warm/cold distributions. HTTP query/approval/valuation load and child
+resource utilization are not measured; parent resource usage is not total worker
+usage. The earlier full-size run is retained as an exploratory, source-drifting
+baseline, not silently replaced by this measurement.
+
+The remaining implementation must shorten main-database writer occupancy without
+weakening immutable-input checks, current-revision CAS or whole-batch atomicity.
+Increasing SQLite timeouts, deleting integrity proofs or splitting financial
+commits into chunks is not an accepted substitute. Main UI conversion and native
+workflow checks must explicitly disclose durable delegation and cancellation
+semantics before any accepted preview or confirmation.

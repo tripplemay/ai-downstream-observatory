@@ -104,7 +104,7 @@ function failure(error: unknown): NextResponse {
   if (error instanceof AuthError) return NextResponse.json({ error: error.code }, {
     status: error.status, headers: error.status === 413 ? { Connection: "close" } : undefined,
   });
-  if (["VERSION_CONFLICT", "DUPLICATE_CONFLICT", "SOURCE_DUPLICATE_CONFLICT", "PREVIEW_HASH_MISMATCH", "CSV_MAPPING_VERSION_CONFLICT", "CSV_FILE_ALREADY_CONFIRMED", "CSV_IMPORT_METHOD_CHANGED", "CSV_IMPORT_CONTEXT_CHANGED", "CSV_REVIEW_HASH_MISMATCH", "CSV_REVIEW_CONFLICT", "CSV_SOURCE_LINK_CONFLICT"].includes(message)) return NextResponse.json({ error: message }, { status: 409 });
+  if (["VERSION_CONFLICT", "DUPLICATE_CONFLICT", "SOURCE_DUPLICATE_CONFLICT", "PREVIEW_HASH_MISMATCH", "CSV_MAPPING_VERSION_CONFLICT", "CSV_FILE_ALREADY_CONFIRMED", "CSV_BACKGROUND_CONFIRM_REQUIRED", "CSV_IMPORT_METHOD_CHANGED", "CSV_IMPORT_CONTEXT_CHANGED", "CSV_REVIEW_HASH_MISMATCH", "CSV_REVIEW_CONFLICT", "CSV_SOURCE_LINK_CONFLICT"].includes(message)) return NextResponse.json({ error: message }, { status: 409 });
   if (["CSV_REVIEW_INVALID", "CSV_REVIEW_ROWS_MISMATCH", "CSV_REVIEW_ROW_INVALID", "CSV_REVIEW_LINK_NOT_EXACT", "CSV_REVIEW_CANDIDATE_LIMIT", "CSV_REVIEW_NOT_APPLICABLE", "CSV_ROW_REQUIRES_LINK"].includes(message)) return NextResponse.json({ error: message }, { status: 400 });
   if (message === "CSV_REVIEW_SCOPE_MISMATCH") return NextResponse.json({ error: message }, { status: 403 });
   if (["ACCOUNT_OUT_OF_SCOPE", "IMPORT_BATCH_OUT_OF_SCOPE", "ATTACHMENT_OUT_OF_SCOPE", "VALUATION_OUT_OF_SCOPE", "STATEMENT_OUT_OF_SCOPE", "RECONCILIATION_ISSUE_OUT_OF_SCOPE", "RESEARCH_OUT_OF_SCOPE", "UNAUTHENTICATED"].includes(message)) return NextResponse.json({ error: message }, { status: message === "UNAUTHENTICATED" ? 401 : 403 });

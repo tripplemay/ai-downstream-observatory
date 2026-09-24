@@ -1,6 +1,6 @@
 # ETF 投资工作台：验收证据与缺口映射
 
-版本：v0.11 | 日期：2026-09-25 | 状态：公开通用版阶段性证据索引，非验收或放行报告
+版本：v0.12 | 日期：2026-09-25 | 状态：公开通用版阶段性证据索引，非验收或放行报告
 
 依据：[01 投资约束](01-investment-mandate.md)、[02 产品需求](02-product-requirements.md)、[03 决策治理](03-decision-policy.md)、[04 数据与核算](04-data-and-accounting.md)、[05 架构迁移](05-architecture-and-migration.md)、[06 验证验收](06-validation-and-acceptance.md)。六份原始个人 v1.0 基线已在本地保存；公开版以通用模板替换个人参数，不是范围削减，也不缩减验收要求。
 
@@ -12,8 +12,9 @@
 - 目前有合成单元、跨语言、HTTP、浏览器和隔离容器验证。v21 已实现仅运行固定现金贡献中性子检查的受控验证 Worker，**不等于完整 E-02、G-03/G-04 或任何 S 门槛验收；仍没有正式 live 数据/账户样本验收和新工作台生产部署验收**。旧站 HTTP 200、远端 fixture 成功、测试中创建的政策和验证记录均不能替代它们。
 - L-0 文档确认保持有效；本表不能宣布 L-1/L-2 全部验收，更不能升级 L-3。D-01 至 D-08 未完成细节继续阻塞相应能力；计划预算不等于实际余额，只有已核实本金及到账事实才能入账。
 - 公开边界已确认：**公开代码和通用示例，个人方案本地隔离，提交前核验 index**。金额精度、并发及性能测试中的明确合成数值仅为 fixture，不是个人投资参数。
-- 本轮发布前已验证的公开基线为 schema v21、NAV v4、绩效 v5：提交 `8e42737540db4146dd768db49c47632124b1c219` 的 CI `36039657000` 成功，Python 590、Web 746、Node 213 通过加 1 项默认未开启的生命周期检查、HTTP 91；独立本地开启该检查后 Node 214/214。当前 v22 加入显式授权的 LongPort 日价格周期采集，本地 Python 619、Web 792、Node 226、HTTP 96 通过，修后原生单页合成闭环另有证据；不是全部界面、真实行情或生产验收，新同版 CI 另核。原生 popup 工具阻断和 callback-only 的 503/未决导航验证均单列，不能继承或扩大历史通过状态。详见 [实现进度](07-implementation-tracker.md)和 [v22 合同](price-collection-schedules.md)。以下历史运行段保留原版本与时点。
+- 本轮之前已验证的公开基线为 schema v22、NAV v4、绩效 v5：提交 `3c77ac9d3478c23e2bad0cb180cf6b4b099a5ea3` 的 CI `36050164145` 两个 job 成功，Python 619、Web 792、Node 225 通过加 1 项默认未开启的生命周期检查、HTTP 96；独立本地开启该检查后 Node 226/226。v22 原生 popup 工具阻断和 callback-only 的 503/未决导航验证仍单列。当前 v23 增加显式授权的后台 CSV 执行器和分页 API，**未完成主界面迁移、并发性能或生产验收**，不得继承 v22 CI 成功状态。详见 [实现进度](07-implementation-tracker.md)、[v22 合同](price-collection-schedules.md)和 [v23 合同](csv-background-imports.md)。以下历史运行段保留原版本与时点。
 - 来源基线是持续变化的工作区，不是单一已签核 release。下列结果需在最终源码冻结后统一重跑，补齐 release SHA、锁文件、schema、环境、fixture、退出码、差异及签核。
+- v23 本地冻结回归：Python **636/636**、Web **826/826**、Node **232/232**（开启生命周期检查）、HTTP **102/102**；生产构建 `PlToWRxOkh4U2SONqGhzT`，555 个 HTTP 源码清单起止一致。证据 `artifacts/verification/workbench-http/2026-09-24T21-11-56-711Z/manifest.json`，SHA256 `a7ef20542c25a3ac6f021cbedde7a61395c0346f2d26f2fa792aaebba2c9f19d`。全规模合成库的万行预览/确认分别 8.928/9.316 秒，但并发写入仍有 **2 次锁超时**，因此 5.1 性能未通过；主 CSV UI 仍未迁移，不增加完整 P/ACC/E/S 已验收项。原始失败记录、最终日志与量测保存在 `artifacts/verification/csv-background-v23/`。
 
 ## 2. 证据目录与复现入口
 
@@ -27,6 +28,7 @@
 | DIVIDEND | [分红与公司行动边界](dividends-and-corporate-actions.md)；`web/src/server/ledger/{fact-quality,fact-quality-db,dividend-queries}.ts`；`worker/accounting/fact_quality.py`；`web/tests/{fact-quality,dividend-ledger-engine,dividend-ledger-service,dividend-input,dividend-workspace}.test.ts` | 未知税不当零税；累计税确认不改现金，实际补扣另记；净额/归因分离，公司行动通知/解决及时间范围质量证据；真实资料与完整人工闭环未验收 |
 | SECURITIES | [证券转移](security-transfers.md)；`web/tests/security-transfer-*.test.ts`、`security-transit-reconciliation.test.ts`；Python `test_security_transfers.py` / `test_security_flows.py` | 外部确认市值资本流、内部逐批在途、部分到达/退回/拆分/更正、两端覆盖；合成数据，不是券商实际转仓核验 |
 | CSV | [CSV 导入](csv-import.md)；`web/src/server/ledger/csv*.ts`；`csv-{workspace,mapping-wizard,mapping-builder,recovery-panel,recovery-client}.tsx/ts`；`web/tests/csv*.test.ts` | 零写检查、完整原值分页、可视化显式映射与高级 JSON；有界原件上传、不可变版本/逐行预检、人工重复决定、原子确认/重试和来源别名；v14 会话隔离的原请求封存与只读恢复，无自动确认；无真实券商格式认证 |
+| CSV-BG | [后台 CSV 合同](csv-background-imports.md)；`web/src/server/csv-background/`、`web/src/app/api/workbench/csv/jobs/route.ts`、`worker/orchestration/csv_imports.py`；`web/tests/csv-background*.test.ts`、`tests/orchestration/test_csv_imports.py`、`web/scripts/csv-background-http-cases.mjs` | v23 人工明确授权预览/确认、固定 Node 整批事务、Python/TS 独立回执验真、跨会话有限查询/取消和有界分页；退出不撤回已接受委托，原请求恢复仍隔离原会话。完整 proof 仍全量读取；长写锁、主界面迁移、原生交互和完整负载验收尚未闭环 |
 | ACCOUNTING | `worker/accounting/`；`tests/accounting/{test_accounting,test_golden_contract}.py`；`tests/accounting/golden.json` | Decimal 金标准和收益函数；包括固定种子往返属性测试，不等于完整随机业务序列覆盖 |
 | MARKET | `worker/market/`；`tests/market/{test_market,test_valuation_units}.py`、`contracts.test.mjs` | NAV v4、显式批次/发布历史、原币/FX 单位检查与独立事实质量证明；缺资料不输出精确 NAV；没有外部实时采集器验收 |
 | PROVIDER | [采集边界](market-provider-collection.md)；`worker/market/{collection,providers/ecb,providers/longport}.py`；`web/src/server/market-source.ts`；`test_collection.py`、`test_market_collection.py`、`provider-captures.test.mjs`、`market-source.test.ts` | ECB 固定 HTTPS 到私有原始 BLOB、发布及双端验真已做独立本地实际网络验证；v16 exact-SHA CI 已过。LongPort 新共享路径见 PRICE；SDK 投影不是 HTTP 原件，两者均不授予账户/策略权限 |
