@@ -183,6 +183,10 @@ def complete_job(connection, lease, result, outcome="succeeded", effect=None, no
                 from .collections import assert_collection_finalization
                 request = connection.execute("SELECT * FROM command_requests WHERE id=?", (job["command_request_id"],)).fetchone()
                 assert_collection_finalization(connection, request, job, lease, now=finished)
+            elif job["job_type"] == "market_collect_prices":
+                from .price_collections import assert_price_collection_finalization
+                request = connection.execute("SELECT * FROM command_requests WHERE id=?", (job["command_request_id"],)).fetchone()
+                assert_price_collection_finalization(connection, request, job, lease, now=finished)
         connection.execute("""UPDATE job_attempts SET status=?,finished_at=? WHERE job_id=? AND attempt=?""",
                            (outcome, finished, lease.job_id, lease.attempt))
         connection.execute("""UPDATE job_runs SET status=?,result_json=?,lease_owner=NULL,lease_until=NULL,
@@ -238,6 +242,10 @@ def run_one(connection, owner, handler, job_type=None, lease_seconds=60, clock=N
                 from .collections import COLLECTION_TERMINAL_CODES
                 scheduled = connection.execute("SELECT 1 FROM collection_schedule_slots WHERE command_request_id=?", (row["command_request_id"],)).fetchone()
                 retryable = not (str(exc) in COLLECTION_TERMINAL_CODES and (scheduled or str(exc) == "COLLECTION_BINDING_INVALID"))
+            elif row["job_type"] == "market_collect_prices" and isinstance(exc, WorkbenchError):
+                from .price_collections import PRICE_COLLECTION_TERMINAL_CODES
+                scheduled = connection.execute("SELECT 1 FROM price_collection_schedule_slots WHERE command_request_id=?", (row["command_request_id"],)).fetchone()
+                retryable = not (str(exc) in PRICE_COLLECTION_TERMINAL_CODES and (scheduled or str(exc) == "PRICE_COLLECTION_BINDING_INVALID"))
             fail_job(connection, lease, {"code": type(exc).__name__, "message": str(exc)}, retryable=retryable, now=clock())
         except WorkbenchError as lease_error:
             if str(lease_error) != "STALE_OR_EXPIRED_LEASE":

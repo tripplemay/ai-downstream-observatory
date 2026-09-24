@@ -78,7 +78,7 @@ v17 的 `market_sdk_captures.raw_body` 为最多 2 MiB 的 BLOB，规范化与�
 | 领取 | `longport` role 只领取价格任务；生产默认 lease 300 秒，拒绝小于 180 秒；同一工作台数据库中的所有组合共享价格任务 mutex |
 | SDK 子进程 | `-I`、固定脚本、UTC、私有临时目录与空 `.env`、环境 allowlist、stdin 凭据；父进程 30 秒 timeout/进程组清理，子进程内核 SIGALRM 30 秒硬截止 |
 | 前置条件 | CLI 在打开数据库前检查批准 SDK 版本与凭据；缺配置不触碰业务数据库；不自动刷新 token |
-| Compose | `docker-compose.market-provider.yml` 为显式可选 profile；基础生产部署脚本不自动启用或部署它 |
+| Compose | `docker-compose.market-provider.yml` 为显式可选 profile；部署默认禁用，只有操作员明确设置 `WORKBENCH_MARKET_PROVIDER_ENABLED=1` 并配置独立凭据文件才构建/启动；升级无论新版启用与否都先停止旧 provider |
 
 全局 mutex 的范围是共享数据库，不是跨独立数据库或其他软件的供应商账户级锁。运行环境、供应商账户并发和许可仍需运维核实。上述镜像定义和离线测试不等于本轮实际 Linux 镜像已通过；需新 exact-SHA CI 执行。
 
@@ -99,5 +99,8 @@ python -m unittest tests.orchestration.test_provider_roles tests.market.test_pro
 
 已完成的本地冻结源码回归见 [07](07-implementation-tracker.md#price-collection-worktree-v17) 和 [08](08-acceptance-evidence-map.md#price-collection-v17)。本地测试通过不能替代尚未验证的新提交镜像、真实市场或生产结果。
 
-仍未完成：供应商适用许可/原件保存条件、实际 A/HK/US 数据和权限、权威映射与交易日历、定期自动采集、原生桌面/窄屏/辅助技术交互、完整故障与规模验收、异机恢复、生产配置与上线，以及任何 D/G/S 投资准入。
+定期自动采集按 [v22 独立计划合同](price-collection-schedules.md) 实施；当前仍是开发中，
+不能把已存在的单次请求或启动 provider 进程当成自动采集已验收。
+
+仍未完成：供应商适用许可/原件保存条件、实际 A/HK/US 数据和权限、权威映射与交易日历、定期自动采集闭环验收、原生桌面/窄屏/辅助技术交互、完整故障与规模验收、异机恢复、生产配置与上线，以及任何 D/G/S 投资准入。
 真实网络原件、SDK 投影和私人权限证据必须放 `.private/` 或受控数据目录，不能放入 CI 上传的 `artifacts/verification/`；代码和通用示例不包含个人资金、券商选择或凭据。

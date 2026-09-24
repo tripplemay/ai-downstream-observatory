@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/price-collection-schedule.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "provider", "frequency", "publish", "market", "timezone", "mapping_version_ids", "calendar_version_ids", "start_date", "end_date", "trigger_local", "deadline_seconds", "max_attempts", "missed_policy"],
+  "properties": {
+    "schema_version": { "const": "price-collection-schedule-v1" },
+    "provider": { "const": "longport" },
+    "frequency": { "const": "daily" },
+    "publish": { "const": true },
+    "market": { "enum": ["CN", "HK", "US"] },
+    "timezone": { "enum": ["Asia/Shanghai", "Asia/Hong_Kong", "America/New_York"] },
+    "mapping_version_ids": { "$ref": "#/$defs/ids" },
+    "calendar_version_ids": { "$ref": "#/$defs/ids" },
+    "start_date": { "$ref": "#/$defs/date" },
+    "end_date": { "$ref": "#/$defs/date" },
+    "trigger_local": { "type": "object", "additionalProperties": false, "required": ["hour", "minute"], "properties": {
+      "hour": { "type": "integer", "minimum": 0, "maximum": 23 },
+      "minute": { "type": "integer", "minimum": 0, "maximum": 59 }
+    } },
+    "deadline_seconds": { "type": "integer", "minimum": 60, "maximum": 86400 },
+    "max_attempts": { "type": "integer", "minimum": 1, "maximum": 5 },
+    "missed_policy": { "const": "record_no_backfill" }
+  },
+  "$defs": {
+    "date": { "type": "string", "format": "date", "pattern": "^(?!0000)[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+    "ids": { "type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$" } }
+  },
+  "description": "Strict original UTF-8 JSON <=65536 bytes. Runtime verifies market timezone, inclusive target-date range <=3660 days, reviewed reference coverage, next-local-day unique UTC triggers and nonoverlapping deadline windows. No default personal parameters or automatic enabling."
+}

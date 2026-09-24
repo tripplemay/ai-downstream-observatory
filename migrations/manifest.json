@@ -105,6 +105,11 @@
       "version": 21,
       "file": "0021_governance_verification_runner.sql",
       "sha256": "4e551a02540804c6da793d62d6f5da29b8126937230a822569e99badc753bdc9"
+    },
+    {
+      "version": 22,
+      "file": "0022_price_collection_schedules.sql",
+      "sha256": "58831cb37a04549e6473c8d7767fbe7fa8de6841c9865c86ae9c74a9a25a114b"
     }
   ]
 }

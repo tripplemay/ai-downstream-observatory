@@ -57,7 +57,10 @@ class ProviderRoleTests(unittest.TestCase):
         self.assertIsNone(claim_job(other, "synthetic-price-two", 300, "market_collect_prices", now=NOW))
         core = claim_job(other, "synthetic-core", 300, "valuation", now=NOW)
         self.assertIsNotNone(core)
-        complete_job(self.db, first, {"synthetic": True}, now=NOW)
+        with self.assertRaisesRegex(WorkbenchError, "PRICE_COLLECTION_BINDING_INVALID"):
+            complete_job(self.db, first, {"synthetic": True}, now=NOW)
+        # This fixture only exercises the mutex; without an actual request it cannot claim collection success.
+        complete_job(self.db, first, {"synthetic": True}, outcome="skipped", now=NOW)
         self.assertIsNotNone(claim_job(other, "synthetic-price-two", 300, "market_collect_prices", now=NOW))
 
     def test_expired_provider_fence_never_allows_late_commit(self):

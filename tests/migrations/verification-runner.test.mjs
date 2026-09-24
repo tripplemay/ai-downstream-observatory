@@ -19,15 +19,18 @@ const canonical = value => JSON.stringify(value, (_, item) => item && typeof ite
   ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
 const insert = (db, table, value, prefix = 'INSERT') => db.prepare(`${prefix} INTO ${table}(${Object.keys(value).join(',')}) VALUES(${Object.keys(value).map(() => '?')})`).run(...Object.values(value));
 
+function copyMigrations(directory, version) {
+  const migrations = join(directory, `v${version}`); mkdirSync(migrations);
+  const original = JSON.parse(readFileSync(join(migrationDirectory, 'manifest.json'))), rows = original.migrations.slice(0, version);
+  for (const row of rows) cpSync(join(migrationDirectory, row.file), join(migrations, row.file));
+  writeFileSync(join(migrations, 'manifest.json'), JSON.stringify({ ...original, migrations: rows }));
+  return migrations;
+}
+
 function fixture(t, version = 21) {
   const directory = mkdtempSync(join(tmpdir(), 'verification-runner-migration-')), path = join(directory, 'workbench.db');
   let migrations = migrationDirectory;
-  if (version !== 21) {
-    migrations = join(directory, `v${version}`); mkdirSync(migrations);
-    const original = JSON.parse(readFileSync(join(migrationDirectory, 'manifest.json'))), rows = original.migrations.slice(0, version);
-    for (const row of rows) cpSync(join(migrationDirectory, row.file), join(migrations, row.file));
-    writeFileSync(join(migrations, 'manifest.json'), JSON.stringify({ ...original, migrations: rows }));
-  }
+  if (version !== 21) migrations = copyMigrations(directory, version);
   migrateWorkbench(path, { directory: migrations });
   const db = new Database(path); db.pragma('foreign_keys=ON'); db.pragma('recursive_triggers=OFF');
   t.after(() => { db.close(); rmSync(directory, { recursive: true, force: true }); });
@@ -132,14 +135,15 @@ function finalizeSql(db, f, value) {
 
 test('v20 to v21 preserves old data and schema bytes, adds no fake execution, and repeat migration is a no-op', t => {
   const f = fixture(t, 20), before = snapshot(f.db).filter(row => row.name !== 'schema_migrations');
+  const directory = copyMigrations(f.directory, 21);
   const schema = f.db.prepare("SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all();
-  assert.equal(migrateWorkbench(f.path).applied, 1); assert.deepEqual(snapshot(f.db, before.map(row => row.name)), before);
+  assert.equal(migrateWorkbench(f.path, { directory }).applied, 1); assert.deepEqual(snapshot(f.db, before.map(row => row.name)), before);
   for (const row of schema) assert.deepEqual(f.db.prepare('SELECT type,name,sql FROM sqlite_master WHERE name=?').get(row.name), row);
   for (const table of ['verification_requests', 'verification_artifacts', 'verification_executions', 'governance_verification_runs', 'ledger_events', 'activations'])
     assert.equal(f.db.prepare(`SELECT COUNT(*) n FROM ${table}`).get().n, 0);
   const state = snapshot(f.db); f.db.pragma('wal_checkpoint(TRUNCATE)'); const bytes = sha(readFileSync(f.path));
-  assert.equal(migrateWorkbench(f.path).applied, 0); assert.equal(sha(readFileSync(f.path)), bytes); assert.deepEqual(snapshot(f.db), state);
-  assert.equal(verifyWorkbenchSchema(f.db).version, 21); assert.deepEqual(f.db.pragma('foreign_key_check'), []);
+  assert.equal(migrateWorkbench(f.path, { directory }).applied, 0); assert.equal(sha(readFileSync(f.path)), bytes); assert.deepEqual(snapshot(f.db), state);
+  assert.equal(verifyWorkbenchSchema(f.db, directory).version, 21); assert.deepEqual(f.db.pragma('foreign_key_check'), []);
 });
 
 test('requests require exact human audit, scoped internal command and fixed context without claimed acceptance', t => {

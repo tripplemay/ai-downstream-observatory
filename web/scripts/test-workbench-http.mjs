@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { migrateWorkbench } from '../../scripts/migrate-workbench.mjs';
 import { probeEarlyRejection } from './http-early-rejection.mjs';
 import { verificationHttpCases } from './verification-http-cases.mjs';
+import { priceScheduleHttpCases } from './price-schedule-http-cases.mjs';
 
 const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const root = path.dirname(web);
@@ -20,7 +21,7 @@ const output = path.join(root, 'artifacts', 'verification', 'workbench-http', no
 mkdirSync(output, { recursive: true });
 const report = {
   suite: 'workbench-http', version: 1, started_at: now, completed_at: null,
-  case_selection: process.argv.includes('--verification-only') ? 'controlled-verification' : 'full',
+  case_selection: process.argv.includes('--verification-only') ? 'controlled-verification' : process.argv.includes('--price-schedules-only') ? 'price-schedules' : 'full',
   status: 'RUNNING', build_id: null, build_performed: !process.argv.includes('--no-build'),
   fixture: 'temporary migrated database and random credentials; no production or real accounts',
   cases: [], source_sha256: {}, limitations: [
@@ -215,6 +216,10 @@ async function main() {
     });
     if (process.argv.includes('--verification-only')) {
       await verificationHttpCases({ check, request, jsonRequest, filename, directory, root, output, origin, password, Database });
+      return;
+    }
+    if (process.argv.includes('--price-schedules-only')) {
+      await priceScheduleHttpCases({ check, request, jsonRequest, filename, directory, root, output, origin, address, password, Database });
       return;
     }
     const evaluationPath = '/api/workbench/evaluations';
@@ -1736,6 +1741,7 @@ try {console.log(JSON.stringify(verifiedMarketSource(db,process.argv[2],new Date
       return { job_status: 'retry_queued', attempt_status: 'failed', error: 'PROVIDER_COLLECTION_FAILED', previous_head_unchanged: true,
         capture_created: false, financial_tables_unchanged: true, actual_provider_requests: 0 };
     });
+    await priceScheduleHttpCases({ check, request, jsonRequest, filename, directory, root, output, origin, address, password, Database });
     let pricePortfolio, priceSource, priceVersions, pricePayload, priceResult;
     const priceDocuments = ['http-listing', 'http-price-listing'].map((listing_id, i) => ({ kind: 'mapping', facts: {
       provider: 'longport', listing_id, provider_symbol: `00000${i + 1}.SH`, market: 'CN', exchange: 'SSE', currency: 'CNY', valid_from: '2025-01-01', valid_to: null,

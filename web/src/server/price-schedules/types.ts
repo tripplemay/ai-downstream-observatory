@@ -1,0 +1,23 @@
+import type { PriceCollectionScheduleDefinition } from "./schemas";
+export type { PriceCollectionScheduleDefinition } from "./schemas";
+export type PriceCollectionActor = { id: string; kind: "human" | "ai" | "worker" | "strategy" };
+export type PriceCollectionOptions = { now?: string };
+export type PriceReferenceProof = { version_id: string; version_hash: string; source_row_hash: string; source_audit_hash: string; review_audit_hash: string };
+export type PriceReferenceHead = { portfolio_id: string; kind: "mapping" | "calendar"; scope_key: string; version: number; version_id: string; updated_at: string };
+export type PriceScheduleReferenceBinding = {
+  schema_version: "price-schedule-reference-binding-v1"; portfolio_id: string; market: "CN" | "HK" | "US";
+  timezone: string; start_date: string; end_date: string; known_at: string;
+  mappings: (PriceReferenceProof & { listing_id: string; listing_identity_hash: string; catalog_entry_hash: string; calendar_version_id: string })[];
+  calendars: PriceReferenceProof[]; heads: PriceReferenceHead[];
+};
+export type PriceCollectionScheduleReceipt = { schedule_id: string; version_id: string; version: number; schedule_revision: number; status: "enabled" | "paused"; scope_key: string; content_hash: string };
+export type PriceCollectionVersionView = { id: string; version: number; definition_json: string; definition: PriceCollectionScheduleDefinition; content_hash: string; reference_binding_json: string; reference_binding_hash: string; reference_binding: PriceScheduleReferenceBinding; created_by: string; created_at: string; audit_id: string };
+export type PriceCollectionScheduleView = { id: string; portfolio_id: string; scope_key: string; market: "CN" | "HK" | "US"; schedule_revision: number; status: "enabled" | "paused"; current_version: PriceCollectionVersionView; last_audit_id: string; updated_at: string; next_trigger_at: string | null; next_target_date: string | null; reference_status: "current" | "changed" | "invalid" };
+export type PriceCollectionSlotRow = { id: string; portfolio_id: string; scope_key: string; period: string; schedule_id: string; schedule_version_id: string; authorization_audit_id: string; authorization_revision: number; reference_binding_json: string; reference_binding_hash: string; scheduled_at: string; deadline_at: string; created_at: string; disposition: "requested" | "skipped" | "blocked" | "missed"; reason_code: string | null; command_request_id: string | null; expected_publication_revision: number | null };
+export type PriceCollectionSlotView = PriceCollectionSlotRow & { job: null | { id: string; status: string; attempt_count: number; max_attempts: number; updated_at: string }; capture: null | { id: string; received_at: string; batch_id: string; receipt_hash: string; status: string }; };
+export type PriceReferenceCandidate = { id: string; kind: "mapping" | "calendar"; market: "CN" | "HK" | "US"; scope_key: string; version: number; known_at: string; content_hash: string; listing_id: string | null; provider_symbol: string | null; exchange: string; range_start: string; range_end: string | null; verification_status: "human_reviewed_not_provider_verified" };
+export type PriceCollectionScheduleState = { schema_version: "price-collection-schedules-v1"; portfolios: { id: string; name: string }[]; portfolios_truncated: boolean; selected_portfolio_id: string | null; read_only: boolean; server_now: string; reference_candidates: PriceReferenceCandidate[]; reference_candidates_truncated: boolean; schedules: PriceCollectionScheduleView[]; schedules_truncated: boolean; slots: PriceCollectionSlotView[]; next_cursor: string | null };
+export type PriceCollectionSlotDetail = { schema_version: "price-collection-slot-v1"; portfolio_id: string; read_only: boolean; server_now: string; slot: PriceCollectionSlotView; version: PriceCollectionVersionView; attempts: { attempt: number; status: string; started_at: string; finished_at: string | null; error_code: string | null }[] };
+export type PriceCollectionScheduleRow = { id: string; portfolio_id: string; provider: "longport"; market: "CN" | "HK" | "US"; scope_key: string; created_by: string; created_at: string };
+export type PriceCollectionControl = { schedule_id: string; revision: number; version_id: string; status: "paused" | "enabled"; audit_id: string; created_at: string };
+export type ScheduledPriceCollectionBinding = { slot: PriceCollectionSlotRow; definition: PriceCollectionScheduleDefinition; schedule: PriceCollectionScheduleRow; authorization: PriceCollectionControl & { ended_at: string | null } };

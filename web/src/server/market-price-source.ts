@@ -13,6 +13,7 @@ import { canonical, hash } from "./ledger/service";
 import { amount } from "./ledger/decimal";
 import { parseStrictJson } from "./strict-json";
 import { readMarketReferenceVersion, type MappingFacts, type CalendarFacts, type PriceCollectRequest } from "./market-references/service";
+import { verifyScheduledPriceCollectionRequest, type PriceCollectionRequestRow } from "./price-schedules/verification";
 
 type Obj = Record<string, unknown>;
 export type SdkMarketSource = { mode: "provider_observed"; provider: "longport"; portfolio_id: string; capture_id: string; receipt_hash: string; rate_kind: "market_price_not_executable"; capture_kind: "sdk_projection"; received_at: string };
@@ -102,6 +103,7 @@ function verify(db: Database.Database, batchId: string, knownAt: string) {
   const projections = array(raw.projections, 4); equal(raw, { schema_version: "longport-batch-projection-v1", projections });
   const request = db.prepare("SELECT * FROM command_requests WHERE id=?").get(capture.command_request_id) as Obj | undefined;
   requireTrue(request && request.command_type === "market_collect_prices" && typeof request.actor_id === "string" && request.actor_id.trim());
+  const scheduled = verifyScheduledPriceCollectionRequest(db, request as unknown as PriceCollectionRequestRow);
   const payload = parse(request.payload_json, 16384); requireTrue(validCollect(payload) && hash(payload) === request.payload_hash && request.payload_hash === receipt.request_hash && payload.publish === true);
   const input = payload as unknown as PriceCollectRequest, portfolio = String(request.portfolio_id), started = String(receipt.request_started_at);
   const original = selectedReferences(db, portfolio, input, started), current = selectedReferences(db, portfolio, input, knownAt);
@@ -111,6 +113,14 @@ function verify(db: Database.Database, batchId: string, knownAt: string) {
   requireTrue(job && attempt && job.job_type === "market_collect_prices" && job.command_request_id === request.id && job.scope === portfolio && job.status === "succeeded" && attempt.status === "succeeded" && job.attempt_count === capture.attempt && job.fencing_token === receipt.fencing_token && attempt.fencing_token === receipt.fencing_token);
   requireTrue(receipt.id === capture.id && receipt.batch_id === batchId && receipt.command_request_id === request.id && receipt.job_id === job.id && receipt.attempt === capture.attempt);
   requireTrue(priceInstant(request.created_at) <= priceInstant(attempt.started_at) && priceInstant(attempt.started_at) <= priceInstant(started) && priceInstant(started) <= priceInstant(receipt.received_at) && priceInstant(receipt.received_at) <= priceInstant(capture.created_at) && priceInstant(capture.created_at) <= priceInstant(attempt.finished_at) && priceInstant(attempt.finished_at) <= priceInstant(job.updated_at) && priceInstant(job.updated_at) <= priceInstant(knownAt));
+  if (scheduled) {
+    const { slot, definition, authorization } = scheduled;
+    requireTrue(job.period === slot.period && job.max_attempts === definition.max_attempts && job.input_version === request.id + ":" + request.payload_hash);
+    for (const time of [attempt.started_at, started, receipt.received_at, capture.created_at, attempt.finished_at, job.updated_at]) {
+      requireTrue(priceInstant(time) >= priceInstant(slot.scheduled_at) && priceInstant(time) < priceInstant(slot.deadline_at)
+        && priceInstant(time) >= priceInstant(authorization.created_at) && (authorization.ended_at === null || priceInstant(time) < priceInstant(authorization.ended_at)));
+    }
+  }
   requireTrue(projections.length === original.mappings.length);
   let previous = started;
   const segments = original.mappings.map((reference, index) => {

@@ -41,6 +41,14 @@ WORKBENCH_RESTORE_PARENT_DIR=${WORKBENCH_RESTORE_PARENT_DIR:-$WORKBENCH_DEPLOY_R
 WORKBENCH_PROJECT=${WORKBENCH_PROJECT:-etf-workbench}
 WORKBENCH_LEGACY_PROJECT=${WORKBENCH_LEGACY_PROJECT:-observatory}
 WORKBENCH_HTTP_PORT=${WORKBENCH_HTTP_PORT:-5051}
+WORKBENCH_MARKET_PROVIDER_ENABLED=${WORKBENCH_MARKET_PROVIDER_ENABLED:-0}
+[[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 0 || "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]] || { printf 'Market provider enable flag must be 0 or 1\n' >&2; exit 2; }
+if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then
+  : "${WORKBENCH_MARKET_PROVIDER_ENV_FILE:?Set independent protected market provider env file}"
+  safe_path "$WORKBENCH_MARKET_PROVIDER_ENV_FILE" || { printf 'Invalid market provider env path\n' >&2; exit 2; }
+  [[ "$WORKBENCH_MARKET_PROVIDER_ENV_FILE" != "$WORKBENCH_RUNTIME_ENV_FILE" && "$WORKBENCH_MARKET_PROVIDER_ENV_FILE" != "$WORKBENCH_BACKUP_KEY_FILE" ]] || { printf 'Market provider credentials must use a separate file\n' >&2; exit 2; }
+  export WORKBENCH_MARKET_PROVIDER_ENV_FILE
+fi
 WORKBENCH_RELEASE_SHA=$release_sha
 COMPOSE_PARALLEL_LIMIT=${COMPOSE_PARALLEL_LIMIT:-1}
 for value in "$WORKBENCH_DEPLOY_ROOT" "$WORKBENCH_LEGACY_DIR" "$WORKBENCH_LEGACY_DATA_DIR" "$WORKBENCH_DATA_DIR_HOST" "$WORKBENCH_BACKUP_DIR_HOST" "$WORKBENCH_RESTORE_PARENT_DIR" "$WORKBENCH_RUNTIME_ENV_FILE" "$WORKBENCH_BACKUP_KEY_FILE"; do
@@ -55,6 +63,7 @@ export COMPOSE_PARALLEL_LIMIT
 
 if ((execute == 0)); then
   printf 'PLAN ONLY: %s\n' "$release_sha"
+  printf 'Optional market provider enabled: %s\n' "$WORKBENCH_MARKET_PROVIDER_ENABLED"
   printf '%s\n' 'Validate protected configuration and isolated UID 10001 volumes' 'Build exact release-tagged web/worker images before stopping existing services' 'Back up current workbench with its compatible previous image, or snapshot legacy SQLite online' 'Stop previous writers; take final backup; migrate new schema explicitly' 'Archive legacy rows only as legacy research; never create actual funds' 'Create encrypted backup and restore into a new rehearsal directory' 'Start isolated workbench project; verify schema, auth, HTTP and worker health' 'Failure stops new writers and preserves all new facts; no database overwrite rollback'
   exit 0
 fi
@@ -69,13 +78,18 @@ read -r staged_sha < "$release_dir/.release-sha"
 (cd "$release_dir" && sha256sum --check --quiet .release-files.sha256)
 [[ -z $(find "$release_dir" -type l -print -quit) ]] || { printf 'Symlinked release source rejected\n' >&2; exit 2; }
 (cd "$release_dir" && diff -u <(find . -type f ! -name .release-files.sha256 | LC_ALL=C sort) <(sed -E 's/^[a-f0-9]{64}  //' .release-files.sha256 | LC_ALL=C sort))
-for secret_file in "$WORKBENCH_RUNTIME_ENV_FILE" "$WORKBENCH_BACKUP_KEY_FILE"; do
+secret_files=("$WORKBENCH_RUNTIME_ENV_FILE" "$WORKBENCH_BACKUP_KEY_FILE")
+if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then secret_files+=("$WORKBENCH_MARKET_PROVIDER_ENV_FILE"); fi
+for secret_file in "${secret_files[@]}"; do
   [[ -f "$secret_file" && ! -L "$secret_file" ]] || { printf 'Secret file missing or symlinked\n' >&2; exit 2; }
   mode=$(stat -c '%a' "$secret_file")
   (( (8#$mode & 077) == 0 )) || { printf 'Secret file permissions too broad\n' >&2; exit 2; }
 done
 [[ $(stat -c '%u' "$WORKBENCH_BACKUP_KEY_FILE") == 10001 ]] || { printf 'Backup key must be readable by UID 10001 and mode 0600\n' >&2; exit 2; }
 [[ $(stat -c '%u' "$WORKBENCH_RUNTIME_ENV_FILE") == 0 ]] || { printf 'Runtime environment must be root-owned\n' >&2; exit 2; }
+if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then
+  [[ $(stat -c '%u' "$WORKBENCH_MARKET_PROVIDER_ENV_FILE") == 0 ]] || { printf 'Market provider environment must be root-owned\n' >&2; exit 2; }
+fi
 mkdir -p "$WORKBENCH_DEPLOY_ROOT"
 exec 9>"$WORKBENCH_DEPLOY_ROOT/.release.lock"
 flock -n 9 || { printf 'Another release is active\n' >&2; exit 2; }
@@ -94,7 +108,44 @@ assert_no_recovery
 
 evidence="$WORKBENCH_DEPLOY_ROOT/release-evidence/$release_sha-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$evidence"
-compose() { docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$release_dir/docker-compose.yml" "$@"; }
+compose_options=(--env-file "$config" -p "$WORKBENCH_PROJECT" -f "$release_dir/docker-compose.yml")
+build_services=(web worker)
+start_services=(web worker verifier)
+release_images=("etf-workbench-web:$release_sha" "etf-workbench-worker:$release_sha")
+if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then
+  [[ -f "$release_dir/docker-compose.market-provider.yml" ]] || { printf 'Market provider Compose overlay missing\n' >&2; exit 2; }
+  compose_options+=(--profile market-provider -f "$release_dir/docker-compose.market-provider.yml")
+  build_services+=(market-provider)
+  start_services+=(market-provider)
+  release_images+=("etf-workbench-market-provider:$release_sha")
+fi
+compose() { docker compose "${compose_options[@]}" "$@"; }
+market_provider_ids() {
+  local ids id
+  ids=$(docker ps --all --filter "label=com.docker.compose.project=$WORKBENCH_PROJECT" --filter 'label=com.docker.compose.service=market-provider' --format '{{.ID}}') || return 1
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    [[ "$id" =~ ^[a-f0-9]{12,64}$ ]] || { printf 'Invalid provider container identity\n' >&2; return 1; }
+    printf '%s\n' "$id"
+  done <<< "$ids"
+}
+stop_market_provider_writers() {
+  local ids id
+  ids=$(market_provider_ids) || return 1
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    timeout 60 docker stop --time 30 "$id" >/dev/null || return 1
+    [[ $(docker inspect "$id" --format '{{.State.Running}}') == false ]] || return 1
+  done <<< "$ids"
+}
+assert_market_provider_stopped() {
+  local ids id
+  ids=$(market_provider_ids) || return 1
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    [[ $(docker inspect "$id" --format '{{.State.Running}}') == false ]] || return 1
+  done <<< "$ids"
+}
 writer_services() {
   local configured service found_web=0 found_worker=0
   configured=$("$@" config --no-env-resolution --services) || return 1
@@ -143,7 +194,8 @@ failed() {
   result=$?
   trap - ERR
   if ((writers_stopped || mutation_started)); then
-    compose stop web worker verifier >/dev/null 2>&1 || true
+    compose stop "${start_services[@]}" >/dev/null 2>&1 || true
+    stop_market_provider_writers >/dev/null 2>&1 || true
     printf '%s\n' '{"reason":"release failed; preserve new facts and reconcile before resuming"}' > "$WORKBENCH_DATA_DIR_HOST/RESTORE_PENDING_REVIEW"
     chown 10001:10001 "$WORKBENCH_DATA_DIR_HOST/RESTORE_PENDING_REVIEW"
     chmod 0600 "$WORKBENCH_DATA_DIR_HOST/RESTORE_PENDING_REVIEW"
@@ -155,13 +207,16 @@ failed() {
 trap failed ERR
 compose config --no-env-resolution --quiet
 timeout 30 docker version --format '{{.Server.Version}}' > "$evidence/docker-version.txt"
-timeout 3600 docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$release_dir/docker-compose.yml" build --pull web worker
-for image in "etf-workbench-web:$release_sha" "etf-workbench-worker:$release_sha"; do
+timeout 3600 docker compose "${compose_options[@]}" build --pull "${build_services[@]}"
+for image in "${release_images[@]}"; do
   [[ $(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}') == "$release_sha" ]]
   [[ $(docker image inspect "$image" --format '{{.Config.User}}') == '10001:10001' ]]
 done
-docker image inspect "etf-workbench-web:$release_sha" "etf-workbench-worker:$release_sha" --format '{{.Id}} {{index .Config.Labels "org.opencontainers.image.revision"}}' > "$evidence/image-identities.txt"
+docker image inspect "${release_images[@]}" --format '{{.Id}} {{index .Config.Labels "org.opencontainers.image.revision"}}' > "$evidence/image-identities.txt"
 compose run --rm --no-deps web node /app/scripts/check-workbench-runtime.mjs --config-only > "$evidence/auth-configuration.json"
+if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then
+  compose run --rm --no-deps --entrypoint python market-provider -c 'import os; from worker.market.providers.longport import _credentials, _load_sdk; assert not any(k in os.environ for k in ("WORKBENCH_PASSWORD_HASH","WORKBENCH_SESSION_SECRET")); _credentials(); _load_sdk(); print("provider credential presence and SDK import checked without network")' > "$evidence/market-provider-configuration.txt"
+fi
 compose run --rm --no-deps --entrypoint node backup --input-type=module -e 'import {readPassphrase} from "/app/scripts/backup-workbench.mjs"; await readPassphrase(); console.log("backup key configured");' > "$evidence/backup-key-check.txt"
 assert_no_recovery
 
@@ -169,6 +224,7 @@ if ((first_release)); then
   compose run --rm --no-deps -e WORKBENCH_DB_PATH= archive-legacy > "$evidence/legacy-online-snapshot.json"
   assert_no_recovery
   writers_stopped=1
+  stop_market_provider_writers
   stop_writers docker compose -p "$WORKBENCH_LEGACY_PROJECT" -f "$WORKBENCH_LEGACY_DIR/docker-compose.yml"
   assert_stopped docker compose -p "$WORKBENCH_LEGACY_PROJECT" -f "$WORKBENCH_LEGACY_DIR/docker-compose.yml"
 else
@@ -177,10 +233,12 @@ else
   WORKBENCH_RELEASE_SHA="$previous_sha" docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$previous/docker-compose.yml" run --rm --no-deps backup > "$evidence/pre-stop-backup.json"
   assert_no_recovery
   writers_stopped=1
+  stop_market_provider_writers
   WORKBENCH_RELEASE_SHA="$previous_sha" stop_writers docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$previous/docker-compose.yml"
   WORKBENCH_RELEASE_SHA="$previous_sha" assert_stopped docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$previous/docker-compose.yml"
   WORKBENCH_RELEASE_SHA="$previous_sha" docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$previous/docker-compose.yml" run --rm --no-deps backup > "$evidence/final-pre-migration-backup.json"
 fi
+assert_market_provider_stopped
 assert_no_recovery
 mutation_started=1
 compose run --rm --no-deps migrate > "$evidence/migration.json"
@@ -194,15 +252,20 @@ export WORKBENCH_RESTORE_ARCHIVE_NAME WORKBENCH_RESTORE_TARGET_NAME
 [[ "$WORKBENCH_RESTORE_ARCHIVE_NAME" =~ ^workbench-[a-f0-9-]+\.etfbackup$ ]]
 compose run --rm --no-deps restore > "$evidence/local-restore-rehearsal.json"
 assert_no_recovery
-timeout 180 docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$release_dir/docker-compose.yml" up -d --no-build --wait --wait-timeout 150 web worker verifier
+timeout 180 docker compose "${compose_options[@]}" up -d --no-build --wait --wait-timeout 150 "${start_services[@]}"
 compose exec -T web node /app/scripts/check-workbench-runtime.mjs --http > "$evidence/runtime-readiness.json"
 compose exec -T worker python -c 'import os; from worker.orchestration.db import open_database; c=open_database(os.environ["WORKBENCH_DB_PATH"]); c.close(); print("worker schema ready")' > "$evidence/worker-readiness.txt"
 compose exec -T verifier python -c 'import os; from worker.orchestration.db import open_database; from worker.governance_verification.source import source_manifest; from worker.orchestration.runtime import role_commands; assert role_commands("verifier") == ("governance_verification_v2",); assert not any(k.startswith("LONGPORT_") or k in ("WORKBENCH_PASSWORD_HASH","WORKBENCH_SESSION_SECRET") for k in os.environ); c=open_database(os.environ["WORKBENCH_DB_PATH"]); c.close(); source_manifest(); print("verifier schema and fixed source ready")' > "$evidence/verifier-readiness.txt"
 [[ $(docker inspect "$(compose ps -q verifier)" --format '{{.HostConfig.NetworkMode}}') == none ]]
+if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then
+  compose exec -T market-provider python -c 'import os; from worker.market.providers.longport import _credentials, _load_sdk; from worker.orchestration.db import open_database; from worker.orchestration.runtime import role_commands; assert role_commands("longport") == ("market_collect_prices",); assert not any(k in os.environ for k in ("WORKBENCH_PASSWORD_HASH","WORKBENCH_SESSION_SECRET")); _credentials(); _load_sdk(); c=open_database(os.environ["WORKBENCH_DB_PATH"]); c.close(); print("provider schema, credential presence and SDK import ready; no live quote validation")' > "$evidence/market-provider-readiness.txt"
+else
+  assert_market_provider_stopped
+fi
 [[ $(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$WORKBENCH_HTTP_PORT/api/workbench") == 401 ]]
 assert_no_recovery
 ln -s "$release_dir" "$WORKBENCH_DEPLOY_ROOT/.current-$release_sha-$$"
 mv -Tf "$WORKBENCH_DEPLOY_ROOT/.current-$release_sha-$$" "$WORKBENCH_DEPLOY_ROOT/current"
-printf '{"release_sha":"%s","status":"technical_cutover_verified","local_restore_verified":true,"independent_host_restore_verified":false,"investment_gates_unchanged":true}\n' "$release_sha" > "$evidence/result.json"
+printf '{"release_sha":"%s","status":"technical_cutover_verified","market_provider_enabled":%s,"local_restore_verified":true,"independent_host_restore_verified":false,"investment_gates_unchanged":true}\n' "$release_sha" "$WORKBENCH_MARKET_PROVIDER_ENABLED" > "$evidence/result.json"
 trap - ERR
 printf 'Technical cutover verified; investment and independent-host recovery gates remain separate. Evidence: %s\n' "$evidence"

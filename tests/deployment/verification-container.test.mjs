@@ -110,8 +110,9 @@ assert_stopped fake || exit 11
   }
   const running = spawnSync('bash', ['-c', script], { env: { ...process.env, SERVICES: 'web\nworker\nverifier', IDS: 'web-id\nworker-id\nverifier-id', RUNNING_ID: 'verifier-id', TRACE: join(directory, 'running.log') }, encoding: 'utf8' });
   assert.equal(running.status, 11, 'migration cannot continue while the old verifier remains running');
-  assert.match(deploy, /compose stop web worker verifier >\/dev\/null/);
-  assert.match(deploy, /up -d --no-build --wait --wait-timeout 150 web worker verifier/);
+  assert.match(deploy, /start_services=\(web worker verifier\)/);
+  assert.match(deploy, /compose stop "\$\{start_services\[@\]\}" >\/dev\/null/);
+  assert.match(deploy, /up -d --no-build --wait --wait-timeout 150 "\$\{start_services\[@\]\}"/);
   assert.match(deploy, /compose exec -T verifier python -c/);
   assert.match(deploy, /"\$previous_sha" stop_writers docker compose/);
 });

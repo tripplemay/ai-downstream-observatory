@@ -20,22 +20,99 @@ replacing personal parameters with public templates does not reduce scope.
 
 ## Implementation sequence and current evidence
 
+The v22 increment adds reviewed ETF daily-price schedules and optional provider
+release wiring. See [the v22 contract](price-collection-schedules.md). Historical
+checkpoints below retain their original scope; none is a release or investment
+acceptance claim for a later increment.
+
 | Workstream | Current implementation | Remaining work / release evidence |
 |---|---|---|
-| Contracts and new database | Versioned migrations through v21 in the current worktree; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, private catalog and identity-review versions, monthly cycle listing-review sequence boundaries, human-reviewed private market references, bounded HTTP/SDK captures, daily collection authorization/slots and controlled verification evidence | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
+| Contracts and new database | Versioned migrations through v22; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, private catalog and identity-review versions, monthly cycle listing-review sequence boundaries, human-reviewed private market references, bounded HTTP/SDK captures, FX and price schedule authorization/slots and controlled verification evidence | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
 | Authentication | Sealed sessions, persistent revocation/rate limit, server-side guards, strict Origin; authenticated HTTP and native login/logout checked; initialization/login share UTF-8 password bounds | Production TLS/proxy, operator configuration and real owner login |
 | Financial ledger | Exact decimal facts, cash/trades/settlement/dividends/FX/transfers/splits; unknown/estimated/confirmed tax, net-only receipts, cumulative tax assessment and actual withholding kept separate; corporate-action notice/resolution isolation; securities transit and append-only dependent corrections | Real dividend/tax/corporate-action and security-transfer evidence, full acceptance matrix |
 | Import and reconciliation | JSON and raw CSV attachment/preview/atomic confirmation; zero-write CSV inspection and visual explicit mapping; immutable mappings and row evidence; explicit duplicate review and persistent source aliases; scoped downloads and encrypted recovery; explicit balance/tax-payable/settled/transit reconciliation and unresolved-fact guards | Domestic/cross-border broker samples, native wizard acceptance, large background imports and full throughput/fault acceptance |
 | Accounting and performance | Immutable NAV v4/performance v5; source-owned transit NAV and per-event external-flow FX; independent Python/Web fact-quality proofs for NAV, after-tax performance and attribution, including intermediate-period unresolved states | Actual historical FX/provider and dividend evidence, full attribution/benchmark/history workflows; implementation is not complete acceptance |
 | Funding plans | Dated multi-currency sources and tranches, version editing/deferral, partial receipt matching, execution association, cash/reservation separation, over-budget acknowledgement, correction review and full audit history | User-confirmed dated plan, broker evidence, D-05 allocation choices and full execution/funding workflow acceptance |
 | ETF research directory | Portfolio-private membership/source/profile/disclosure versions; independent CAS, stable pagination, account-evidence summaries and up-to-four version-bound comparisons; TS/Python exact-decimal overlap bounds; v19 sourced human identity/lifecycle/product-structure/trading-unit reviews with expiry and independent proofs | Issuer/provider originals and actual identity/lifecycle verification, current fees/liquidity/premiums and weighted exposures; full P-05 and native comparison/mobile acceptance |
-| Market and orchestration | Immutable paged batches, validate/publish CAS, as-known/restated valuation, leases/fencing/retry/outbox; monthly discovery and fixed Node publisher; ECB reference-FX plus explicit daily collection schedules; LongPort day-price SDK publication bound to private human-reviewed mapping/calendar versions; separate core/provider roles | Actual A/HK/US permissions/data, authoritative exchange references, recurring price collection, full fault/load tests and current-image verification |
+| Market and orchestration | Immutable paged batches, validate/publish CAS, as-known/restated valuation, leases/fencing/retry/outbox; monthly discovery and fixed Node publisher; ECB reference-FX and LongPort day-price schedules with explicit human authorization; complete mapping/calendar bindings, next-local-day triggers, durable gaps and atomic in-flight pause checks; separate core/provider roles | Actual A/HK/US permissions/data, authoritative exchange references, full fault/load tests and current-image verification; stateless once-only cross-scope fairness beyond the bounded scan is not implemented |
 | Strategy and AI | Preregistered v1 contribution-only research plus explicit v2 monthly momentum/MA rotation and fixed-rebalance benchmark; exact PIT ranking, simulated sales/settlement/fixed buys, costs and bounded read-only summaries; frozen inputs/implementation and independent research windows | Live providers/models, continuous forward simulation, complete long-history workflow performance and genuine S-gate evidence; v2 does not activate actual schedules |
 | Governance and execution | Human version/capability APIs, risk/approval CAS, independent-process cash/share reservation race tests, execution reports separate from facts; private listing-review inputs invalidate old approvals on change/expiry; price reads bind listing identity and exact knowledge time; v21 controlled runner executes one fixed source-bound synthetic cash subcheck with independent Python/TS proof | Full E/S adapters, formal gate evidence and release/runtime binding beyond this subcheck; executable liquidity inputs and complete look-through; actual D/G/S approvals remain absent |
-| Product UI | Account, funding, catalog, research, governance, monthly evaluation, private market-reference and listing-review workspaces; typed securities and dividend/tax/corporate-action preview/confirm; visual CSV mapping and server-backed, current-session, read-only confirmation recovery | Native listing-review/market-reference/monthly/wizard/recovery/BFCache and full catalog comparison/positive governance acceptance; complete accessibility and readonly UX |
-| Deployment | Manual-only release, encrypted backup/restore, exact-SHA v21 core/provider/verifier CI and local restore; full historical real legacy-copy archive/recovery rehearsal; separate credential-free/network-free verifier wiring; no current production cutover | Final-release image rerun, independent-host restore, protected credentials/configuration, release and post-release checks |
+| Product UI | Account, funding, catalog, research, governance, monthly evaluation, private market-reference, listing-review, controlled-verification and daily-price schedule workspaces; typed securities and dividend/tax/corporate-action preview/confirm; visual CSV mapping and server-backed, current-session, read-only confirmation recovery | Native listing-review/market-reference/monthly/wizard/recovery/BFCache and full catalog comparison/positive governance acceptance; complete accessibility and readonly UX; enumeration of old price versions without slots |
+| Deployment | Manual-only release, encrypted backup/restore, historical exact-SHA core/provider/verifier CI and local restore; separate credential-free/network-free verifier; opt-in provider release with a separate private env file and label-scoped old-provider stop even when disabling it; no current production cutover | Final-release image rerun, independent-host restore, protected credentials/configuration, release and post-release checks |
+
+### v22 recurring reviewed ETF prices
+
+The new typed workspace/API saves paused finite definitions and requires separate
+human enable/pause. The provider daemon discovers D+1 market-local triggers and
+reuses the existing fixed daily-price collector; closed/mixed/stale/missed slots
+never masquerade as published prices. Original authorization, complete listing
+scope, reference versions, deadline, lease and publication CAS are rechecked
+between calls and atomically at finalization. Historical Python and TypeScript
+consumers independently reject forged slots and out-of-window captures.
+
+Review found and reproduced two defects before publication: SPA navigation could
+discard an unresolved retry body/key, and new-process discovery could repeatedly
+consume its history quota on existing slots. The fixes add navigation confirmation
+and derive the earliest historical gap from durable slots and exact authorization
+intervals. Red baseline logs are retained alongside green reruns. The latter fix
+does not claim global cross-scope fairness for cron-style `--once`; production
+uses the long-running provider daemon.
+
+Fixed-source local checks passed Python **619/619**, Web **792/792**, and Node
+**226/226** with the lifecycle explicitly enabled, plus production build,
+typecheck and shellcheck. Authentication HTTP passed and npm audit reported zero
+vulnerabilities. Evidence is under `artifacts/verification/price-schedules-v22/`.
+Full production-build HTTP passed **96/96**, schema 22, build
+`EvhnlYJ8L-ZwA7ZbRHq1x`, with all 536 inventoried source files unchanged.
+Manifest: `artifacts/verification/workbench-http/2026-09-24T19-26-14-873Z/manifest.json`,
+SHA256 `0e9bf4f3f56fb2be4427a70db16eb7c6c6698dc78f45409e9c19fd051fd8c679`.
+The fixed verifier source inventory now has 210 files, manifest hash
+`e5e478f3392de77dfc96a554bc1e4ef90be55bc02b2b0c5be1d612f3c0180dd5`;
+v21 source hashes cannot certify this increment.
+
+Native baseline exercised empty/typed input, explicit controls, actual future
+trigger, history, same-selection/A-B-A isolation, read-only recovery, cross-tab
+logout and 390px wrapping. After the two fixes, a fresh single-page run on the
+build above repeated save/enable, actual future two-listing collection, pause,
+history and narrow layout, with unchanged source hashes and exact 2,615-byte
+SDK projection/BLOB equality. All task processes, directories and ports were
+cleaned up, and no further browser restart occurred. Evidence:
+`artifacts/verification/browser-price-schedules-v22/`.
+
+These native fixtures use a frozen production build with development loopback
+authentication, not production TLS/proxy acceptance. The new-tab popup opened,
+but the automation's popup/page-attachment path failed; that blocked attempt is
+preserved separately and its content/draft behavior is not verified. Normal
+single-page recovery succeeded without restarting the browser. Uncertain-write
+navigation dialogs and exact 503 retry are callback tests, not native fault
+injection. Older read-only/logout evidence is not relabeled as a fixed-build
+rerun. `verify-local.mjs` in the local evidence directory rechecks this scoped
+checkpoint, not full P/ACC/E/S or release approval.
+
+The provider release flag defaults to disabled. Preflight checks credential
+presence and SDK loading without a quote context or network call. The prior
+provider is stopped by exact project/service labels even when the new release
+does not enable it, and a fresh pre-migration check rejects restarted writers.
+This is tested helper/wiring behavior, not an actual local Docker deployment.
+Read-only repository preflight again found a public repository, no GitHub
+environments and no `VPS_SSH_HOST_KEY` secret name. No secret values, production
+connection or deployment were used. Exact-commit CI remains a separate check
+after publication; real provider data and independent-host recovery remain open.
 
 ### v21 controlled engineering verification local checkpoint
+
+The later same-scope fix was published as
+`8e42737540db4146dd768db49c47632124b1c219` and passed
+[CI 36039657000](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/36039657000).
+Both jobs passed: Python 590, Web 746, Node 213 plus the default opt-in lifecycle
+skip, and HTTP 91. The separate local enabled lifecycle run passed 214/214;
+native evidence records 11 PASS and one unverified OS download-save boundary.
+All 509 HTTP source hashes and the preserved original artifact digests match
+that commit. The retained aggregate is
+`artifacts/verification/github-ci/36039657000/verification-result.json`, SHA256
+`e43abad26d05964df878a17faee6a23c88e426d2b5d63889df8f6ffa32c55716`.
+No production cutover occurred. The following sections retain their historical
+sequence and are not new v22 evidence.
 
 The [controlled verification runner](controlled-verification.md) now connects a
 normal human request, dedicated fenced verifier job, actual synthetic Node ledger

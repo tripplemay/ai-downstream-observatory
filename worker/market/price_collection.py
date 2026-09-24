@@ -162,7 +162,9 @@ def _verify_references(connection, prepared, payload, portfolio_id, known_at, *,
     _assert(current["heads"] == frozen["heads"], "STALE_MARKET_REFERENCE_VERSION")
 
 
-def prepare_price_collection(connection, request, job, lease):
+def prepare_price_collection(connection, request, job, lease, *, clock=None):
+    from worker.orchestration.price_collections import assert_price_collection_authorized, PRICE_COLLECTION_TERMINAL_CODES
+    clock = (lambda: None) if clock is None else clock
     if connection.in_transaction:
         raise WorkbenchError("PROVIDER_NETWORK_INSIDE_TRANSACTION")
     assert_writable(connection)
@@ -170,8 +172,9 @@ def prepare_price_collection(connection, request, job, lease):
     _assert(job["id"] == lease.job_id and job["command_request_id"] == request["id"]
             and job["scope"] == request["portfolio_id"] and job["job_type"] == "market_collect_prices",
             "PROVIDER_JOB_SCOPE_MISMATCH")
-    assert_lease(connection, lease)
-    started = stamp()
+    assert_lease(connection, lease, now=clock())
+    started = stamp(clock())
+    assert_price_collection_authorized(connection, request, job, lease, now=started)
     with transaction(connection, immediate=False):
         references, selected = select_references(connection, request["portfolio_id"], payload, started, require_current=True)
         scope = price_collection_scope(request["portfolio_id"], references)
@@ -180,15 +183,17 @@ def prepare_price_collection(connection, request, job, lease):
         projections = []
         for chosen in selected:
             assert_writable(connection)
-            assert_lease(connection, lease)
+            assert_lease(connection, lease, now=clock())
+            assert_price_collection_authorized(connection, request, job, lease, now=clock())
             result = longport.collect_longport_candles(mapping=chosen["mapping"], start_date=payload["start_date"],
                                                        end_date=payload["end_date"], expected_dates=chosen["expected_dates"])
-            assert_lease(connection, lease)
+            assert_lease(connection, lease, now=clock())
             assert_writable(connection)
+            assert_price_collection_authorized(connection, request, job, lease, now=clock())
             parsed = _replay_projection(result["projection"], chosen, payload)
             _assert(parsed == result, "PRICE_PROVIDER_PROJECTION_MISMATCH")
             projections.append(result["projection"])
-        received = stamp()
+        received = stamp(clock())
         raw = canonical_json({"schema_version": "longport-batch-projection-v1", "projections": projections}).encode("utf-8")
         normalized = _normalized(request["portfolio_id"], payload, references, selected, projections)
         receipt = {"schema_version": "market-sdk-capture-v1", "id": new_id("capture"), "batch_id": new_id("batch"),
@@ -206,13 +211,15 @@ def prepare_price_collection(connection, request, job, lease):
         _verify_material(prepared, request)
         return prepared
     except Exception as error:
-        allowed = {"STALE_OR_EXPIRED_LEASE", "RESTORE_PENDING_REVIEW", "WORKBENCH_READ_ONLY"}
+        allowed = {"STALE_OR_EXPIRED_LEASE", "RESTORE_PENDING_REVIEW", "WORKBENCH_READ_ONLY", *PRICE_COLLECTION_TERMINAL_CODES}
         code = str(error) if isinstance(error, WorkbenchError) and str(error) in allowed else "PRICE_PROVIDER_COLLECTION_FAILED"
         raise WorkbenchError(code) from None
 
 
 def persist_price_collection(connection, prepared, now=None):
     from .batches import stage_batch, stage_page, validate_batch, publish_batch
+    from .collection import _verify_collection_window
+    from worker.orchestration.price_collections import assert_price_collection_authorized
     receipt, current = prepared.receipt, stamp(now)
     with transaction(connection):
         request = connection.execute("SELECT * FROM command_requests WHERE id=?", (receipt["command_request_id"],)).fetchone()
@@ -221,6 +228,9 @@ def persist_price_collection(connection, prepared, now=None):
         _assert(job is not None, "PROVIDER_JOB_SCOPE_MISMATCH")
         lease = Lease(job["id"], job["lease_owner"], receipt["fencing_token"], receipt["attempt"], job["lease_until"])
         assert_lease(connection, lease, now=current)
+        scheduled = assert_price_collection_authorized(connection, request, job, lease, now=current)
+        if scheduled is not None:
+            _verify_collection_window(scheduled, receipt["request_started_at"], receipt["received_at"], current)
         _verify_references(connection, prepared, payload, request["portfolio_id"], current, require_current=True)
         _assert(_revision(connection, prepared.document["batch"]["scope"]) == payload["expected_publication_revision"], "STALE_PUBLICATION_REVISION")
         _assert(instant(current) >= instant(receipt["received_at"]), "PROVIDER_COMMIT_BEFORE_RECEIPT")
@@ -242,7 +252,8 @@ def persist_price_collection(connection, prepared, now=None):
 
 
 def verify_price_provider_capture(connection, batch_id, require_published=True, *, replay=True, known_at=None):
-    from .collection import _verify_capture
+    from .collection import _verify_capture, _verify_collection_window
+    from worker.orchestration.price_collections import price_collection_request_binding
     try:
         summary = _verify_capture(connection, batch_id, require_published, replay=replay, known_at=known_at,
                                   table="market_sdk_captures", prepared_type=PreparedPriceCollection,
@@ -252,6 +263,18 @@ def verify_price_provider_capture(connection, batch_id, require_published=True, 
         request = connection.execute("SELECT * FROM command_requests WHERE id=?", (row["command_request_id"],)).fetchone()
         prepared = PreparedPriceCollection(bytes(row["raw_body"]), json.loads(row["receipt_json"]),
                                            json.loads(row["normalized_json"]), json.loads(row["document_json"]))
+        scheduled = price_collection_request_binding(connection, request)
+        if scheduled is not None:
+            receipt = prepared.receipt
+            job = connection.execute("SELECT * FROM job_runs WHERE id=?", (receipt["job_id"],)).fetchone()
+            attempt = connection.execute("SELECT * FROM job_attempts WHERE job_id=? AND attempt=?", (receipt["job_id"], receipt["attempt"])).fetchone()
+            _assert(job["period"] == scheduled["slot"]["period"] and job["max_attempts"] == scheduled["definition"]["max_attempts"]
+                    and job["input_version"] == request["id"] + ":" + request["payload_hash"])
+            _verify_collection_window(scheduled, attempt["started_at"], receipt["request_started_at"], receipt["received_at"], row["created_at"])
+            if job["status"] == "succeeded":
+                _verify_collection_window(scheduled, attempt["finished_at"], job["updated_at"])
+            for event in connection.execute("SELECT published_at FROM market_publication_events WHERE batch_id=?", (batch_id,)):
+                _verify_collection_window(scheduled, event["published_at"])
         _verify_references(connection, prepared, _request_payload(request), request["portfolio_id"], stamp(known_at))
         return summary
     except (ValueError, TypeError, KeyError, IndexError, AttributeError, UnicodeError):

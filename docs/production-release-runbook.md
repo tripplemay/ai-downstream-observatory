@@ -16,6 +16,7 @@
 | `/opt/observatory/restores-workbench` | 每次恢复的新目录；10001，0700 |
 | `/opt/observatory/release-evidence` | 发布命令与结果；root，0700；不公开下载 |
 | `/etc/etf-workbench/runtime.env` | 密码 hash、会话 secret、HTTPS origin；root，0600 |
+| `/etc/etf-workbench/market-provider.env` | 可选价格采集的独立凭据；仅 provider 容器可读，root，0600，不复用 Web secret |
 | `/etc/etf-workbench/backup.passphrase` | 独立随机备份口令；10001，0600；密钥另行保管 |
 | `/etc/etf-workbench/release.env` | root 管理的 shell 配置；root，0600；不可使用不可信上传文件 |
 
@@ -75,6 +76,30 @@ bash scripts/deploy-workbench.sh \
 6. `up --wait` 等待 Web 就绪，核对 schema、健康接口、未登录 API 401、worker 数据库加载；成功后才切 current 链接。
 
 所有备份、schema、镜像 ID、恢复和健康结果写入 `release-evidence/<SHA>-<UTC>/`。旧库及旧容器保留，不自动清理旧镜像、备份或归档。
+
+### 可选价格 Worker 的发布边界
+
+默认 `WORKBENCH_MARKET_PROVIDER_ENABLED=0`，不会构建或启动价格 Worker。操作员在
+完成供应商权限及凭据配置审核后，才能在受控 `release.env` 中明确设置：
+
+```sh
+WORKBENCH_MARKET_PROVIDER_ENABLED=1
+WORKBENCH_MARKET_PROVIDER_ENV_FILE=/etc/etf-workbench/market-provider.env
+```
+
+凭据内容只写独立私有文件，不加入 Git、镜像或本文示例，不传给 core/verifier/Web。
+发布工具检查独立路径、root 所有权及无 group/other 权限，以准确 SHA 构建 provider
+镜像，停写前离线检查 SDK 导入与凭据存在，启动后检查角色与 schema。此检查**不请求
+行情**，不证明数据权限、行情新鲜度或许可；真实数据仍需单独验收。
+
+迁移前按当前 Compose project 和 `market-provider` service 标签发现并停止旧 provider，
+即使新版配置已禁用它，也不能遗留后台写者跨 schema 运行。停不下来、状态不可核实
+或失败清理后存在疑点时，不继续迁移或自动重启。失败路径停止新服务与发现的 provider，
+保留恢复标记和全部事实；不得回滚数据库覆盖新事实。
+
+启用进程不等于批准采集计划。自动采集还要求组合内独立的人类保存/启用记录，见
+[日价格计划合同](price-collection-schedules.md)。既有已启用计划会在合法后续窗口被
+消费，发布不重新批准、改写或补跑它们。
 
 旧库始终只读挂载。关闭最后写者的 WAL 库可能删除辅助文件，SQLite 无法在只读目录重建 `-shm`；因此只有已停写的最终归档传 `WORKBENCH_LEGACY_QUIESCED=1`，将主文件及存在的 WAL/rollback journal 一起流式校验复制到私有 staging，再使用 Online Backup 生成规范快照。初次在线备份不使用该分支；不得在写者仍运行时谎报 quiesced，也不得仅复制主文件忽略 WAL。
 
