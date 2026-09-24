@@ -109,6 +109,8 @@ finally: db.close()
     await check('HTTP-CB03', 'real CSV-only Python dispatcher and fixed Node preview yield scoped row and candidate pages', async () => {
       const job = worker(previewRequest), status = await get({ request: previewRequest }); assert.equal(status.status, 200, JSON.stringify(status.json)); preview = status.json.item.result;
       assert.equal(status.json.item.status, 'succeeded'); assert.equal(preview.row_count, 3); assert.equal(preview.required_review_count, 3); assert.equal(counts().facts, 0);
+      const metadata = await get({ request: previewRequest, view: 'preview' }); assert.equal(metadata.status, 200);
+      assert.equal(metadata.json.preview.batch_status, 'preview'); assert.equal(metadata.json.preview.current_revision, 0); assert.equal(metadata.json.preview.confirmed_revision, null);
       const first = await get({ request: previewRequest, view: 'rows', limit: '1' }); assert.equal(first.status, 200); assert.equal(first.json.items.length, 1); assert.equal(first.json.items[0].row, 1); assert.ok(first.json.next_cursor);
       const second = await get({ request: previewRequest, view: 'rows', limit: '1', cursor: first.json.next_cursor }); assert.equal(second.status, 200); assert.equal(second.json.items[0].row, 2);
       assert.equal((await get({ request: previewRequest, view: 'candidates', row: '3', kind: 'exact_prior_rows', cursor: first.json.next_cursor })).status, 400);
@@ -168,6 +170,7 @@ finally: db.close()
         const list = await get(); assert.equal(list.status, 200); assert.equal(list.json.read_only, true);
         const status = await get({ request: confirmation }); assert.equal(status.status, 200); assert.equal(status.json.read_only, true);
         const receipts = await get({ request: confirmation, view: 'receipts', limit: '1' }); assert.equal(receipts.status, 200); assert.equal(receipts.json.read_only, true);
+        const metadata = await get({ request: previewRequest, view: 'preview' }); assert.equal(metadata.status, 200); assert.equal(metadata.json.read_only, true);
         assert.equal((await upload('readonly', { expected_revision: '3' })).status, 423);
         assert.equal((await post(endpoint, { action: 'cancel', command: { portfolio_id: portfolio, request_id: previewRequest, reason: 'No recovery writes' } })).status, 423);
         assert.equal((await get({ portfolio: foreign, request: confirmation })).status, 404);
@@ -177,6 +180,29 @@ finally: db.close()
       assert.equal((await get({ portfolio: foreign, cursor: list.json.next_cursor })).status, 400);
       read(db => { assert.equal(db.pragma('quick_check', { simple: true }), 'ok'); assert.deepEqual(db.pragma('foreign_key_check'), []); });
       return { readonly_private_reads: true, readonly_write_status: 423, cross_portfolio_detail: 404, cursor_cross_scope: 400, quick_check: 'ok' };
+    });
+    await check('HTTP-CB07', 'proved preview metadata distinguishes current batch from immutable result and review-only keysets stay filter bound', async () => {
+      const before = counts(), metadata = await get({ request: previewRequest, view: 'preview' });
+      assert.equal(metadata.status, 200); assert.equal(metadata.json.session_binding, binding); assert.equal(metadata.json.view, 'preview');
+      assert.equal(metadata.json.preview.batch_status, 'confirmed'); assert.equal(metadata.json.preview.confirmed_revision, 3); assert.equal(metadata.json.preview.current_revision, 3);
+      assert.equal(metadata.json.preview.expected_revision, 0); assert.equal(metadata.json.preview.content_hash, sha(csv)); assert.equal(metadata.json.preview.mapping_attachment_hash, sha(mapping));
+      assert.deepEqual(metadata.json.preview.headers, ['date', 'amount', 'note']); assert.equal(metadata.json.preview.broker_format_verified, false);
+      assert.equal(metadata.json.preview.required_review_count, 3); assert.equal(metadata.json.preview.error_count, 0);
+      assert.equal((await get({ request: previewRequest })).json.item.result.batch_status, 'preview');
+      assert.doesNotMatch(JSON.stringify(metadata.json), /required_review_rows|"candidates"|payload_text|csv_bytes|input_json|session_hash/);
+      const first = await get({ request: previewRequest, view: 'rows', review_only: 'true', limit: '1' });
+      assert.equal(first.status, 200); assert.equal(first.json.review_only, true); assert.equal(first.json.total, 3); assert.equal(first.json.items[0].missing_source_id, true);
+      assert.deepEqual(first.json.items[0].candidate_counts, { exact_event_ids: 0, possible_event_ids: 0, exact_prior_rows: 0, possible_prior_rows: 0 });
+      const second = await get({ request: previewRequest, view: 'rows', review_only: 'true', limit: '1', cursor: first.json.next_cursor });
+      assert.equal(second.status, 200); assert.equal(second.json.items[0].row, 2); assert.equal(second.json.items[0].candidate_counts.exact_prior_rows, 1);
+      assert.equal(second.json.items[0].requires_review, true); assert.equal(second.json.result_hash, first.json.result_hash);
+      assert.equal((await get({ request: previewRequest, view: 'rows', review_only: 'false', cursor: first.json.next_cursor })).status, 400);
+      assert.equal((await get({ request: previewRequest, view: 'rows', cursor: first.json.next_cursor })).status, 400);
+      for (const query of [{ view: 'preview', limit: '1' }, { view: 'preview', review_only: 'false' }, { view: 'rows', review_only: '1' }]) assert.equal((await get({ request: previewRequest, ...query })).status, 400);
+      assert.equal((await get({ portfolio: foreign, request: previewRequest, view: 'preview' })).status, 404);
+      assert.deepEqual(counts(), before);
+      return { metadata_proof_required: true, current_batch_status: 'confirmed', immutable_preview_result_status: 'preview', current_revision: 3,
+        review_only_total: 3, bounded_row_count: 1, filter_cursor_mismatch: 400, cross_portfolio: 404, GET_dispatches: false };
     });
   } finally {
     if (cookie) await request('/api/auth/logout', { method: 'POST', headers: { Cookie: cookie, Origin: origin } });

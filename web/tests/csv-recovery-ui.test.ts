@@ -38,7 +38,7 @@ function evidence(confirmed = false) {
 }
 
 // Runs real component callbacks/effects with deterministic hooks; not browser or App Router acceptance.
-function mount(t: { after: (callback: () => void) => void }, options: { readOnly?: boolean; deferredRefresh?: boolean } = {}) {
+function mount(t: { after: (callback: () => void) => void }, options: { readOnly?: boolean; deferredRefresh?: boolean; legacyRecoveryOnly?: boolean } = {}) {
   const hooks: unknown[] = [], effects: { dependencies?: readonly unknown[]; callback: Effect; cleanup?: () => void }[] = [];
   let cursor = 0, effectCursor = 0, pendingRender = true, tree: Tree;
   const pendingEffects = new Set<number>(), locks: boolean[] = [], requests: { url: string; init?: RequestInit; resolve: (value: unknown, status?: number) => void }[] = [];
@@ -90,7 +90,7 @@ function mount(t: { after: (callback: () => void) => void }, options: { readOnly
     crypto: globalThis.crypto, fetch: (url: string, init?: RequestInit) => new Promise(resolve => requests.push({ url, init,
       resolve: (value, status = 200) => resolve({ ok: status >= 200 && status < 300, status, json: async () => value }) })) });
   initialize((id: string) => { assert.ok(id in dependencies, id); return dependencies[id]; }, module, module.exports);
-  const props = { portfolioId: "p", accountId: "a", revision: 0, readOnly: options.readOnly ?? false,
+  const props = { portfolioId: "p", accountId: "a", revision: 0, readOnly: options.readOnly ?? false, legacyRecoveryOnly: options.legacyRecoveryOnly ?? false,
     onScopeLockChange: (locked: boolean) => locks.push(locked), onRestorePendingScope: async () => {},
     onCommitted: () => { refreshCalls++; return options.deferredRefresh ? new Promise<void>((resolve, reject) => { resolveRefresh = resolve; rejectRefresh = reject; }) : Promise.resolve(); } };
   function flush() {
@@ -116,6 +116,7 @@ function mount(t: { after: (callback: () => void) => void }, options: { readOnly
     failRefresh: async () => { rejectRefresh?.(new Error("synthetic refresh transport failure")); await settle(); },
     invalidate: () => { invalidate(); flush(); },
     updateScope: (portfolioId: string, accountId: string) => { Object.assign(props, { portfolioId, accountId }); pendingRender = true; flush(); },
+    setLegacyRecoveryOnly: (value: boolean) => { props.legacyRecoveryOnly = value; pendingRender = true; flush(); },
   };
 }
 
@@ -244,4 +245,84 @@ test("401 from an explicit recovered confirmation invalidates the session and cl
   assert.equal(f.nodes().some(node => node.type === "button" && node.props.children === "重试完全相同的确认请求"), false);
   assert.equal(f.nodes().some(node => node.props.role === "alert"), false);
   assert.equal(f.locks.at(-1), false);
+});
+
+test("legacy recovery mode omits the new upload and mapping UI while default mode remains unchanged", t => {
+  const legacy = mount(t, { legacyRecoveryOnly: true });
+  assert.ok(legacy.panel());
+  assert.equal(legacy.nodes().some(node => node.type === "form" || node.type === "wizard" || node.props.type === "file"), false);
+  assert.ok(legacy.nodes().some(node => node.type === "h2" && node.props.children === "旧 CSV 确认恢复与审计"));
+  assert.equal(legacy.requests.length, 0);
+  const original = mount(t);
+  assert.ok(original.nodes().some(node => node.type === "form"));
+  assert.ok(original.nodes().some(node => node.type === "wizard"));
+});
+
+test("switching to legacy-only rejects retained upload and wizard callbacks before reading new file bytes", async t => {
+  const f = mount(t); let reads = 0;
+  const file = { name: "synthetic.csv", size: 1, arrayBuffer: async () => { reads++; return new Uint8Array([49]).buffer; } };
+  const fileInput = f.nodes().find(node => node.props["aria-label"] === "CSV 原文件")!;
+  (fileInput.props.onChange as (event: unknown) => void)({ target: { files: [file] } }); f.flush();
+  const wizard = f.nodes().find(node => node.type === "wizard")!;
+  const apply = wizard.props.onApply as (text: string, hash: string) => boolean;
+  assert.equal(apply("{}", "synthetic-hash"), true); f.flush();
+  const submit = f.nodes().find(node => node.type === "form")!.props.onSubmit as (event: unknown) => Promise<void>;
+  f.setLegacyRecoveryOnly(true);
+  assert.equal(apply("changed", "changed-hash"), false);
+  await submit({ preventDefault() {} }); await f.settle();
+  assert.equal(reads, 0); assert.equal(f.requests.length, 0);
+  assert.equal(f.nodes().some(node => node.type === "form" || node.type === "wizard"), false);
+});
+
+test("legacy-only explicit retries preserve the original BOM payload across failure without creating a background request", async t => {
+  const f = mount(t, { legacyRecoveryOnly: true }), { detail, batch, payload } = evidence();
+  const restore = (f.panel().props.onRestore as (detail: CsvConfirmationRecoveryDetailResponse) => Promise<boolean>)(detail);
+  f.requests[0].resolve(batch); assert.equal(await restore, true); await f.settle();
+  assert.equal(f.requests.length, 1);
+  for (const status of [503, 200]) {
+    const retry = f.nodes().find(node => node.type === "button" && node.props.children === "重试完全相同的确认请求")!;
+    assert.equal(retry.props.disabled, false); (retry.props.onClick as () => void)(); await f.settle();
+    const request = f.requests.at(-1)!;
+    assert.equal(request.url, "/api/workbench"); assert.equal(request.init?.method, "POST");
+    assert.deepEqual(Buffer.from(String(request.init.body)), Buffer.from(payload));
+    assert.equal(new Headers(request.init.headers).get("X-Workbench-Session-Binding"), sessionBinding);
+    request.resolve(status === 503 ? { error: "WORKBENCH_UNAVAILABLE" } : { revision: 1,
+      receipts: [{ event_id: "synthetic-event", audit_id: "synthetic-audit", revision: 1, warnings: [] }], duplicate: true }, status);
+    await f.settle(); await f.settle();
+    assert.equal(f.nodes().some(node => node.type === "form" || node.type === "wizard"), false);
+    if (status === 503) { assert.equal(f.requests.length, 2); assert.equal(f.refreshCalls(), 0); }
+  }
+  assert.equal(f.refreshCalls(), 1); assert.equal(f.requests.filter(request => request.init?.method === "POST").length, 2);
+  assert.equal(f.requests.some(request => request.url === "/api/workbench/csv/jobs" || request.url === "/api/workbench/csv"), false);
+});
+
+test("background-owned recovery preserves the frozen request but directs users back to tasks instead of retrying or falling back", async t => {
+  const f = mount(t, { legacyRecoveryOnly: true }), { detail, batch, payload } = evidence();
+  const restore = (f.panel().props.onRestore as (detail: CsvConfirmationRecoveryDetailResponse) => Promise<boolean>)(detail);
+  f.requests[0].resolve(batch); assert.equal(await restore, true); await f.settle();
+  const retry = () => f.nodes().find(node => node.type === "button" && node.props.children === "重试完全相同的确认请求")!;
+  (retry().props.onClick as () => void)(); await f.settle();
+  assert.equal(f.requests[1].init?.body, payload);
+  f.requests[1].resolve({ error: "CSV_BACKGROUND_CONFIRM_REQUIRED" }, 409); await f.settle(); await f.settle();
+  assert.ok(f.nodes().some(node => node.props.role === "alert" && String(node.props.children).includes("返回后台 CSV 任务入口核对状态")));
+  assert.ok(f.nodes().some(node => node.type === "pre" && node.props.children === payload));
+  assert.equal(retry().props.disabled, true); (retry().props.onClick as () => void)(); await f.settle();
+  assert.equal(f.requests.length, 2); assert.equal(f.refreshCalls(), 0);
+  const finish = f.nodes().find(node => node.type === "button" && node.props.children === "结束旧恢复展示，返回任务入口")!;
+  (finish.props.onClick as () => void)(); await f.settle();
+  assert.equal(f.nodes().some(node => node.type === "pre" && node.props.children === payload), false);
+  assert.equal(f.nodes().some(node => node.type === "form" || node.type === "wizard"), false);
+  assert.equal(f.panel().props.disabled, false); assert.equal(f.requests.length, 2);
+});
+
+test("legacy-only recovery in restore read-only mode retains audit and download links without permitting confirmation", async t => {
+  const f = mount(t, { legacyRecoveryOnly: true, readOnly: true }), { detail, batch, payload } = evidence();
+  const restore = (f.panel().props.onRestore as (detail: CsvConfirmationRecoveryDetailResponse) => Promise<boolean>)(detail);
+  f.requests[0].resolve(batch); assert.equal(await restore, true); await f.settle();
+  assert.ok(f.nodes().some(node => node.type === "pre" && node.props.children === payload));
+  assert.equal(f.nodes().filter(node => node.type === "a" && node.props.download).length, 2);
+  const retry = f.nodes().find(node => node.type === "button" && node.props.children === "重试完全相同的确认请求")!;
+  assert.equal(retry.props.disabled, true); (retry.props.onClick as () => void)(); await f.settle();
+  assert.equal(f.requests.length, 1); assert.equal(f.refreshCalls(), 0);
+  assert.equal(f.nodes().some(node => node.type === "form" || node.type === "wizard"), false);
 });

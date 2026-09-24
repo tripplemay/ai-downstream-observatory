@@ -97,9 +97,11 @@ does not start or finalize new work.
 
 Background-owned batches cannot use the old synchronous confirmation endpoint;
 it must fail with `CSV_BACKGROUND_CONFIRM_REQUIRED`. The executor uses the
-existing inner confirmation engine within its own fenced transaction. Existing
-unrelated synchronous import/recovery behavior remains unchanged during UI
-migration; this compatibility phase is not completion of the background UI.
+existing inner confirmation engine within its own fenced transaction. The main
+CSV workspace now uses these background commands. The explicitly selected legacy
+recovery panel cannot create new synchronous CSV previews; it only retains old
+current-session recovery behavior. The legacy API and standard JSON importer are
+not removed, and their existence is not an automatic fallback for new CSV work.
 
 ## Results and queries
 
@@ -153,19 +155,79 @@ the status GET is authoritative for execution state.
   request_id, reason}}`. Neither action accepts caller identity, a result or a
   replacement deadline.
 - GET `?portfolio=P` lists requests. Adding `request=R` reads one status;
+  `view=preview` reads bounded, proved metadata including the current batch status
+  and ledger revision, not just the immutable historical result status.
   `view=rows|candidates|receipts` reads a page. Candidate queries also require a
   source `row` and `kind` (`exact_event_ids`, `possible_event_ids`,
   `exact_prior_rows` or `possible_prior_rows`). Unknown/duplicate query fields
-  are rejected, not silently ignored.
+  are rejected, not silently ignored. Only row queries accept `review_only=true`
+  or `false`; filtering uses the sealed required-review row numbers and SQL LIMIT.
+  Rows expose candidate counts, not complete candidate arrays.
 
 The page schema is `csv-background-page-v1`. List, row, candidate and receipt
 limits are respectively 20, 25, 100 and 25, with an 8 MiB response ceiling.
 Domain-page cursors bind actor, portfolio, request, immutable result hash, view
-and candidate row/kind. List cursors use stable creation-time/ID ordering.
+and candidate row/kind; row cursors also bind the review-only filter. List cursors
+use stable creation-time/ID ordering.
 Rows and receipts use SQL-limited extraction; candidate arrays are sliced only
 after validating their immutable manifest. The existing full-domain result proof
 still runs before page extraction. Bounded response size therefore does not mean
 bounded proof CPU or establish the query latency target.
+
+## Main workspace and browser boundary
+
+Preview and confirmation each require a separate, initially unchecked durable
+delegation. A third acknowledgement covers complete human review of the original
+records, mapping and duplicate candidates. Required row decisions must all be
+provided, with reasons and exact candidates selected from verified pages. Visiting
+pages is not treated as proof that a human reviewed every record. Files, mappings,
+review drafts and pending retry bytes are memory-only; no local storage persists
+them. Current-batch status prevents an old successful preview from being treated
+as permission to confirm a batch that has since been confirmed.
+
+The browser freezes immutable file bytes, raw mapping text or original confirmation
+text, scope, revision and idempotency key before submission. An ambiguous response
+does not create a new key or a synchronous fallback. Only an explicit unchanged
+retry is permitted within the original session. Clearing the page discards local
+retry information, not server authorization. A new session can explicitly inspect
+restricted task history and freshly review a successful preview; it does not
+recover or replay the old session's original confirmation request.
+
+Preview uses a frozen multipart Blob rather than native FormData string parts:
+the latter normalize mapping LF to CRLF and change its authorized input hash.
+The multipart boundary is checked against the original content; UTF-8 filename
+encoding preserves quoted/non-ASCII names. Retries reuse the same immutable wire
+body. Route-level tests must exercise this transport, not only call the service
+directly with the intended original strings.
+
+Network helpers probe the current session before and after requests, carry the
+binding header, and check the component operation epoch after asynchronous work
+and immediately before POST. A scope/session change during hashing or a session
+probe cannot send a stale write. Response bodies use bounded strict JSON/UTF-8
+reading; cancellation of a rejected stream is not awaited indefinitely. Runtime
+schemas reject unknown fields and bind pages to the verified request/result/review
+identity. The browser recomputes immutable result/input hashes; this supplements,
+not replaces, the server's full ledger/evidence proof. Displayed row commands use
+a browser-only CSV projection schema without runtime code generation.
+
+Each public GET or POST has one 30-second monotonic deadline covering both
+session probes, response reading and hash verification. Timeout aborts the local
+transport and releases the UI wait; an explicit, unchanged retry remains the
+only write retry. Late transport or crypto completion cannot publish state or
+send a stale POST, including when the timer callback itself is delayed. A local
+timeout does not revoke work already accepted by the server: inspect status or
+explicitly cancel according to the durable-work rules above.
+
+Task history, status refresh, row/candidate/receipt pagination and page restoration
+are read-only requests. The UI does not claim accepted `queued` receipts are
+completed accounting. Recovery mode disables all background submissions, retries
+and cancellations while permitting evidence queries. Original CSV and mapping
+downloads remain explicit uses of the existing authenticated attachment API;
+downloading an attachment is not restoration of an old confirmation authorization.
+
+This migration does not itself certify native desktop/mobile, accessibility,
+fault, full workload or production acceptance. Those require their own frozen
+runtime evidence rather than component callback tests alone.
 
 ## Acceptance remaining
 

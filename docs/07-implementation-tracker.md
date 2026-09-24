@@ -22,8 +22,10 @@ replacing personal parameters with public templates does not reduce scope.
 
 The current v23 increment adds explicitly authorized background CSV preview and
 confirmation, plus bounded private query APIs. See [the v23 contract](csv-background-imports.md).
-The main CSV UI is not yet converted and concurrent-write performance remains
-an open requirement. The preceding v22 increment added reviewed ETF daily-price
+The main CSV UI now uses the background API with separate human authorizations,
+bounded evidence pages and exact manual retry. A synthetic native workflow subset
+is verified below; the complete native/fault matrix and concurrent-write performance
+remain open requirements. The preceding v22 increment added reviewed ETF daily-price
 schedules and optional provider release wiring. Historical
 checkpoints below retain their original scope; none is a release or investment
 acceptance claim for a later increment.
@@ -33,7 +35,7 @@ acceptance claim for a later increment.
 | Contracts and new database | Versioned migrations through v23; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, durable human CSV authorization/cancellation/results, private catalog and identity-review versions, monthly cycle listing-review sequence boundaries, human-reviewed private market references, bounded HTTP/SDK captures, FX and price schedule authorization/slots and controlled verification evidence | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
 | Authentication | Sealed sessions, persistent revocation/rate limit, server-side guards, strict Origin; authenticated HTTP and native login/logout checked; initialization/login share UTF-8 password bounds | Production TLS/proxy, operator configuration and real owner login |
 | Financial ledger | Exact decimal facts, cash/trades/settlement/dividends/FX/transfers/splits; unknown/estimated/confirmed tax, net-only receipts, cumulative tax assessment and actual withholding kept separate; corporate-action notice/resolution isolation; securities transit and append-only dependent corrections | Real dividend/tax/corporate-action and security-transfer evidence, full acceptance matrix |
-| Import and reconciliation | JSON and raw CSV attachment/preview/atomic confirmation; zero-write CSV inspection and visual explicit mapping; immutable mappings and row evidence; explicit duplicate review and persistent source aliases; scoped downloads and encrypted recovery; v23 fixed Python/Node background execution with independent receipt proof and bounded private pages; explicit balance/tax-payable/settled/transit reconciliation and unresolved-fact guards | Domestic/cross-border broker samples, background UI conversion/native wizard acceptance, shorter writer transactions and full throughput/fault acceptance |
+| Import and reconciliation | JSON and raw CSV attachment/preview/atomic confirmation; zero-write CSV inspection and visual explicit mapping; immutable mappings and row evidence; explicit duplicate review and persistent source aliases; scoped downloads and encrypted recovery; v23 fixed Python/Node background execution with independent receipt proof, bounded private pages and main-workspace authorizations; explicit balance/tax-payable/settled/transit reconciliation and unresolved-fact guards | Domestic/cross-border broker samples, native background/wizard acceptance, shorter writer transactions and full throughput/fault acceptance |
 | Accounting and performance | Immutable NAV v4/performance v5; source-owned transit NAV and per-event external-flow FX; independent Python/Web fact-quality proofs for NAV, after-tax performance and attribution, including intermediate-period unresolved states | Actual historical FX/provider and dividend evidence, full attribution/benchmark/history workflows; implementation is not complete acceptance |
 | Funding plans | Dated multi-currency sources and tranches, version editing/deferral, partial receipt matching, execution association, cash/reservation separation, over-budget acknowledgement, correction review and full audit history | User-confirmed dated plan, broker evidence, D-05 allocation choices and full execution/funding workflow acceptance |
 | ETF research directory | Portfolio-private membership/source/profile/disclosure versions; independent CAS, stable pagination, account-evidence summaries and up-to-four version-bound comparisons; TS/Python exact-decimal overlap bounds; v19 sourced human identity/lifecycle/product-structure/trading-unit reviews with expiry and independent proofs | Issuer/provider originals and actual identity/lifecycle verification, current fees/liquidity/premiums and weighted exposures; full P-05 and native comparison/mobile acceptance |
@@ -134,6 +136,77 @@ and current bytes. Its manifest is
 SHA256 `842b1628dddbdd50df37ccd8a70c212f0b5f1a6320fdf32b09fb98c26201700d`.
 These are local engineering checks, not a current container/native/production
 release certificate; the following public CI records predate this follow-up.
+
+### Main CSV workspace migration checkpoint
+
+The main CSV workspace now creates durable preview and confirmation jobs with
+separate initially unchecked authorizations. It exposes status, explicit pending
+cancellation, bounded row/candidate/receipt pages and authenticated originals.
+Human review decisions are bound to the immutable review hash; current batch
+metadata prevents reconfirming an already completed preview. A new session can
+inspect history and review again but cannot recover or replay the old request.
+Only one CSV workspace is mounted at a time; the explicitly selected legacy
+panel is recovery-only and cannot start new synchronous previews.
+
+The browser freezes original input bytes and keys, validates bounded strict
+responses, verifies result hashes and checks session/scope epochs around all
+asynchronous work. Its single 30-second operation deadline covers probes, reads
+and crypto without implying cancellation of accepted server work. Rejected or
+ambiguous responses never trigger an automatic POST or synchronous fallback.
+Real route/worker integration exposed native FormData's LF-to-CRLF mapping
+normalization; frozen multipart bytes now preserve the authorized text, CSV BOM
+and quoted Unicode filename. Another regression aligns mapped-command reason
+length with JSON Schema's Unicode code-point counting; human CSV review reasons
+retain their existing Zod limit. Initial red/drifted logs
+remain retained rather than being relabeled as successful runs.
+
+Final local regression passed Python **636/636**, Web **883/883**, and Node
+**231 passed / 1 opt-in lifecycle skipped** out of 232. Typecheck, production
+build and authentication HTTP passed. The full HTTP suite passed **103/103**,
+schema 23, build `SfHfbL8HxP6sSiBkXGKJ2`, including seven background CSV groups.
+All 566 HTTP-inventoried files remained unchanged through the run and final
+comparison. Manifest:
+`artifacts/verification/workbench-http/2026-09-24T23-32-46-311Z/manifest.json`,
+SHA256 `afa235d1e735192cdea8fa21d6847ed251d09699093ee8d16bc9799524f6aaee`.
+Web/typecheck/build/authentication logs are in
+`artifacts/verification/csv-background-ui-v24/root/`; the independent Python/Node
+report is `artifacts/verification/csv-background-v23/ui-final2-regression-result.json`.
+Its 619-file source/document inventory was stable during those tests; these
+subsequently appended progress records are documentation-only changes, not a
+claim that the earlier complete inventory still matches byte-for-byte.
+
+The frozen-source Tabbit development fixture reproduced a 27-row synthetic
+import through normal UI account setup, zero-write inspection, explicitly
+authorized preview, logout/new-session restricted history, fresh human duplicate
+review and separate confirmation authorization. Real Python/fixed-Node workers
+produced **26 facts, revision 26 and 27 receipts**, with rows 26/27 linked to the
+same event and exact cash **CNY 351**. Rows and receipts actually crossed server
+pages (25 + 2); candidate selection came from the verified candidate page.
+Authenticated original CSV/mapping responses matched original and stored hashes.
+Desktop review, 390px wrapped UUID receipts and desktop recovery-readonly views
+were captured and visually inspected. This does not verify the OS save dialog.
+
+A queued request survived logout and was explicitly cancelled in a new session
+without adding facts. Account A-B-A cleared file, acknowledgement and selected
+evidence. Recovery-readonly mode disabled preview/confirmation controls while permitting
+receipt queries and original downloads. Final logout cleared private DOM;
+the task-owned browser page and all three fixture processes were closed, the
+port released and temporary database directory removed. No additional browser
+restart was performed. Evidence is retained in
+`artifacts/verification/browser-csv-background-v24/native-20260924T232105Z/`.
+The original async-checkbox immediate-assertion failure is retained: subsequent
+read-only observation proved the checked filtered result, without replaying the
+action. Native tests did not inject response loss, timeouts or every BFCache/
+accessibility/worker-crash case; those are not inferred from unit/HTTP coverage.
+An incorrect cancellation locator also timed out before any cancellation action;
+the original trace is retained, followed by read-only inspection and one explicit
+cancel. No post-logout private GET was attempted in this native subset.
+
+The preceding published hot-path checkpoint `777dd2dabd1fb37b512420091d0a12b81fa2e072`
+passed both jobs in [CI 36067569470](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/36067569470).
+That historical run is not CI evidence for this UI increment. The current local
+checks do not certify concurrent workload latency, full failure/native matrices,
+strategy admission, the final image or production deployment.
 
 ### Earlier v23 public CI history
 

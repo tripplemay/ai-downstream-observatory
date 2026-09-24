@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -38,6 +39,68 @@ test("real preview rows and candidate pages use fixed result identity and actual
   for (const patch of [{ row: 26 }, { kind: "possible_prior_rows" as const }, { view: "rows" as const, row: undefined, kind: undefined }]) assert.throws(() => queryCsvBackground(f.db, f.principal, { ...input, view: "candidates", row: 27, kind: "exact_prior_rows", ...patch, cursor: candidate.next_cursor! }, f.options), /CURSOR_INVALID/);
   assert.equal((f.db.prepare("SELECT COUNT(*) n FROM ledger_events").get() as { n: number }).n, 0);
 });
+test("preview metadata is a proved whitelist with live batch state and revision, never an authorization or full manifest", t => {
+  const f = csvBackgroundQueryFixture(t, 3), request = f.enqueue();
+  const input = { portfolio_id: f.portfolio, request_id: request.request_id, view: "preview" as const };
+  assert.throws(() => queryCsvBackground(f.db, f.principal, input, f.options), /RESULT_NOT_READY/);
+  const result = f.publish(request.request_id), page = queryCsvBackground(f.db, f.principal, input, f.options);
+  assert.equal(page.view, "preview"); if (page.view !== "preview") throw new Error("wrong page");
+  assert.equal(page.result_hash, hash(result)); assert.equal(page.batch_id, result.batch_id); assert.equal(page.review_hash, result.review_hash);
+  assert.equal(page.preview.original_filename, "synthetic.csv"); assert.deepEqual(page.preview.headers, ["date", "amount", "id", "note"]);
+  assert.equal(page.preview.content_hash, createHash("sha256").update(f.input.bytes).digest("hex"));
+  assert.equal(page.preview.mapping_hash, hash(JSON.parse(f.input.mapping)));
+  assert.equal(page.preview.mapping_attachment_hash, createHash("sha256").update(f.input.mapping).digest("hex"));
+  assert.equal(page.preview.row_count, 3); assert.equal(page.preview.error_count, 0); assert.equal(page.preview.required_review_count, 2);
+  assert.equal(page.preview.expected_revision, 0); assert.equal(page.preview.current_revision, 0); assert.equal(page.preview.batch_status, "preview"); assert.equal(page.preview.confirmed_revision, null);
+  assert.equal(page.preview.broker_format_verified, false); assert.deepEqual(page.preview.document_errors, []);
+  assert.doesNotMatch(JSON.stringify(page), /required_review_rows|"candidates"|payload_text|csv_bytes|input_json|session_hash|definition_json/);
+  const confirmation = f.confirm(result.batch_id); f.publish(confirmation.request_id);
+  writeFileSync(path.join(f.dir, "RESTORE_PENDING_REVIEW"), "Synthetic read only");
+  const current = queryCsvBackground(f.db, { ...f.principal, sessionHash: "b".repeat(64) }, input, f.options);
+  assert.equal(current.view, "preview"); if (current.view !== "preview") throw new Error("wrong page");
+  assert.equal(current.read_only, true); assert.equal(current.preview.batch_status, "confirmed"); assert.equal(current.preview.current_revision, 3); assert.equal(current.preview.confirmed_revision, 3);
+  assert.equal(current.preview.expected_revision, 0); assert.equal(current.result_hash, page.result_hash);
+  const history = queryCsvBackground(f.db, f.principal, { portfolio_id: f.portfolio, request_id: request.request_id }, f.options);
+  assert.equal(history.view, "status"); if (history.view !== "status") throw new Error("wrong page");
+  assert.equal(history.item.result?.batch_status, "preview");
+  for (const [actorId, portfolio_id] of [["other", f.portfolio], ["owner", "other"]]) assert.throws(() => queryCsvBackground(f.db, { ...f.principal, actorId }, { ...input, portfolio_id }, f.options), /NOT_FOUND/);
+});
+test("review-only rows use sparse row-number keysets and scoped filters, while each row exposes only candidate counts", t => {
+  const f = csvBackgroundQueryFixture(t, 6);
+  const bytes = Buffer.from("date,amount,id,note\n" + [100, 101, 100, 103, 104, 100].map((amount, index) => `2026-01-01,${amount},s${index},Synthetic`).join("\n") + "\n");
+  const request = f.enqueue({ bytes }); f.publish(request.request_id);
+  const queries: string[] = [], original = f.db.prepare.bind(f.db);
+  f.db.prepare = ((sql: string) => { queries.push(sql); return original(sql); }) as typeof f.db.prepare;
+  const input = { portfolio_id: f.portfolio, request_id: request.request_id, view: "rows" as const, review_only: true, limit: 1 };
+  const page = queryCsvBackground(f.db, f.principal, input, f.options);
+  assert.equal(page.view, "rows"); if (page.view !== "rows") throw new Error("wrong page");
+  assert.equal(page.review_only, true); assert.equal(page.total, 2); assert.equal(page.items.length, 1); assert.equal(page.items[0].row, 3);
+  assert.equal(page.items[0].requires_review, true); assert.equal(page.items[0].missing_source_id, false);
+  assert.deepEqual(page.items[0].candidate_counts, { exact_event_ids: 0, possible_event_ids: 0, exact_prior_rows: 1, possible_prior_rows: 0 });
+  assert.ok(queries.some(sql => /row_number>\?.*row_number IN \(SELECT value FROM json_each\(\?\)\).*ORDER BY row_number LIMIT \?/.test(sql)));
+  assert.ok(page.next_cursor);
+  const tail = queryCsvBackground(f.db, f.principal, { ...input, cursor: page.next_cursor! }, f.options);
+  assert.equal(tail.view, "rows"); if (tail.view !== "rows") throw new Error("wrong page");
+  assert.deepEqual(tail.items.map(row => row.row), [6]); assert.equal(tail.total, 2); assert.equal(tail.next_cursor, null); assert.equal(tail.items[0].candidate_counts.exact_prior_rows, 2);
+  assert.doesNotMatch(JSON.stringify(tail), /required_review_rows|"exact_prior_rows":\[/);
+  const all = queryCsvBackground(f.db, f.principal, { ...input, review_only: false }, f.options);
+  assert.equal(all.view, "rows"); if (all.view !== "rows") throw new Error("wrong page");
+  assert.equal(all.review_only, false); assert.equal(all.total, 6); assert.equal(all.items[0].row, 1);
+  assert.throws(() => queryCsvBackground(f.db, f.principal, { ...input, cursor: all.next_cursor! }, f.options), /CURSOR_INVALID/);
+  for (const review_only of [false, undefined]) assert.throws(() => queryCsvBackground(f.db, f.principal, { ...input, review_only, cursor: page.next_cursor! }, f.options), /CURSOR_INVALID/);
+  assert.equal((f.db.prepare("SELECT COUNT(*) n FROM ledger_events").get() as { n: number }).n, 0);
+});
+test("empty review-only pages and missing-source rows retain explicit review semantics", t => {
+  const f = csvBackgroundQueryFixture(t, 1), request = f.enqueue(); f.publish(request.request_id);
+  const page = queryCsvBackground(f.db, f.principal, { portfolio_id: f.portfolio, request_id: request.request_id, view: "rows", review_only: true }, f.options);
+  assert.equal(page.view, "rows"); if (page.view !== "rows") throw new Error("wrong page");
+  assert.equal(page.total, 0); assert.deepEqual(page.items, []); assert.equal(page.next_cursor, null);
+  const mapping = JSON.parse(f.input.mapping); mapping.source_event_id = null; mapping.ignored_columns = ["id"];
+  const missing = f.enqueue({ idempotency_key: "missing-source", mapping: JSON.stringify({ ...mapping, mapping_id: "MISSING-SOURCE" }) }); f.publish(missing.request_id);
+  const required = queryCsvBackground(f.db, f.principal, { portfolio_id: f.portfolio, request_id: missing.request_id, view: "rows", review_only: true }, f.options);
+  assert.equal(required.view, "rows"); if (required.view !== "rows") throw new Error("wrong page");
+  assert.equal(required.total, 1); assert.equal(required.items[0].missing_source_id, true); assert.equal(required.items[0].requires_review, true);
+});
 test("real confirmation receipts remain paged proof-bound and readable in recovery readonly", t => {
   const f = csvBackgroundQueryFixture(t), previewRequest = f.enqueue(), preview = f.publish(previewRequest.request_id), request = f.confirm(preview.batch_id), actual = f.publish(request.request_id);
   const input = { portfolio_id: f.portfolio, request_id: request.request_id, view: "receipts" as const, limit: 2 };
@@ -49,13 +112,17 @@ test("real confirmation receipts remain paged proof-bound and readable in recove
 });
 test("invalid/mixed selectors, pending pages and corrupted domain evidence fail closed", t => {
   const f = csvBackgroundQueryFixture(t), request = f.enqueue();
-  for (const patch of [{ view: "rows" }, { request_id: request.request_id, view: "status", limit: 1 }, { request_id: request.request_id, view: "candidates", row: 1 }, { limit: 21 }, { raw: true }]) assert.throws(() => queryCsvBackground(f.db, f.principal, { portfolio_id: f.portfolio, ...patch } as never, f.options), /QUERY_INVALID/);
+  for (const patch of [{ view: "rows" }, { request_id: request.request_id, view: "status", limit: 1 }, { request_id: request.request_id, view: "candidates", row: 1 }, { limit: 21 }, { raw: true },
+    { review_only: false }, { request_id: request.request_id, view: "preview", limit: 1 }, { request_id: request.request_id, view: "preview", review_only: false },
+    { request_id: request.request_id, view: "rows", review_only: "true" }, { request_id: request.request_id, view: "receipts", review_only: true }]) assert.throws(() => queryCsvBackground(f.db, f.principal, { portfolio_id: f.portfolio, ...patch } as never, f.options), /QUERY_INVALID/);
   assert.throws(() => queryCsvBackground(f.db, f.principal, { portfolio_id: f.portfolio, request_id: request.request_id, view: "rows" }, f.options), /RESULT_NOT_READY/);
   const result = f.publish(request.request_id);
   const triggers = f.db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='import_rows'").all() as { name: string }[];
   for (const trigger of triggers) f.db.exec(`DROP TRIGGER "${trigger.name}"`);
   f.db.prepare("UPDATE import_rows SET errors_json='[]',normalized_json=NULL WHERE batch_id=? AND row_number=27").run(result.batch_id);
   assert.throws(() => queryCsvBackground(f.db, f.principal, { portfolio_id: f.portfolio, request_id: request.request_id, view: "rows", limit: 1 }, f.options), /EVIDENCE_INVALID/);
+  assert.throws(() => queryCsvBackground(f.db, f.principal, { portfolio_id: f.portfolio, request_id: request.request_id, view: "preview" }, f.options), /EVIDENCE_INVALID/);
+  assert.throws(() => queryCsvBackground(f.db, f.principal, { portfolio_id: f.portfolio, request_id: request.request_id, view: "rows", review_only: true, limit: 1 }, f.options), /EVIDENCE_INVALID/);
 });
 test("page projections reject unproved extra wrapper keys instead of leaking data or replacing SQL row numbers", t => {
   for (const view of ["rows", "receipts"] as const) {

@@ -74,7 +74,10 @@ test("background GET selectors are strict and dispatch only the scoped bounded q
   for (const [query, expected] of [
     ["portfolio=p&limit=2", { portfolio_id: "p", limit: 2 }],
     ["portfolio=p&request=r", { portfolio_id: "p", request_id: "r" }],
+    ["portfolio=p&request=r&view=preview", { portfolio_id: "p", request_id: "r", view: "preview" }],
     ["portfolio=p&request=r&view=rows&cursor=next&limit=2", { portfolio_id: "p", request_id: "r", view: "rows", cursor: "next", limit: 2 }],
+    ["portfolio=p&request=r&view=rows&review_only=true&limit=2", { portfolio_id: "p", request_id: "r", view: "rows", review_only: true, limit: 2 }],
+    ["portfolio=p&request=r&view=rows&review_only=false", { portfolio_id: "p", request_id: "r", view: "rows", review_only: false }],
     ["portfolio=p&request=r&view=candidates&row=12&kind=exact_prior_rows&limit=5", { portfolio_id: "p", request_id: "r", view: "candidates", row: 12, kind: "exact_prior_rows", limit: 5 }],
     ["portfolio=p&request=r&view=receipts", { portfolio_id: "p", request_id: "r", view: "receipts" }],
   ] as const) {
@@ -86,6 +89,17 @@ test("background GET selectors are strict and dispatch only the scoped bounded q
     const h = harness(); assert.equal((await h.GET(get(query))).status, 400, query); assert.equal(h.calls.includes("open"), false);
   }
   for (const userChanged of [false, true]) { const h = harness({ changedAt: 2, userChanged }); assert.equal((await h.GET(get())).status, 401); assert.equal(h.calls.at(-1), "close"); }
+});
+test("preview metadata and row-review filters reject ambiguous, mixed or coerced selectors before database access", async () => {
+  for (const query of ["portfolio=p&request=r&view=preview&limit=1", "portfolio=p&request=r&view=preview&cursor=x", "portfolio=p&review_only=true",
+    "portfolio=p&request=r&view=status&review_only=false", "portfolio=p&request=r&view=receipts&review_only=true", "portfolio=p&request=r&view=preview&review_only=false",
+    ...["1", "0", "TRUE", "", "yes"].map(value => `portfolio=p&request=r&view=rows&review_only=${value}`),
+    "portfolio=p&request=r&view=rows&review_only=true&review_only=true"] ) {
+    const h = harness(); assert.equal((await h.GET(get(query))).status, 400, query); assert.equal(h.calls.includes("open"), false);
+  }
+  for (const view of ["preview", "rows&review_only=true"]) {
+    const h = harness({ changedAt: 2 }); assert.equal((await h.GET(get(`portfolio=p&request=r&view=${view}`))).status, 401); assert.equal(h.calls.at(-1), "close");
+  }
 });
 test("background strict JSON rejects forged fields, missing acknowledgement, duplicate keys and invalid cancellation Unicode", async () => {
   for (const command of [{ ...confirm.command, actorId: "forged" }, { ...confirm.command, session_hash: "a".repeat(64) }, { ...confirm.command, acknowledge_background_execution: false }, { ...confirm.command, expected_revision: 0 }]) {

@@ -19,7 +19,8 @@ const confirm = z.object({ portfolio_id: id, account_id: id, idempotency_key: id
 const cancel = z.object({ portfolio_id: id, request_id: id, reason: z.string().refine(value => !!value.trim() && [...value].length <= 1000 && !/[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(value)) }).strict();
 const envelope = z.discriminatedUnion("action", [z.object({ action: z.literal("confirm"), command: confirm }).strict(), z.object({ action: z.literal("cancel"), command: cancel }).strict()]);
 const integer = z.string().regex(/^[1-9]\d*$/).transform(Number).pipe(z.number().int().safe());
-const queryStrings = z.object({ portfolio: id, request: id.optional(), view: z.enum(["status", "rows", "candidates", "receipts"]).optional(), cursor: z.string().min(1).max(2048).optional(), limit: integer.optional(), row: integer.optional(), kind: z.string().optional() }).strict();
+const queryStrings = z.object({ portfolio: id, request: id.optional(), view: z.enum(["status", "preview", "rows", "candidates", "receipts"]).optional(), cursor: z.string().min(1).max(2048).optional(), limit: integer.optional(), row: integer.optional(), kind: z.string().optional(),
+  review_only: z.enum(["true", "false"]).transform(value => value === "true").optional() }).strict();
 const conflicts = new Set(["VERSION_CONFLICT", "PREVIEW_HASH_MISMATCH", "CSV_BACKGROUND_IDEMPOTENCY_CONFLICT", "CSV_BACKGROUND_ALREADY_TERMINAL", "CSV_BACKGROUND_CONFIRM_REQUIRED", "CSV_FILE_ALREADY_CONFIRMED", "IMPORT_HAS_ERRORS", "CSV_BACKGROUND_RESULT_NOT_READY", "CSV_BACKGROUND_RECEIPTS_UNAVAILABLE"]);
 const inputErrors = new Set(["CSV_BACKGROUND_QUERY_INVALID", "CSV_BACKGROUND_CURSOR_INVALID", "CSV_MAPPING_JSON_INVALID", "CSV_MAPPING_INVALID", "CSV_REVIEW_INVALID", "CSV_RECOVERY_PAYLOAD_INVALID", "CSV_RECOVERY_NOT_CSV", "CSV_RECOVERY_QUERY_INVALID"]);
 function bound(request: Request, sid: string) {
@@ -62,7 +63,7 @@ export async function GET(request: Request) {
     const params = new URL(request.url).searchParams;
     if ([...params.keys()].some(key => params.getAll(key).length !== 1)) throw new AuthError("INVALID_QUERY", 400);
     const strings = queryStrings.parse(Object.fromEntries(params));
-    const query = csvBackgroundQuerySchema.parse({ portfolio_id: strings.portfolio, request_id: strings.request, view: strings.view, cursor: strings.cursor, limit: strings.limit, row: strings.row, kind: strings.kind });
+    const query = csvBackgroundQuerySchema.parse({ portfolio_id: strings.portfolio, request_id: strings.request, view: strings.view, cursor: strings.cursor, limit: strings.limit, row: strings.row, kind: strings.kind, review_only: strings.review_only });
     const db = openWorkbench();
     try {
       const result = queryCsvBackground(db, { actorId: initial.userId, sessionHash: tokenHash(initial.sessionId) }, query);
