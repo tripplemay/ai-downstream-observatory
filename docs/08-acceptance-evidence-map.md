@@ -688,6 +688,50 @@ SHA-256 `26f06913221c130d9dd3d64e49933e0ba7c91679aad81a97b00aa3fec5372cd5`。
 新 VF01-07 覆盖正常请求/真实 CLI/独立 proof、原件 SHA、跨作用域/会话、幂等和恢复只读。
 最终日志以 `verification-v21-hardened` 为前缀，保留先前失败及修复记录，不拿旧计数替代。
 
-原生浏览器因 `BROWSER_RUNTIME_UNAVAILABLE` 仍 **NOT_RUN**；本地 Docker daemon 不可用，
+上述发布前本地检查点中，原生浏览器因 `BROWSER_RUNTIME_UNAVAILABLE` 为 **NOT_RUN**；本地 Docker daemon 不可用，
 没有本地容器 PASS。精确提交 CI/镜像、完整产品验收、真实数据/策略和生产切换仍需证据。
 个人规划原件继续留在被 Git 与 Docker 排除的本地目录，八份保留基线 SHA 校验全部一致。
+
+### v21 已发布提交的 CI 与获准重启后的原生检查
+
+`6fd08ae73574bfcb9d6971ea8262a39ca85ebb69` 的
+[CI 36034497147](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/36034497147)
+两项 job 均终态成功：Python 590、Web 743、HTTP 91；Node 为 213 通过、1 项默认未开启
+的生命周期测试跳过，不能把本地显式开启后的 214/214 混称为 CI 结果。509 项 HTTP
+源码均逐字节 hash 匹配该提交；两个原始 ZIP 匹配 GitHub digest，下载原件经本地
+Python/TS 独立复核。容器实际执行固定 verifier，200 项源码清单、bundle、sidecar 与
+本地一致。Provider 原生 smoke 不含联网、凭证或实际 quote context；同机加密恢复
+不等于异机恢复。工件：`artifacts/verification/github-ci/36034497147/verification-result.json`。
+
+用户明确允许后只重启一次 Tabbit，恢复了原生验收能力。全新合成 schema-21 fixture
+实际经 UI 建立空组合、显式提交一次检查、得到真实 Worker 结果，并检查 A-B-A 隔离、
+390px 布局、恢复只读与跨标签退出清空/401。普通和只读浏览器网络原件均与 SQLite
+BLOB 的 17,678 字节及 SHA 一致；工具不支持下载事件和下载管理页，因此不声称验证
+了 OS 保存对话框或下载管理器。另行标明的 DOM-only 长 ID 仅是布局压力测试。
+
+冻结版本发现一项同值导航缺陷：重复选择当前组合会清空页面和重试草稿，而 effect
+依赖未变，不会重新读取；手动刷新可恢复，未增加 POST 或跨组合披露。该失败保留，
+不得用后续正常 A-B-A 通过覆盖。证据在
+`artifacts/verification/browser-verification-v21/6fd08ae-native-restart1/`；测试进程、目录、
+端口和任务标签均清理，用户原标签保留。后续修复须有独立回归证据。
+
+后续最小修复按完整 `(portfolio, requestId)` 元组做同值早退。新增 3 项 callback
+回归先复现 2 失败，再全部通过，并保留详情返回两条路径。全新原生 fixture 复验
+确认同值事件保留草稿、确认和已核数据，GET/POST 数均不增加；真实提交/完成、详情
+按钮返回与重选组合返回、A-B-A、只读、跨标签退出均通过。没有再次重启浏览器，
+fixture 已清理。原生增量证据：
+`artifacts/verification/browser-verification-v21/6fd08ae-scope-guard-rerun1/`。
+503 未决请求原字节和幂等键保留仅有 callback 回归，不冒充原生网络故障测试。
+
+修复后的本地 Python **590/590**、Web **746/746**、Node **214/214**（原生清理后显式
+开启 lifecycle）、类型、生产构建、认证 HTTP、
+shellcheck 与零漏洞 audit 通过；生产构建 HTTP **91/91**、build
+`O39kAIKakMvv1G3N-z0ME`，509 项源码首尾及随后核验一致。工件：
+`artifacts/verification/workbench-http/2026-09-24T17-54-10-331Z/manifest.json`。
+组件 SHA 为 `cd616026a6b1ce492635a51469a57d6464383f6e1f8909238b7e722dc1390d47`；
+固定 verifier 的 200 项源码 hash 未变，但不据此宣称它覆盖 UI 或整版发布。
+上述已发布 CI 早于修复，不替代新提交的 CI。
+原生增量正式记录为 **11 PASS / 1 NOT_VERIFIED**，未验证项为 OS 下载保存完成。
+
+仓库仍缺 `VPS_SSH_HOST_KEY` 和受保护的 production Environment；未读取 secret 值、
+连接服务器或发起部署。本节不升级完整 P/ACC/E/S、真实数据、投资准入或生产门槛。

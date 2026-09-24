@@ -169,6 +169,29 @@ test("A-B-A scope switching clears reason and results, never carrying a prior re
   assert.equal(f.named("textarea", "工程检查请求理由").props.value, ""); assert.equal(f.checkbox().props.checked, false); assert.doesNotMatch(f.text(), /synthetic-request|synthetic-artifact/);
   f.change(f.named("select", "工程检查组合"), "p"); await f.ready(); assert.equal(f.named("textarea", "工程检查请求理由").props.value, ""); assert.equal(f.posts().length, 0);
 });
+test("same-scope selection preserves verified data, draft and confirmation without another GET or POST", async t => {
+  const f = mount(t); await f.ready(verificationState("p", true)); fill(f);
+  const before = f.requests.length; f.change(f.named("select", "工程检查组合"), "p"); await f.flush();
+  assert.equal(f.requests.length, before); assert.equal(f.posts().length, 0);
+  assert.equal(f.named("select", "工程检查组合").props.disabled, false);
+  assert.equal(f.named("textarea", "工程检查请求理由").props.value, "SYNTHETIC PRIVATE CHECK REASON");
+  assert.equal(f.checkbox().props.checked, true); assert.equal(f.control("main").props["aria-busy"], false);
+  assert.match(f.text(), /真实执行结果： pass/); assert.doesNotMatch(f.text(), /资料尚未复核；写入锁定/);
+});
+test("same-scope selection preserves the exact unresolved 503 request for explicit manual retry", async t => {
+  const f = mount(t); await f.ready(); fill(f); const start = f.requests.length; f.submit(); await f.session(start);
+  const original = f.posts()[0].options!.body as string;
+  await f.respond(start + 1, { error: "WORKBENCH_UNAVAILABLE" }, 503);
+  const before = f.requests.length; f.change(f.named("select", "工程检查组合"), "p"); await f.flush();
+  assert.equal(f.requests.length, before); assert.equal(f.posts().length, 1);
+  assert.match(f.text(), /冻结的原请求/); assert.ok(f.text().includes(original));
+  assert.equal(f.named("textarea", "工程检查请求理由").props.disabled, true); assert.equal(f.checkbox().props.checked, false);
+  f.change(f.checkbox(), true); const retry = f.requests.length; f.submit(); await f.session(retry);
+  assert.equal(f.posts().length, 2); assert.equal(f.posts()[1].options!.body, original);
+  assert.equal(JSON.parse(f.posts()[1].options!.body as string).command.idempotency_key, JSON.parse(original).command.idempotency_key);
+  await f.respond(retry + 1, verificationReceipt(original)); await f.session(retry + 2); await f.load(retry + 3);
+  assert.equal(f.posts().length, 2);
+});
 test("late validation or old session response cannot restore hidden private results", async t => {
   const f = mount(t); await f.ready(); const start = f.requests.length; f.click("刷新会话、任务与工件"); await f.session(start);
   f.holdValidation(true); await f.respond(start + 1, { ...verificationState("p", true), session_binding: binding }); f.window.emit("blur"); await f.releaseValidation();
@@ -201,6 +224,24 @@ test("detail and cursor reads keep exact scope and never trigger a verification 
   start = f.requests.length; f.click("读取请求 synthetic-request"); await f.session(start); assert.match(f.requests[start + 1].url, /portfolio=p&request=synthetic-request$/);
   await f.respond(start + 1, { ...verificationState("p", true), session_binding: binding }); await f.session(start + 2);
   assert.equal(f.posts().length, 0); assert.match(f.text(), /返回本组合请求列表/);
+});
+test("same-scope guard still permits request detail and both return-to-list actions", async t => {
+  for (const action of ["return-button", "same-portfolio-select"]) {
+    const f = mount(t); await f.ready(verificationState("p", true)); fill(f);
+    let start = f.requests.length; f.click("读取请求 synthetic-request"); await f.session(start);
+    assert.equal(f.requests[start + 1].url, "/api/workbench/verifications?portfolio=p&request=synthetic-request");
+    await f.respond(start + 1, { ...verificationState("p", true), session_binding: binding }); await f.session(start + 2);
+    assert.equal(f.named("textarea", "工程检查请求理由").props.value, ""); assert.equal(f.checkbox().props.checked, false);
+    assert.match(f.text(), /返回本组合请求列表/); fill(f);
+    start = f.requests.length;
+    if (action === "return-button") f.click("返回本组合请求列表");
+    else f.change(f.named("select", "工程检查组合"), "p");
+    await f.session(start); assert.equal(f.requests[start + 1].url, "/api/workbench/verifications?portfolio=p");
+    await f.respond(start + 1, { ...verificationState("p", true), session_binding: binding }); await f.session(start + 2);
+    assert.equal(f.named("textarea", "工程检查请求理由").props.value, ""); assert.equal(f.checkbox().props.checked, false);
+    assert.doesNotMatch(f.text(), /返回本组合请求列表/); assert.match(f.text(), /读取请求\s+synthetic-request/);
+    assert.equal(f.named("select", "工程检查组合").props.disabled, false); assert.equal(f.posts().length, 0);
+  }
 });
 test("long private identifiers and evidence issues use wrapping without hiding their contents", async t => {
   const f = mount(t), data = verificationState("p", true); data.requests[0].id = "SYNTHETIC-".padEnd(200, "X"); data.requests[0].evidence_issues = ["VERIFICATION_SYNTHETIC_LONG_ISSUE_".padEnd(180, "X")];

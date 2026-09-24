@@ -33,7 +33,7 @@ replacing personal parameters with public templates does not reduce scope.
 | Strategy and AI | Preregistered v1 contribution-only research plus explicit v2 monthly momentum/MA rotation and fixed-rebalance benchmark; exact PIT ranking, simulated sales/settlement/fixed buys, costs and bounded read-only summaries; frozen inputs/implementation and independent research windows | Live providers/models, continuous forward simulation, complete long-history workflow performance and genuine S-gate evidence; v2 does not activate actual schedules |
 | Governance and execution | Human version/capability APIs, risk/approval CAS, independent-process cash/share reservation race tests, execution reports separate from facts; private listing-review inputs invalidate old approvals on change/expiry; price reads bind listing identity and exact knowledge time; v21 controlled runner executes one fixed source-bound synthetic cash subcheck with independent Python/TS proof | Full E/S adapters, formal gate evidence and release/runtime binding beyond this subcheck; executable liquidity inputs and complete look-through; actual D/G/S approvals remain absent |
 | Product UI | Account, funding, catalog, research, governance, monthly evaluation, private market-reference and listing-review workspaces; typed securities and dividend/tax/corporate-action preview/confirm; visual CSV mapping and server-backed, current-session, read-only confirmation recovery | Native listing-review/market-reference/monthly/wizard/recovery/BFCache and full catalog comparison/positive governance acceptance; complete accessibility and readonly UX |
-| Deployment | Manual-only release, encrypted backup/restore, historical exact-SHA v20 core/provider CI and local restore; full historical real legacy-copy archive/recovery rehearsal; v21 separate credential-free/network-free verifier wiring; no current production cutover | New v21 source-bound image checks, independent-host restore, protected credentials/configuration, release and post-release checks |
+| Deployment | Manual-only release, encrypted backup/restore, exact-SHA v21 core/provider/verifier CI and local restore; full historical real legacy-copy archive/recovery rehearsal; separate credential-free/network-free verifier wiring; no current production cutover | Final-release image rerun, independent-host restore, protected credentials/configuration, release and post-release checks |
 
 ### v21 controlled engineering verification local checkpoint
 
@@ -63,12 +63,79 @@ The controlled-runner source manifest contains 200 files, hash
 `02b0a5858ba40bb3785297f8029701a88183b56cda64377216ae2e379d6dd562`,
 unchanged across final checks. This is not a complete release attestation.
 
-Native UI remains **NOT_RUN**: Tabbit returned `BROWSER_RUNTIME_UNAVAILABLE`;
+At this pre-publication local checkpoint, native UI was **NOT_RUN**: Tabbit returned `BROWSER_RUNTIME_UNAVAILABLE`;
 no restart or backend substitution was attempted. The fixture lifecycle test
 proved process/port/temporary-directory cleanup, not browser interaction.
 Evidence: `artifacts/verification/browser-verification-v21/`. Local Docker daemon
 is unavailable; actual image smoke, exact-commit CI and production acceptance
 remain separate pending checks. No current production cutover occurred.
+
+### v21 published CI and one-restart native verification
+
+Commit `6fd08ae73574bfcb9d6971ea8262a39ca85ebb69` passed
+[CI 36034497147](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/36034497147).
+Both `test` and `containers` completed successfully. Python 590, Web 743,
+authentication and full HTTP 91 passed; CI Node had 213 passes and one default
+opt-in lifecycle skip (the separate local enabled run above passed 214/214).
+All 509 HTTP source hashes matched this exact commit. Original validation and
+container ZIPs match their GitHub SHA256 digests. Independent local Python and
+TypeScript checks also verified the downloaded original artifact bytes.
+
+The non-root, network-disabled verifier container executed the actual fixed
+fixture and independent proof; its 200-file source manifest, bundle and sidecar
+matched local evidence. Provider image smoke exercised native import/signature
+and rejected invalid input, without credentials, network or a live quote context.
+Encrypted local restore passed, but independent-host recovery was not tested.
+Evidence: `artifacts/verification/github-ci/36034497147/verification-result.json`;
+the adjacent `verify-checkpoint.mjs` rechecks the pinned historical commit.
+
+After explicit permission, Tabbit was restarted once and its native runtime
+recovered. A fresh empty schema-21 synthetic fixture then exercised actual UI
+portfolio creation, one explicit request, real verifier completion, A-B-A scope
+isolation, 390px wrapping, recovery read-only and cross-tab logout. Normal and
+read-only private browser-network downloads matched the original 17,678-byte
+SQLite BLOB. OS download-manager/save-dialog completion remains unverified:
+Tabbit exposes neither download events nor `chrome://downloads` access.
+The separately labelled DOM-only long-ID layout test is not a real server-ID
+business test. All fixture processes, its temporary directory and port were
+cleaned up; only task-created tabs were closed, retaining the user's original
+tabs. Evidence: `artifacts/verification/browser-verification-v21/6fd08ae-native-restart1/`.
+
+This frozen native run found a same-value scope-change defect: selecting the
+already-selected portfolio cleared the page and retry draft without triggering
+a new read. It failed closed and required explicit refresh; it did not create
+another job or disclose another scope. That failure is retained, not reported as
+PASS. A subsequent fix must have its own regression and native evidence.
+
+The follow-up fixes only the full `(portfolio, requestId)` same-value guard.
+Three added callback regressions first reproduced two failures and then passed;
+the third preserves both detail-to-list actions. A new native fixture on the
+fixed component independently confirmed unchanged GET/POST counts, retained
+draft/acknowledgement and verified data on same-value selection, real request
+completion, both detail-return paths, A-B-A isolation, read-only and cross-tab
+logout. It required no further browser restart and was fully cleaned up.
+Evidence: `artifacts/verification/browser-verification-v21/6fd08ae-scope-guard-rerun1/`.
+The 503 unresolved-request byte/key preservation case is callback evidence,
+not a claimed native network-fault test.
+
+Fixed-source local regression passed Python **590/590**, Web **746/746**,
+Node **214/214** with the lifecycle explicitly enabled after native cleanup,
+typecheck, production build, auth HTTP, shellcheck and zero-vulnerability audit.
+Full production-build HTTP passed **91/91**, build `O39kAIKakMvv1G3N-z0ME`, with
+all 509 source hashes unchanged; manifest:
+`artifacts/verification/workbench-http/2026-09-24T17-54-10-331Z/manifest.json`.
+The component SHA256 is
+`cd616026a6b1ce492635a51469a57d6464383f6e1f8909238b7e722dc1390d47`.
+The dedicated verifier's source manifest remains unchanged; it does not include
+or attest the UI. Local increment evidence is retained under
+`artifacts/verification/browser-verification-v21/same-scope-fix/`.
+The native increment records **11 PASS / 1 NOT_VERIFIED** (OS download saving).
+The published CI above predates this one-line fix and cannot certify it.
+
+Read-only release preflight still found no `VPS_SSH_HOST_KEY` repository secret
+and no GitHub environments. No secret values, server access, deployment or
+cutover were attempted. The exact-commit CI and narrow native checks do not
+complete full P/ACC/E/S, real-data, investment or production acceptance.
 
 The prior published checkpoint is commit
 `8448e72c005d93b865fa2c38d42239655863706f`, CI `34735669873` (Python 553, Web 675,

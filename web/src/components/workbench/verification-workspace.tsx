@@ -98,7 +98,7 @@ export function VerificationWorkspace({ initialSessionBinding }: { initialSessio
     return () => { revokeDownloads(); window.removeEventListener("blur", hide); window.removeEventListener("pagehide", hide); document.removeEventListener("visibilitychange", visibility); window.removeEventListener(SESSION_INVALIDATED_EVENT, invalidate); };
   }, []);
   const chooseScope = (p: string | null, r: string | null = null) => {
-    if (busyRef.current) return;
+    if (busyRef.current || (p === live.current.portfolio && r === live.current.requestId)) return;
     ++generation.current; live.current = { ...live.current, portfolio: p, requestId: r, readOnly: true };
     setData(null); setReason(""); setAck(false); setPending(null); setReceipt(null); setError(""); setPortfolio(p); setRequestId(r);
   };
