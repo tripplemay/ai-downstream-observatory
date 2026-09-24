@@ -100,7 +100,7 @@ function mount(t: { after(callback: () => void): void }, options: { delayedRecei
   const checkbox = () => control("input", node => node.props.type === "checkbox");
   const change = (node: Tree, value: string | boolean) => (node.props.onChange as (event: unknown) => void)({ target: typeof value === "boolean" ? { checked: value } : { value } });
   const click = (label: string) => { const node = control("button", row => text(row).replace(/\s+/g, " ").trim() === label); assert.equal(!!node.props.disabled, false); (node.props.onClick as () => void)(); };
-  const submit = () => (control("form").props.onSubmit as (event: unknown) => void)({ preventDefault() {} });
+  const submit = () => (control("form").props.onSubmit as (event: unknown) => Promise<void>)({ preventDefault() {} });
   const flush = async () => { for (let i = 0; i < 4; i++) await new Promise(resolve => setImmediate(resolve)); };
   const respond = async (index: number, body: unknown, status = 200, raw = false) => { (await network.at(index)).resolve(new Response(raw ? body as string : JSON.stringify(body), { status })); await flush(); };
   const session = (index: number, value = binding) => respond(index, { authenticated: true, session_binding: value });
@@ -206,14 +206,30 @@ test("receipt hash await cannot reveal or accept an old operation after blur, hi
 });
 
 test("bad receipt hash keeps pending; valid exact receipt requires a post-response probe and never sends another POST", async t => {
-  const f = mount(t); await selected(f); fill(f); const start = f.requests.length; f.submit(); await f.session(start);
+  const nativeDigest = crypto.subtle.digest.bind(crypto.subtle), digests = queue<{ release(): void }>();
+  let holdFirstDigest = true;
+  t.mock.method(crypto.subtle, "digest", (...args: Parameters<SubtleCrypto["digest"]>) => {
+    const actual = nativeDigest(...args);
+    if (!holdFirstDigest) return actual;
+    holdFirstDigest = false;
+    return new Promise<void>(release => digests.push({ release })).then(() => actual);
+  });
+  t.after(() => digests.items.forEach(item => item.release()));
+  const f = mount(t); await selected(f); fill(f); const start = f.requests.length; const submitted = f.submit(); await f.session(start);
   const original = (await f.waitForRequest(start + 1)).options!.body as string;
   await f.respond(start + 1, { ...receipt(original), content_hash: "e".repeat(64) });
+  const digest = await digests.at(0); let settled = false;
+  void submitted.then(() => { settled = true; });
+  await f.flush(); assert.equal(settled, false); assert.doesNotMatch(f.text(), /LISTING_REVIEW_RESPONSE_INVALID/);
+  assert.equal(f.postRequests().length, 1); assert.equal(f.beforeUnload().defaultPrevented, true);
+  // Event-loop ticks do not settle native WebCrypto; await the real component callback.
+  digest.release(); await submitted;
   assert.equal(f.postRequests().length, 1); assert.match(f.text(), /LISTING_REVIEW_RESPONSE_INVALID/); assert.equal(f.beforeUnload().defaultPrevented, true);
-  f.change(f.checkbox(), true); const retry = f.requests.length; f.submit(); await f.session(retry);
+  f.change(f.checkbox(), true); const retry = f.requests.length; const retried = f.submit(); await f.session(retry);
   assert.equal((await f.waitForRequest(retry + 1)).options!.body, original); await f.respond(retry + 1, receipt(original));
+  assert.equal((await f.waitForRequest(retry + 2)).url, "/api/auth/session");
   assert.doesNotMatch(f.text(), /原文与身份 hash 已核验的审核回执/);
-  await f.session(retry + 2); await f.ready(initial("p", "CN:SYNTH"));
+  await f.session(retry + 2); await f.ready(initial("p", "CN:SYNTH")); await retried;
   assert.match(f.text(), /原文与身份 hash 已核验的审核回执/); assert.equal(f.postRequests().length, 2);
   assert.equal(f.checkbox().props.checked, false); assert.equal(f.beforeUnload().defaultPrevented, false);
 });

@@ -89,6 +89,20 @@ shorter writer occupancy, repeated full-load measurements, native workflow check
 the final image and production cutover remain open. Local Docker was unavailable;
 container wiring and report-parser tests are not actual image execution.
 
+The first v23 public commit, `50b6335974f2ff1b0346d087c275ee0a54f85c4f`, did
+**not** pass overall [CI 36060642971](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/36060642971).
+Its container job passed schema-23 loading/recovery checks, but Web had 825 passes
+and one failure after Python 636 passed; subsequent test-job steps were skipped
+and no validation artifact was uploaded. The original failure is retained under
+`artifacts/verification/github-ci/36060642971/`, not relabeled as a passing run.
+The failure exposed an existing listing-review test that assumed four event-loop
+ticks meant native WebCrypto had finished. A test-only follow-up awaits the real
+component submission promise and uses a controlled delivery barrier around the
+real digest to prove the premature assertion. All original bad-receipt, pending,
+exact-retry and post-response session checks remain. The component and client
+code are unchanged; 20 serial and 24 loaded-process repetitions passed 572/572
+asserted test cases. A fresh exact-commit CI run is still required for the fix.
+
 ### v22 published checkpoint
 
 The preceding increment was published as
