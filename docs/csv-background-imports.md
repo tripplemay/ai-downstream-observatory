@@ -211,3 +211,51 @@ Increasing SQLite timeouts, deleting integrity proofs or splitting financial
 commits into chunks is not an accepted substitute. Main UI conversion and native
 workflow checks must explicitly disclose durable delegation and cancellation
 semantics before any accepted preview or confirmation.
+
+### Writer-cost optimization and independent probes
+
+The v23 follow-up caches compiled ledger SQL per database object and at most 64
+timezone formatter objects. No data, scope decision, parameter binding, clock,
+revision or source receipt is cached. The CSV row/outcome INSERT and receipt-audit
+SELECT statements are prepared once per loop. Original SQL execution and final
+full-domain proofs remain in the same atomic transaction; neither busy_timeout
+nor financial commit boundaries change.
+
+`profile-baseline-1.json`, `profile-optimized-1.json` and
+`profile-optimized-1-comparison.json` in the same local evidence directory retain
+the source-profile measurements and their differing instrumentation. The optimized
+writer intervals were 3.835 / 3.273 seconds. The seed phase warmed that shared
+connection's statement cache; do not treat those intervals as fresh-process
+worker latency or a full workload result.
+
+The `csv-background-benchmark-v2` report starts separate read and write probe
+processes before each real Python/fixed-Node execution. It records process IDs,
+monotonic start/end timestamps, unchanged 5,000ms busy_timeout, operation errors,
+phase containment and sample shortfalls. `--probe-samples` is the minimum target
+per kind per execution phase, not a request to append idle samples.
+`--idle-probe-samples` explicitly enables a separate idle baseline and defaults to
+zero. Probes are closed-loop with a 20ms delay after each operation, so long writes
+reduce the number of attempts; they are not an open-loop arrival-rate test.
+Worker wall time and probe waits do not directly measure the fixed child's
+transaction-lock interval, which is explicitly marked `NOT_MEASURED`.
+
+The first source- and bundle-frozen optimized full-size run is
+`artifacts/verification/csv-background-v23/benchmark-optimized-independent-1.json`,
+SHA256 `76ac14ef4e82266681300f9b728b2cbac24ca3d12e55a6d815ebe8ae37e3ecfd`.
+Preview / confirmation took 4.875 / 5.522 seconds. Independent active-phase probes
+recorded 222 / 252 reads and 54 / 99 successful writes, with no errors and no idle
+samples. The 10,000 unique receipts, all 153 committed probe facts and exact
+synthetic cash balance matched. Nevertheless, maximum write latency was
+3.584 / 3.246 seconds and none of the four 1,000-sample targets was reached.
+This is a reproducible scoped improvement, **not concurrent-performance
+acceptance**. HTTP/approval/valuation load, target-host limits, repeated warm/cold
+distributions, UI/native workflow and production checks remain open.
+
+A second independently seeded database and fresh worker processes reproduced the
+same correctness checks with no source, measurement or bundle drift:
+`artifacts/verification/csv-background-v23/benchmark-optimized-independent-2.json`,
+SHA256 `7eca82ea156f2645c99d45ee9bee0efebffc746d53b538c87436893795b656d1`.
+Preview / confirmation took 5.389 / 6.173 seconds; active reads numbered 246 / 282
+and successful writes 57 / 96, again with no errors or idle padding. Maximum write
+waits were still 4.046 / 3.928 seconds. Two fresh-worker runs do not establish a
+warm/cold distribution or satisfy the 1,000-operation-per-kind workload gate.

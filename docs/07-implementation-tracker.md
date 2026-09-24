@@ -89,6 +89,54 @@ shorter writer occupancy, repeated full-load measurements, native workflow check
 the final image and production cutover remain open. Local Docker was unavailable;
 container wiring and report-parser tests are not actual image execution.
 
+### v23 writer hot-path follow-up
+
+Source profiling of the same 10,000-row / 50,000-fact / 2,000,000-observation
+synthetic fixture identified repeated SQL compilation as the main avoidable cost:
+200,068 preview and 220,112 confirmation prepares consumed 2.883 and 3.158 seconds.
+The ledger now reuses compiled statements per database connection, not query
+results or bindings. A bounded 64-entry timezone-formatter cache and three
+loop-local CSV statements remove further repeated setup. All domain SQL,
+parameters, recovery guards, savepoints, whole-batch atomicity and final complete
+evidence proofs remain unchanged. New regressions exercise rollback, dedup,
+schema-trigger changes, second-connection visibility, recovery locks, exact FIFO
+eviction and timezone/DST boundaries.
+
+The retained optimized source profile measured writer occupancy of 3.835 seconds
+for preview and 3.273 seconds for confirmation, with 65 and 111 prepares. Its
+per-SQL execution counts match the original domain statements. This is a warmed
+shared-connection source profile with different instrumentation, not a cold
+fixed-worker or production latency certificate. Originals and the explicit
+comparison are retained under `artifacts/verification/csv-background-v23/`.
+
+The v2 benchmark replaces parent-thread synchronous probes with independent read
+and normal-ledger-write processes. It retains the 5,000ms SQLite timeout, uses
+monotonic phase windows, records boundary-crossing samples, and never fills an
+execution sample target with idle measurements. Worker timeout termination now
+escalates from SIGTERM to SIGKILL. These are measurement and execution-cost
+improvements, not acceptance of the full concurrent workload or a production
+release; see the [updated measurement boundaries](csv-background-imports.md).
+
+Two independently seeded full-size runs through fresh Python/fixed-Node workers
+completed preview in 4.875 / 5.389 seconds and confirmation in 5.522 / 6.173 seconds.
+Both reconciled 10,000 unique receipts and 153 actual unrelated-portfolio probe
+facts, with no probe errors, idle padding or source/bundle drift. Maximum writes
+still waited up to 4.046 seconds and every 1,000-sample target was short. These
+runs reproduce the improvement but leave the concurrent latency requirement open.
+
+Local regression for this follow-up passed Python **636/636**, Web **835/835**,
+and Node **231 passed / 1 opt-in lifecycle skipped** out of 232. Typecheck, a new
+production build, authentication HTTP, shellcheck and dependency audit passed
+(zero vulnerabilities). The complete workbench HTTP suite passed **102/102**,
+build `4aQW1j3SrjT6FeJ7fdi6y`, with all 559 source hashes matching their final
+and current bytes. Its manifest is
+`artifacts/verification/workbench-http/2026-09-24T22-20-16-708Z/manifest.json`,
+SHA256 `842b1628dddbdd50df37ccd8a70c212f0b5f1a6320fdf32b09fb98c26201700d`.
+These are local engineering checks, not a current container/native/production
+release certificate; the following public CI records predate this follow-up.
+
+### Earlier v23 public CI history
+
 The first v23 public commit, `50b6335974f2ff1b0346d087c275ee0a54f85c4f`, did
 **not** pass overall [CI 36060642971](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/36060642971).
 Its container job passed schema-23 loading/recovery checks, but Web had 825 passes

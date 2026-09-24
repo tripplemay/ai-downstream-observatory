@@ -29,6 +29,7 @@ function confirmedResult(db: Database.Database, batch: CsvBatch & { confirmed_re
   if (old.csv_review_hash !== hash(old.csv_review) || old.manifest_hash !== hash(manifest) || !Number.isSafeInteger(old.revision)
     || old.revision !== batch.confirmed_revision || old.revision !== audits[0].ledger_revision || old.revision < batch.expected_revision
     || old.revision > revision(db, batch.portfolio_id) || outcomes.length !== rows.length || old.receipts.length !== rows.length) return invalid();
+  const receiptAuditQuery = db.prepare("SELECT action,object_id,portfolio_id,payload_json FROM audit_events WHERE id=?");
   for (let i = 0; i < rows.length; i++) {
     const outcome = outcomes[i];
     let stored: { receipt: Receipt; resolution: unknown };
@@ -37,7 +38,7 @@ function confirmedResult(db: Database.Database, batch: CsvBatch & { confirmed_re
       || outcome.event_id !== stored.receipt.event_id || outcome.ledger_revision !== stored.receipt.revision || outcome.ledger_revision > old.revision
       || outcome.duplicate !== Number(!!stored.receipt.duplicate) || canonical(stored.receipt) !== canonical(old.receipts[i])
       || canonical(stored.resolution) !== canonical(resolutions.get(rows[i].row) ?? null)) return invalid();
-    const receiptAudit = db.prepare("SELECT action,object_id,portfolio_id,payload_json FROM audit_events WHERE id=?").get(stored.receipt.audit_id) as { action: string; object_id: string; portfolio_id: string; payload_json: string } | undefined;
+    const receiptAudit = receiptAuditQuery.get(stored.receipt.audit_id) as { action: string; object_id: string; portfolio_id: string; payload_json: string } | undefined;
     if (!receiptAudit || receiptAudit.portfolio_id !== batch.portfolio_id) return invalid();
     try {
       if (receiptAudit.action === "record_fact" ? receiptAudit.object_id !== outcome.event_id
@@ -85,6 +86,7 @@ export function confirmCsvImport(db: Database.Database, actor: Actor, portfolio:
   const candidates = buildCsvReviewCandidates(db, portfolio, batch.account_id, rows);
   if (hash(candidates) !== manifest.review_hash) throw new Error("CSV_REVIEW_HASH_MISMATCH");
   const receipts: Receipt[] = [], byRow = new Map<number, Receipt>(), bySource = new Map<string, string>();
+  const insertOutcome = db.prepare("INSERT INTO csv_import_outcomes(batch_id,row_number,event_id,duplicate,result_json,actor_id,created_at) VALUES(?,?,?,?,?,?,?)");
   for (const row of rows) {
     const command = row.command!, resolution = resolutions.get(row.row);
     let receipt: Receipt;
@@ -105,8 +107,7 @@ export function confirmCsvImport(db: Database.Database, actor: Actor, portfolio:
       bySource.set(identity, receipt.event_id);
     }
     receipts.push(receipt); byRow.set(row.row, receipt);
-    db.prepare("INSERT INTO csv_import_outcomes(batch_id,row_number,event_id,duplicate,result_json,actor_id,created_at) VALUES(?,?,?,?,?,?,?)")
-      .run(batchId, row.row, receipt.event_id, Number(!!receipt.duplicate), canonical({ receipt, resolution: resolution ?? null }), actor.id, now);
+    insertOutcome.run(batchId, row.row, receipt.event_id, Number(!!receipt.duplicate), canonical({ receipt, resolution: resolution ?? null }), actor.id, now);
   }
   const endRevision = revision(db, portfolio);
   db.prepare("UPDATE import_batches SET status='confirmed',confirmed_at=?,confirmed_revision=? WHERE id=? AND status='preview'").run(now, endRevision, batchId);

@@ -84,8 +84,8 @@ export function previewCsvImport(db: Database.Database, actor: Actor, input: Csv
     const errorCount = rows.filter(row => row.errors.length).length + Number(!mapped.can_preview || manifest.document_errors.length > 0);
     db.prepare("INSERT INTO import_batches(id,portfolio_id,account_id,attachment_id,content_hash,parser_version,mapping_version,status,preview_hash,expected_revision,row_count,error_count,created_by,created_at) VALUES(?,?,?,?,?,'csv-v1',?,?,?,?,?,?,?,?)")
       .run(id, input.portfolio_id, input.account_id, attachment.id, attachment.content_hash, mapping.id, errorCount ? "invalid" : "preview", previewHash, rev, rows.length, errorCount, actor.id, now);
-    for (const row of rows) db.prepare("INSERT INTO import_rows(batch_id,row_number,raw_json,normalized_json,errors_json,source_event_id) VALUES(?,?,?,?,?,?)")
-      .run(id, row.row, canonical({ source: row.source, outcome: row.outcome }), row.command ? canonical(row.command) : null, canonical(row.errors), row.command?.source_event_id ?? null);
+    const insertRow = db.prepare("INSERT INTO import_rows(batch_id,row_number,raw_json,normalized_json,errors_json,source_event_id) VALUES(?,?,?,?,?,?)");
+    for (const row of rows) insertRow.run(id, row.row, canonical({ source: row.source, outcome: row.outcome }), row.command ? canonical(row.command) : null, canonical(row.errors), row.command?.source_event_id ?? null);
     db.prepare("INSERT INTO csv_import_manifests(batch_id,mapping_version_id,manifest_json,content_hash,created_at) VALUES(?,?,?,?,?)").run(id, mapping.id, canonical(manifest), manifestHash, now);
     audit(db, actor, "preview_csv_import", "import_batch", id, input.portfolio_id, rev, { attachment_id: attachment.id, mapping_version_id: mapping.id, manifest_hash: manifestHash, preview_hash: previewHash, error_count: errorCount }, now);
     assertWritableDatabase(db);
