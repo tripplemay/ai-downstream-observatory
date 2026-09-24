@@ -107,6 +107,11 @@ print(json.dumps({"schema_version": "monthly-publisher-smoke-v1", "publisher_pat
                   "logical_database_unchanged": True}, separators=(",", ":")))
 PY_PUBLISHER
 )
+web_verification_source=$(docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  --entrypoint node "$web_image" /app/web/dist/verification-container-bridge.mjs source)
+governance_verifier=$(compose run --rm --no-deps -T \
+  --volume "$root/tests/deployment/verification-runtime-smoke.py:/fixture-smoke.py:ro" \
+  --entrypoint python verifier /fixture-smoke.py "$web_verification_source")
 compose run --rm --no-deps -e WORKBENCH_LEGACY_QUIESCED=1 archive-legacy
 backup=$(compose run --rm --no-deps backup)
 archive=$(printf '%s' "$backup" | python3 -c 'import json,sys; print(json.load(sys.stdin)["path"].split("/")[-1])')
@@ -118,23 +123,24 @@ compose run --rm --no-deps --entrypoint node migrate --input-type=module -e '
   if(db.prepare("SELECT COUNT(*) n FROM ledger_events").get().n!==0)throw Error("legacy seeded actual facts");
   if(db.prepare("SELECT COUNT(*) n FROM legacy_archives").get().n!==1)throw Error("legacy row missing");db.close();
 '
-timeout 120 docker compose --env-file /dev/null -p "$project" -f "$root/docker-compose.yml" up -d --no-build --wait --wait-timeout 90 web worker
+timeout 120 docker compose --env-file /dev/null -p "$project" -f "$root/docker-compose.yml" up -d --no-build --wait --wait-timeout 90 web worker verifier
 compose exec -T web node /app/scripts/check-workbench-runtime.mjs --http
 compose exec -T worker python -c 'import os; from worker.orchestration.db import open_database; import worker.performance; import worker.research; c=open_database(os.environ["WORKBENCH_DB_PATH"]); c.close(); print("worker schema ready")'
+[[ $(docker inspect "$(compose ps -q verifier)" --format '{{.HostConfig.NetworkMode}}') == none ]]
 [[ $(curl --max-time 5 --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$WORKBENCH_HTTP_PORT/api/workbench") == 401 ]]
 for image in "$web_image" "$worker_image"; do
   [[ $(docker image inspect "$image" --format '{{.Config.User}}') == '10001:10001' ]]
   docker run --rm --read-only --entrypoint sh "$image" -c 'test ! -e /app/data/observatory.db && test ! -e /app/config/gateway.json && test ! -e /app/.env && test ! -e /app/.private'
 done
 publish_container_report() {
-  python3 - "$root" "$run_id" "$1" "$2" "$monthly_publisher" <<'PY_REPORT'
+  python3 - "$root" "$run_id" "$1" "$2" "$monthly_publisher" "$governance_verifier" <<'PY_REPORT'
 import json
 import os
 import re
 import stat
 import sys
 
-root, run_id, web_image, worker_image, publisher_json = sys.argv[1:]
+root, run_id, web_image, worker_image, publisher_json, verifier_json = sys.argv[1:]
 if len(publisher_json.encode("utf-8")) > 4096:
     raise SystemExit("Monthly publisher proof is oversized")
 try:
@@ -154,6 +160,31 @@ try:
         raise ValueError("Invalid monthly publisher proof")
 except (ValueError, TypeError, KeyError, OSError) as error:
     raise SystemExit("Monthly publisher runtime proof is missing or invalid") from error
+if len(verifier_json.encode("utf-8")) > 4096:
+    raise SystemExit("Governance verifier proof is oversized")
+try:
+    verifier = json.loads(verifier_json)
+    expected = {"schema_version", "status", "runtime_uid", "sqlite_schema_version", "source_manifest_sha256", "bundle_path", "bundle_sha256",
+                "sidecar_sha256", "source_file_count", "web_worker_sources_equal", "network_disabled", "credentials_present",
+                "verifier_role_isolated", "fixed_node_fixture_executed", "normal_ts_request", "independent_ts_proof", "persisted_blob_rechecked", "request_financial_rows",
+                "acceptance_scope", "data_provenance", "gate_eligible", "completed_requirements"}
+    if (not isinstance(verifier, dict) or set(verifier) != expected
+            or verifier["schema_version"] != "verification-container-smoke-v1" or verifier["status"] != "passed"
+            or type(verifier["runtime_uid"]) is not int or verifier["runtime_uid"] != 10001
+            or type(verifier["sqlite_schema_version"]) is not int or verifier["sqlite_schema_version"] != schema_version
+            or verifier["bundle_path"] != "/app/web/dist/governance-fixture.mjs"
+            or any(not isinstance(verifier[key], str) or not re.fullmatch(r"[a-f0-9]{64}", verifier[key])
+                   for key in ("source_manifest_sha256", "bundle_sha256", "sidecar_sha256"))
+            or type(verifier["source_file_count"]) is not int or not 10 <= verifier["source_file_count"] <= 4098
+            or any(verifier[key] is not True for key in ("web_worker_sources_equal", "network_disabled", "verifier_role_isolated",
+                                                        "fixed_node_fixture_executed", "normal_ts_request", "independent_ts_proof", "persisted_blob_rechecked"))
+            or verifier["credentials_present"] is not False or verifier["gate_eligible"] is not False
+            or type(verifier["request_financial_rows"]) is not int or verifier["request_financial_rows"] != 0
+            or verifier["acceptance_scope"] != "engineering_subcheck" or verifier["data_provenance"] != "synthetic"
+            or verifier["completed_requirements"] != []):
+        raise ValueError("Invalid governance verifier proof")
+except (ValueError, TypeError, KeyError) as error:
+    raise SystemExit("Governance verifier runtime proof is missing or invalid") from error
 caller = [os.environ.get("SUDO_UID"), os.environ.get("SUDO_GID")]
 if caller == [None, None]:
     uid, gid = os.getuid(), os.getgid()
@@ -185,7 +216,7 @@ try:
                   "missing_bind_source_rejected": True,
                   "legacy_actual_facts": 0, "encrypted_local_restore": True,
                   "independent_host_restore": False, "web_image": web_image,
-                  "worker_image": worker_image, "monthly_publisher": publisher}
+                  "worker_image": worker_image, "monthly_publisher": publisher, "governance_verifier": verifier}
         with os.fdopen(os.dup(descriptor), "w", encoding="utf-8") as output:
             json.dump(report, output, separators=(",", ":"))
             output.write("\n")
@@ -209,4 +240,4 @@ finally:
 PY_REPORT
 }
 publish_container_report "$(docker image inspect "$web_image" --format '{{.Id}}')" "$(docker image inspect "$worker_image" --format '{{.Id}}')"
-printf 'Container migration, fixed Node publisher, legacy isolation, encrypted restore and HTTP fixture passed\n'
+printf 'Container migration, fixed Node publisher, isolated synthetic verifier, legacy isolation, encrypted restore and HTTP fixture passed\n'

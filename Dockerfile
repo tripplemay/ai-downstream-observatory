@@ -7,8 +7,18 @@ COPY contracts/ ./contracts/
 COPY migrations/ ./migrations/
 COPY web/src/server/ ./web/src/server/
 COPY web/scripts/build-evaluation-worker.mjs web/scripts/monthly-evaluation.ts ./web/scripts/
+COPY web/scripts/build-governance-fixture.mjs web/scripts/governance-fixture.ts ./web/scripts/
 COPY web/tsconfig.json ./web/tsconfig.json
-RUN npm --prefix web run build:evaluation-worker
+COPY worker/accounting/ ./worker/accounting/
+COPY worker/market/ ./worker/market/
+COPY worker/orchestration/ ./worker/orchestration/
+COPY worker/performance/ ./worker/performance/
+COPY worker/research/ ./worker/research/
+COPY worker/governance_verification/ ./worker/governance_verification/
+COPY requirements-workbench.txt ./
+COPY scripts/migrate-workbench.mjs scripts/verification-source.mjs ./scripts/
+COPY tests/deployment/build-verification-smoke.mjs tests/deployment/verification-container-bridge.ts ./tests/deployment/
+RUN npm --prefix web run build:evaluation-worker && npm --prefix web run build:verification-worker && node tests/deployment/build-verification-smoke.mjs
 
 FROM python:3.11-slim-bookworm
 
@@ -24,6 +34,16 @@ COPY --from=evaluation-builder /build/web/dist/monthly-evaluation.mjs ./worker-b
 COPY --from=evaluation-builder /build/web/node_modules/better-sqlite3/ ./worker-bridge/node_modules/better-sqlite3/
 COPY --from=evaluation-builder /build/web/node_modules/bindings/ ./worker-bridge/node_modules/bindings/
 COPY --from=evaluation-builder /build/web/node_modules/file-uri-to-path/ ./worker-bridge/node_modules/file-uri-to-path/
+# The verifier executes this exact path; its sidecar binds the bundle and every source file.
+COPY --from=evaluation-builder /build/web/dist/governance-fixture.mjs /build/web/dist/governance-fixture.manifest.json ./web/dist/
+COPY --from=evaluation-builder /build/web/dist/verification-container-bridge.mjs ./web/dist/
+COPY --from=evaluation-builder /build/web/node_modules/better-sqlite3/ ./web/node_modules/better-sqlite3/
+COPY --from=evaluation-builder /build/web/node_modules/bindings/ ./web/node_modules/bindings/
+COPY --from=evaluation-builder /build/web/node_modules/file-uri-to-path/ ./web/node_modules/file-uri-to-path/
+COPY --from=evaluation-builder /build/web/src/server/ ./web/src/server/
+COPY --from=evaluation-builder /build/web/scripts/build-governance-fixture.mjs /build/web/scripts/governance-fixture.ts ./web/scripts/
+COPY --from=evaluation-builder /build/web/package.json /build/web/package-lock.json /build/web/tsconfig.json ./web/
+COPY --from=evaluation-builder /build/scripts/ ./scripts/
 RUN node --input-type=module -e "import Database from './worker-bridge/node_modules/better-sqlite3/lib/index.js'; const db = new Database(':memory:'); db.prepare('SELECT 1').get(); db.close();"
 
 COPY requirements-workbench.txt .
@@ -34,6 +54,7 @@ COPY worker/market/ ./worker/market/
 COPY worker/orchestration/ ./worker/orchestration/
 COPY worker/performance/ ./worker/performance/
 COPY worker/research/ ./worker/research/
+COPY worker/governance_verification/ ./worker/governance_verification/
 COPY contracts/ ./contracts/
 COPY migrations/ ./migrations/
 

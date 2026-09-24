@@ -15,6 +15,13 @@ const manifest = readFileSync(join(root, 'migrations/manifest.json'), 'utf8');
 const publisherProof = { schema_version: 'monthly-publisher-smoke-v1', publisher_path: '/app/worker-bridge/monthly-evaluation.mjs',
   bundle_sha256: 'b'.repeat(64), node_version: 'v22.0.0', sqlite_schema_version: JSON.parse(manifest).migrations.length,
   runtime_uid: 10001, native_sqlite_loaded: true, invalid_lease_rejected: true, logical_database_unchanged: true };
+const verifierProof = { schema_version: 'verification-container-smoke-v1', status: 'passed', runtime_uid: 10001,
+  sqlite_schema_version: JSON.parse(manifest).migrations.length, source_manifest_sha256: 'c'.repeat(64),
+  bundle_path: '/app/web/dist/governance-fixture.mjs', bundle_sha256: 'd'.repeat(64), sidecar_sha256: 'e'.repeat(64), source_file_count: 100,
+  web_worker_sources_equal: true, network_disabled: true, credentials_present: false, verifier_role_isolated: true,
+  fixed_node_fixture_executed: true, normal_ts_request: true, independent_ts_proof: true,
+  persisted_blob_rechecked: true, request_financial_rows: 0, acceptance_scope: 'engineering_subcheck',
+  data_provenance: 'synthetic', gate_eligible: false, completed_requirements: [] };
 const mode = file => statSync(file).mode & 0o777;
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'etf-container-report-'));
@@ -22,9 +29,9 @@ function fixture(t) {
   mkdirSync(join(directory, 'migrations'), { mode: 0o700 });
   writeFileSync(join(directory, 'migrations/manifest.json'), manifest, { mode: 0o600 });
   const report = join(directory, 'artifacts', 'verification', `container-${runId}.json`);
-  const run = (extra = {}, id = runId, webImage = image, publisher = JSON.stringify(publisherProof)) => {
+  const run = (extra = {}, id = runId, webImage = image, publisher = JSON.stringify(publisherProof), verifier = JSON.stringify(verifierProof)) => {
     const env = { ...process.env }; delete env.SUDO_UID; delete env.SUDO_GID;
-    return spawnSync(process.env.WORKBENCH_PYTHON || 'python3', ['-c', code, directory, id, webImage, image, publisher], { env: { ...env, ...extra }, encoding: 'utf8' });
+    return spawnSync(process.env.WORKBENCH_PYTHON || 'python3', ['-c', code, directory, id, webImage, image, publisher, verifier], { env: { ...env, ...extra }, encoding: 'utf8' });
   };
   return { directory, report, run };
 }
@@ -37,7 +44,7 @@ test('container report handoff gives the caller a bounded 0600 JSON without expo
   assert.equal(mode(join(f.directory, 'artifacts')), 0o700); assert.equal(mode(dirname(f.report)), 0o700); assert.equal(mode(f.report), 0o600);
   assert.equal(statSync(f.report).uid, process.getuid()); assert.equal(statSync(f.report).gid, process.getgid());
   assert.equal(mode(secrets), 0o700); assert.equal(mode(secret), 0o600);
-  assert.deepEqual(JSON.parse(readFileSync(f.report, 'utf8')), { run_id: runId, status: 'passed', non_root: true, missing_bind_source_rejected: true, legacy_actual_facts: 0, encrypted_local_restore: true, independent_host_restore: false, web_image: image, worker_image: image, monthly_publisher: publisherProof });
+  assert.deepEqual(JSON.parse(readFileSync(f.report, 'utf8')), { run_id: runId, status: 'passed', non_root: true, missing_bind_source_rejected: true, legacy_actual_facts: 0, encrypted_local_restore: true, independent_host_restore: false, web_image: image, worker_image: image, monthly_publisher: publisherProof, governance_verifier: verifierProof });
   assert.doesNotMatch(readFileSync(f.report, 'utf8'), /SYNTHETIC-NOT-A-REAL-KEY/);
 });
 
@@ -76,6 +83,19 @@ test('container reports require complete current-schema runtime proof rather tha
   }
   for (const raw of ['', '{', ' '.repeat(4097)]) {
     assert.notEqual(f.run({}, runId, image, raw).status, 0);
+    assert.equal(existsSync(join(f.directory, 'artifacts')), false);
+  }
+});
+
+test('container report cannot omit verifier runtime proof or upgrade synthetic engineering scope', t => {
+  const f = fixture(t), missing = { ...verifierProof }; delete missing.fixed_node_fixture_executed;
+  for (const proof of [null, {}, missing, { ...verifierProof, extra: true }, { ...verifierProof, gate_eligible: true },
+    { ...verifierProof, completed_requirements: ['E-02'] }, { ...verifierProof, acceptance_scope: 'gate' },
+    { ...verifierProof, credentials_present: true }, { ...verifierProof, network_disabled: false },
+    { ...verifierProof, source_file_count: '100' }, { ...verifierProof, source_manifest_sha256: 'invalid' },
+    { ...verifierProof, bundle_path: '/app/worker-bridge/governance-fixture.mjs' }, { ...verifierProof, sqlite_schema_version: 20 }]) {
+    const result = f.run({}, runId, image, JSON.stringify(publisherProof), JSON.stringify(proof));
+    assert.notEqual(result.status, 0, JSON.stringify(proof)); assert.match(result.stderr, /Governance verifier runtime proof is missing or invalid/);
     assert.equal(existsSync(join(f.directory, 'artifacts')), false);
   }
 });

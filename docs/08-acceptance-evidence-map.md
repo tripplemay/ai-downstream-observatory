@@ -218,7 +218,7 @@ npm run test:workbench:http
 
 - G-01 需要真实已批准政策，G-02 需要经确认账户及权限；临时测试附件与合成对账不代表用户资料已核实。
 - `web/src/server/governance/verification.ts` 只有受信内部登记/校验接口，没有用户/AI HTTP 操作；它要求受信任务、suite/tool、文件与 manifest hash、适用版本和正式结果。
-- **真正执行并生成合格证据的 `governance_verification` Worker 尚未实现。** 直接在临时库构造的成功任务只验证状态机，不能转录成真实 G-03/G-04 证据。
+- v21 已实现独立 `verifier` role 的真实执行链，但只覆盖固定合成工程子检查 `E-02.cash-contribution-neutrality.v1`，不等于完整 E-02 或正式 G-03/G-04。结果固定 `gate_eligible=false`、`completed_requirements=[]`；见[受控验收边界](controlled-verification.md)。完整 E/S 适配器和正式证据仍未完成，旧 v1 临时库成功任务不会升级为 v2 证据。
 - `WORKBENCH_RELEASE_SHA256` 未配置，当前 Compose 未透传；不能为演示塞入任意 hash 打开实盘门槛。最终必须绑定已核验源码 manifest 与实际运行版本。
 - 当前研究不产出经独立核验的 `admission_grade=formal_verified`。S 证据不足不能靠手改研究成功标签、上传 PASS 或人工确认阅读而升级。
 
@@ -664,3 +664,30 @@ SHA-256 `260027271abeebeec9b0d6fb2d2b7bbfd40f8bbdfe863bc5870a72855c198858`。
 `5e31e4ed9e063300f238e727f3f908c4300fc131e1499d7df0559b941a99a5bf`，fixture 已停止。
 此原生 smoke 没有周期，不能替代周期逻辑、BFCache、键盘/读屏或生产构建验收。
 v20 同提交 CI/镜像、全部发布和投资门槛仍需独立证据，本轮没有生产切换。
+
+## 20. 受控合成工程检查 v21
+
+已实现[受控验收链](controlled-verification.md)：人类会话请求、当前源码上下文、
+专用 verifier 租约、真实 Node 账本与 Python 估值/绩效、不可变原件和独立 TS 复核。
+SQLite 迁移 21 保留旧 1-20 字节；部署脚本能发现并停止旧版实际存在的 writer，
+包含新 verifier 的启动、失败停止、健康与无网络检查，不假定 v20 已存在此服务。
+
+固定检查只验证现金追加不能冒充盈利，并诚实保留 Modified Dietz 估计质量；
+`gate_eligible=false`、`completed_requirements=[]`。本节**不升级任何完整 E、S、
+G 或生产验收状态**，不使用用户实际资金/券商，也不创建真实账本事实或下单。
+
+2026-09-25 本地冻结源码回归：Python **590/590**、Web **743/743**、Node **214/214**，
+无失败/跳过；最后一项包含显式开启的测试服务生命周期检查，不是原生 UI。
+类型、生产构建、认证 HTTP、shellcheck 通过，npm audit 报告 0 个漏洞。
+12 类协调篡改在 Python/TS 两侧使用相同字节复核；错误收益实际终止为 fail，
+孤立 surrogate/异常控制符不会留下无法执行的请求，篡改 dedup 回执不能转向别的请求。
+
+真实生产构建 HTTP **91/91**，schema 21，build `ltJVTfkb8Ibq8-2AK22a0`；509 个源码
+hash 首尾一致。工件：`artifacts/verification/workbench-http/2026-09-24T17-22-03-354Z/manifest.json`，
+SHA-256 `26f06913221c130d9dd3d64e49933e0ba7c91679aad81a97b00aa3fec5372cd5`。
+新 VF01-07 覆盖正常请求/真实 CLI/独立 proof、原件 SHA、跨作用域/会话、幂等和恢复只读。
+最终日志以 `verification-v21-hardened` 为前缀，保留先前失败及修复记录，不拿旧计数替代。
+
+原生浏览器因 `BROWSER_RUNTIME_UNAVAILABLE` 仍 **NOT_RUN**；本地 Docker daemon 不可用，
+没有本地容器 PASS。精确提交 CI/镜像、完整产品验收、真实数据/策略和生产切换仍需证据。
+个人规划原件继续留在被 Git 与 Docker 排除的本地目录，八份保留基线 SHA 校验全部一致。

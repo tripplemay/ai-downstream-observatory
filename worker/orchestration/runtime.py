@@ -24,7 +24,8 @@ RESEARCH_COMMANDS = ("research_register", "research_register_trial", "research_t
                      "research_unseal", "research_ai_context", "research_ai_review")
 CORE_COMMANDS = ("market_ingest", "market_collect", "valuation", "performance", *RESEARCH_COMMANDS, "monthly_evaluation")
 PRICE_COMMANDS = ("market_collect_prices",)
-SUPPORTED_COMMANDS = (*CORE_COMMANDS, *PRICE_COMMANDS)
+VERIFIER_COMMANDS = ("governance_verification_v2",)
+SUPPORTED_COMMANDS = (*CORE_COMMANDS, *PRICE_COMMANDS, *VERIFIER_COMMANDS)
 
 
 def role_commands(role):
@@ -32,6 +33,8 @@ def role_commands(role):
         return CORE_COMMANDS
     if role == "longport":
         return PRICE_COMMANDS
+    if role == "verifier":
+        return VERIFIER_COMMANDS
     raise WorkbenchError("INVALID_WORKER_ROLE")
 
 
@@ -55,9 +58,24 @@ def sync_requests(connection, limit=100, now=None, command_types=None):
           AND o.topic='collection_schedule.request_invalid'
           AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.command_request_id')=c.id
           AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.portfolio_id')=c.portfolio_id)
+        AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.dedup_key='verification-request-invalid:' || c.id
+          AND o.topic='governance_verification.request_invalid'
+          AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.code')='VERIFICATION_REQUEST_INVALID'
+          AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.command_request_id')=c.id
+          AND json_extract(CASE WHEN json_valid(o.payload_json) THEN o.payload_json ELSE '{}' END,'$.portfolio_id')=c.portfolio_id)
         ORDER BY c.created_at,c.id LIMIT ?""", (*supported, limit)).fetchall()
     jobs = []
     for request in requests:
+        if request["command_type"] == "governance_verification_v2":
+            from worker.governance_verification.binding import request_binding
+            try:
+                request_binding(connection, request, verify_source=False)
+            except WorkbenchError:
+                enqueue_notification(connection, "verification-request-invalid:" + request["id"],
+                                     "governance_verification.request_invalid",
+                                     {"code": "VERIFICATION_REQUEST_INVALID", "command_request_id": request["id"],
+                                      "portfolio_id": request["portfolio_id"]}, now=now)
+                continue
         if request["command_type"] == "monthly_evaluation":
             try:
                 cycle, definition = monthly_request_binding(connection, request)
@@ -216,6 +234,10 @@ def command_handler(connection, clock=None, lease_seconds=300, stop_requested=No
         payload = json.loads(request["payload_json"])
         if content_hash(payload) != request["payload_hash"]:
             raise WorkbenchError("COMMAND_PAYLOAD_HASH_MISMATCH")
+        if job["job_type"] == "governance_verification_v2":
+            from worker.governance_verification.runner import prepare_verification
+            return prepare_verification(connection, job, lease, lease_seconds=lease_seconds, clock=clock,
+                                        stop_requested=stop_requested)
         if job["job_type"] == "monthly_evaluation":
             monthly_request_binding(connection, request)
             return publish_monthly(connection, job, lease, lease_seconds=lease_seconds, clock=clock,

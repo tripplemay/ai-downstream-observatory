@@ -1,6 +1,6 @@
 # ETF workbench implementation and release tracker
 
-Updated: 2026-09-13. This is a progress record, not an acceptance certificate.
+Updated: 2026-09-25. This is a progress record, not an acceptance certificate.
 
 ## Objective and authority
 
@@ -22,7 +22,7 @@ replacing personal parameters with public templates does not reduce scope.
 
 | Workstream | Current implementation | Remaining work / release evidence |
 |---|---|---|
-| Contracts and new database | Versioned migrations through v20 in the current worktree; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, private catalog and identity-review versions, monthly cycle listing-review sequence boundaries, human-reviewed private market references, bounded HTTP/SDK captures and daily collection authorization/slots | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
+| Contracts and new database | Versioned migrations through v21 in the current worktree; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, private catalog and identity-review versions, monthly cycle listing-review sequence boundaries, human-reviewed private market references, bounded HTTP/SDK captures, daily collection authorization/slots and controlled verification evidence | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
 | Authentication | Sealed sessions, persistent revocation/rate limit, server-side guards, strict Origin; authenticated HTTP and native login/logout checked; initialization/login share UTF-8 password bounds | Production TLS/proxy, operator configuration and real owner login |
 | Financial ledger | Exact decimal facts, cash/trades/settlement/dividends/FX/transfers/splits; unknown/estimated/confirmed tax, net-only receipts, cumulative tax assessment and actual withholding kept separate; corporate-action notice/resolution isolation; securities transit and append-only dependent corrections | Real dividend/tax/corporate-action and security-transfer evidence, full acceptance matrix |
 | Import and reconciliation | JSON and raw CSV attachment/preview/atomic confirmation; zero-write CSV inspection and visual explicit mapping; immutable mappings and row evidence; explicit duplicate review and persistent source aliases; scoped downloads and encrypted recovery; explicit balance/tax-payable/settled/transit reconciliation and unresolved-fact guards | Domestic/cross-border broker samples, native wizard acceptance, large background imports and full throughput/fault acceptance |
@@ -31,9 +31,51 @@ replacing personal parameters with public templates does not reduce scope.
 | ETF research directory | Portfolio-private membership/source/profile/disclosure versions; independent CAS, stable pagination, account-evidence summaries and up-to-four version-bound comparisons; TS/Python exact-decimal overlap bounds; v19 sourced human identity/lifecycle/product-structure/trading-unit reviews with expiry and independent proofs | Issuer/provider originals and actual identity/lifecycle verification, current fees/liquidity/premiums and weighted exposures; full P-05 and native comparison/mobile acceptance |
 | Market and orchestration | Immutable paged batches, validate/publish CAS, as-known/restated valuation, leases/fencing/retry/outbox; monthly discovery and fixed Node publisher; ECB reference-FX plus explicit daily collection schedules; LongPort day-price SDK publication bound to private human-reviewed mapping/calendar versions; separate core/provider roles | Actual A/HK/US permissions/data, authoritative exchange references, recurring price collection, full fault/load tests and current-image verification |
 | Strategy and AI | Preregistered v1 contribution-only research plus explicit v2 monthly momentum/MA rotation and fixed-rebalance benchmark; exact PIT ranking, simulated sales/settlement/fixed buys, costs and bounded read-only summaries; frozen inputs/implementation and independent research windows | Live providers/models, continuous forward simulation, complete long-history workflow performance and genuine S-gate evidence; v2 does not activate actual schedules |
-| Governance and execution | Human version/capability APIs, risk/approval CAS, independent-process cash/share reservation race tests, execution reports separate from facts; trusted verification import rejects user PASS claims; private listing-review inputs invalidate old approvals on change/expiry; price reads bind listing identity and exact knowledge time | Actual trusted verification Worker, formal evidence and runtime manifest binding; executable liquidity inputs and complete look-through; actual D/G/S approvals remain absent |
+| Governance and execution | Human version/capability APIs, risk/approval CAS, independent-process cash/share reservation race tests, execution reports separate from facts; private listing-review inputs invalidate old approvals on change/expiry; price reads bind listing identity and exact knowledge time; v21 controlled runner executes one fixed source-bound synthetic cash subcheck with independent Python/TS proof | Full E/S adapters, formal gate evidence and release/runtime binding beyond this subcheck; executable liquidity inputs and complete look-through; actual D/G/S approvals remain absent |
 | Product UI | Account, funding, catalog, research, governance, monthly evaluation, private market-reference and listing-review workspaces; typed securities and dividend/tax/corporate-action preview/confirm; visual CSV mapping and server-backed, current-session, read-only confirmation recovery | Native listing-review/market-reference/monthly/wizard/recovery/BFCache and full catalog comparison/positive governance acceptance; complete accessibility and readonly UX |
-| Deployment | Manual-only release, encrypted backup/restore, exact-SHA CI-verified non-root v19 core/provider images and local restore; full historical real legacy-copy archive/recovery rehearsal; old production unchanged | New v20 source-bound image checks, independent-host restore, protected credentials/configuration, release and post-release checks |
+| Deployment | Manual-only release, encrypted backup/restore, historical exact-SHA v20 core/provider CI and local restore; full historical real legacy-copy archive/recovery rehearsal; v21 separate credential-free/network-free verifier wiring; no current production cutover | New v21 source-bound image checks, independent-host restore, protected credentials/configuration, release and post-release checks |
+
+### v21 controlled engineering verification local checkpoint
+
+The [controlled verification runner](controlled-verification.md) now connects a
+normal human request, dedicated fenced verifier job, actual synthetic Node ledger
+and Python valuation/performance, immutable raw artifact and independent Web
+proof. `E-02.cash-contribution-neutrality.v1` never counts as complete E-02 or
+G-03/G-04: `gate_eligible=false`, `completed_requirements=[]`. The main portfolio
+gets orchestration evidence only, not fixture financial facts.
+
+Frozen-source local regression passed: Python **590/590**, Web **743/743**, Node
+**214/214** (including the opt-in fixture lifecycle), with no failures/skips.
+Typecheck, production build, authentication HTTP and shellcheck passed; npm audit
+reported zero vulnerabilities. Logs use the `verification-v21-hardened` prefix
+under `artifacts/verification/final-regression/`. Earlier rounds exposed and
+fixed Unicode request rejection, dedup alias replay, cross-language boolean/ID
+and container-type confusion, and a test harness that did not wait for actual
+WebCrypto completion. Earlier `final`-named logs are superseded, not erased.
+
+Production-build HTTP passed **91/91**, schema 21, build
+`ltJVTfkb8Ibq8-2AK22a0`. All 509 inventoried source hashes matched before/after
+execution. Manifest: `artifacts/verification/workbench-http/2026-09-24T17-22-03-354Z/manifest.json`,
+SHA-256 `26f06913221c130d9dd3d64e49933e0ba7c91679aad81a97b00aa3fec5372cd5`.
+Its seven new verification cases use a normal authenticated request, dedicated
+verifier CLI and independent HTTP proof/download; no passing job is seeded.
+The controlled-runner source manifest contains 200 files, hash
+`02b0a5858ba40bb3785297f8029701a88183b56cda64377216ae2e379d6dd562`,
+unchanged across final checks. This is not a complete release attestation.
+
+Native UI remains **NOT_RUN**: Tabbit returned `BROWSER_RUNTIME_UNAVAILABLE`;
+no restart or backend substitution was attempted. The fixture lifecycle test
+proved process/port/temporary-directory cleanup, not browser interaction.
+Evidence: `artifacts/verification/browser-verification-v21/`. Local Docker daemon
+is unavailable; actual image smoke, exact-commit CI and production acceptance
+remain separate pending checks. No current production cutover occurred.
+
+The prior published checkpoint is commit
+`8448e72c005d93b865fa2c38d42239655863706f`, CI `34735669873` (Python 553, Web 675,
+Node 188, HTTP 84, schema 20). Its retained report is
+`artifacts/verification/github-ci/34735669873/verification-result.json`, SHA-256
+`ce9a8d5364d66f0ea73e1e235e8f5f612cdaa67ee57f202a08fc4279f285fb6f`.
+This is historical evidence, not certification of v21 or current production.
 
 ### v18 exact-commit CI checkpoint
 

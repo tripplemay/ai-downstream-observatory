@@ -41,6 +41,7 @@ export function SiteHeader({ nav }: { nav?: React.ReactNode }) {
               <Link className="block px-3 py-2 text-sm" href="/workbench/catalog">ETF 标的与持仓比较</Link>
               <Link className="block px-3 py-2 text-sm" href="/workbench/research">策略研究与 AI</Link>
               <Link className="block px-3 py-2 text-sm" href="/workbench/governance">政策与执行审批</Link>
+              <Link className="block px-3 py-2 text-sm" href="/workbench/verifications">受控工程子检查</Link>
               <Link className="block px-3 py-2 text-sm" href="/legacy">历史研究档案</Link>
             </nav>}
           </div>

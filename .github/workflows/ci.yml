@@ -34,6 +34,9 @@ jobs:
       - name: build fixed monthly evaluation publisher
         working-directory: web
         run: npm run build:evaluation-worker
+      - name: build hash-bound synthetic governance fixture before Python checks
+        working-directory: web
+        run: npm run build:verification-worker
       - name: Python accounting, market, worker and performance tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Web unit and ledger integration tests

@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { migrateWorkbench } from '../../scripts/migrate-workbench.mjs';
 import { probeEarlyRejection } from './http-early-rejection.mjs';
+import { verificationHttpCases } from './verification-http-cases.mjs';
 
 const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const root = path.dirname(web);
@@ -19,6 +20,7 @@ const output = path.join(root, 'artifacts', 'verification', 'workbench-http', no
 mkdirSync(output, { recursive: true });
 const report = {
   suite: 'workbench-http', version: 1, started_at: now, completed_at: null,
+  case_selection: process.argv.includes('--verification-only') ? 'controlled-verification' : 'full',
   status: 'RUNNING', build_id: null, build_performed: !process.argv.includes('--no-build'),
   fixture: 'temporary migrated database and random credentials; no production or real accounts',
   cases: [], source_sha256: {}, limitations: [
@@ -30,6 +32,7 @@ const report = {
     'Recurring collection cases use an actual UTC trigger and loopback HTTP pause, but do not certify production uptime, real provider freshness or native browser behavior.',
     'Price collection cases use human-reviewed synthetic references and SDK projections in an independent test transport; they do not verify exchange calendars, subscriptions, real market data or broker buyability.',
     'Listing reviews use synthetic private human assertions, not issuer verification, live trading authority or weighted holdings look-through; HTTP page output is not native browser interaction acceptance.',
+    'Controlled verification executes only E-02.cash-contribution-neutrality.v1 against an isolated synthetic ledger; it is not full E-02, G-03/G-04 acceptance, investment approval or native browser verification.',
   ],
 };
 const sha = (value) => createHash('sha256').update(value).digest('hex');
@@ -39,7 +42,7 @@ function sourceFiles(relative) {
     return entry.isDirectory() && entry.name !== '__pycache__' ? sourceFiles(name) : entry.isFile() && /\.(?:ts|tsx|py|json|sql|mjs|sh)$/.test(entry.name) ? [name] : [];
   });
 }
-const inventory = () => [...['contracts', 'migrations', 'web/src', 'web/tests', 'web/scripts', 'tests', 'scripts', 'worker/accounting', 'worker/market', 'worker/orchestration', 'worker/performance', 'worker/research'].flatMap(sourceFiles), 'web/package.json', 'web/package-lock.json', 'web/next.config.ts', 'web/tailwind.config.ts', 'requirements-workbench.txt'].sort();
+const inventory = () => [...['contracts', 'migrations', 'web/src', 'web/tests', 'web/scripts', 'tests', 'scripts', 'worker/accounting', 'worker/market', 'worker/orchestration', 'worker/performance', 'worker/research', 'worker/governance_verification'].flatMap(sourceFiles), 'web/package.json', 'web/package-lock.json', 'web/next.config.ts', 'web/tailwind.config.ts', 'requirements-workbench.txt'].sort();
 for (const relative of inventory()) {
   report.source_sha256[relative] = sha(readFileSync(path.join(root, relative)));
 }
@@ -210,6 +213,10 @@ async function main() {
       assert.equal(current.advice_status, 'blocked'); assert.equal(current.valuation_status, 'not_ready');
       return { personal_funding_defaults: false, funding_plan_versions: 0, cash_cny: '0' };
     });
+    if (process.argv.includes('--verification-only')) {
+      await verificationHttpCases({ check, request, jsonRequest, filename, directory, root, output, origin, password, Database });
+      return;
+    }
     const evaluationPath = '/api/workbench/evaluations';
     const evaluationPost = (body, extraHeaders = {}) => jsonRequest(evaluationPath, {
       method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json', ...extraHeaders }, body: JSON.stringify(body),
@@ -1969,6 +1976,7 @@ catch(error) { console.log(JSON.stringify({error:error.message})); } finally {db
       assert.equal(identityStorage(), before); assert.equal(rotationSnapshot(), financial);
       return { revision: 2, blocked_issue: 'LISTING_REVIEW_NOT_ACTIVE', historical_versions_preserved: 2, recovery_write: 423, financial_tables_unchanged: true };
     });
+    await verificationHttpCases({ check, request, jsonRequest, filename, directory, root, output, origin, password, Database });
     await check('HTTP-16', 'storage errors do not expose paths or SQL', async () => {
       renameSync(filename, `${filename}.held`);
       try {

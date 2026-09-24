@@ -100,6 +100,11 @@
       "version": 20,
       "file": "0020_evaluation_listing_boundaries.sql",
       "sha256": "a143cf7a6578b3329d8800cf927bf55729edcc78d9cd4085e30ee16e9d4c0d3d"
+    },
+    {
+      "version": 21,
+      "file": "0021_governance_verification_runner.sql",
+      "sha256": "4e551a02540804c6da793d62d6f5da29b8126937230a822569e99badc753bdc9"
     }
   ]
 }

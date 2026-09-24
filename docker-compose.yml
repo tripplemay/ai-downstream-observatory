@@ -14,6 +14,14 @@ x-web-image: &web-image
     args:
       RELEASE_SHA: ${WORKBENCH_RELEASE_SHA:-development}
 
+x-worker-image: &worker-image
+  image: etf-workbench-worker:${WORKBENCH_RELEASE_SHA:-development}
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      RELEASE_SHA: ${WORKBENCH_RELEASE_SHA:-development}
+
 x-data: &data
   type: bind
   source: ${WORKBENCH_DATA_DIR_HOST:-./data-workbench}
@@ -48,15 +56,20 @@ services:
     volumes: [*data]
 
   worker:
-    <<: *hardened
-    image: etf-workbench-worker:${WORKBENCH_RELEASE_SHA:-development}
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        RELEASE_SHA: ${WORKBENCH_RELEASE_SHA:-development}
+    <<: [*hardened, *worker-image]
     restart: unless-stopped
     environment: *runtime
+    volumes: [*data]
+    depends_on:
+      web:
+        condition: service_healthy
+
+  verifier:
+    <<: [*hardened, *worker-image]
+    restart: unless-stopped
+    network_mode: none
+    environment: *runtime
+    command: [python, -m, worker.orchestration, --role, verifier]
     volumes: [*data]
     depends_on:
       web:

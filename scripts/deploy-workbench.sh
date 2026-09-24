@@ -95,9 +95,33 @@ assert_no_recovery
 evidence="$WORKBENCH_DEPLOY_ROOT/release-evidence/$release_sha-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$evidence"
 compose() { docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$release_dir/docker-compose.yml" "$@"; }
+writer_services() {
+  local configured service found_web=0 found_worker=0
+  configured=$("$@" config --no-env-resolution --services) || return 1
+  while IFS= read -r service; do
+    case "$service" in
+      web) found_web=1; printf '%s\n' "$service" ;;
+      worker) found_worker=1; printf '%s\n' "$service" ;;
+      verifier) printf '%s\n' "$service" ;;
+      migrate|backup|restore|archive-legacy) ;;
+      *) printf 'Unrecognized previous Compose service; writer review required: %s\n' "$service" >&2; return 1 ;;
+    esac
+  done <<< "$configured"
+  ((found_web && found_worker)) || { printf 'Previous Compose is missing required writer services\n' >&2; return 1; }
+}
+stop_writers() {
+  local discovered service
+  local -a writers=()
+  discovered=$(writer_services "$@") || return 1
+  while IFS= read -r service; do writers+=("$service"); done <<< "$discovered"
+  "$@" stop "${writers[@]}"
+}
 assert_stopped() {
-  local ids id
-  ids=$("$@" ps --all --quiet web worker)
+  local ids id discovered service
+  local -a writers=()
+  discovered=$(writer_services "$@") || return 1
+  while IFS= read -r service; do writers+=("$service"); done <<< "$discovered"
+  ids=$("$@" ps --all --quiet "${writers[@]}") || return 1
   [[ -n "$ids" ]] || { printf 'Cannot establish previous writer container state\n' >&2; return 1; }
   for id in $ids; do [[ $(docker inspect "$id" --format '{{.State.Running}}') == false ]] || return 1; done
 }
@@ -119,7 +143,7 @@ failed() {
   result=$?
   trap - ERR
   if ((writers_stopped || mutation_started)); then
-    compose stop web worker >/dev/null 2>&1 || true
+    compose stop web worker verifier >/dev/null 2>&1 || true
     printf '%s\n' '{"reason":"release failed; preserve new facts and reconcile before resuming"}' > "$WORKBENCH_DATA_DIR_HOST/RESTORE_PENDING_REVIEW"
     chown 10001:10001 "$WORKBENCH_DATA_DIR_HOST/RESTORE_PENDING_REVIEW"
     chmod 0600 "$WORKBENCH_DATA_DIR_HOST/RESTORE_PENDING_REVIEW"
@@ -145,7 +169,7 @@ if ((first_release)); then
   compose run --rm --no-deps -e WORKBENCH_DB_PATH= archive-legacy > "$evidence/legacy-online-snapshot.json"
   assert_no_recovery
   writers_stopped=1
-  docker compose -p "$WORKBENCH_LEGACY_PROJECT" -f "$WORKBENCH_LEGACY_DIR/docker-compose.yml" stop web worker
+  stop_writers docker compose -p "$WORKBENCH_LEGACY_PROJECT" -f "$WORKBENCH_LEGACY_DIR/docker-compose.yml"
   assert_stopped docker compose -p "$WORKBENCH_LEGACY_PROJECT" -f "$WORKBENCH_LEGACY_DIR/docker-compose.yml"
 else
   read -r previous_sha < "$previous/.release-sha"
@@ -153,7 +177,7 @@ else
   WORKBENCH_RELEASE_SHA="$previous_sha" docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$previous/docker-compose.yml" run --rm --no-deps backup > "$evidence/pre-stop-backup.json"
   assert_no_recovery
   writers_stopped=1
-  WORKBENCH_RELEASE_SHA="$previous_sha" docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$previous/docker-compose.yml" stop web worker
+  WORKBENCH_RELEASE_SHA="$previous_sha" stop_writers docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$previous/docker-compose.yml"
   WORKBENCH_RELEASE_SHA="$previous_sha" assert_stopped docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$previous/docker-compose.yml"
   WORKBENCH_RELEASE_SHA="$previous_sha" docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$previous/docker-compose.yml" run --rm --no-deps backup > "$evidence/final-pre-migration-backup.json"
 fi
@@ -170,9 +194,11 @@ export WORKBENCH_RESTORE_ARCHIVE_NAME WORKBENCH_RESTORE_TARGET_NAME
 [[ "$WORKBENCH_RESTORE_ARCHIVE_NAME" =~ ^workbench-[a-f0-9-]+\.etfbackup$ ]]
 compose run --rm --no-deps restore > "$evidence/local-restore-rehearsal.json"
 assert_no_recovery
-timeout 180 docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$release_dir/docker-compose.yml" up -d --no-build --wait --wait-timeout 150 web worker
+timeout 180 docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$release_dir/docker-compose.yml" up -d --no-build --wait --wait-timeout 150 web worker verifier
 compose exec -T web node /app/scripts/check-workbench-runtime.mjs --http > "$evidence/runtime-readiness.json"
 compose exec -T worker python -c 'import os; from worker.orchestration.db import open_database; c=open_database(os.environ["WORKBENCH_DB_PATH"]); c.close(); print("worker schema ready")' > "$evidence/worker-readiness.txt"
+compose exec -T verifier python -c 'import os; from worker.orchestration.db import open_database; from worker.governance_verification.source import source_manifest; from worker.orchestration.runtime import role_commands; assert role_commands("verifier") == ("governance_verification_v2",); assert not any(k.startswith("LONGPORT_") or k in ("WORKBENCH_PASSWORD_HASH","WORKBENCH_SESSION_SECRET") for k in os.environ); c=open_database(os.environ["WORKBENCH_DB_PATH"]); c.close(); source_manifest(); print("verifier schema and fixed source ready")' > "$evidence/verifier-readiness.txt"
+[[ $(docker inspect "$(compose ps -q verifier)" --format '{{.HostConfig.NetworkMode}}') == none ]]
 [[ $(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$WORKBENCH_HTTP_PORT/api/workbench") == 401 ]]
 assert_no_recovery
 ln -s "$release_dir" "$WORKBENCH_DEPLOY_ROOT/.current-$release_sha-$$"

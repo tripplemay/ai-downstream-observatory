@@ -169,6 +169,14 @@ def complete_job(connection, lease, result, outcome="succeeded", effect=None, no
         if instant(finished) < instant(current):
             raise WorkbenchError("JOB_CLOCK_REGRESSION")
         assert_lease(connection, lease, now=finished)
+        finalizing_job = connection.execute("SELECT * FROM job_runs WHERE id=?", (lease.job_id,)).fetchone()
+        if finalizing_job["job_type"] == "governance_verification_v2":
+            from worker.governance_verification.runner import assert_finalization
+            assert_finalization(connection, finalizing_job, lease, result, outcome, finished)
+            finished = stamp(clock()) if clock is not None else finished
+            if instant(finished) < instant(current):
+                raise WorkbenchError("JOB_CLOCK_REGRESSION")
+            assert_lease(connection, lease, now=finished)
         if outcome == "succeeded":
             job = connection.execute("SELECT * FROM job_runs WHERE id=?", (lease.job_id,)).fetchone()
             if job["job_type"] == "market_collect":

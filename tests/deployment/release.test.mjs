@@ -256,7 +256,7 @@ test('container smoke executes the deployed monthly publisher against SQLite bef
   assert.match(probe, /if fingerprint\(connection\) != before:/);
   assert.match(probe, /\(os\.getuid\(\), os\.getgid\(\)\) != \(10001, 10001\)/);
   assert.match(probe, /hashlib\.file_digest\(original, "sha256"\)/);
-  assert.match(smoke, /python3 - "\$root" "\$run_id" "\$1" "\$2" "\$monthly_publisher" <<'PY_REPORT'/);
+  assert.match(smoke, /python3 - "\$root" "\$run_id" "\$1" "\$2" "\$monthly_publisher" "\$governance_verifier" <<'PY_REPORT'/);
   assert.match(smoke, /test ! -e \/app\/\.private/);
 });
 
