@@ -62,8 +62,10 @@ export function readCsvManifest(db: Database.Database, batch: string): CsvManife
   return manifest;
 }
 
-/** Confirmed retries authenticate retained evidence, but never claim to rerun a newer parser. */
-export function verifyCsvEvidence(db: Database.Database, actor: Actor, batch: CsvBatch, options: AttachmentOptions, live: boolean): { manifest: CsvManifest; rows: CsvStoredRow[] } {
+interface CsvEvidence { manifest: CsvManifest; rows: CsvStoredRow[] }
+
+/** The decision runs only after a fresh read; confirmed retries never invoke a newer parser. */
+export function verifyCsvEvidence(db: Database.Database, actor: Actor, batch: CsvBatch, options: AttachmentOptions, live: boolean | ((evidence: CsvEvidence) => boolean)): CsvEvidence {
   const manifest = readCsvManifest(db, batch.id), rows = storedCsvRows(db, batch.id);
   const mapping = db.prepare("SELECT * FROM csv_mapping_versions WHERE id=?").get(manifest.mapping_version_id) as MappingRow | undefined;
   const association = db.prepare("SELECT mapping_version_id FROM csv_import_manifests WHERE batch_id=?").get(batch.id) as { mapping_version_id: string };
@@ -77,7 +79,8 @@ export function verifyCsvEvidence(db: Database.Database, actor: Actor, batch: Cs
   const uploaded = readJsonAttachment(db, actor, batch.portfolio_id, manifest.mapping_attachment_id, { ...options, accountId: batch.account_id });
   const definition = parseCsvMapping(pinned.bytes.toString("utf8"));
   if (hash(definition) !== manifest.mapping_hash || hash(parseCsvMapping(uploaded.bytes.toString("utf8"))) !== manifest.mapping_hash || canonical(definition) !== mapping.definition_json) throw new Error("CSV_IMPORT_EVIDENCE_INVALID");
-  if (!live) return { manifest, rows };
+  const evidence = { manifest, rows };
+  if (!(typeof live === "function" ? live(evidence) : live)) return evidence;
   if (manifest.parser_version !== CSV_PARSER_VERSION || manifest.mapper_version !== CSV_MAPPING_VERSION) throw new Error("CSV_IMPORT_METHOD_CHANGED");
   const context = csvContext(db, batch.portfolio_id, batch.account_id, definition);
   if (hash(context) !== manifest.context_hash) throw new Error("CSV_IMPORT_CONTEXT_CHANGED");
@@ -87,5 +90,5 @@ export function verifyCsvEvidence(db: Database.Database, actor: Actor, batch: Cs
     const source = mapped.rows[row.row - 1];
     if (canonical(source) !== canonical(row.source) || canonical(csvRowCommand(source.command, batch.portfolio_id, batch.account_id, batch.content_hash, row.row, batch.expected_revision)) !== canonical(row.command)) throw new Error("CSV_IMPORT_EVIDENCE_INVALID");
   }
-  return { manifest, rows };
+  return evidence;
 }

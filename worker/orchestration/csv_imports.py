@@ -12,6 +12,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -31,6 +32,9 @@ LOCAL_PUBLISHER = Path(__file__).resolve().parents[2] / "web/dist/csv-background
 RESULT_KEYS = {"schema_version", "request_id", "operation", "input_hash", "batch_id", "preview_hash",
                "expected_revision", "batch_status", "row_count", "error_count", "review_hash",
                "required_review_count", "confirmed_revision", "receipts_hash"}
+TIMING_PREFIX = "CSV_TRANSACTION_TIMING "
+TIMING_KEYS = {"schema_version", "outcome", "transaction_call_us", "begin_to_callback_us", "callback_us", "finalize_tail_us"}
+CHILD_ERROR_PATTERN = r"(?:CSV|IMPORT)_[A-Z0-9_]{1,100}|VERSION_CONFLICT|PREVIEW_HASH_MISMATCH|STALE_OR_EXPIRED_LEASE|WORKBENCH_READ_ONLY|RESTORE_PENDING_REVIEW"
 
 
 def _require(condition):
@@ -340,13 +344,56 @@ def committed_csv_job(connection, lease):
         raise WorkbenchError("CSV_BACKGROUND_RECEIPT_INVALID") from None
 
 
-def _publisher_argv(lease):
+def _timing_diagnostic(raw):
+    """Strict diagnostic transport only; never evidence of a financial commit."""
+    try:
+        if not 0 < len(raw) <= 4096:
+            return None, ""
+        lines = raw.decode("ascii").removesuffix("\n").split("\n")
+        if not 1 <= len(lines) <= 2:
+            return None, ""
+        timing, code = None, ""
+        for line in lines:
+            if line.startswith(TIMING_PREFIX) and timing is None:
+                if not raw.endswith(b"\n"):
+                    return None, ""
+                value = _json(line[len(TIMING_PREFIX):], 4096)
+                if not isinstance(value, dict) or set(value) != TIMING_KEYS or value["schema_version"] != "csv-transaction-timing-v1" or value["outcome"] not in ("returned", "threw"):
+                    return None, ""
+                if type(value["transaction_call_us"]) is not int or not _integer(value["transaction_call_us"]):
+                    return None, ""
+                parts = [value[key] for key in ("begin_to_callback_us", "callback_us", "finalize_tail_us")]
+                if all(part is None for part in parts):
+                    if value["outcome"] != "threw":
+                        return None, ""
+                elif not all(type(part) is int and _integer(part) for part in parts) or sum(parts) != value["transaction_call_us"]:
+                    return None, ""
+                timing = value
+            elif not code and re.fullmatch(CHILD_ERROR_PATTERN, line):
+                code = line
+            else:
+                return None, ""
+        return timing, code
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        return None, ""
+
+
+def _report_timing(raw):
+    timing, _ = _timing_diagnostic(raw)
+    message = TIMING_PREFIX + canonical_json(timing) if timing is not None else "CSV_TRANSACTION_TIMING_MISSING"
+    try:
+        print(message, file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
+def _publisher_argv(lease, timing=False):
     script = DEPLOYED_PUBLISHER if DEPLOYED_PUBLISHER.is_file() else LOCAL_PUBLISHER
     node = shutil.which("node")
     if not script.is_file() or node is None:
         raise WorkbenchError("CSV_BACKGROUND_PUBLISHER_UNAVAILABLE")
     return [node, str(script), "--job-id", lease.job_id, "--lease-owner", lease.owner,
-            "--fencing-token", str(lease.fencing_token), "--attempt", str(lease.attempt)]
+            "--fencing-token", str(lease.fencing_token), "--attempt", str(lease.attempt)] + (["--timing"] if timing else [])
 
 
 def _stop(process):
@@ -386,7 +433,8 @@ def publish_csv(connection, job, lease, clock=None, *, process_factory=None, mon
     data_dir = os.environ.get("WORKBENCH_DATA_DIR")
     if not data_dir or not Path(data_dir).is_absolute():
         raise WorkbenchError("CSV_BACKGROUND_DATA_DIR_REQUIRED")
-    argv = _publisher_argv(lease)
+    timing = os.environ.get("WORKBENCH_CSV_TRANSACTION_TIMING") == "1"
+    argv = _publisher_argv(lease, timing=timing)
     with tempfile.TemporaryDirectory(prefix="workbench-csv-worker-") as temporary:
         environment = {"PATH": str(Path(argv[0]).parent) + os.pathsep + os.defpath, "HOME": temporary,
                        "TMPDIR": temporary, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "TZ": "UTC",
@@ -399,13 +447,16 @@ def publish_csv(connection, job, lease, clock=None, *, process_factory=None, mon
             os.set_blocking(stderr.fileno(), False)
         def drain():
             if stderr is not None:
-                try:
-                    chunk = os.read(stderr.fileno(), 4097 - len(diagnostic))
-                except BlockingIOError:
-                    return
-                diagnostic.extend(chunk)
-                if len(diagnostic) > 4096:
-                    raise WorkbenchError("CSV_BACKGROUND_OUTPUT_LIMIT")
+                while len(diagnostic) <= 4096:
+                    try:
+                        chunk = os.read(stderr.fileno(), 4097 - len(diagnostic))
+                    except BlockingIOError:
+                        return
+                    if not chunk:
+                        return
+                    diagnostic.extend(chunk)
+                    if len(diagnostic) > 4096:
+                        raise WorkbenchError("CSV_BACKGROUND_OUTPUT_LIMIT")
         started = monotonic()
         try:
             while process.poll() is None:
@@ -421,11 +472,14 @@ def publish_csv(connection, job, lease, clock=None, *, process_factory=None, mon
                 sleep(0.2)
             drain()
             if committed_csv_job(connection, lease) is None:
-                try:
-                    code = diagnostic.decode("ascii").removesuffix("\n")
-                except UnicodeDecodeError:
-                    code = ""
-                if re.fullmatch(r"(?:CSV|IMPORT)_[A-Z0-9_]{1,100}|VERSION_CONFLICT|PREVIEW_HASH_MISMATCH|STALE_OR_EXPIRED_LEASE|WORKBENCH_READ_ONLY|RESTORE_PENDING_REVIEW", code):
+                if timing:
+                    _, code = _timing_diagnostic(diagnostic)
+                else:
+                    try:
+                        code = diagnostic.decode("ascii").removesuffix("\n")
+                    except UnicodeDecodeError:
+                        code = ""
+                if re.fullmatch(CHILD_ERROR_PATTERN, code):
                     raise WorkbenchError(code)
                 raise WorkbenchError("CSV_BACKGROUND_DID_NOT_COMMIT")
             return ExternalCommit()
@@ -435,5 +489,11 @@ def publish_csv(connection, job, lease, clock=None, *, process_factory=None, mon
                 return ExternalCommit()
             raise
         finally:
+            if timing:
+                try:
+                    drain()
+                except Exception:
+                    diagnostic.clear()
+                _report_timing(diagnostic)
             if stderr is not None:
                 stderr.close()

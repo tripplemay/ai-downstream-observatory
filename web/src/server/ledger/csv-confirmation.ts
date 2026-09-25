@@ -4,7 +4,7 @@ import { assertWritableDatabase } from "../workbench-db";
 import type { AttachmentOptions } from "./attachments";
 import { audit, canonical, hash, recordFact, resolveSourceReceipt, revision, type Actor, type LedgerCommand, type Receipt } from "./service";
 import { verifyCsvEvidence, type CsvBatch, type CsvManifest, type CsvStoredRow } from "./csv-import-evidence";
-import { buildCsvReviewCandidates, csvEconomicHash, parseCsvReview } from "./csv-review";
+import { buildCsvReviewCandidates, csvEconomicHash, parseCsvReview, type CsvRowResolution } from "./csv-review";
 
 interface Result { revision: number; receipts: Receipt[]; duplicate: boolean }
 export interface ConfirmedCsvImportResult extends Result { duplicate: true; csv_review_hash: string }
@@ -49,40 +49,55 @@ function confirmedResult(db: Database.Database, batch: CsvBatch & { confirmed_re
   return { revision: old.revision, receipts: old.receipts, duplicate: true, csv_review_hash: old.csv_review_hash };
 }
 
-/** Authenticates retained evidence and actual historical receipts without invoking a mutation or write guard. */
-export function readConfirmedCsvImport(db: Database.Database, actor: Actor, portfolio: string, batchId: string, options: AttachmentOptions = {}): ConfirmedCsvImportResult {
+/** Always reads retained evidence and actual historical receipts afresh, without a write guard. */
+export function readConfirmedCsvImportEvidence(db: Database.Database, actor: Actor, portfolio: string, batchId: string, options: AttachmentOptions = {}) {
   if (!actor?.id?.trim()) throw new Error("UNAUTHENTICATED");
   const read = () => {
     const batch = db.prepare("SELECT * FROM import_batches WHERE id=? AND portfolio_id=?").get(batchId, portfolio) as CsvBatch & { confirmed_revision: number | null } | undefined;
     if (!batch) throw new Error("IMPORT_NOT_FOUND");
     if (batch.parser_version !== "csv-v1" || batch.status !== "confirmed") throw new Error("CSV_IMPORT_NOT_CONFIRMED");
     const { manifest, rows } = verifyCsvEvidence(db, actor, batch, options, false);
-    return confirmedResult(db, batch, manifest, rows);
+    return { manifest, rows, result: confirmedResult(db, batch, manifest, rows) };
   };
   return db.inTransaction ? read() : db.transaction(read).deferred();
 }
 
+export function readConfirmedCsvImport(db: Database.Database, actor: Actor, portfolio: string, batchId: string, options: AttachmentOptions = {}): ConfirmedCsvImportResult {
+  return readConfirmedCsvImportEvidence(db, actor, portfolio, batchId, options).result;
+}
+
 /** Called within the import confirmation's immediate transaction. */
 export function confirmCsvImport(db: Database.Database, actor: Actor, portfolio: string, batchId: string, previewHash: string, expectedRevision: number, now: string, options: AttachmentOptions, reviewInput: unknown): Result {
+  return confirmCsvImportWithReview(db, actor, portfolio, batchId, previewHash, expectedRevision, now, options, reviewInput).result;
+}
+
+export function confirmCsvImportWithReview(db: Database.Database, actor: Actor, portfolio: string, batchId: string, previewHash: string, expectedRevision: number, now: string, options: AttachmentOptions, reviewInput: unknown) {
   if (!db.inTransaction) throw new Error("CSV_CONFIRM_TRANSACTION_REQUIRED");
   const batch = db.prepare("SELECT * FROM import_batches WHERE id=? AND portfolio_id=?").get(batchId, portfolio) as CsvBatch & { confirmed_revision: number | null };
   if (!batch) throw new Error("IMPORT_NOT_FOUND");
   if (batch.preview_hash !== previewHash) throw new Error("PREVIEW_HASH_MISMATCH");
-  const { manifest, rows } = verifyCsvEvidence(db, actor, batch, options, false);
-  if (batch.status !== "confirmed" && (batch.status !== "preview" || batch.error_count || !rows.length || rows.some(row => row.errors.length || !row.command))) throw new Error("IMPORT_HAS_ERRORS");
-  const resolutions = parseCsvReview(reviewInput, manifest.required_review_rows, manifest.candidates, manifest.review_hash);
-  if (rows.some(row => row.outcome.kind === "link_only" && (!resolutions.has(row.row) || resolutions.get(row.row)!.action === "record_distinct"))) throw new Error("CSV_ROW_REQUIRES_LINK");
-  const review = { acknowledge_unverified_mapping: true, review_hash: manifest.review_hash, rows: [...resolutions.values()].sort((a, b) => a.row - b.row) };
-  const reviewHash = hash(review);
-  if (batch.status === "confirmed") {
-    const old = confirmedResult(db, batch, manifest, rows);
-    if (old.csv_review_hash !== reviewHash) throw new Error("CSV_REVIEW_CONFLICT");
-    assertWritableDatabase(db);
-    return { revision: old.revision, receipts: old.receipts, duplicate: true };
-  }
-  if (batch.expected_revision !== expectedRevision || revision(db, portfolio) !== expectedRevision) throw new Error("VERSION_CONFLICT");
-  if (db.prepare("SELECT id FROM import_batches WHERE portfolio_id=? AND account_id=? AND content_hash=? AND parser_version='csv-v1' AND status='confirmed' AND id<>? LIMIT 1").get(portfolio, batch.account_id, batch.content_hash, batchId)) throw new Error("CSV_FILE_ALREADY_CONFIRMED");
-  verifyCsvEvidence(db, actor, batch, options, true);
+  let resolutions!: ReturnType<typeof parseCsvReview>, review!: { acknowledge_unverified_mapping: true; review_hash: string; rows: CsvRowResolution[] };
+  let reviewHash!: string, prior: Result | undefined;
+  const { manifest, rows } = verifyCsvEvidence(db, actor, batch, options, evidence => {
+    const { manifest, rows } = evidence;
+    if (batch.status !== "confirmed" && (batch.status !== "preview" || batch.error_count || !rows.length || rows.some(row => row.errors.length || !row.command))) throw new Error("IMPORT_HAS_ERRORS");
+    resolutions = parseCsvReview(reviewInput, manifest.required_review_rows, manifest.candidates, manifest.review_hash);
+    if (rows.some(row => row.outcome.kind === "link_only" && (!resolutions.has(row.row) || resolutions.get(row.row)!.action === "record_distinct"))) throw new Error("CSV_ROW_REQUIRES_LINK");
+    review = { acknowledge_unverified_mapping: true, review_hash: manifest.review_hash, rows: [...resolutions.values()].sort((a, b) => a.row - b.row) };
+    reviewHash = hash(review);
+    if (batch.status === "confirmed") {
+      const old = confirmedResult(db, batch, manifest, rows);
+      if (old.csv_review_hash !== reviewHash) throw new Error("CSV_REVIEW_CONFLICT");
+      assertWritableDatabase(db);
+      prior = { revision: old.revision, receipts: old.receipts, duplicate: true };
+      return false;
+    }
+    if (batch.expected_revision !== expectedRevision || revision(db, portfolio) !== expectedRevision) throw new Error("VERSION_CONFLICT");
+    if (db.prepare("SELECT id FROM import_batches WHERE portfolio_id=? AND account_id=? AND content_hash=? AND parser_version='csv-v1' AND status='confirmed' AND id<>? LIMIT 1").get(portfolio, batch.account_id, batch.content_hash, batchId)) throw new Error("CSV_FILE_ALREADY_CONFIRMED");
+    return true;
+  });
+  const reviewSummary = { review_hash: manifest.review_hash, required_review_count: manifest.required_review_rows.length };
+  if (prior) return { result: prior, review: reviewSummary };
   const candidates = buildCsvReviewCandidates(db, portfolio, batch.account_id, rows);
   if (hash(candidates) !== manifest.review_hash) throw new Error("CSV_REVIEW_HASH_MISMATCH");
   const receipts: Receipt[] = [], byRow = new Map<number, Receipt>(), bySource = new Map<string, string>();
@@ -114,5 +129,5 @@ export function confirmCsvImport(db: Database.Database, actor: Actor, portfolio:
   const result = { revision: endRevision, receipts, duplicate: false };
   audit(db, actor, "confirm_import", "import_batch", batchId, portfolio, endRevision, { ...result, csv_review: review, csv_review_hash: reviewHash, manifest_hash: hash(manifest) }, now);
   assertWritableDatabase(db);
-  return result;
+  return { result, review: reviewSummary };
 }

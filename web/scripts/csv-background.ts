@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import { syncBuiltinESMExports } from "node:module";
+import { writeSync } from "node:fs";
 import net from "node:net";
 import tls from "node:tls";
 import http from "node:http";
@@ -31,7 +32,7 @@ block(globalThis, ["fetch", "WebSocket", "EventSource"]);
 syncBuiltinESMExports();
 
 try {
-  const { values } = parseArgs({ args: process.argv.slice(2), options: { "job-id": { type: "string" }, "lease-owner": { type: "string" }, "fencing-token": { type: "string" }, attempt: { type: "string" } }, strict: true, allowPositionals: false });
+  const { values } = parseArgs({ args: process.argv.slice(2), options: { "job-id": { type: "string" }, "lease-owner": { type: "string" }, "fencing-token": { type: "string" }, attempt: { type: "string" }, timing: { type: "boolean" } }, strict: true, allowPositionals: false });
   const integer = (value: string | undefined) => {
     if (!value || !/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error("CSV_BACKGROUND_LEASE_INVALID");
     return Number(value);
@@ -43,7 +44,9 @@ try {
   const { publishCsvBackground } = await import("../src/server/csv-background/publisher");
   const db = openWorkbench();
   try {
-    publishCsvBackground(db, lease);
+    publishCsvBackground(db, lease, values.timing ? { onTransactionTiming: value => {
+      try { writeSync(2, `CSV_TRANSACTION_TIMING ${JSON.stringify(value)}\n`); } catch { /* Diagnostics cannot change the committed receipt. */ }
+    } } : {});
     process.stdout.write('{"status":"committed"}\n');
   } finally { db.close(); }
 } catch (error) {

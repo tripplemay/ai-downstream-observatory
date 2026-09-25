@@ -20,8 +20,10 @@ replacing personal parameters with public templates does not reduce scope.
 
 ## Implementation sequence and current evidence
 
-The current v23 increment adds explicitly authorized background CSV preview and
-confirmation, plus bounded private query APIs. See [the v23 contract](csv-background-imports.md).
+The current v24 increment adds an attachment-audit index, reduces repeated CSV
+evidence reads and instruments fixed-worker transaction API boundaries. The v23
+increment added explicitly authorized background CSV preview and confirmation,
+plus bounded private query APIs. See [the contract](csv-background-imports.md).
 The main CSV UI now uses the background API with separate human authorizations,
 bounded evidence pages and exact manual retry. A synthetic native workflow subset
 is verified below; the complete native/fault matrix and concurrent-write performance
@@ -32,7 +34,7 @@ acceptance claim for a later increment.
 
 | Workstream | Current implementation | Remaining work / release evidence |
 |---|---|---|
-| Contracts and new database | Versioned migrations through v23; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, durable human CSV authorization/cancellation/results, private catalog and identity-review versions, monthly cycle listing-review sequence boundaries, human-reviewed private market references, bounded HTTP/SDK captures, FX and price schedule authorization/slots and controlled verification evidence | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
+| Contracts and new database | Versioned migrations through v24; immutable facts, scoped foreign keys, shared JSON Schema; append-only funding/security-transit/CSV evidence, session-scoped confirmation attempts, durable human CSV authorization/cancellation/results, private catalog and identity-review versions, monthly cycle listing-review sequence boundaries, human-reviewed private market references, bounded HTTP/SDK captures, FX and price schedule authorization/slots and controlled verification evidence | Final-release image/recovery rerun, actual cutover tail-difference proof and production release binding |
 | Authentication | Sealed sessions, persistent revocation/rate limit, server-side guards, strict Origin; authenticated HTTP and native login/logout checked; initialization/login share UTF-8 password bounds | Production TLS/proxy, operator configuration and real owner login |
 | Financial ledger | Exact decimal facts, cash/trades/settlement/dividends/FX/transfers/splits; unknown/estimated/confirmed tax, net-only receipts, cumulative tax assessment and actual withholding kept separate; corporate-action notice/resolution isolation; securities transit and append-only dependent corrections | Real dividend/tax/corporate-action and security-transfer evidence, full acceptance matrix |
 | Import and reconciliation | JSON and raw CSV attachment/preview/atomic confirmation; zero-write CSV inspection and visual explicit mapping; immutable mappings and row evidence; explicit duplicate review and persistent source aliases; scoped downloads and encrypted recovery; v23 fixed Python/Node background execution with independent receipt proof, bounded private pages and main-workspace authorizations; explicit balance/tax-payable/settled/transit reconciliation and unresolved-fact guards | Domestic/cross-border broker samples, native background/wizard acceptance, shorter writer transactions and full throughput/fault acceptance |
@@ -44,6 +46,58 @@ acceptance claim for a later increment.
 | Governance and execution | Human version/capability APIs, risk/approval CAS, independent-process cash/share reservation race tests, execution reports separate from facts; private listing-review inputs invalidate old approvals on change/expiry; price reads bind listing identity and exact knowledge time; v21 controlled runner executes one fixed source-bound synthetic cash subcheck with independent Python/TS proof | Full E/S adapters, formal gate evidence and release/runtime binding beyond this subcheck; executable liquidity inputs and complete look-through; actual D/G/S approvals remain absent |
 | Product UI | Account, funding, catalog, research, governance, monthly evaluation, private market-reference, listing-review, controlled-verification and daily-price schedule workspaces; typed securities and dividend/tax/corporate-action preview/confirm; visual CSV mapping and server-backed, current-session, read-only confirmation recovery | Native listing-review/market-reference/monthly/wizard/recovery/BFCache and full catalog comparison/positive governance acceptance; complete accessibility and readonly UX; enumeration of old price versions without slots |
 | Deployment | Manual-only release, encrypted backup/restore, historical exact-SHA core/provider/verifier CI and local restore; separate credential-free/network-free verifier; opt-in provider release with a separate private env file and label-scoped old-provider stop even when disabling it; no current production cutover | Final-release image rerun, independent-host restore, protected credentials/configuration, release and post-release checks |
+
+### Verified preceding public checkpoint
+
+Commit `b2f9cce1d02c9eaec74630c5f3016c018d2142bf` passed exact-SHA
+[CI 36077599219](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/36077599219):
+Python 636, Web 896, Node 231 plus one opt-in lifecycle skip, HTTP 103.
+Both test and limited container jobs succeeded on Node 22.23.2. The original
+validation/container ZIP bytes and their member evidence were independently
+checked; the scoped aggregate is
+`artifacts/verification/github-ci/36077599219/verification-result.json`, SHA256
+`28c31aed9e6eb8a6621abf4045d3be7604a1779537c0b63dfd3c0d39ddff0776`.
+The narrow repaired-client native transport run verified 3 facts / 3 receipts,
+revision 3 and CNY 6, including the original Unicode filename, BOM/CRLF CSV and
+LF mapping bytes. This does not transfer the older client's 27-row native matrix
+to the repair, and does not certify OS file saving or Node 22 native execution.
+All task fixture processes and browser tabs were cleaned up, without another
+browser restart. These results bind that previous commit, not the v24 changes.
+
+### v24 scoped CSV performance increment
+
+Migration 0024 adds an attachment-specific partial audit lookup index. Fresh
+confirmation now reads complete evidence at preflight and again independently
+before commit, instead of five passes. Retained retries likewise use preflight
+plus the independent final proof, rather than four passes.
+Original API/receipt/audit shapes, live context and source-alias checks, whole-batch
+atomicity and post-proof lease/deadline/recovery checks remain intact. Optional
+fixed-child timing records outer transaction API boundaries, not exact SQLite
+lock instants, and is never accepted as a financial receipt.
+
+Two independently seeded full-size synthetic runs recorded preview / confirmation
+wall times of **4.687 / 4.818 s** and **4.698 / 5.218 s**, compared with one unchanged
+baseline of **4.944 / 5.585 s**. All receipts, balances, probe commits and source
+inventories matched; no probe errors or idle padding occurred. The callback still
+occupies roughly 2.6-3.2 seconds within the write transaction. Per-class samples
+remain below 1,000, and the complete target-resource HTTP/market/valuation/approval
+mix is absent. This is not performance or production acceptance. See the
+[measurement details and API-timing boundaries](csv-background-imports.md).
+
+Local frozen regression: Python **647/647**, Web **909/909**, Node **233 pass / 1
+opt-in lifecycle skip**, HTTP **103/103**; migration checks **141/141**. Typecheck,
+production build, authentication HTTP, all three CI shellchecks and dependency
+audit passed. HTTP schema 24, build `7t0pNLDHifOPuUBinR6aw`; all **574** source
+files match at start, end and subsequent check. Manifest:
+`artifacts/verification/workbench-http/2026-09-25T01-27-00-040Z/manifest.json`,
+SHA256 `7f1687b9a5a716ff50659a4284447c9b047f794492650caf5e01cb8a5721db62`.
+Logs and comparison evidence are in `artifacts/verification/csv-background-v26/`.
+The initial telemetry tests exposed a float-typed diagnostic integer and a bundle
+built before migration 24 landed; both original failure logs are retained. The
+final focused fixed-worker transport run passed 28 tests, including natural CLI
+commit/rollback and permitted commit-first missing diagnostics. No new native
+browser, current-image, independent-host restore or production run is inferred
+from this local checkpoint; its new exact-SHA CI must be checked separately.
 
 ### v23 background CSV backend checkpoint
 

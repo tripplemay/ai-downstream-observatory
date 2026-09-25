@@ -2,6 +2,8 @@
 
 from dataclasses import replace
 from datetime import timedelta
+from contextlib import redirect_stderr
+import io
 import json
 import os
 from pathlib import Path
@@ -12,7 +14,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from worker.orchestration.csv_imports import CSV_COMMANDS, committed_csv_job, csv_request_binding, publish_csv
+from worker.orchestration.csv_imports import CSV_COMMANDS, TIMING_PREFIX, _active, _publisher_argv, _timing_diagnostic, committed_csv_job, csv_request_binding, publish_csv
 from worker.orchestration.db import WorkbenchError, open_database, stamp, instant, transaction
 from worker.orchestration.jobs import ExternalCommit, Lease, claim_job, run_one
 from worker.orchestration.runtime import role_commands, run_pending_once, sync_requests
@@ -28,6 +30,40 @@ class ExitOnly:
 
     def poll(self):
         return self.returncode
+
+
+def timing_record(**changes):
+    return {"schema_version": "csv-transaction-timing-v1", "outcome": "returned", "transaction_call_us": 30,
+            "begin_to_callback_us": 3, "callback_us": 20, "finalize_tail_us": 7} | changes
+
+
+def timing_line(value=None):
+    return (TIMING_PREFIX + json.dumps(timing_record() if value is None else value) + "\n").encode("ascii")
+
+
+class CsvTimingTransportTests(unittest.TestCase):
+    def test_timing_accepts_one_strict_record_and_optional_safe_code(self):
+        for raw, code in ((timing_line(), ""), (timing_line() + b"VERSION_CONFLICT\n", "VERSION_CONFLICT"),
+                          (b"VERSION_CONFLICT\n" + timing_line(), "VERSION_CONFLICT")):
+            self.assertEqual(_timing_diagnostic(raw), (timing_record(), code))
+        failed_begin = timing_record(outcome="threw", begin_to_callback_us=None, callback_us=None, finalize_tail_us=None)
+        self.assertEqual(_timing_diagnostic(timing_line(failed_begin)), (failed_begin, ""))
+        self.assertEqual(_timing_diagnostic(b"VERSION_CONFLICT\n"), (None, "VERSION_CONFLICT"))
+
+    def test_timing_rejects_unknown_duplicate_noninteger_inconsistent_and_unbounded_records(self):
+        invalid = [timing_record(extra="private"), timing_record(outcome="succeeded"), timing_record(transaction_call_us=True),
+                   timing_record(transaction_call_us=30.0), timing_record(transaction_call_us=-1),
+                   timing_record(transaction_call_us=9007199254740992), timing_record(callback_us=True),
+                   timing_record(callback_us=None), timing_record(callback_us=21),
+                   timing_record(begin_to_callback_us=None, callback_us=None, finalize_tail_us=None)]
+        raw_values = [timing_line(value) for value in invalid]
+        raw_values += [timing_line().replace(b'"outcome": "returned"', b'"outcome":"threw","outcome":"returned"'),
+                       timing_line() + timing_line(), timing_line() + b"VERSION_CONFLICT\nVERSION_CONFLICT\n",
+                       timing_line() + b"private details\n", timing_line()[:-1], b"x" * 4097,
+                       TIMING_PREFIX.encode() + b'{"schema_version":NaN}\n', b"\xff\n", b"\n", b""]
+        for raw in raw_values:
+            with self.subTest(raw=raw[:120]):
+                self.assertEqual(_timing_diagnostic(raw), (None, ""))
 
 
 class CsvBackgroundTests(unittest.TestCase):
@@ -88,6 +124,68 @@ class CsvBackgroundTests(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM csv_import_outcomes").fetchone()[0], 2)
         self.assertIsNone(run_pending_once(self.db, "idle", role="core"))
         self.assertEqual(self.fixture("read", self.identity["request_id"]), preview)
+
+    def test_real_python_fixed_node_timing_or_missing_preserves_preview_and_confirm_receipts(self):
+        with patch.dict(os.environ, {"WORKBENCH_CSV_TRANSACTION_TIMING": "1"}):
+            for operation in ("preview", "confirm"):
+                request = self.identity if operation == "preview" else self.fixture("confirm", self.identity["request_id"])
+                child = subprocess.run([sys.executable, "-m", "worker.orchestration", "--db", str(self.path), "--once", "--role", "core"],
+                                       cwd=ROOT, capture_output=True, text=True, timeout=60)
+                self.assertEqual(child.returncode, 0, child.stderr)
+                if child.stderr != "CSV_TRANSACTION_TIMING_MISSING\n":
+                    timing, code = _timing_diagnostic(child.stderr.encode("ascii"))
+                    self.assertIsNotNone(timing, child.stderr)
+                    self.assertEqual(code, "")
+                    self.assertEqual(timing["outcome"], "returned")
+                    self.assertGreater(timing["callback_us"], 0)
+                job = json.loads(child.stdout)
+                self.assertEqual(committed_csv_job(self.db, self.completed_lease(job["job_id"]))["status"], "succeeded")
+                self.assertEqual(self.fixture("read", request["request_id"])["operation"], operation)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM ledger_events").fetchone()[0], 2)
+
+    def run_fixed_timing_child(self):
+        lease = self.lease()
+        child = subprocess.run(_publisher_argv(lease, timing=True), cwd=self.directory, capture_output=True, text=True, timeout=30,
+                               env={"PATH": os.environ["PATH"], "HOME": str(self.directory), "TMPDIR": str(self.directory), "TZ": "UTC",
+                                    "WORKBENCH_DB_PATH": str(self.path), "WORKBENCH_DATA_DIR": str(self.directory)})
+        timing, code = _timing_diagnostic(child.stderr.encode("ascii"))
+        self.assertIsNotNone(timing, child.stderr)
+        return child, timing, code, lease
+
+    def test_fixed_timing_producer_natural_exit_emits_a_complete_committed_record(self):
+        child, timing, code, lease = self.run_fixed_timing_child()
+        self.assertEqual(child.returncode, 0, child.stderr)
+        self.assertEqual(timing["outcome"], "returned")
+        self.assertGreater(timing["callback_us"], 0)
+        self.assertEqual(code, "")
+        self.assertEqual(committed_csv_job(self.db, lease)["status"], "succeeded")
+        self.assertEqual(self.fixture("read", self.identity["request_id"])["operation"], "preview")
+
+    def test_fixed_timing_producer_natural_rollback_emits_metrics_and_only_safe_error(self):
+        self.db.execute("UPDATE ledger_heads SET revision=1 WHERE portfolio_id=?", (self.identity["portfolio"],))
+        child, timing, code, lease = self.run_fixed_timing_child()
+        self.assertEqual(child.returncode, 1)
+        self.assertEqual(timing["outcome"], "threw")
+        self.assertEqual(code, "VERSION_CONFLICT")
+        self.assertIsNone(committed_csv_job(self.db, lease))
+        for table in ("import_batches", "ledger_events", "csv_background_results"):
+            self.assertEqual(self.db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0)
+
+    def test_real_fixed_node_rollback_keeps_safe_error_with_timing(self):
+        self.db.execute("UPDATE ledger_heads SET revision=1 WHERE portfolio_id=?", (self.identity["portfolio"],))
+        with patch.dict(os.environ, {"WORKBENCH_CSV_TRANSACTION_TIMING": "1"}):
+            child = subprocess.run([sys.executable, "-m", "worker.orchestration", "--db", str(self.path), "--once", "--role", "core"],
+                                   cwd=ROOT, capture_output=True, text=True, timeout=60)
+        self.assertEqual(child.returncode, 1, child.stdout)
+        lines = child.stderr.splitlines()
+        self.assertEqual(len(lines), 2, child.stderr)
+        timing, code = _timing_diagnostic((lines[0] + "\n").encode())
+        self.assertEqual(timing["outcome"], "threw")
+        self.assertEqual(code, "")
+        self.assertEqual(json.loads(lines[1])["message"], "VERSION_CONFLICT")
+        for table in ("import_batches", "ledger_events", "csv_background_results"):
+            self.assertEqual(self.db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0)
+        self.assertEqual(self.db.execute("SELECT status FROM job_runs").fetchone()[0], "failed")
 
     def test_roles_only_core_dispatches_csv(self):
         for role in ("verifier", "longport"):
@@ -262,6 +360,88 @@ class CsvBackgroundTests(unittest.TestCase):
             with self.assertRaisesRegex(WorkbenchError, expected):
                 publish_csv(self.db, self.job(lease), lease, process_factory=lambda *args, **kwargs: process)
             self.assertIsNone(committed_csv_job(self.db, lease))
+
+    def test_opt_in_timing_is_diagnostic_not_a_receipt_and_environment_stays_minimal(self):
+        lease = self.lease()
+        for output, expected in ((timing_line(), "DID_NOT_COMMIT"), (timing_line() + b"VERSION_CONFLICT\n", "VERSION_CONFLICT"),
+                                 (timing_line() + b"private raw details\n", "DID_NOT_COMMIT"), (b"x" * 4097, "OUTPUT_LIMIT")):
+            process, captured = ExitOnly(), {}
+            read, write = os.pipe()
+            os.write(write, output)
+            os.close(write)
+            process.stderr = os.fdopen(read, "rb", buffering=0)
+            def factory(argv, **options):
+                captured.update(argv=argv, **options)
+                return process
+            forwarded = io.StringIO()
+            with patch.dict(os.environ, {"WORKBENCH_CSV_TRANSACTION_TIMING": "1"}), redirect_stderr(forwarded):
+                with self.assertRaisesRegex(WorkbenchError, expected):
+                    publish_csv(self.db, self.job(lease), lease, process_factory=factory)
+            self.assertEqual(captured["argv"][-1], "--timing")
+            self.assertEqual(set(captured["env"]), {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "WORKBENCH_DB_PATH", "WORKBENCH_DATA_DIR"})
+            self.assertNotIn("private", forwarded.getvalue())
+            if _timing_diagnostic(output)[0] is None:
+                self.assertEqual(forwarded.getvalue(), "CSV_TRANSACTION_TIMING_MISSING\n")
+            else:
+                self.assertEqual(_timing_diagnostic(forwarded.getvalue().encode()), (timing_record(), ""))
+            self.assertIsNone(committed_csv_job(self.db, lease))
+
+    def test_timing_requires_exact_opt_in_and_default_error_parsing_is_unchanged(self):
+        lease = self.lease()
+        for setting in ("", "0", "true", "2"):
+            process, captured = ExitOnly(), {}
+            read, write = os.pipe()
+            os.write(write, timing_line() + b"VERSION_CONFLICT\n")
+            os.close(write)
+            process.stderr = os.fdopen(read, "rb", buffering=0)
+            def factory(argv, **options):
+                captured.update(argv=argv)
+                return process
+            forwarded = io.StringIO()
+            with patch.dict(os.environ, {"WORKBENCH_CSV_TRANSACTION_TIMING": setting}), redirect_stderr(forwarded):
+                with self.assertRaisesRegex(WorkbenchError, "DID_NOT_COMMIT"):
+                    publish_csv(self.db, self.job(lease), lease, process_factory=factory)
+            self.assertNotIn("--timing", captured["argv"])
+            self.assertEqual(forwarded.getvalue(), "")
+
+    def assert_timing_after_real_commit(self, delayed):
+        lease = self.lease()
+        process = ExitOnly()
+        process.returncode = None
+        read, write = os.pipe()
+        process.stderr = os.fdopen(read, "rb", buffering=0)
+        def factory(argv, **options):
+            # Produce a real receipt; only the subsequent response transport is synthetic.
+            real = subprocess.run(argv[:-1], stdin=subprocess.DEVNULL, capture_output=True, env=options["env"], cwd=options["cwd"], timeout=30)
+            self.assertEqual(real.returncode, 0, real.stderr)
+            return process
+        def stop(child):
+            self.assertIs(child, process)
+            os.write(write, delayed)
+            os.close(write)
+            child.returncode = -15
+        forwarded = io.StringIO()
+        with patch.dict(os.environ, {"WORKBENCH_CSV_TRANSACTION_TIMING": "1"}), redirect_stderr(forwarded), \
+                patch("worker.orchestration.csv_imports._stop", side_effect=stop) as stopped, \
+                patch("worker.orchestration.csv_imports._active", wraps=_active) as active:
+            result = publish_csv(self.db, self.job(lease), lease, process_factory=factory, sleep=lambda _: self.fail("No diagnostic grace wait"))
+        self.assertIsInstance(result, ExternalCommit)
+        stopped.assert_called_once()
+        self.assertEqual(active.call_count, 1, "Committed receipt must not be rechecked as a running lease")
+        self.assertIsNotNone(committed_csv_job(self.db, lease))
+        if delayed == timing_line():
+            self.assertEqual(_timing_diagnostic(forwarded.getvalue().encode()), (timing_record(), ""))
+        else:
+            self.assertEqual(forwarded.getvalue(), "CSV_TRANSACTION_TIMING_MISSING\n")
+
+    def test_real_commit_stops_immediately_then_drains_timing_without_a_grace_wait(self):
+        self.assert_timing_after_real_commit(timing_line())
+
+    def test_real_commit_without_timing_remains_successful_and_reports_missing(self):
+        self.assert_timing_after_real_commit(b"")
+
+    def test_real_commit_with_excess_diagnostic_output_remains_successful_but_unmeasured(self):
+        self.assert_timing_after_real_commit(b"x" * 4097)
 
     def test_real_confirm_receipt_corruption_matrix_is_independently_rejected(self):
         self.cli()

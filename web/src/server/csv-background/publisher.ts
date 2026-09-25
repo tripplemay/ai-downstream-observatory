@@ -2,9 +2,10 @@ import type Database from "better-sqlite3";
 import { assertWritableDatabase } from "../workbench-db";
 import { canonical, hash } from "../ledger/service";
 import { previewCsvImport } from "../ledger/csv-imports";
-import { confirmCsvImport } from "../ledger/csv-confirmation";
-import { verifyCsvEvidence, type CsvBatch } from "../ledger/csv-import-evidence";
+import { confirmCsvImportWithReview } from "../ledger/csv-confirmation";
+import type { CsvBatch } from "../ledger/csv-import-evidence";
 import { assertCsvBackgroundLease, csvBackgroundStamp, readCsvBackgroundResult } from "./binding";
+import { runCsvTransaction } from "./transaction-timing";
 import type { CsvBackgroundLease, CsvBackgroundPublishOptions, CsvBackgroundPreviewData, CsvBackgroundResult, CsvBackgroundJobResult } from "./types";
 
 /** Domain effects, the receipt and the fenced terminal transition have one commit point. */
@@ -12,27 +13,27 @@ export function publishCsvBackground(db: Database.Database, lease: CsvBackground
   if (db.inTransaction) throw new Error("CSV_BACKGROUND_INDEPENDENT_TRANSACTION_REQUIRED");
   const clock = () => csvBackgroundStamp(options.clock?.() ?? options.now);
   assertWritableDatabase(db);
-  return db.transaction(() => {
+  return runCsvTransaction(db, () => {
     assertWritableDatabase(db);
     const started = clock(), binding = assertCsvBackgroundLease(db, lease, started), request = binding.row, actor = { id: request.actor_id };
-    let batchId: string, review: { review_hash: string; required_review_rows: number[] } | undefined;
-    let confirmed: ReturnType<typeof confirmCsvImport> | null = null;
+    let batchId: string, review: { review_hash: string; required_review_count: number };
+    let confirmed: ReturnType<typeof confirmCsvImportWithReview>["result"] | null = null;
     if (request.operation === "preview") {
       const input = binding.input as CsvBackgroundPreviewData;
       const preview = previewCsvImport(db, actor, { portfolio_id: request.portfolio_id, account_id: request.account_id, expected_revision: request.expected_revision,
         filename: input.filename, mapping: input.mapping, bytes: request.csv_bytes! }, { ...options, now: started });
       if (preview.status === "confirmed") throw new Error("CSV_FILE_ALREADY_CONFIRMED");
-      batchId = preview.id; review = preview.csv;
+      batchId = preview.id; review = { review_hash: preview.csv!.review_hash, required_review_count: preview.csv!.required_review_rows.length };
     } else {
       const payload = binding.confirmation!.payload;
-      confirmed = confirmCsvImport(db, actor, request.portfolio_id, payload.batch_id, payload.preview_hash, request.expected_revision, started, { ...options, now: started }, payload.csv_review);
+      const confirmation = confirmCsvImportWithReview(db, actor, request.portfolio_id, payload.batch_id, payload.preview_hash, request.expected_revision, started, { ...options, now: started }, payload.csv_review);
+      confirmed = confirmation.result; review = confirmation.review;
       batchId = payload.batch_id;
     }
     const batch = db.prepare("SELECT * FROM import_batches WHERE id=?").get(batchId) as CsvBatch & { confirmed_revision: number | null };
-    review ??= verifyCsvEvidence(db, actor, batch, options, false).manifest;
     const result: CsvBackgroundResult = { schema_version: "csv-background-result-v1", request_id: request.id, operation: request.operation, input_hash: request.input_hash,
       batch_id: batch.id, preview_hash: batch.preview_hash, expected_revision: request.expected_revision, batch_status: batch.status as CsvBackgroundResult["batch_status"],
-      row_count: batch.row_count, error_count: batch.error_count, review_hash: review.review_hash, required_review_count: review.required_review_rows.length,
+      row_count: batch.row_count, error_count: batch.error_count, review_hash: review.review_hash, required_review_count: review.required_review_count,
       confirmed_revision: confirmed?.revision ?? null, receipts_hash: confirmed ? hash(confirmed.receipts) : null };
     const resultHash = hash(result), envelope: CsvBackgroundJobResult = { schema_version: "csv-background-job-result-v1", request_id: request.id, operation: request.operation, batch_id: batchId, result_hash: resultHash };
     options.beforeCommit?.();
@@ -52,5 +53,5 @@ export function publishCsvBackground(db: Database.Database, lease: CsvBackground
     if (commitAt >= csvBackgroundStamp(binding.job.lease_until!)) throw new Error("CSV_BACKGROUND_STALE_LEASE");
     if (commitAt >= request.expires_at) throw new Error("CSV_BACKGROUND_EXPIRED");
     assertWritableDatabase(db); return envelope;
-  }).immediate();
+  }, options.onTransactionTiming);
 }

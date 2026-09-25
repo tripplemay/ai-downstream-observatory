@@ -7,7 +7,7 @@ import { parseCsvMapping, CSV_MAPPING_MAX_BYTES } from "../ledger/csv-mapping";
 import { CSV_LIMITS } from "../ledger/csv";
 import { verifyCsvEvidence, type CsvBatch } from "../ledger/csv-import-evidence";
 import { parseCsvReview } from "../ledger/csv-review";
-import { readConfirmedCsvImport } from "../ledger/csv-confirmation";
+import { readConfirmedCsvImportEvidence } from "../ledger/csv-confirmation";
 import type { CsvBackgroundConfirmationPayload, CsvBackgroundJobResult, CsvBackgroundJobRow, CsvBackgroundLease, CsvBackgroundOptions,
   CsvBackgroundRequestBinding, CsvBackgroundRequestRow, CsvBackgroundResult, CsvBackgroundResultRow } from "./types";
 
@@ -126,7 +126,8 @@ export function readCsvBackgroundResult(db: Database.Database, requestId: string
     requireTrue(!db.prepare("SELECT 1 FROM csv_background_cancellations WHERE request_id=?").get(requestId));
     const batch = db.prepare("SELECT * FROM import_batches WHERE id=?").get(result.batch_id) as CsvBatch & { confirmed_revision: number | null } | undefined;
     requireTrue(batch && batch.portfolio_id === request.portfolio_id && batch.account_id === request.account_id && batch.parser_version === "csv-v1" && batch.preview_hash === result.preview_hash && batch.expected_revision === result.expected_revision);
-    const { manifest, rows } = verifyCsvEvidence(db, { id: request.actor_id }, batch, options, false);
+    const confirmed = request.operation === "confirm" ? readConfirmedCsvImportEvidence(db, { id: request.actor_id }, request.portfolio_id, result.batch_id, options) : null;
+    const { manifest, rows } = confirmed ?? verifyCsvEvidence(db, { id: request.actor_id }, batch, options, false);
     requireTrue(result.row_count === rows.length && result.row_count === batch.row_count && result.error_count === batch.error_count
       && result.review_hash === manifest.review_hash && result.required_review_count === manifest.required_review_rows.length);
     if (request.operation === "preview") {
@@ -143,7 +144,7 @@ export function readCsvBackgroundResult(db: Database.Database, requestId: string
       }));
     } else {
       requireTrue(result.batch_id === request.batch_id && result.batch_status === "confirmed" && batch.status === "confirmed");
-      const actual = readConfirmedCsvImport(db, { id: request.actor_id }, request.portfolio_id, result.batch_id, options);
+      const actual = confirmed!.result;
       const resolutions = parseCsvReview(binding.confirmation!.payload.csv_review, manifest.required_review_rows, manifest.candidates, manifest.review_hash);
       const review = { acknowledge_unverified_mapping: true, review_hash: manifest.review_hash, rows: [...resolutions.values()].sort((a, b) => a.row - b.row) };
       requireTrue(actual.csv_review_hash === hash(review) && result.confirmed_revision === actual.revision && result.receipts_hash === hash(actual.receipts));

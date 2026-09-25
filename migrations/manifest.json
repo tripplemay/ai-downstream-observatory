@@ -115,6 +115,11 @@
       "version": 23,
       "file": "0023_csv_background_imports.sql",
       "sha256": "21f42a17fb990d8f097e92b54c4219d4c383ad195d33e225f76acff2b902dfd7"
+    },
+    {
+      "version": 24,
+      "file": "0024_attachment_audit_lookup.sql",
+      "sha256": "c42aa8c4eb5b6657769e61de0d55405d575032d24e9c8dff3d925c47a06f2a08"
     }
   ]
 }

@@ -335,3 +335,71 @@ Preview / confirmation took 5.389 / 6.173 seconds; active reads numbered 246 / 2
 and successful writes 57 / 96, again with no errors or idle padding. Maximum write
 waits were still 4.046 / 3.928 seconds. Two fresh-worker runs do not establish a
 warm/cold distribution or satisfy the 1,000-operation-per-kind workload gate.
+
+### v24 evidence-read and attachment-audit optimization
+
+Migration 0024 adds only a partial audit lookup index for `store_attachment`
+events of type `attachment`, keyed by attachment ID and portfolio. It does not
+index every financial audit, change existing facts or relax immutable triggers.
+The first 23 migrations retain their original hashes.
+
+Fresh CSV confirmation now reads complete retained evidence twice, rather than
+five times: once before mutation, including current context/remapping, and once
+independently after the result and terminal transitions have been staged. The
+final read still authenticates original files, all rows, outcomes, receipts and
+audit bindings. The live decision occurs synchronously after fresh evidence is
+read, inside the same transaction; callers cannot supply a previously verified
+object. Confirmed retries retain their original receipt shape and do not run a
+new parser. There is no cross-request evidence cache, revision-only dependency
+shortcut, timeout increase or split financial commit.
+
+The benchmark's optional `--transaction-timing` flag enables fixed-child
+diagnostics through `WORKBENCH_CSV_TRANSACTION_TIMING=1` on the Python parent.
+Only the fixed `--timing` CLI flag reaches the child; no arbitrary code, output
+path, principal or extra environment is forwarded. Strict bounded diagnostics
+are not a success receipt. The existing independent database proof remains the
+only success authority. Missing or invalid telemetry is reported, not filled
+with zero, and the parent still stops a child immediately after observing a
+durable receipt rather than waiting for diagnostic output.
+
+The four monotonic boundaries are immediately before `immediate()`, callback
+entry, callback exit, and transaction return/throw. Integer-microsecond fields
+are `transaction_call_us`, `begin_to_callback_us`, `callback_us` and
+`finalize_tail_us`. BEGIN-to-callback includes lock acquisition and wrapper work;
+callback time is a known interval within the write transaction; the final tail
+includes COMMIT/ROLLBACK and wrapper work. **These are not exact SQLite lock
+acquisition/release instants or a pure lock-wait measurement.** The hook runs only
+after transaction return/throw and cannot replace its result or error.
+
+The original performance criteria remain core-query p95 <= 2 seconds and
+approval/small-ledger-command p95 <= 1 second, with at least 1,000 concurrent
+samples per class, the specified complete workload and 4 vCPU / 8 GiB / local SSD.
+A maximum write above one second does not by itself fail a p95 criterion;
+conversely, a small-sample p95 below one second does not certify it. Full mixed
+HTTP/approval/valuation/market-publication load, cold/warm distributions, actual
+lock waits and child resource coverage remain required.
+
+The frozen v24 measurement retains one pre-change run and two independently
+seeded optimized runs under `artifacts/verification/csv-background-v26/`.
+`comparison.json` independently matches all 216 baseline source files to commit
+`b2f9cce1d02c9eaec74630c5f3016c018d2142bf`, all 218 optimized governed files to
+the worktree, and both optimized source inventories to each other. Its SHA256 is
+`fda998f36e02432e441a29445d82407741ce4cc5f22dc843e314ece81efb4d05`.
+
+| Run | Preview / confirm worker wall time | Preview / confirm transaction API call | Active reads / writes by phase |
+|---|---|---|---|
+| Before | 4.944 / 5.585 s | Not measured | 224 / 63; 254 / 97 |
+| After 1 | 4.687 / 4.818 s | 3.108 / 2.706 s | 213 / 68; 220 / 96 |
+| After 2 | 4.698 / 5.218 s | 3.464 / 3.085 s | 214 / 60; 237 / 102 |
+
+All runs kept exactly 10 accounts, 1,000 listings, 2 million reconstructed market
+observations and 50,000 historical ledger facts before the 10,000-row import.
+Each independently proved 10,000 distinct import receipts, exact final cash and
+all committed probe facts. Sources, measurement scripts and bundle bytes did not
+drift during any run; no probe errors or idle padding occurred. All four optimized
+transaction diagnostics were actually observed, not inferred from worker time.
+The callback intervals were 2.977 / 2.580 and 3.211 / 2.804 seconds; maximum
+concurrent write latency remained 3.071 / 2.659 and 3.289 / 2.850 seconds.
+These are observed scoped measurements, not a causal estimate, a measured
+before/after lock-duration comparison, a cold/warm distribution or the full SLA.
+Every per-class 1,000-sample target still falls short.

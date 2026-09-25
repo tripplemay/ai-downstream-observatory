@@ -14,12 +14,14 @@ import { readConfirmedCsvImport } from "../src/server/ledger/csv-confirmation";
 import { requestCsvBackgroundConfirmation, requestCsvBackgroundPreview } from "../src/server/csv-background/service";
 import type { CsvMapping } from "../src/server/ledger/csv-mapping";
 import { boundedTermination, startProbePair, summarizeProbeSamples, type ProbeSample, type ProbeWindow } from "./csv-benchmark-probes";
+import { readTransactionTiming } from "./csv-benchmark-timing";
 
 async function main() {
 const { values } = parseArgs({ strict: true, allowPositionals: false, options: {
   rows: { type: "string", default: "10000" }, "historical-facts": { type: "string", default: "50000" },
   "market-rows": { type: "string", default: "2000000" }, "probe-samples": { type: "string", default: "1000" },
   "idle-probe-samples": { type: "string", default: "0" },
+  "transaction-timing": { type: "boolean", default: false },
   output: { type: "string" },
 } });
 function integer(value: string | undefined, maximum: number): number {
@@ -36,14 +38,14 @@ assert.equal(existsSync(output), false, "Refuse to overwrite retained evidence")
 const python = process.env.WORKBENCH_TEST_PYTHON ?? "python3";
 const measurementSources = () => Object.fromEntries([
   "web/scripts/benchmark-csv-background.ts", "web/scripts/csv-background.ts", "web/scripts/build-csv-background.mjs",
-  "web/scripts/csv-benchmark-probe.ts", "web/scripts/csv-benchmark-probes.ts",
+  "web/scripts/csv-benchmark-probe.ts", "web/scripts/csv-benchmark-probes.ts", "web/scripts/csv-benchmark-timing.ts",
 ].map(file => [file, createHash("sha256").update(readFileSync(path.join(root, file))).digest("hex")]));
 const directory = mkdtempSync(path.join(os.tmpdir(), "csv-background-benchmark-"));
 const filename = path.join(directory, "workbench.db"), start = performance.now();
 const report: Record<string, unknown> = {
-  schema_version: "csv-background-benchmark-v2", status: "RUNNING", started_at: new Date().toISOString(),
+  schema_version: "csv-background-benchmark-v3", status: "RUNNING", started_at: new Date().toISOString(),
   environment: { platform: process.platform, architecture: process.arch, node: process.version, cpus: os.cpus().length, memory_bytes: os.totalmem(), parent_pid: process.pid },
-  requested: { rows: count, historical_facts: history, market_rows: marketRows, probe_minimum_per_kind_per_execution_phase: samples, explicit_idle_samples_per_kind: idleSamples },
+  requested: { rows: count, historical_facts: history, market_rows: marketRows, probe_minimum_per_kind_per_execution_phase: samples, explicit_idle_samples_per_kind: idleSamples, transaction_timing: values["transaction-timing"] },
   source_sha256: sourceFiles(root),
   measurement_source_sha256: measurementSources(),
   boundaries: ["Synthetic isolated database; no broker credentials, live providers, HTTP authentication, browser or production.",
@@ -55,6 +57,8 @@ const report: Record<string, unknown> = {
     "Closed-loop probes wait 20ms after each operation; this is not a fixed-arrival load test and slow writes reduce the observed sample count.",
     "Requested sample count is a target, never padded with idle probes; explicit idle baseline and boundary-crossing samples remain separate.",
     "Phase attribution uses operation start monotonic time, with overlap and containment recorded; worker wall time does not measure SQLite writer lock duration.",
+    "Optional fixed-child telemetry measures outer immediate() API boundaries only. BEGIN-to-callback includes acquisition and wrapper overhead, callback time is a known write-transaction interval, and finalization includes COMMIT/ROLLBACK and wrapper overhead; none gives exact lock instants.",
+    "Transaction telemetry is bounded and non-authoritative; it may be missing if the Python parent observes a durable receipt and stops the child before diagnostics are emitted.",
     "Completed measurement is not a performance pass; inspect phase errors, latency, sample shortfall, and source changes independently.",
     "Each import operation runs once; cold/warm repeated import distribution remains unverified."],
 };
@@ -67,7 +71,8 @@ let active: ReturnType<typeof spawn> | undefined;
 const probes: ProbeSample[] = [], windows: ProbeWindow[] = [], probeProcesses: Record<string, unknown>[] = [];
 const updateProbes = () => { report.probes = { ...summarizeProbeSamples(probes, windows, samples), windows, processes: probeProcesses,
   configuration: { process_per_kind: true, busy_timeout_ms: 5000, interval_after_operation_ms: 20, maximum_samples_per_process: 10000, maximum_lifetime_ms: 180000 } }; };
-report.writer_transaction_timing = { status: "NOT_MEASURED", reason: "No publisher transaction-boundary instrumentation; worker and probe timings cannot establish lock acquisition or hold time." };
+const transactionTimings: Record<string, ReturnType<typeof readTransactionTiming>> = {};
+report.writer_transaction_timing = { scope: "fixed_node_outer_immediate_api_boundaries", exact_lock_timing_measured: false, phases: transactionTimings };
 try {
   migrateWorkbench(filename); db = openWorkbench(filename);
   const actor = { id: "owner" }, principal = { actorId: actor.id, sessionHash: "a".repeat(64) };
@@ -120,7 +125,8 @@ try {
     const pair = samples ? await startProbePair(probeOptions) : undefined;
     const started = performance.now(), startedNs = process.hrtime.bigint(); let stdout = "", stderr = "";
     const child = spawn(python, ["-m", "worker.orchestration", "--db", filename, "--once", "--role", "core"], {
-      cwd: root, env: { NODE_ENV: "test", PATH: process.env.PATH, WORKBENCH_DB_PATH: filename, WORKBENCH_DATA_DIR: directory, PYTHONUNBUFFERED: "1" }, stdio: ["ignore", "pipe", "pipe"],
+      cwd: root, env: { NODE_ENV: "test", PATH: process.env.PATH, WORKBENCH_DB_PATH: filename, WORKBENCH_DATA_DIR: directory, PYTHONUNBUFFERED: "1",
+        ...(values["transaction-timing"] ? { WORKBENCH_CSV_TRANSACTION_TIMING: "1" } : {}) }, stdio: ["ignore", "pipe", "pipe"],
     });
     active = child;
     pair?.start();
@@ -142,6 +148,7 @@ try {
       if (pair) await collectProbes(pair, label);
       report[label] = { duration_ms: duration, exit_code: code, stdout, stderr,
         jobs: db!.prepare("SELECT status,attempt_count,result_json FROM job_runs WHERE command_request_id=?").all(requestId) };
+      transactionTimings[label] = readTransactionTiming(stderr, values["transaction-timing"]);
       persist(); if (error) throw error; assert.equal(code, 0, `${label} worker failed`);
       const stored = db!.prepare("SELECT result_json,result_hash FROM csv_background_results WHERE request_id=?").get(requestId) as { result_json: string; result_hash: string } | undefined;
       assert.ok(stored); assert.equal(hash(JSON.parse(stored.result_json)), stored.result_hash);

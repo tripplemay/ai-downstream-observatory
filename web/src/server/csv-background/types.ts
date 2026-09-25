@@ -26,7 +26,13 @@ export interface CsvBackgroundResult {
 export interface CsvBackgroundResultRow { request_id: string; job_id: string; job_attempt_id: string; batch_id: string; result_json: string; result_hash: string; completed_at: string }
 export interface CsvBackgroundJobResult { schema_version: "csv-background-job-result-v1"; request_id: string; operation: CsvBackgroundOperation; batch_id: string; result_hash: string }
 export interface CsvBackgroundLease { job_id: string; owner: string; fencing_token: number; attempt: number }
-export interface CsvBackgroundPublishOptions extends CsvBackgroundOptions { clock?: () => string; beforeCommit?: () => void }
+export interface CsvTransactionTiming {
+  schema_version: "csv-transaction-timing-v1"; outcome: "returned" | "threw"; transaction_call_us: number;
+  begin_to_callback_us: number | null; callback_us: number | null; finalize_tail_us: number | null;
+}
+export interface CsvBackgroundPublishOptions extends CsvBackgroundOptions {
+  clock?: () => string; beforeCommit?: () => void; onTransactionTiming?: (timing: CsvTransactionTiming) => void;
+}
 export interface CsvBackgroundPreviewData { filename: string; mapping: string; csv_sha256: string }
 export interface CsvBackgroundConfirmData { payload_hash: string }
 export interface CsvBackgroundConfirmationPayload {
