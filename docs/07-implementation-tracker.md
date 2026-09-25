@@ -208,6 +208,54 @@ That historical run is not CI evidence for this UI increment. The current local
 checks do not certify concurrent workload latency, full failure/native matrices,
 strategy admission, the final image or production deployment.
 
+### Node 22 multipart compatibility follow-up
+
+The preceding UI commit `1c15cc7803a27d808e43e0846370faaf72f8ca1b` was published,
+but [CI 36075093464](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/36075093464)
+**failed**. Python passed 636 tests; Web passed 880 of 883, with three actual
+multipart parser failures. Subsequent Node fixtures, typecheck, build, authentication,
+HTTP and audit steps were skipped, and no validation ZIP was uploaded. The container
+job passed its existing limited smoke scope only. The original logs and failure
+report are retained under `artifacts/verification/github-ci/36075093464/`.
+
+This was a real Node runtime compatibility defect, not a flaky timing assertion:
+the old file-part header carried both `filename` and `filename*`. The CI Node 22
+parser rejected it while local Node 25 accepted it; RFC 7578 also prohibits
+`filename*` for multipart/form-data. Merely percent-escaping a quoted filename is
+not a lossless substitute: literal `%22`/`%0A` sequences and leading BOM can be
+reinterpreted by platform parsers. The fix keeps the file part inert as
+`filename="upload.csv"` and carries the canonical UTF-8 original name in the
+strict background-only `X-CSV-Original-Filename` header. The original name, raw
+mapping and CSV bytes remain bound by the existing immutable input hash. The
+legacy shared parser and database/worker contracts are unchanged.
+
+Pure transport regressions exercise nine filename cases, both LF/CRLF mappings,
+CSV BOM bytes, frozen identical retries and distinct filename identities without
+loading native SQLite. Node **25.7.0** and **22.23.3** each passed **10/10**; the
+former dual-filename request failed all nine Node 22 probes as expected. These
+are not an exact rerun of the failed CI's Node **22.23.2**. Route tests passed
+**13/13**, covering canonical decoding, malformed/duplicate headers, byte/UTF-16
+limits, invalid UTF-8, controls, placeholder conflicts and authentication-before-
+parsing. Full client/real-route/worker integration passed **23/23**. The prior
+27-row native report remains evidence for the old client bytes, not an automatic
+certificate for this transport change.
+
+Final local compatibility regression passed Python **636/636**, Web **896/896**,
+Node **231 passed / 1 opt-in lifecycle skipped**, typecheck, production build,
+authentication HTTP and the full **103/103** HTTP suite. The build is
+`QgObTgPeYSIxI1ThQWiOo`; all 567 HTTP source files match before/after and current
+bytes. Manifest:
+`artifacts/verification/workbench-http/2026-09-25T00-18-24-034Z/manifest.json`,
+SHA256 `ecd119659bdfbd83220a43183b020febd0eaf2cee1542ccdc90e8742bf732c3f`.
+Logs are under `artifacts/verification/csv-background-ui-v25/`; the independent
+Python/Node inventory explicitly separates documentation changes from stable
+execution sources. At this publication checkpoint a new, narrow native transport
+run is still in progress under
+`artifacts/verification/browser-csv-background-v24/transport-20260925T001612Z/`.
+It must not borrow the old client's native success. New exact-commit CI and its
+original evidence are required; neither the failed run nor local passes certify
+the compatibility follow-up's CI, production or complete acceptance gates.
+
 ### Earlier v23 public CI history
 
 The first v23 public commit, `50b6335974f2ff1b0346d087c275ee0a54f85c4f`, did

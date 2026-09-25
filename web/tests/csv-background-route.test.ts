@@ -45,6 +45,15 @@ function upload(patch?: (form: FormData) => void) {
   form.set("mapping", " \r\n{\"synthetic\":true}\t"); form.set("file", new Blob(["\ufeffid,value\r\nx,1\r\n"], { type: "text/csv" }), "synthetic.csv"); patch?.(form);
   return new Request(url, { method: "POST", headers: { "X-Workbench-Session-Binding": binding, "X-CSV-Idempotency-Key": "synthetic-upload", "X-CSV-Background-Acknowledged": "true" }, body: form });
 }
+const originalMapping = " \n{\"synthetic\":true}\r\n\t", originalCsv = Buffer.from("\ufeffid,value\r\nx,1\r\n");
+function originalUpload(encoded: string, filename = "upload.csv") {
+  const boundary = "synthetic-original-filename";
+  const field = (name: string, value: string) => `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`;
+  const body = new Blob([field("portfolio_id", "p"), field("account_id", "a"), field("expected_revision", "0"), field("mapping", originalMapping),
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: text/csv\r\n\r\n`, originalCsv, `\r\n--${boundary}--\r\n`]);
+  return new Request(url, { method: "POST", headers: { "Content-Type": `multipart/form-data; boundary=${boundary}`, "X-Workbench-Session-Binding": binding,
+    "X-CSV-Idempotency-Key": "synthetic-upload", "X-CSV-Background-Acknowledged": "true", "X-CSV-Original-Filename": encoded }, body });
+}
 function plain(value: unknown) { return JSON.parse(JSON.stringify(value)); }
 
 test("background API authenticates session/Origin and requires current binding before parsing or storage", async () => {
@@ -128,6 +137,44 @@ test("background multipart requires explicit delegation headers and preserves ma
   for (const patch of [(form: FormData) => form.set("actor", "forged"), (form: FormData) => form.append("portfolio_id", "p"), (form: FormData) => form.delete("mapping"), (form: FormData) => form.set("expected_revision", "01")]) {
     const h = harness(); assert.equal((await h.POST(upload(patch))).status, 400); assert.equal(h.calls.includes("open"), false);
   }
+});
+test("background original filename header preserves Unicode, quotes, slashes and literal percent text without changing mapping or CSV bytes", async () => {
+  for (const filename of ['\u5408\u6210 "original".csv', "back\\slash.csv", "%22-literal-%0A.csv", "\ufefforiginal.csv", "x".repeat(200), "\ud83d\ude00".repeat(100)]) {
+    const h = harness(), response = await h.POST(originalUpload(Buffer.from(filename, "utf8").toString("base64url")));
+    assert.equal(response.status, 200, filename);
+    const command = h.args[0][2] as { filename: string; mapping: string; bytes: Uint8Array };
+    assert.equal(command.filename, filename); assert.equal(command.mapping, originalMapping); assert.deepEqual(Buffer.from(command.bytes), originalCsv);
+    assert.equal(h.calls.filter(value => value === "preview").length, 1);
+  }
+  const legacy = harness(); assert.equal((await legacy.POST(upload())).status, 200);
+  assert.equal((legacy.args[0][2] as { filename: string }).filename, "synthetic.csv");
+});
+test("background original filename header rejects noncanonical encoding, malformed UTF8, controls and bounds before consuming the body", async () => {
+  const values = ["", "Y", "YR", "YQ=", "YQ==", "YQ+", "YQ/", "Y Q", "YQ,YQ", "x".repeat(1068),
+    ...[Buffer.from([0xff]), Buffer.from([0xc0, 0xaf]), Buffer.from([0xed, 0xa0, 0x80]), Buffer.from("x".repeat(801)),
+      Buffer.from("x".repeat(201)), Buffer.from("\ud83d\ude00".repeat(101)), ...["\u0000", "\n", "\r", "\t", "\u001f", "\u007f"].map(value => Buffer.from(`bad${value}.csv`))]
+      .map(value => value.toString("base64url"))];
+  for (const encoded of values) {
+    const h = harness(), request = originalUpload(encoded), response = await h.POST(request);
+    assert.equal(response.status, 400, encoded); assert.deepEqual(await response.json(), { error: "CSV_FILENAME_INVALID" });
+    assert.equal(request.bodyUsed, false); assert.equal(h.calls.includes("open"), false);
+  }
+  const h = harness(), request = originalUpload(Buffer.from("a.csv").toString("base64url"));
+  request.headers.append("X-CSV-Original-Filename", Buffer.from("a.csv").toString("base64url"));
+  const response = await h.POST(request); assert.equal(response.status, 400); assert.deepEqual(await response.json(), { error: "CSV_FILENAME_INVALID" });
+  assert.equal(request.bodyUsed, false); assert.equal(h.calls.includes("open"), false);
+});
+test("background original filename transport requires the fixed filepart identity and retains auth-first behavior", async () => {
+  for (const filename of ["synthetic.csv", "Upload.csv", "upload.csv.csv"]) {
+    const h = harness(), response = await h.POST(originalUpload(Buffer.from("original.csv").toString("base64url"), filename));
+    assert.equal(response.status, 400); assert.deepEqual(await response.json(), { error: "CSV_FILENAME_INVALID" }); assert.equal(h.calls.includes("open"), false);
+  }
+  for (const denied of [401, 403]) {
+    const h = harness({ denied }), request = originalUpload("not/canonical=="), response = await h.POST(request);
+    assert.equal(response.status, denied); assert.equal(request.bodyUsed, false); assert.deepEqual(h.calls, ["auth"]);
+  }
+  const h = harness(), request = originalUpload("not/canonical=="); request.headers.set("X-Workbench-Session-Binding", "b".repeat(64));
+  assert.equal((await h.POST(request)).status, 401); assert.equal(request.bodyUsed, false); assert.equal(h.calls.includes("open"), false);
 });
 test("background JSON supports a 5 MiB exact payload expanded by outer escaping rather than an accidental 5 MiB request cap", async () => {
   const size = bindingModule.CSV_BACKGROUND_LIMITS.payload_bytes, payload = "{}" + "\t".repeat(size - 2), raw = JSON.stringify({ ...confirm, command: { ...confirm.command, payload_text: payload } });

@@ -192,7 +192,7 @@ export async function assertCsvBackgroundPage(raw: unknown, query: CsvBackground
 
 const previewInput = z.object({ portfolioId: id, accountId: id, revision: integer, mapping: z.string().min(1), idempotencyKey: id, acknowledge: z.literal(true) }).strict();
 type PreviewInput = z.infer<typeof previewInput> & { file: File };
-export type CsvBackgroundPreparedPreview = Readonly<z.infer<typeof previewInput> & { kind: "preview"; file: File; contentHash: string; inputHash: string; body: Blob; contentType: string }>;
+export type CsvBackgroundPreparedPreview = Readonly<z.infer<typeof previewInput> & { kind: "preview"; file: File; contentHash: string; inputHash: string; body: Blob; contentType: string; filenameBase64url: string }>;
 export type CsvBackgroundPreparedConfirmation = Readonly<{ kind: "confirm"; portfolioId: string; accountId: string; idempotencyKey: string; payloadText: string; body: string; inputHash: string }>;
 export type CsvBackgroundPreparedCancellation = Readonly<{ kind: "cancel"; portfolioId: string; requestId: string; body: string }>;
 export type CsvBackgroundPrepared = CsvBackgroundPreparedPreview | CsvBackgroundPreparedConfirmation | CsvBackgroundPreparedCancellation;
@@ -204,7 +204,7 @@ function utf8(raw: string, maximum: number) {
 export async function prepareCsvBackgroundPreview(input: PreviewInput): Promise<CsvBackgroundPreparedPreview> {
   const { file, ...rest } = input, value = previewInput.parse(rest);
   if (!(file instanceof File) || file.size < 1 || file.size > 4 * 1024 * 1024 || !file.name || file.name.length > 200 || /[\u0000-\u001f\u007f]/.test(file.name)) throw new Error("CSV_BACKGROUND_INPUT_INVALID");
-  utf8(file.name, 800); utf8(value.mapping, 256 * 1024);
+  const filenameBytes = utf8(file.name, 800); utf8(value.mapping, 256 * 1024);
   csvMappingSchema.parse(parseStrictJson(value.mapping));
   const bytes = new Uint8Array(await file.arrayBuffer()), contentHash = await sha(bytes);
   const inputHash = await sha(canonical({ operation: "preview", portfolio_id: value.portfolioId, account_id: value.accountId, expected_revision: value.revision,
@@ -219,11 +219,13 @@ export async function prepareCsvBackgroundPreview(input: PreviewInput): Promise<
   }
   if (!boundary) throw new Error("CSV_BACKGROUND_INPUT_INVALID");
   const part = (name: string, raw: string) => `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${raw}\r\n`;
-  const filename = encodeURIComponent(file.name).replace(/[!'()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+  // Multipart filename decoding differs across runtimes, including literal %22.
+  // Keep its header inert; the strict background-only header preserves original UTF-8.
+  const filenameBase64url = btoa(String.fromCharCode(...filenameBytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const body = new Blob([part("portfolio_id", value.portfolioId), part("account_id", value.accountId), part("expected_revision", String(value.revision)), part("mapping", value.mapping),
-    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="upload.csv"; filename*=UTF-8''${filename}\r\nContent-Type: text/csv\r\n\r\n`, bytes, `\r\n--${boundary}--\r\n`]);
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="upload.csv"\r\nContent-Type: text/csv\r\n\r\n`, bytes, `\r\n--${boundary}--\r\n`]);
   return Object.freeze({ ...value, kind: "preview", file: new File([bytes], file.name, { type: "text/csv" }), contentHash, inputHash, body,
-    contentType: `multipart/form-data; boundary=${boundary}` });
+    contentType: `multipart/form-data; boundary=${boundary}`, filenameBase64url });
 }
 export async function prepareCsvBackgroundConfirmation(input: { portfolioId: string; accountId: string; idempotencyKey: string; payloadText: string; acknowledge: true }): Promise<CsvBackgroundPreparedConfirmation> {
   const value = z.object({ portfolioId: id, accountId: id, idempotencyKey: id, payloadText: z.string().min(1), acknowledge: z.literal(true) }).strict().parse(input);
@@ -333,6 +335,7 @@ export async function sendCsvBackground(prepared: CsvBackgroundPrepared, options
     let body: BodyInit;
     if (prepared.kind === "preview") {
       headers["Content-Type"] = prepared.contentType;
+      headers["X-CSV-Original-Filename"] = prepared.filenameBase64url;
       headers["X-CSV-Idempotency-Key"] = prepared.idempotencyKey; headers["X-CSV-Background-Acknowledged"] = "true"; body = prepared.body;
     } else { headers["Content-Type"] = "application/json"; body = prepared.body; }
     guard(options);

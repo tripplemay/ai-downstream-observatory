@@ -144,6 +144,14 @@ the status GET is authoritative for execution state.
 - Preview POST is multipart with exactly `portfolio_id`, `account_id`,
   `expected_revision`, `mapping` and `file`. It additionally requires
   `X-CSV-Idempotency-Key` and `X-CSV-Background-Acknowledged: true`.
+  The current browser sends an inert file-part filename `upload.csv` and carries
+  the original name in `X-CSV-Original-Filename`: canonical unpadded base64url of
+  its UTF-8 bytes. This background-only optional header is strictly decoded and
+  bounded (800 bytes / 200 UTF-16 units, no existing forbidden controls); when
+  present, any other file-part filename is rejected. The decoded original name
+  still participates in the existing immutable input hash. Missing-header callers
+  retain the original parser-filename behavior; the shared legacy upload parser
+  and the five allowed multipart fields are unchanged.
   The outer transport limit is 5 MiB; inner CSV and mapping bounds still apply.
 - Confirmation POST is JSON `{action:"confirm", command:{portfolio_id,
   account_id, idempotency_key, payload_text,
@@ -195,10 +203,16 @@ recover or replay the old session's original confirmation request.
 
 Preview uses a frozen multipart Blob rather than native FormData string parts:
 the latter normalize mapping LF to CRLF and change its authorized input hash.
-The multipart boundary is checked against the original content; UTF-8 filename
-encoding preserves quoted/non-ASCII names. Retries reuse the same immutable wire
-body. Route-level tests must exercise this transport, not only call the service
-directly with the intended original strings.
+The multipart boundary is checked against the original content. An inert ASCII
+file-part filename plus the strict original-name header preserves Unicode,
+quotes, backslashes, leading BOM and literal percent sequences without depending
+on platform filename unescaping. In particular, do not emit `filename*` here:
+[RFC 7578 section 4.2](https://www.rfc-editor.org/rfc/rfc7578#section-4.2) prohibits
+it for multipart/form-data, and Node 22 rejected the former dual-filename header
+that Node 25 accepted. Retries reuse the same immutable wire body and header.
+Route-level tests must exercise this transport, not only call the service directly
+with the intended original strings. Pure transport tests also run without native
+SQLite dependencies so supported Node runtimes can execute their real parsers.
 
 Network helpers probe the current session before and after requests, carry the
 binding header, and check the component operation epoch after asynchronous work

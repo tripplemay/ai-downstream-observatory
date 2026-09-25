@@ -27,6 +27,18 @@ function bound(request: Request, sid: string) {
   if (!request.headers.get("X-Workbench-Session-Binding")) throw new AuthError("SESSION_CHANGED", 401);
   assertRequestSessionBinding(request, sid);
 }
+function originalFilename(request: Request): string | null {
+  const encoded = request.headers.get("X-CSV-Original-Filename");
+  if (encoded === null) return null;
+  try {
+    if (!/^[A-Za-z0-9_-]{1,1067}$/.test(encoded)) throw new Error();
+    const bytes = Buffer.from(encoded, "base64url");
+    if (bytes.length < 1 || bytes.length > 800 || bytes.toString("base64url") !== encoded) throw new Error();
+    const filename = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    if (!filename || filename.length > 200 || /[\u0000-\u001f\u007f]/.test(filename) || Buffer.from(filename, "utf8").toString("base64url") !== encoded) throw new Error();
+    return filename;
+  } catch { throw new AuthError("CSV_FILENAME_INVALID", 400); }
+}
 function failure(error: unknown) {
   let code = "WORKBENCH_UNAVAILABLE", status = 503;
   if (error instanceof AuthError) { code = error.code; status = error.status; }
@@ -83,8 +95,13 @@ export async function POST(request: Request) {
     if (media === "multipart/form-data") {
       const key = id.parse(request.headers.get("X-CSV-Idempotency-Key"));
       if (request.headers.get("X-CSV-Background-Acknowledged") !== "true") throw new AuthError("CSV_BACKGROUND_ACKNOWLEDGEMENT_REQUIRED", 400);
+      const filename = originalFilename(request);
       const raw = await readBytes(request, MULTIPART_MAX_BYTES);
       const upload = await readCsvUpload(new Request(request.url, { method: "POST", headers: request.headers, body: raw }));
+      if (filename !== null) {
+        if (upload.filename !== "upload.csv") throw new AuthError("CSV_FILENAME_INVALID", 400);
+        upload.filename = filename;
+      }
       input = { action: "preview" as const, command: { ...upload, idempotency_key: key, acknowledge_background_execution: true as const } };
     } else {
       if (media !== "application/json") throw new AuthError("CSV_BACKGROUND_MEDIA_TYPE_REQUIRED", 415);
