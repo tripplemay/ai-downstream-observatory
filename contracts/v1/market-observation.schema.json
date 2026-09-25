@@ -9,7 +9,7 @@
     "source_id": {"$ref": "common.schema.json#/$defs/id"},
     "listing_id": {"$ref": "common.schema.json#/$defs/id"},
     "series_key": {"$ref": "common.schema.json#/$defs/id"},
-    "metric": {"type": "string", "minLength": 1},
+    "metric": {"enum": ["close", "fx_cny_per_unit", "universe_member", "spread_bps", "premium_bps", "turnover", "volume"]},
     "value": {"$ref": "common.schema.json#/$defs/decimal"},
     "unit": {"type": "string", "minLength": 1},
     "observed_at": {"type": "string"},
@@ -24,7 +24,11 @@
     "provenance": {"enum": ["live_observed", "historical_point_in_time", "reconstructed"]}
   },
   "allOf": [
-    {"if": {"properties": {"time_precision": {"const": "date"}}}, "then": {"properties": {"observed_at": {"$ref": "common.schema.json#/$defs/date"}}}, "else": {"properties": {"observed_at": {"$ref": "common.schema.json#/$defs/instant"}}}}
+    {"if": {"properties": {"time_precision": {"const": "date"}}}, "then": {"properties": {"observed_at": {"$ref": "common.schema.json#/$defs/date"}}}, "else": {"properties": {"observed_at": {"$ref": "common.schema.json#/$defs/instant"}}}},
+    {"if": {"properties": {"metric": {"enum": ["spread_bps", "premium_bps", "turnover", "volume"]}}}, "then": {"required": ["listing_id"], "properties": {"listing_id": {"$ref": "common.schema.json#/$defs/id"}, "price_basis": {"const": "not_applicable"}}}},
+    {"if": {"properties": {"metric": {"enum": ["spread_bps", "premium_bps"]}}}, "then": {"properties": {"unit": {"const": "bps"}}}},
+    {"if": {"properties": {"metric": {"const": "volume"}}}, "then": {"properties": {"unit": {"const": "shares"}}}},
+    {"if": {"properties": {"metric": {"const": "turnover"}}}, "then": {"properties": {"unit": {"type": "string", "pattern": "^[A-Z]{3}$"}}}}
   ],
   "additionalProperties": false
 }

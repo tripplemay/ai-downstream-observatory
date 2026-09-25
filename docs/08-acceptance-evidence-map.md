@@ -1,6 +1,6 @@
 # ETF 投资工作台：验收证据与缺口映射
 
-版本：v0.14 | 日期：2026-09-25 | 状态：公开通用版阶段性证据索引，非验收或放行报告
+版本：v0.15 | 日期：2026-09-25 | 状态：公开通用版阶段性证据索引，非验收或放行报告
 
 依据：[01 投资约束](01-investment-mandate.md)、[02 产品需求](02-product-requirements.md)、[03 决策治理](03-decision-policy.md)、[04 数据与核算](04-data-and-accounting.md)、[05 架构迁移](05-architecture-and-migration.md)、[06 验证验收](06-validation-and-acceptance.md)。六份原始个人 v1.0 基线已在本地保存；公开版以通用模板替换个人参数，不是范围削减，也不缩减验收要求。
 
@@ -24,6 +24,21 @@
 - v23 本地冻结回归：Python **636/636**、Web **826/826**、Node **232/232**（开启生命周期检查）、HTTP **102/102**；生产构建 `PlToWRxOkh4U2SONqGhzT`，555 个 HTTP 源码清单起止一致。证据 `artifacts/verification/workbench-http/2026-09-24T21-11-56-711Z/manifest.json`，SHA256 `a7ef20542c25a3ac6f021cbedde7a61395c0346f2d26f2fa792aaebba2c9f19d`。全规模合成库的万行预览/确认分别 8.928/9.316 秒，但并发写入仍有 **2 次锁超时**，因此 5.1 性能未通过；主 CSV UI 仍未迁移，不增加完整 P/ACC/E/S 已验收项。原始失败记录、最终日志与量测保存在 `artifacts/verification/csv-background-v23/`。
 
 ## 2. 证据目录与复现入口
+
+最新混合 HTTP 工具见 [复现说明](mixed-workload-verification.md)。两个独立新库
+`artifacts/verification/mixed-workload-v27/smoke-2/`、`smoke-3/` 均完成真实认证、
+正常 core Worker、行情发布、估值、CSV 预览/确认、记账和批准/取消；四类负载各
+20/20 成功，独立 Python baseline/preview/complete 校验通过。各后台流程窗口内
+均有各类真实请求重叠，但不是精确 SQLite 持锁重叠、1,000 样本或目标硬件性能通过。
+第一轮 macOS 临时路径别名校验失败保留；修正为真实路径，没有放松 oracle。
+
+本次另沿用已恢复的 Tabbit，没有再次重启。原生开发环境 27 行 CSV 得到 26 笔
+合成事实、27 条回执、revision 26、CNY 351；确认前零事实、人工重复行关联、
+25+2 分页、390px 回执及退出后 401 已核对，任务页、进程、端口和临时库已清理。
+工件 `artifacts/verification/browser-csv-background-v24/native-20260925-resumed/`。
+期间共享 schema 编写曾触发开发热更新/500，修复后只读恢复同一任务并确认；
+两次错误标签断言和一次忽略滚动条的布局断言也保留。这是有明确阶段边界的
+原生子集，**不是单一冻结源码的无中断全链，不继承为最终生产构建验收**。
 
 本表用下列短名指向具体文件。测试源码可说明断言范围，但不能单独证明最近一次构建、生产服务或真实数据已经通过。
 

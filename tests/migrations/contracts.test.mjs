@@ -106,6 +106,52 @@ test('E-12: a date-only observation cannot invent an instant or omit provenance'
   assert.equal(check(missing), false);
 });
 
+test('liquidity observations and normal market batches compile under strictRequired and accept their units', () => {
+  const observationCheck = validator.getSchema('https://etf-workbench.invalid/contracts/v1/market-observation.schema.json');
+  const batchCheck = validator.getSchema('https://etf-workbench.invalid/contracts/v1/market-batch.schema.json');
+  const observations = [
+    ['spread_bps', '200', 'bps'],
+    ['premium_bps', '-200', 'bps'],
+    ['turnover', '1000000.01', 'CNY'],
+    ['volume', '0', 'shares'],
+  ].map(([metric, value, unit]) => ({
+    id: `liquidity:${metric}`, batch_id: 'liquidity-batch', source_id: 'fixture', listing_id: 'ETF:001',
+    series_key: `ETF:001:${metric}`, metric, value, unit, observed_at: '2026-01-01',
+    ingested_at: '2026-01-02T00:00:00Z', source_timezone: 'Asia/Shanghai', time_precision: 'date',
+    price_basis: 'not_applicable', revision_id: 'r1', raw_hash: 'a'.repeat(64),
+    parser_version: 'v1', provenance: 'reconstructed',
+  }));
+  for (const observation of observations) {
+    assert.equal(observationCheck(observation), true, JSON.stringify(observationCheck.errors));
+  }
+  assert.equal(batchCheck({
+    schema_version: 'market-batch-v1',
+    batch: { id: 'liquidity-batch', source_id: 'fixture', batch_type: 'prices', scope: 'CN',
+      expected_pages: 1, expected_rows: observations.length, expected_publication_revision: 0, source_mode: 'synthetic' },
+    pages: [{ page_number: 1, observations }],
+  }), true, JSON.stringify(batchCheck.errors));
+});
+
+test('liquidity observation shapes reject missing listing, wrong unit or basis, and non-decimal values', () => {
+  const check = validator.getSchema('https://etf-workbench.invalid/contracts/v1/market-observation.schema.json');
+  for (const [metric, unit] of [['spread_bps', 'bps'], ['premium_bps', 'bps'], ['turnover', 'USD'], ['volume', 'shares']]) {
+    const observation = {
+      id: `liquidity:${metric}`, batch_id: 'liquidity-batch', source_id: 'fixture', listing_id: 'ETF:001',
+      series_key: `ETF:001:${metric}`, metric, value: '1', unit, observed_at: '2026-01-01',
+      ingested_at: '2026-01-02T00:00:00Z', source_timezone: 'Asia/Shanghai', time_precision: 'date',
+      price_basis: 'not_applicable', revision_id: 'r1', raw_hash: 'a'.repeat(64),
+      parser_version: 'v1', provenance: 'reconstructed',
+    };
+    assert.equal(check(observation), true, JSON.stringify(check.errors));
+    const missingListing = { ...observation }; delete missingListing.listing_id;
+    for (const invalid of [missingListing, { ...observation, listing_id: '' },
+      { ...observation, price_basis: 'unadjusted' }, { ...observation, unit: 'invalid' },
+      { ...observation, value: 1 }, { ...observation, value: '1e3' }, { ...observation, metric: 'unknown_metric' }]) {
+      assert.equal(check(invalid), false, JSON.stringify(invalid));
+    }
+  }
+});
+
 test('E-12/E-13: reversal payload is distinct from user facts and requires original evidence links', () => {
   const check = validator.getSchema('https://etf-workbench.invalid/contracts/v1/ledger-event.schema.json');
   const event = {

@@ -113,6 +113,8 @@ def _normalized_observation(connection, raw, plan, received):
             raise WorkbenchError("UNKNOWN_LISTING:" + row["listing_id"])
         if row["metric"] == "close" and row["unit"] != listing["currency"]:
             raise WorkbenchError("PRICE_CURRENCY_MISMATCH:" + row["listing_id"])
+        if row["metric"] == "turnover" and row["unit"] != listing["currency"]:
+            raise WorkbenchError("TURNOVER_CURRENCY_MISMATCH:" + row["listing_id"])
     return row
 
 

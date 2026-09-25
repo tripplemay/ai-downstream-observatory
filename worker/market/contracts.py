@@ -70,10 +70,22 @@ def observation_semantics(row, batch):
     elif row["metric"] == "universe_member":
         if not row.get("listing_id") or value != 1 or row["price_basis"] != "not_applicable" or row["unit"] != "boolean":
             raise WorkbenchError("INVALID_UNIVERSE_MEMBER")
+    elif row["metric"] in ("spread_bps", "premium_bps", "turnover", "volume"):
+        if not row.get("listing_id") or row["price_basis"] != "not_applicable":
+            raise WorkbenchError("INVALID_LIQUIDITY_OBSERVATION")
+        if row["metric"] in ("spread_bps", "premium_bps"):
+            if row["unit"] != "bps" or (row["metric"] == "spread_bps" and value < 0):
+                raise WorkbenchError("INVALID_LIQUIDITY_OBSERVATION")
+        elif row["metric"] == "turnover":
+            if not re.fullmatch(r"[A-Z]{3}", row["unit"]) or value < 0:
+                raise WorkbenchError("INVALID_LIQUIDITY_OBSERVATION")
+        elif row["unit"] != "shares" or value < 0 or value != value.to_integral_value():
+            raise WorkbenchError("INVALID_LIQUIDITY_OBSERVATION")
     else:
         raise WorkbenchError("UNSUPPORTED_MARKET_METRIC")
-    permitted = {"prices": {"close"}, "fx": {"fx_cny_per_unit"},
-                 "universe": {"universe_member"}, "mixed": {"close", "fx_cny_per_unit", "universe_member"}}
+    prices = {"close", "spread_bps", "premium_bps", "turnover", "volume"}
+    permitted = {"prices": prices, "fx": {"fx_cny_per_unit"},
+                 "universe": {"universe_member"}, "mixed": prices | {"fx_cny_per_unit", "universe_member"}}
     if row["metric"] not in permitted[batch["batch_type"]]:
         raise WorkbenchError("BATCH_TYPE_METRIC_MISMATCH")
     if batch["source_mode"] == "synthetic" and row["provenance"] != "reconstructed":
