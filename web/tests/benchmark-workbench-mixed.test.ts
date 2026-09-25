@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { childJson, mixedCsvInput, mixedOverlapSummary, parseMixedOptions, removeVerifiedTemporary } from "../scripts/benchmark-workbench-mixed";
+import { childJson, mixedCsvInput, mixedOverlapSummary, parseMixedOptions, removeVerifiedTemporary, retainMixedAttachments } from "../scripts/benchmark-workbench-mixed";
 import type { HttpLoadReport, HttpLoadSample } from "../scripts/workbench-http-load";
 import type { WorkbenchMixedFixture } from "../scripts/workbench-mixed-fixture";
 import { mapCsvImport, parseCsvMapping } from "../src/server/ledger/csv-mapping";
@@ -63,5 +63,20 @@ test("stopped fixture remains available when evidence retention fails, and unkno
     assert.equal(removeVerifiedTemporary(directory, true, false), false); assert.equal(existsSync(original), true);
     assert.equal(removeVerifiedTemporary(directory, false, true), false); assert.equal(existsSync(original), true);
     assert.equal(removeVerifiedTemporary(directory, true, true), true); assert.equal(existsSync(directory), false);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("retained attachments preserve private directory and file modes as well as original bytes", () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "mixed-private-evidence-")), source = path.join(directory, "source"), target = path.join(directory, "retained");
+  try {
+    mkdirSync(source, { mode: 0o700 }); writeFileSync(path.join(source, "original.json"), '{"synthetic":true}', { mode: 0o600 });
+    const evidence = retainMixedAttachments(source, target);
+    assert.equal(evidence.directory_mode, "0700"); assert.equal(evidence.files.length, 1);
+    assert.equal(evidence.files[0].mode, "0600"); assert.equal(statSync(target).mode & 0o777, 0o700);
+    assert.equal(statSync(path.join(target, "original.json")).mode & 0o777, 0o600);
+    assert.deepEqual(readFileSync(path.join(target, "original.json")), readFileSync(path.join(source, "original.json")));
+    assert.throws(() => retainMixedAttachments(source, target), /REFUSE_TO_OVERWRITE_ATTACHMENTS/);
+    chmodSync(source, 0o755);
+    assert.throws(() => retainMixedAttachments(source, path.join(directory, "invalid")), /SOURCE_ATTACHMENT_DIRECTORY_INVALID/);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

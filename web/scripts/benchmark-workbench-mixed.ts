@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
-import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,22 @@ import { runHttpLoad, summarizeHttpLoadSamples, type HttpLoadContext, type HttpL
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."), endpoint = "/api/workbench", csvEndpoint = `${endpoint}/csv/jobs`;
 const sha = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const code = (error: unknown) => error instanceof MixedHttpError ? error.code : error instanceof Error ? error.message.slice(0, 1024) : "UNKNOWN_FAILURE";
+export function retainMixedAttachments(source: string, destination: string) {
+  const directory = lstatSync(source);
+  assert.ok(directory.isDirectory() && !directory.isSymbolicLink() && (directory.mode & 0o777) === 0o700, "SOURCE_ATTACHMENT_DIRECTORY_INVALID");
+  assert.equal(existsSync(destination), false, "REFUSE_TO_OVERWRITE_ATTACHMENTS");
+  mkdirSync(destination, { mode: 0o700 });
+  assert.equal(lstatSync(destination).mode & 0o777, 0o700, "RETAINED_ATTACHMENT_DIRECTORY_MODE");
+  const files = readdirSync(source).sort().map(name => {
+    const from = path.join(source, name), to = path.join(destination, name), stat = lstatSync(from);
+    assert.ok(stat.isFile() && !stat.isSymbolicLink() && (stat.mode & 0o777) === 0o600, "SOURCE_ATTACHMENT_FILE_INVALID");
+    const hash = sha(readFileSync(from)); copyFileSync(from, to, constants.COPYFILE_EXCL);
+    assert.equal(lstatSync(to).mode & 0o777, 0o600, "RETAINED_ATTACHMENT_FILE_MODE");
+    assert.equal(sha(readFileSync(to)), hash, "RETAINED_ATTACHMENT_BYTES_MISMATCH");
+    return { name, sha256: hash, byte_size: stat.size, mode: "0600" };
+  });
+  return { directory_mode: "0700", files };
+}
 export function parseMixedOptions(args: string[]) {
   const { values } = parseArgs({ args, strict: true, allowPositionals: false, options: {
     history: { type: "string", default: "30" }, listings: { type: "string", default: "10" }, "market-rows": { type: "string", default: "50" },
@@ -291,8 +307,8 @@ export async function runMixedBenchmark(options: ReturnType<typeof parseMixedOpt
     if (fixture && cleanupVerified) {
       try {
         const db = new Database(filename, { readonly: true }); try { await db.backup(path.join(evidence, "final-workbench.db")); } finally { db.close(); }
-        if (existsSync(path.join(dataDir, "attachments"))) cpSync(path.join(dataDir, "attachments"), path.join(evidence, "attachments"), { recursive: true, errorOnExist: true, force: false });
-        report.retained_database = { path: "final-workbench.db", sha256: sha(readFileSync(path.join(evidence, "final-workbench.db"))), attachments: "attachments", auth_database_retained: false };
+        const attachments = existsSync(path.join(dataDir, "attachments")) ? retainMixedAttachments(path.join(dataDir, "attachments"), path.join(evidence, "attachments")) : null;
+        report.retained_database = { path: "final-workbench.db", sha256: sha(readFileSync(path.join(evidence, "final-workbench.db"))), attachments: "attachments", attachment_evidence: attachments, auth_database_retained: false };
         retentionVerified = true;
       } catch (error) { report.errors.push({ stage: "retention", message: code(error) }); }
     }

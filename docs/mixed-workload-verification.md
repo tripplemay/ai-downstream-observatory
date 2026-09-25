@@ -67,6 +67,8 @@ Actual per-window target-HTTP overlaps are reported, not assumed from this setti
 
 Reports, original CSV/mapping bytes, the pre-dispatch HTTP journal and synthetic
 database/attachment evidence stay under ignored `artifacts/verification/`.
+Retained attachments require a `0700` directory and `0600` files; original-byte
+hashes and modes are checked before temporary originals may be removed.
 Authentication storage is not copied into the retained database artifact.
 Personal plans and broker credentials are not inputs to this harness.
 
@@ -86,6 +88,9 @@ uncertain cleanup blocks the final oracle, backup and temporary-directory
 removal. The directory is retained for inspection rather than declared safe.
 Historical cleared lease deadlines are not reconstructed as if they were
 persisted evidence.
+For a separate replay, copy evidence to a fresh private directory, record the
+path relocation and compare bytes/modes. SQLite read-only access can still create
+WAL/SHM lock files, so do not open the original retained database in place.
 
 ## What remains outside this smoke
 
