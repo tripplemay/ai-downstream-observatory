@@ -36,21 +36,25 @@ diagnostic **failed** under its fixed 250 ms arrival schedule: ledger GET
 transport failure remain; the three database oracles passed. See the retained
 failure and caveats in [mixed-workload verification](mixed-workload-verification.md).
 The first manual Linux `small` pilot failed before workload dispatch, with
-`RESOURCE_PREFLIGHT_MISSING`; the child cause was not retained and diagnostic
-capture now requires a new exact-SHA run. No successful Linux resource pilot,
+`RESOURCE_PREFLIGHT_MISSING` and no retained child cause. A diagnostic fix and
+new exact-SHA `small` pilot then passed on a constrained runner: 20/20 per
+foreground class, three oracles and 706/706 paired server traces. A same-SHA
+`full` pilot failed before workload dispatch because the assigned runner did
+not verify as nonrotational storage. No full-size target-resource result,
 formal performance pass or production cutover has occurred.
 
 Current local regression after the diagnostic-report fix: Python **666/666**,
-Web **960/960**, Node **247 pass / 1 opt-in lifecycle skip**, authenticated
+Web **960/960**, Node **250 pass / 1 opt-in lifecycle skip**, authenticated
 workbench HTTP **103/103**, auth HTTP, typecheck, production build, shellcheck
 and dependency audit passed. The new 20-per-class real-HTTP smoke passed with
 all three oracles and 180/180 paired server traces; its `performance_gate` is
 false. Logs and retained synthetic reports are under
 `artifacts/verification/mixed-workload-v28/` and are not public release
-certificates. The latest previously pushed exact-SHA CI remains
-`f9b3fef02b251254bad0ef479fc5594436d5f480` / run
-`36089157117` (test and containers passed); it does **not** cover this later
-increment.
+certificates. Exact SHA `50b679fc5e842b3e67e7dd2a6977f7ab1c6a960b`
+passed [CI 36545429373](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/36545429373)
+(test and containers); its downloaded HTTP manifest reports 103/103 and
+592 unchanged source hashes. This covers the diagnostic increment, not the
+still-unrun full resource workload or production environment.
 
 The current v24 increment adds an attachment-audit index, reduces repeated CSV
 evidence reads and instruments fixed-worker transaction API boundaries. The v23

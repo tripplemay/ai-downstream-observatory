@@ -153,9 +153,27 @@ HTTP report. The original artifact reports `RESOURCE_PREFLIGHT_MISSING` without
 the child exception; it cannot establish whether storage, affinity, runtime
 binding or another prerequisite failed. The subsequent pilot code writes a
 private, bounded, structured child failure code and validates it before adding
-it to the supervisor report. A new run is required to identify and resolve the
-underlying prerequisite; neither this failed pilot nor its instrumentation
-change is a resource or performance pass.
+it to the supervisor report. This original failure was not reinterpreted.
+
+On exact commit `50b679fc5e842b3e67e7dd2a6977f7ab1c6a960b`, the subsequent
+[`small` run 36545480127](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/36545480127)
+passed its **scoped** resource/correctness pilot: 59 live cgroup samples under
+an observed four-CPU quota/affinity, 8-GiB limit, zero swap, and kernel-reported
+nonrotational local ext4 block mount. Four classes each had 20/20 successful
+samples; baseline/preview/final oracles passed; all 706 observed server
+requests had terminal traces. The 19 allowlisted synthetic artifacts matched
+their recorded SHA-256 hashes. A derived private copy of the downloaded DB and
+attachments independently replayed the final oracle after restoring the
+attachment file modes lost by artifact extraction. This is not a 1,000-sample,
+full-size, cold-start, physical-SSD or production performance claim.
+
+The same commit's
+[`full` run 36546030321](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/36546030321)
+failed **before workload dispatch**: the assigned runner's block-device
+metadata did not verify as nonrotational (`NONROTATIONAL_STORAGE_UNVERIFIED`).
+The supervisor retained a settled child exit and one constrained cgroup sample,
+but no preflight or HTTP result. It is not a failed 1,000-sample workload
+measurement, nor a pass; a verified target runner is still required.
 
 ### 2026-09-29 local full-size diagnostic (failed)
 
@@ -191,7 +209,7 @@ the updated harness requires a new run for its own validation.
 
 ## What remains outside this smoke
 
-- A passing run with the specified 4 vCPU / 8 GiB / local SSD environment and full dataset.
+- A passing full-size run on a verified 4 vCPU / 8 GiB / local SSD environment.
 - At least 1,000 valid samples per required query/atomic-command class, warm/cold
   distinctions, resource use, lock waits and the complete concurrent workload.
 - Queue-to-terminal overlap is not proof of simultaneous SQLite writer locks.
