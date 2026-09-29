@@ -43,6 +43,19 @@ foreground class, three oracles and 706/706 paired server traces. A same-SHA
 not verify as nonrotational storage. No full-size target-resource result,
 formal performance pass or production cutover has occurred.
 
+A follow-up keeps server storage diagnostics limited to a validated SQLite error
+code, without logging the exception message, database path or SQL. This will let
+a subsequent workload distinguish lock contention from other 503 causes; the
+failed original run cannot be retroactively classified. A fixture-timeout test
+now allows process startup under a loaded test runner without a CPU-spin child.
+Web **961/961**, typecheck, production build and authenticated HTTP **103/103**
+passed locally with 594 unchanged source hashes during the HTTP run. GitHub's
+`production` Environment is configured for `main` and required **self-review**;
+all five deployment secrets are present at environment scope. Four older
+repository-scoped duplicates still exist and require an explicit retirement
+decision. This is not independent review, server runtime configuration, a
+restore rehearsal or deployment.
+
 Current local regression after the diagnostic-report fix: Python **666/666**,
 Web **960/960**, Node **250 pass / 1 opt-in lifecycle skip**, authenticated
 workbench HTTP **103/103**, auth HTTP, typecheck, production build, shellcheck
@@ -81,7 +94,7 @@ acceptance claim for a later increment.
 | Strategy and AI | Preregistered v1 contribution-only research plus explicit v2 monthly momentum/MA rotation and fixed-rebalance benchmark; exact PIT ranking, simulated sales/settlement/fixed buys, costs and bounded read-only summaries; frozen inputs/implementation and independent research windows | Live providers/models, continuous forward simulation, complete long-history workflow performance and genuine S-gate evidence; v2 does not activate actual schedules |
 | Governance and execution | Human version/capability APIs, risk/approval CAS, independent-process cash/share reservation race tests, execution reports separate from facts; private listing-review inputs invalidate old approvals on change/expiry; price reads bind listing identity and exact knowledge time; normal ingestion supports approval-required spread/premium/turnover/volume; v21 controlled runner executes one fixed source-bound synthetic cash subcheck with independent Python/TS proof | Full E/S adapters, formal gate evidence and release/runtime binding beyond this subcheck; real liquidity evidence and complete look-through; actual D/G/S approvals remain absent |
 | Product UI | Account, funding, catalog, research, governance, monthly evaluation, private market-reference, listing-review, controlled-verification and daily-price schedule workspaces; typed securities and dividend/tax/corporate-action preview/confirm; visual CSV mapping and server-backed, current-session, read-only confirmation recovery | Native listing-review/market-reference/monthly/wizard/recovery/BFCache and full catalog comparison/positive governance acceptance; complete accessibility and readonly UX; enumeration of old price versions without slots |
-| Deployment | Manual-only release, encrypted backup/restore, historical exact-SHA core/provider/verifier CI and local restore; separate credential-free/network-free verifier; opt-in provider release with a separate private env file and label-scoped old-provider stop even when disabling it; no current production cutover | Final-release image rerun, independent-host restore, protected credentials/configuration, release and post-release checks |
+| Deployment | Manual-only release, encrypted backup/restore, historical exact-SHA core/provider/verifier CI and local restore; separate credential-free/network-free verifier; opt-in provider release with a separate private env file and label-scoped old-provider stop even when disabling it; GitHub `production` Environment has `main`-only self-review and environment secrets; no current production cutover | Retire older repository-scoped deployment secrets after review, final-release image rerun, independent-host restore, server runtime configuration, independent review if required, release and post-release checks |
 
 ### Verified preceding public checkpoint
 

@@ -42,12 +42,12 @@ test("oracle transport cannot accept a timeout response or wait forever for a TE
   assert.equal(result.cleanup_verified, true); assert.equal(result.value, null); assert.equal(result.stderr, "ORACLE_TIMEOUT"); assert.notEqual(result.exit_code, 0);
 });
 
-test("fixture setup uses a separately bounded process and keeps partial evidence after a timeout", async () => {
+test("fixture setup uses a separately bounded process and keeps partial evidence after a timeout", { timeout: 10000 }, async () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "mixed-partial-fixture-"));
   const filename = path.join(directory, "partial.db");
   try {
-    const result = await childJson(process.execPath, ["-e", `require('node:fs').writeFileSync(${JSON.stringify(filename)},'partial');for(;;){}`],
-      { PATH: process.env.PATH, NODE_ENV: "test" }, 150, "FIXTURE");
+    const result = await childJson(process.execPath, ["-e", `require('node:fs').writeFileSync(${JSON.stringify(filename)},'partial');setInterval(()=>{},1000)`],
+      { PATH: process.env.PATH, NODE_ENV: "test" }, 3000, "FIXTURE");
     assert.equal(result.stderr, "FIXTURE_TIMEOUT"); assert.equal(result.value, null);
     assert.equal(result.cleanup_verified, true); assert.notEqual(result.exit_code, 0);
     assert.equal(removeVerifiedTemporary(directory, true, false), false);

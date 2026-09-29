@@ -206,6 +206,10 @@ Successful-request server p95 values were below 0.5 s in each class, but this
 excludes the queue-full, deadline, transport and 503 failures and cannot be
 reported as a passing p95. The original failed report is immutable evidence;
 the updated harness requires a new run for its own validation.
+The workbench route now logs only a bounded SQLite error code alongside the
+error class for future 503s; it still returns a generic response and never logs
+the exception message, database path or SQL. This diagnostic change does not
+repair contention or classify the original two failures.
 
 ## What remains outside this smoke
 

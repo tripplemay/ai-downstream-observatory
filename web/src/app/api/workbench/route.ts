@@ -20,6 +20,7 @@ import { getFundingState, isFundingClientError } from "@/server/funding/service"
 import { executeFundingCommand } from "@/server/funding-commands";
 import { isCsvRecoveryClientError, saveCsvConfirmationAttempt } from "@/server/ledger/csv-confirmation-recovery";
 import { isReferenceClientError } from "@/server/market-references/service";
+import { safeStorageErrorDiagnostic } from "@/server/error-diagnostic";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -127,7 +128,7 @@ function failure(error: unknown): NextResponse {
   const code = message.split(":", 1)[0];
   if (clientErrors.has(code)) return NextResponse.json({ error: code }, { status: 400 });
   // Native storage errors can include paths or source SQL; keep those server-side.
-  console.error("Workbench request failed", error instanceof Error ? error.name : "UnknownError");
+  console.error("Workbench request failed", safeStorageErrorDiagnostic(error));
   return NextResponse.json({ error: "WORKBENCH_UNAVAILABLE" }, { status: 503 });
 }
 
