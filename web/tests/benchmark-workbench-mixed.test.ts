@@ -3,7 +3,7 @@ import test from "node:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { childJson, mixedCsvInput, mixedOverlapSummary, parseMixedOptions, removeVerifiedTemporary, retainMixedAttachments } from "../scripts/benchmark-workbench-mixed";
+import { childJson, linkMixedServerTargets, mixedCsvInput, mixedOverlapSummary, parseMixedOptions, removeVerifiedTemporary, retainMixedAttachments } from "../scripts/benchmark-workbench-mixed";
 import type { HttpLoadReport, HttpLoadSample } from "../scripts/workbench-http-load";
 import type { WorkbenchMixedFixture } from "../scripts/workbench-mixed-fixture";
 import { mapCsvImport, parseCsvMapping } from "../src/server/ledger/csv-mapping";
@@ -12,9 +12,13 @@ test("mixed benchmark defaults are explicitly small and preserve normal worker p
   const input = parseMixedOptions([]);
   assert.deepEqual([input.history, input.listings, input.marketRows, input.csvRows, input.count], [30, 10, 50, 10, 20]);
   assert.equal(input.coreCount, 1); assert.equal(input.pollSeconds, 5);
+  assert.equal(input.setupMs, 600000); assert.equal(input.overallMs, 180000);
+  assert.equal(input.backgroundCycles, 1); assert.equal(input.backgroundIntervalMs, 20000);
+  assert.equal(parseMixedOptions(["--background-cycles", "12"]).backgroundCycles, 12);
+  assert.equal(parseMixedOptions(["--setup-seconds", "30", "--overall-seconds", "120"]).setupMs, 30000);
   assert.equal(parseMixedOptions(["--poll-seconds", "0.1"]).pollSeconds, .1);
   assert.equal(parseMixedOptions(["--count", "1000", "--history", "50000", "--listings", "1000", "--market-rows", "2000000", "--csv-rows", "10000"]).count, 1000);
-  for (const args of [["--count", "0"], ["--count", "1001"], ["--poll-seconds", "0"], ["--poll-seconds", "Infinity"], ["--core-count", "4"], ["--history", "05"], ["--unknown"]]) assert.throws(() => parseMixedOptions(args));
+  for (const args of [["--count", "0"], ["--count", "1001"], ["--poll-seconds", "0"], ["--poll-seconds", "Infinity"], ["--core-count", "4"], ["--history", "05"], ["--setup-seconds", "0"], ["--unknown"]]) assert.throws(() => parseMixedOptions(args));
 });
 
 test("mixed CSV originals map all rows to unique reliable sources and an independently calculable cash sum", () => {
@@ -38,6 +42,19 @@ test("oracle transport cannot accept a timeout response or wait forever for a TE
   assert.equal(result.cleanup_verified, true); assert.equal(result.value, null); assert.equal(result.stderr, "ORACLE_TIMEOUT"); assert.notEqual(result.exit_code, 0);
 });
 
+test("fixture setup uses a separately bounded process and keeps partial evidence after a timeout", async () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "mixed-partial-fixture-"));
+  const filename = path.join(directory, "partial.db");
+  try {
+    const result = await childJson(process.execPath, ["-e", `require('node:fs').writeFileSync(${JSON.stringify(filename)},'partial');for(;;){}`],
+      { PATH: process.env.PATH, NODE_ENV: "test" }, 150, "FIXTURE");
+    assert.equal(result.stderr, "FIXTURE_TIMEOUT"); assert.equal(result.value, null);
+    assert.equal(result.cleanup_verified, true); assert.notEqual(result.exit_code, 0);
+    assert.equal(removeVerifiedTemporary(directory, true, false), false);
+    assert.equal(readFileSync(filename, "utf8"), "partial");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("mixed overlap needs real dispatches and measured HTTP overlap in every class and background window", () => {
   const classes = ["ledger-get", "governance-get", "record-fact", "approval"];
   const windows = ["csv_preview_flow", "csv_confirm_flow", "market_valuation_update_flow"].map(name => ({ name, started_ms: 10, completed_ms: 20 }));
@@ -46,6 +63,8 @@ test("mixed overlap needs real dispatches and measured HTTP overlap in every cla
     result: { ok: true, http: { method: "GET", url: "/api/workbench", status: 200, timings: { started_ms: 12, headers_ms: 15, completed_ms: 18 } } } }));
   const load = { samples, classes: Object.fromEntries(classes.map(id => [id, {}])) } as HttpLoadReport;
   assert.equal(mixedOverlapSummary(load, windows).verified, true);
+  assert.equal(mixedOverlapSummary(load, [...windows, { name: "market_valuation_update_flow:2", started_ms: 10, completed_ms: 20 }]).verified, true);
+  assert.equal(mixedOverlapSummary(load, [...windows, windows[2]]).verified, false);
   samples[0].dispatched_ms = 9;
   let value = mixedOverlapSummary(load, windows);
   assert.equal(value.verified, false); assert.equal(value.windows.csv_preview_flow[classes[0]].operation_overlap, 1);
@@ -54,6 +73,29 @@ test("mixed overlap needs real dispatches and measured HTTP overlap in every cla
   assert.equal(mixedOverlapSummary(load, windows).verified, false);
   assert.equal(mixedOverlapSummary(load, []).verified, false);
   assert.equal(mixedOverlapSummary(load, windows.map(window => ({ ...window, completed_ms: null }))).verified, false);
+});
+
+test("server timing links successful targets but preserves client failures that never reached the server", () => {
+  const attempts = [
+    { phase: "ledger-get", sample_id: "ledger-get:0", method: "GET", path: "/api/workbench", status: 200, server_request_id: "run:1", error: null },
+    { phase: "ledger-get", sample_id: "ledger-get:1", method: "GET", path: "/api/workbench", status: null, server_request_id: "run:2", error: "HTTP_TRANSPORT_FAILED" },
+    { phase: "record-fact", sample_id: "record-fact:0", method: "POST", path: "/api/workbench", status: 503, server_request_id: "run:3", error: null },
+  ];
+  const requests = {
+    "run:1": { trace_id: "trace:1", method: "GET", path: "/api/workbench", status: 200, outcome: "finish", duration_ms: 10 },
+    "run:3": { trace_id: "trace:3", method: "POST", path: "/api/workbench", status: 503, outcome: "finish", duration_ms: 20 },
+  };
+  const load = { samples: [
+    { sample_id: "ledger-get:0", class_id: "ledger-get", status: "success" },
+    { sample_id: "ledger-get:1", class_id: "ledger-get", status: "error" },
+    { sample_id: "record-fact:0", class_id: "record-fact", status: "error" },
+  ], classes: { "ledger-get": {}, "record-fact": {} } } as unknown as HttpLoadReport;
+  const linked = linkMixedServerTargets(attempts, load, { requests } as never);
+  assert.equal(linked.server_samples.length, 2);
+  assert.deepEqual(linked.server_unobserved_targets, [{ sample_id: "ledger-get:1", request_id: "run:2", error: "HTTP_TRANSPORT_FAILED", server_observed: false }]);
+  assert.equal(linked.server_latency["ledger-get"].successful_count, 1);
+  assert.equal(linked.server_latency["record-fact"].successful_count, 0);
+  assert.throws(() => linkMixedServerTargets(attempts, load, { requests: { "run:3": requests["run:3"] } } as never), /SERVER_TRACE_TARGET_MISMATCH/);
 });
 
 test("stopped fixture remains available when evidence retention fails, and unknown writers are never removed", () => {

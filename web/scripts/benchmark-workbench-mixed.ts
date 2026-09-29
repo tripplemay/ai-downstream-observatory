@@ -7,10 +7,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import Database from "better-sqlite3";
-import { createWorkbenchMixedFixture, mixedActivationRequest, mixedApprovalRequest, mixedCancelRequest, mixedLedgerRequest,
+import { mixedActivationRequest, mixedApprovalRequest, mixedCancelRequest, mixedLedgerRequest,
   mixedMarketRequest, mixedProposalRequest, mixedValuationRequest, type WorkbenchMixedFixture } from "./workbench-mixed-fixture";
 import { MixedHttpError, startMixedRuntime, type MixedHttpResponse } from "./workbench-mixed-runtime";
 import { runHttpLoad, summarizeHttpLoadSamples, type HttpLoadContext, type HttpLoadOperationResult, type HttpLoadReport } from "./workbench-http-load";
+import { assertMixedGovernanceView, assertMixedLedgerView } from "./workbench-mixed-views";
+import { summarizeServerTrace } from "./workbench-server-trace.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."), endpoint = "/api/workbench", csvEndpoint = `${endpoint}/csv/jobs`;
 const sha = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
@@ -36,7 +38,8 @@ export function parseMixedOptions(args: string[]) {
     history: { type: "string", default: "30" }, listings: { type: "string", default: "10" }, "market-rows": { type: "string", default: "50" },
     "csv-rows": { type: "string", default: "10" }, count: { type: "string", default: "20" }, "interval-ms": { type: "string", default: "50" },
     "max-queued": { type: "string", default: "32" }, "core-count": { type: "string", default: "1" }, "poll-seconds": { type: "string", default: "5" },
-    "overall-seconds": { type: "string", default: "180" }, output: { type: "string" },
+    "background-cycles": { type: "string", default: "1" }, "background-interval-ms": { type: "string", default: "20000" },
+    "overall-seconds": { type: "string", default: "180" }, "setup-seconds": { type: "string", default: "600" }, output: { type: "string" },
   } });
   const integer = (name: keyof typeof values, low: number, high: number) => {
     const raw = values[name]; assert.ok(typeof raw === "string" && /^(0|[1-9]\d*)$/.test(raw), `INVALID_${name}`);
@@ -45,7 +48,9 @@ export function parseMixedOptions(args: string[]) {
   const pollSeconds = Number(values["poll-seconds"]); assert.ok(Number.isFinite(pollSeconds) && pollSeconds >= .1 && pollSeconds <= 5, "INVALID_poll-seconds");
   return { history: integer("history", 6, 50000), listings: integer("listings", 2, 1000), marketRows: integer("market-rows", 0, 2000000),
     csvRows: integer("csv-rows", 1, 10000), count: integer("count", 1, 1000), intervalMs: integer("interval-ms", 1, 10000), maxQueued: integer("max-queued", 0, 1000),
-    coreCount: integer("core-count", 1, 3), pollSeconds, overallMs: integer("overall-seconds", 30, 3600) * 1000, output: values.output };
+    coreCount: integer("core-count", 1, 3), pollSeconds, overallMs: integer("overall-seconds", 30, 3600) * 1000,
+    setupMs: integer("setup-seconds", 30, 3600) * 1000, backgroundCycles: integer("background-cycles", 1, 100),
+    backgroundIntervalMs: integer("background-interval-ms", 100, 60000), output: values.output };
 }
 export function mixedCsvInput(fixture: WorkbenchMixedFixture, count: number) {
   assert.ok(Number.isSafeInteger(count) && count > 0 && count <= 10000);
@@ -71,9 +76,40 @@ export function mixedOverlapSummary(load: HttpLoadReport, windows: { name: strin
       }).length,
     }];
   }))]));
+  const names = new Set(windows.map(window => window.name));
   return { criterion: "Every completed background flow window has at least one actual dispatch and one measured target HTTP overlap for every class; not a SQLite lock claim.",
-    windows: counts, verified: windows.length === 3 && Object.keys(load.classes).length === 4 && windows.every(window => window.completed_ms !== null) &&
+    windows: counts, verified: windows.length >= 3 && names.size === windows.length && names.has("csv_preview_flow") && names.has("csv_confirm_flow") &&
+      windows.filter(window => /^market_valuation_update_flow(?::[1-9]\d*)?$/.test(window.name)).length === windows.length - 2 &&
+      Object.keys(load.classes).length === 4 && windows.every(window => window.completed_ms !== null) &&
       Object.values(counts).every(classes => Object.values(classes).every(value => value.dispatched_during_window > 0 && value.measured_http_overlap > 0)) };
+}
+export function linkMixedServerTargets(attempts: { phase: string; sample_id: string | null; method: string; path: string; status: number | null;
+  server_request_id?: string | null; error?: string | null }[], load: HttpLoadReport, trace: ReturnType<typeof summarizeServerTrace>) {
+  const measuredPhases = new Set(["ledger-get", "governance-get", "record-fact", "approval:approve"]);
+  const targets = attempts.filter(row => row.sample_id && measuredPhases.has(row.phase));
+  const server_unobserved_targets = targets.filter(row => row.status === null).map(row => {
+    assert.ok(row.error && row.server_request_id, "SERVER_TRACE_UNOBSERVED_TARGET_INVALID");
+    return { sample_id: row.sample_id, request_id: row.server_request_id, error: row.error,
+      server_observed: Boolean(trace.requests[row.server_request_id]) };
+  });
+  const server_samples = targets.filter(row => row.status !== null).map(row => {
+    const measured = row.server_request_id ? trace.requests[row.server_request_id] : undefined;
+    assert.ok(measured && measured.method === row.method && measured.path === row.path && measured.status === row.status && measured.outcome === "finish", "SERVER_TRACE_TARGET_MISMATCH");
+    return { sample_id: row.sample_id, request_id: row.server_request_id, ...measured };
+  });
+  const bySample = new Map<string, typeof server_samples>();
+  for (const sample of server_samples) {
+    const group = bySample.get(sample.sample_id!) ?? [];
+    group.push(sample); bySample.set(sample.sample_id!, group);
+  }
+  const successful = load.samples.filter(row => row.status === "success");
+  for (const row of successful) assert.equal(bySample.get(row.sample_id)?.length, 1, "SERVER_TRACE_SUCCESS_MISSING");
+  const server_latency = Object.fromEntries(Object.keys(load.classes).map(classId => {
+    const durations = successful.filter(row => row.class_id === classId).map(row => bySample.get(row.sample_id)![0].duration_ms).sort((a, b) => a - b);
+    const percentile = (p: number) => durations.length ? durations[Math.ceil(durations.length * p) - 1] : null;
+    return [classId, { successful_count: durations.length, p50_ms: percentile(.5), p95_ms: percentile(.95), p99_ms: percentile(.99), max_ms: durations.at(-1) ?? null }];
+  }));
+  return { server_samples, server_unobserved_targets, server_latency };
 }
 export function removeVerifiedTemporary(directory: string, processesStopped: boolean, retentionVerified: boolean) {
   if (processesStopped && retentionVerified) rmSync(directory, { recursive: true, force: true });
@@ -85,7 +121,7 @@ function sourceSnapshot() {
   return Object.fromEntries([...new Set([...files, "web/package.json", "web/package-lock.json", "requirements-workbench.txt",
     "web/dist/csv-background.mjs", "web/dist/monthly-evaluation.mjs", "web/dist/governance-fixture.mjs", "web/dist/governance-fixture.manifest.json", "web/.next/BUILD_ID"])].sort().map(file => [file, sha(readFileSync(path.join(root, file)))]));
 }
-export async function childJson(python: string, args: string[], environment: NodeJS.ProcessEnv, timeoutMs: number) {
+export async function childJson(python: string, args: string[], environment: NodeJS.ProcessEnv, timeoutMs: number, label: "ORACLE" | "FIXTURE" = "ORACLE") {
   return new Promise<{ exit_code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; value: any; cleanup_verified: boolean }>(resolve => {
     const child = spawn(python, args, { cwd: root, env: environment, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "", limited = false, expired = false, stopping = false, closed = false, settled = false;
@@ -100,7 +136,7 @@ export async function childJson(python: string, args: string[], environment: Nod
       clearTimeout(timer); if (escalation) clearTimeout(escalation); if (finalDeadline) clearTimeout(finalDeadline); if (poll) clearTimeout(poll);
       let value = null; if (cleanupVerified && !limited && !expired) { try { value = JSON.parse(stdout); } catch {} }
       if (!cleanupVerified) { child.stdout!.destroy(); child.stderr!.destroy(); child.unref(); }
-      resolve({ exit_code: child.exitCode, signal: child.signalCode, stdout, stderr: !cleanupVerified ? "ORACLE_CLEANUP_UNCONFIRMED" : limited ? "ORACLE_OUTPUT_LIMIT" : expired ? "ORACLE_TIMEOUT" : stderr, value, cleanup_verified: cleanupVerified });
+      resolve({ exit_code: child.exitCode, signal: child.signalCode, stdout, stderr: !cleanupVerified ? `${label}_CLEANUP_UNCONFIRMED` : limited ? `${label}_OUTPUT_LIMIT` : expired ? `${label}_TIMEOUT` : stderr, value, cleanup_verified: cleanupVerified });
     };
     const check = () => { if (settled) return; if (closed && groupGone()) finish(true); else poll = setTimeout(check, 25); };
     const stop = () => {
@@ -135,13 +171,14 @@ export async function runMixedBenchmark(options: ReturnType<typeof parseMixedOpt
       "Overlap windows cover observed request/queue/worker/proof flow, not exact SQLite writer-lock instants.",
       "First measured versus subsequent samples are not a cold-server claim; bootstrap HTTP already ran. Bucket sample targets are null unless separately specified.",
       "Every planned class must have its requested successful count; this smoke is not a 1000-sample/resource-constrained/SLA acceptance."],
-    attempts: [], errors: [], windows: [], source_before: {}, oracles: {},
+    attempts: [], errors: [], windows: [], source_before: {}, oracles: {}, phase_times: {}, csv_timing: {}, background_schedule: [], temporary_directory: temporary,
   };
   const persist = () => writeFileSync(output, JSON.stringify(report, null, 2) + "\n");
   let fixture: WorkbenchMixedFixture | undefined, runtime: Awaited<ReturnType<typeof startMixedRuntime>> | undefined, baseline: any = null, sealed = false, oracleCleanupVerified = true, runtimeCleanupVerified = true;
   const records: { command: unknown; receipt: unknown }[] = [], approvals: { proposal_id: string; approval_id: string; cancel_id: string }[] = [], marketIds: string[] = [], valuationIds: string[] = [];
   let csv: { preview_request_id: string; confirm_request_id: string | null; rows: number; csv_sha256: string; mapping_sha256: string } | null = null;
-  const abort = new AbortController(), wholeDeadline = setTimeout(() => abort.abort(), options.overallMs), pendingRequests = new Set<Promise<unknown>>();
+  const abort = new AbortController(), pendingRequests = new Set<Promise<unknown>>();
+  let wholeDeadline = setTimeout(() => abort.abort(), options.setupMs);
   const attempt = async (phase: string, url: string, init: RequestInit, requestBody: unknown, clock = now, signal = abort.signal, sampleId: string | null = null) => {
     assert.equal(sealed, false, "MIXED_REPORT_SEALED");
     assert.ok(runtime, "RUNTIME_NOT_STARTED");
@@ -153,14 +190,14 @@ export async function runMixedBenchmark(options: ReturnType<typeof parseMixedOpt
     try {
       const response = await promise;
       if (!sealed) {
-        Object.assign(record, { completed_ms: response.timing.completed_ms, status: response.status, timing: response.timing,
+        Object.assign(record, { completed_ms: response.timing.completed_ms, status: response.status, timing: response.timing, server_request_id: response.requestId,
           response: { bytes: response.bytes, parsed_json_sha256: sha(JSON.stringify(response.json)),
             id: response.json?.id ?? null, request_id: response.json?.request_id ?? null, revision: response.json?.revision ?? null, status: response.json?.status ?? null, error: response.json?.error ?? null } });
         appendFileSync(journal, JSON.stringify({ event: "response", ...record }) + "\n");
       }
       return response;
     } catch (error) {
-      if (!sealed) { Object.assign(record, { completed_ms: clock(), status: error instanceof MixedHttpError ? error.status : null, error: code(error) }); appendFileSync(journal, JSON.stringify({ event: "failed", ...record }) + "\n"); }
+      if (!sealed) { Object.assign(record, { completed_ms: clock(), status: error instanceof MixedHttpError ? error.status : null, server_request_id: error instanceof MixedHttpError ? error.requestId : null, error: code(error) }); appendFileSync(journal, JSON.stringify({ event: "failed", ...record }) + "\n"); }
       throw error;
     } finally { pendingRequests.delete(promise); }
   };
@@ -174,10 +211,12 @@ export async function runMixedBenchmark(options: ReturnType<typeof parseMixedOpt
     const input = { schema_version: "workbench-mixed-oracle-input-v1", phase, fixture, baseline, csv: phase === "baseline" ? null : csv,
       records: phase === "complete" ? records : [], approvals: phase === "complete" ? approvals : [], market_request_ids: phase === "complete" ? marketIds : [], valuation_request_ids: phase === "complete" ? valuationIds : [] };
     const inputFile = path.join(evidence, `oracle-${phase}-input.json`); writeFileSync(inputFile, JSON.stringify(input, null, 2) + "\n", { flag: "wx" });
+    const oracleStarted = now();
     const result = await childJson(python, ["tests/performance/mixed_workload_oracle.py", "--db", filename, "--data-dir", dataDir, "--expected", inputFile],
       { PATH: process.env.PATH, NODE_ENV: "test", PYTHONPATH: root, PYTHONDONTWRITEBYTECODE: "1", WORKBENCH_DATA_DIR: dataDir }, 60000);
     oracleCleanupVerified &&= result.cleanup_verified;
-    report.oracles[phase] = result; writeFileSync(path.join(evidence, `oracle-${phase}.json`), JSON.stringify(result, null, 2) + "\n", { flag: "wx" }); persist();
+    report.oracles[phase] = { ...result, started_ms: oracleStarted, completed_ms: now() };
+    writeFileSync(path.join(evidence, `oracle-${phase}.json`), JSON.stringify(report.oracles[phase], null, 2) + "\n", { flag: "wx" }); persist();
     assert.equal(result.cleanup_verified, true, "ORACLE_CLEANUP_UNCONFIRMED");
     assert.equal(result.exit_code, 0, `ORACLE_${phase}_FAILED:${result.stdout || result.stderr}`); assert.equal(result.value?.status, "passed");
     if (phase === "baseline") baseline = result.value.baseline;
@@ -204,7 +243,18 @@ export async function runMixedBenchmark(options: ReturnType<typeof parseMixedOpt
   };
   let load: Promise<HttpLoadReport> | undefined;
   try {
-    persist(); report.source_before = sourceSnapshot(); fixture = createWorkbenchMixedFixture({ filename, dataDir, history: options.history, listings: options.listings, marketRows: options.marketRows });
+    persist(); report.source_before = sourceSnapshot();
+    report.phase_times.fixture = { started_ms: now(), completed_ms: null };
+    const seeded = await childJson(process.execPath, ["--import", path.join(root, "web/node_modules/tsx/dist/loader.mjs"), path.join(root, "web/scripts/create-workbench-mixed-fixture.ts"),
+      JSON.stringify({ filename, dataDir, history: options.history, listings: options.listings, marketRows: options.marketRows })],
+      { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR, HOME: temporary, NODE_ENV: "test", TZ: "UTC" }, options.setupMs, "FIXTURE");
+    report.fixture_process = { ...seeded, value: undefined, stdout: undefined, stdout_sha256: sha(seeded.stdout) };
+    runtimeCleanupVerified = seeded.cleanup_verified;
+    report.phase_times.fixture.completed_ms = now(); persist();
+    assert.equal(seeded.exit_code, 0, `FIXTURE_FAILED:${seeded.stderr}`);
+    assert.equal(seeded.cleanup_verified, true, "FIXTURE_CLEANUP_UNCONFIRMED");
+    assert.equal(seeded.value?.schema_version, "workbench-mixed-fixture-v1", "FIXTURE_RESULT_INVALID");
+    fixture = seeded.value as WorkbenchMixedFixture;
     report.fixture = fixture; await oracle("baseline");
     // A failed startup may also fail its internal cleanup before exposing handles.
     runtimeCleanupVerified = false;
@@ -216,6 +266,9 @@ export async function runMixedBenchmark(options: ReturnType<typeof parseMixedOpt
     await task("bootstrap:valuation", mixedValuationRequest(fixture, "valuation", 0), "valuation");
     const activation = accepted(await post("bootstrap:activation", mixedActivationRequest(fixture, approvalValuation.valuation_id))); assert.equal(typeof activation.id, "string");
     report.bootstrap = { activation_id: activation.id, approval_valuation_id: approvalValuation.valuation_id };
+    assert.equal(abort.signal.aborted, false, "MIXED_SETUP_DEADLINE");
+    clearTimeout(wholeDeadline); wholeDeadline = setTimeout(() => abort.abort(), options.overallMs);
+    report.phase_times.load = { started_ms: now(), completed_ms: null };
     let loadOrigin: number | undefined;
     const loadClock = () => performance.now() - loadOrigin!;
     const classOperation = (kind: "ledger-get" | "governance-get" | "record-fact" | "approval") => async (context: HttpLoadContext): Promise<HttpLoadOperationResult> => {
@@ -226,8 +279,8 @@ export async function runMixedBenchmark(options: ReturnType<typeof parseMixedOpt
         ...(measured ? { timings: measured.timing } : {}) },
         ...(ok ? {} : { error: { code: "MIXED_OPERATION_FAILED", message: code(error) } }) });
       try {
-        if (kind === "ledger-get") { const value = await measure(() => get(kind, `${endpoint}?portfolio=${fixture!.ids.csv.portfolio_id}`, context)); assert.equal(value.selected, fixture!.ids.csv.portfolio_id); }
-        else if (kind === "governance-get") await measure(() => get(kind, `${endpoint}?portfolio=${fixture!.ids.approval.portfolio_id}&view=governance`, context));
+        if (kind === "ledger-get") assertMixedLedgerView(await measure(() => get(kind, `${endpoint}?portfolio=${fixture!.ids.csv.portfolio_id}`, context)), fixture!, options.csvRows);
+        else if (kind === "governance-get") assertMixedGovernanceView(await measure(() => get(kind, `${endpoint}?portfolio=${fixture!.ids.approval.portfolio_id}&view=governance`, context)), fixture!, activation.id);
         else if (kind === "record-fact") {
           const state = accepted(await get("record-fact:revision", `${endpoint}?portfolio=${fixture!.ids.ledger.portfolio_id}`, context));
           const body = mixedLedgerRequest(fixture!, context.index, state.revision), receipt = await measure(() => post(kind, body, context));
@@ -243,7 +296,7 @@ export async function runMixedBenchmark(options: ReturnType<typeof parseMixedOpt
         return result(true);
       } catch (error) { return result(false, error); }
     };
-    load = runHttpLoad({ overallTimeoutMs: Math.max(1, options.overallMs - now()), drainTimeoutMs: 35000, signal: abort.signal,
+    load = runHttpLoad({ overallTimeoutMs: options.overallMs, drainTimeoutMs: 35000, signal: abort.signal,
       runtime: { now: () => { const value = performance.now(); loadOrigin ??= value; return value; }, setTimer: (callback, ms) => setTimeout(callback, ms), clearTimer: handle => clearTimeout(handle as NodeJS.Timeout) },
       classes: (["ledger-get", "governance-get", "record-fact", "approval"] as const).map(id => ({ id, count: options.count, intervalMs: options.intervalMs,
         maxInFlight: id.endsWith("get") ? 2 : 1, maxQueued: options.maxQueued, queueTimeoutMs: 30000, requestTimeoutMs: 30000,
@@ -258,31 +311,51 @@ export async function runMixedBenchmark(options: ReturnType<typeof parseMixedOpt
     let preview: any;
     const flows = await Promise.allSettled([(async () => {
       await window("csv_preview_flow", async () => {
+        report.csv_timing.preview = { submitted_ms: now(), accepted_ms: null, terminal_observed_ms: null,
+          scope: "submission_to_terminal_HTTP_observation; includes queue and transport, excludes independent oracle" };
         const form = new FormData();
         for (const [key, value] of Object.entries({ portfolio_id: fixture!.ids.csv.portfolio_id, account_id: fixture!.ids.csv.account_ids[0], expected_revision: String(fixture!.revisions.csv), mapping: input.mapping })) form.set(key, value);
         form.set("file", new Blob([new Uint8Array(input.bytes)], { type: "text/csv" }), "upload.csv");
         const response = accepted(await attempt("csv:preview", csvEndpoint, { method: "POST", headers: { "X-CSV-Idempotency-Key": "mixed-csv-preview",
           "X-CSV-Background-Acknowledged": "true", "X-CSV-Original-Filename": Buffer.from(input.filename).toString("base64url") }, body: form }, report.csv_input));
         csv = { preview_request_id: response.request_id, confirm_request_id: null, rows: options.csvRows, csv_sha256: sha(input.bytes), mapping_sha256: sha(input.mapping) };
+        report.csv_timing.preview.accepted_ms = now();
         preview = await csvResult(response.request_id, "csv:preview");
+        report.csv_timing.preview.terminal_observed_ms = now();
         assert.equal(preview.error_count, 0); assert.equal(preview.row_count, options.csvRows); assert.equal(preview.required_review_count, 0);
-        await oracle("preview");
       });
+      await oracle("preview");
       await window("csv_confirm_flow", async () => {
+        report.csv_timing.confirm = { submitted_ms: now(), accepted_ms: null, terminal_observed_ms: null,
+          scope: "submission_to_terminal_HTTP_observation; includes queue and transport, excludes independent oracle" };
         const payload = { action: "confirm_import", portfolio_id: fixture!.ids.csv.portfolio_id, batch_id: preview.batch_id, preview_hash: preview.preview_hash,
           expected_revision: fixture!.revisions.csv, csv_review: { acknowledge_unverified_mapping: true, review_hash: preview.review_hash, rows: [] } };
         const response = accepted(await post("csv:confirm", { action: "confirm", command: { portfolio_id: fixture!.ids.csv.portfolio_id, account_id: fixture!.ids.csv.account_ids[0],
           idempotency_key: "mixed-csv-confirm", payload_text: JSON.stringify(payload), acknowledge_background_execution: true } }, undefined, csvEndpoint));
-        csv!.confirm_request_id = response.request_id; const confirmed = await csvResult(response.request_id, "csv:confirm");
+        csv!.confirm_request_id = response.request_id; report.csv_timing.confirm.accepted_ms = now();
+        const confirmed = await csvResult(response.request_id, "csv:confirm"); report.csv_timing.confirm.terminal_observed_ms = now();
         assert.equal(confirmed.confirmed_revision, fixture!.revisions.csv + options.csvRows);
       });
-    })(), window("market_valuation_update_flow", async () => {
-      await task("update:valuation-price", mixedMarketRequest(fixture!, "valuation", 1, 1), "market");
-      await task("update:fx", mixedMarketRequest(fixture!, "fx", 1, 1), "market");
-      await task("update:valuation", mixedValuationRequest(fixture!, "valuation", 1), "valuation");
-    })]);
+    })(), (async () => {
+      for (let index = 0; index < options.backgroundCycles; index++) {
+        const planned = index * options.backgroundIntervalMs;
+        while (loadClock() < planned) await sleep();
+        if (abort.signal.aborted) throw new Error("MIXED_OVERALL_DEADLINE");
+        const schedule = { cycle: index + 1, scheduled_ms: planned, started_ms: loadClock(), completed_ms: null as number | null };
+        report.background_schedule.push(schedule);
+        try {
+          await window(index === 0 ? "market_valuation_update_flow" : `market_valuation_update_flow:${index + 1}`, async () => {
+            const sequence = index + 1;
+            await task(`update:${sequence}:valuation-price`, mixedMarketRequest(fixture!, "valuation", sequence, sequence), "market");
+            await task(`update:${sequence}:fx`, mixedMarketRequest(fixture!, "fx", sequence, sequence), "market");
+            await task(`update:${sequence}:valuation`, mixedValuationRequest(fixture!, "valuation", sequence), "valuation");
+          });
+        } finally { schedule.completed_ms = loadClock(); }
+      }
+    })()]);
     for (const [index, result] of flows.entries()) if (result.status === "rejected") report.errors.push({ stage: index === 0 ? "csv_flow" : "market_valuation_flow", message: code(result.reason) });
     report.load = await load;
+    report.phase_times.load.completed_ms = now();
     report.buckets = Object.fromEntries(Object.keys(report.load.classes).map(id => {
       const rows = (report.load as HttpLoadReport).samples.filter(row => row.class_id === id);
       return [id, { first_measured: summarizeHttpLoadSamples(rows.filter(row => row.index === 0)), subsequent: summarizeHttpLoadSamples(rows.filter(row => row.index > 0)),
@@ -294,6 +367,18 @@ export async function runMixedBenchmark(options: ReturnType<typeof parseMixedOpt
     abort.abort(); clearTimeout(wholeDeadline);
     if (load && !report.load) { try { report.load = await load; } catch (error) { report.errors.push({ stage: "scheduler", message: code(error) }); } }
     if (runtime) { try { await runtime.stop(); } catch (error) { runtimeCleanupVerified = false; report.errors.push({ stage: "cleanup", message: code(error) }); } report.processes = runtime.processes.map(process => process.snapshot()); }
+    if (runtime && runtimeCleanupVerified) {
+      try {
+        const traceBytes = readFileSync(runtime.trace.path), retained = path.join(evidence, "server-trace.jsonl");
+        writeFileSync(retained, traceBytes, { flag: "wx", mode: 0o600 });
+        const trace = summarizeServerTrace(traceBytes.toString("utf8"), runtime.trace.runId);
+        report.server_trace = { ...trace, path: "server-trace.jsonl", sha256: sha(traceBytes),
+          scope: "HTTP request event to response finish; excludes pre-request socket/event-loop queue and client receive/parse; includes server streaming/backpressure and begin-observer write overhead" };
+        assert.equal(trace.status, "PASS", "SERVER_TRACE_INCOMPLETE");
+        assert.ok(!report.processes.some((row: any) => row.stderr.includes("WORKBENCH_SERVER_TRACE_INTEGRITY_FAILED")), "SERVER_TRACE_DIAGNOSTIC_FAILURE");
+        Object.assign(report, linkMixedServerTargets(report.attempts, report.load, trace));
+      } catch (error) { report.errors.push({ stage: "server_trace", message: code(error) }); }
+    }
     if (pendingRequests.size) { let timer: NodeJS.Timeout | undefined; await Promise.race([Promise.allSettled([...pendingRequests]), new Promise(resolve => { timer = setTimeout(resolve, 1000); })]); if (timer) clearTimeout(timer); }
     sealed = true; report.unsettled_http_at_return = pendingRequests.size;
     const stopped = runtimeCleanupVerified && oracleCleanupVerified && (!runtime || report.processes.every((process: any) => process.exit_code !== null || process.signal !== null));
@@ -303,7 +388,8 @@ export async function runMixedBenchmark(options: ReturnType<typeof parseMixedOpt
     else if (!stopped) report.errors.push({ stage: "final_oracle", message: "NOT_RUN_PROCESSES_NOT_STOPPED" });
     const cleanupVerified = stopped && oracleCleanupVerified;
     report.owned_processes_stopped = cleanupVerified; report.uncertain_writers = !cleanupVerified;
-    let retentionVerified = !fixture;
+    // A timed-out fixture child can leave a partial database without a result.
+    let retentionVerified = !fixture && !existsSync(filename);
     if (fixture && cleanupVerified) {
       try {
         const db = new Database(filename, { readonly: true }); try { await db.backup(path.join(evidence, "final-workbench.db")); } finally { db.close(); }
@@ -317,6 +403,8 @@ export async function runMixedBenchmark(options: ReturnType<typeof parseMixedOpt
     catch (error) { report.errors.push({ stage: "source_snapshot", message: code(error) }); report.source_drift = null; }
     const classes = report.load?.classes as HttpLoadReport["classes"] | undefined;
     const complete = classes && Object.keys(classes).length === 4 && Object.values(classes).every(value => value.succeeded === options.count && value.failed === 0 && value.unsettled_at_return === 0);
+    if (classes && !complete) report.errors.push({ stage: "load", message: "MIXED_CLASS_SHORTFALL",
+      classes: Object.fromEntries(Object.entries(classes).map(([id, value]) => [id, { succeeded: value.succeeded, failed: value.failed, statuses: value.statuses }])) });
     report.status = !report.errors.length && report.source_drift?.length === 0 && !pendingRequests.size && cleanupVerified && complete && report.oracles.complete?.value?.status === "passed" ? "PASS" : "FAIL";
     report.finished_at = new Date().toISOString(); report.duration_ms = now(); report.http_attempt_journal = { path: "http-attempts.jsonl", sha256: sha(readFileSync(journal)) };
     report.temporary_directory_removed = removeVerifiedTemporary(temporary, cleanupVerified, retentionVerified); persist();

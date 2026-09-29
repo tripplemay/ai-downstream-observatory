@@ -171,6 +171,40 @@ class MixedWorkloadOracleTests(unittest.TestCase):
         with self.assertRaisesRegex(oracle.OracleError, "RECORD_COVERAGE_MISMATCH"):
             self.verify()
 
+    def test_duplicate_record_inputs_cannot_inflate_success_samples(self):
+        self.expected["records"].append(deepcopy(self.expected["records"][0]))
+        with self.assertRaisesRegex(oracle.OracleError, "RECORD_DUPLICATE_INPUT"):
+            self.verify()
+
+    def test_unreported_approval_events_are_not_hidden_by_known_proposals(self):
+        self.corrupt("approval_events", """INSERT INTO approval_events
+            SELECT 'synthetic-extra-approval',proposal_id,actor_id,action,expected_revision,input_hash,payload_json,created_at
+            FROM approval_events WHERE action='approve' LIMIT 1""")
+        with self.assertRaisesRegex(oracle.OracleError, "APPROVAL_EVENT_COVERAGE_MISMATCH"):
+            self.verify()
+
+    def test_unreported_reservations_are_not_hidden_by_known_approvals(self):
+        self.corrupt("reservations", """INSERT INTO reservations
+            SELECT 'synthetic-extra-reservation',portfolio_id,account_id,proposal_item_id,NULL,listing_id,currency,side,
+                '1','1','active',0,created_at,updated_at FROM reservations LIMIT 1""")
+        with self.assertRaisesRegex(oracle.OracleError, "RESERVATION_COVERAGE_MISMATCH"):
+            self.verify()
+
+    def test_padding_count_uses_sequential_proof_without_changing_predicate(self):
+        statements = []
+        with oracle.readonly_database(self.filename) as connection:
+            connection.set_trace_callback(statements.append)
+            result = oracle.verify(connection, self.expected)
+            query = next(sql for sql in statements if "COUNT(*) FROM market_observations" in sql and "provenance=" in sql)
+            self.assertIn(" NOT INDEXED ", query)
+            self.assertEqual(connection.execute(query.replace(" NOT INDEXED", "")).fetchone()[0], 50)
+            self.assertEqual(result["reconstructed_padding_rows_not_valuation_evidence"], 50)
+            plans = [row[3] for row in connection.execute("EXPLAIN QUERY PLAN " + query)]
+            self.assertIn("SCAN market_observations", plans)
+        self.corrupt("market_observations", "UPDATE market_observations SET provenance='live_observed' WHERE id='mixed-padding:0'")
+        with self.assertRaisesRegex(oracle.OracleError, "MARKET_PADDING_SCOPE_MISMATCH"):
+            self.verify()
+
     def test_original_csv_attachment_corruption_fails_independent_receipt_proof(self):
         path = next((self.directory / "data/attachments").glob("*.csv"))
         path.write_bytes(b"synthetic corruption")

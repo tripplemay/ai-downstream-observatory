@@ -43,6 +43,17 @@ test("mixed HTTP parent cancellation prevents dispatch when already aborted", as
   assert.equal(calls, 0);
 });
 
+test("benchmark trace identifiers are private-run scoped, unique and never caller-controlled", async t => {
+  const ids: (string | string[] | undefined)[] = [];
+  const untraced = await server(t, (request, response) => { ids.push(request.headers["x-workbench-benchmark-id"]); response.end("{}"); });
+  assert.throws(() => new MixedHttpClient(untraced.address, undefined, "arbitrary-user-value"), /INVALID_TRACE_RUN_ID/);
+  assert.equal((await untraced.request("/api/workbench", { headers: { "X-Workbench-Benchmark-Id": "caller" } })).requestId, null);
+  const run = "a".repeat(32), traced = new MixedHttpClient(untraced.address, undefined, run);
+  assert.equal((await traced.request("/api/workbench", { headers: { "X-Workbench-Benchmark-Id": "caller" } })).requestId, `${run}:1`);
+  assert.equal((await traced.request("/api/workbench")).requestId, `${run}:2`);
+  assert.deepEqual(ids, [undefined, `${run}:1`, `${run}:2`]);
+});
+
 test("owned process cleanup stops a group even after its leader has exited", async t => {
   const script = `const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});process.stdout.write('ready');setInterval(()=>{},1000)"],{stdio:['ignore','pipe','ignore']}); child.stdout.once('data',()=>{process.stdout.write(String(child.pid));process.exit(0)});`;
   const owned = spawnOwned(process.execPath, ["-e", script], process.cwd(), process.env, { graceMs: 100 });

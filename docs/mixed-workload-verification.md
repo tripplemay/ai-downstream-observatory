@@ -64,6 +64,16 @@ The explicit 0.1-second poll is a smoke-test configuration, not the deployed
 background jobs; multiple workers are a separate, declared topology.
 The 250-ms arrival interval gives the small run a non-idle request horizon.
 Actual per-window target-HTTP overlaps are reported, not assumed from this setting.
+`--setup-seconds` separately bounds fixture generation and bootstrap; generation
+runs in its own bounded process so synchronous SQLite work cannot prevent the
+supervisor timer from firing. `--overall-seconds` bounds the measured workload,
+not setup. An interrupted partial fixture remains local for inspection.
+
+`--background-cycles` and `--background-interval-ms` define a fixed schedule of
+normal price/FX publication and valuation cycles. A slow preceding cycle may
+delay the next cycle; planned, actual start and completion times are retained.
+The schedule is never shifted to hide lateness, and idle time is not counted as
+background execution. Each cycle has its own overlap window and sample counts.
 
 Reports, original CSV/mapping bytes, the pre-dispatch HTTP journal and synthetic
 database/attachment evidence stay under ignored `artifacts/verification/`.
@@ -92,9 +102,84 @@ For a separate replay, copy evidence to a fresh private directory, record the
 path relocation and compare bytes/modes. SQLite read-only access can still create
 WAL/SHM lock files, so do not open the original retained database in place.
 
+The oracle also rejects duplicate expected small-write receipts and extra
+proposal/approval/reservation effects. GET responses are checked against the
+fixture's actual snapshot semantics, including atomic pre/post-CSV balances;
+HTTP 200 or a correct terminal database alone is not a correct response proof.
+
+## Server timing and full-quantity resource pilot
+
+Only the benchmark Next process loads the fixed server observer; application
+routes and authentication are unchanged. The observer records a bounded private
+journal for tool-generated request IDs on the two measured API paths. It never
+records request bodies, query strings, cookies or session bindings. Each request
+event must pair with a finish, abort or incomplete terminal record. Duplicate,
+missing, malformed, over-capacity or failed writes invalidate telemetry rather
+than produce zero-duration samples.
+
+`server_samples` and `server_latency` measure request-event to response-finish
+wall time, including begin-observer write overhead and server streaming/backpressure.
+They exclude time before the HTTP request event and client receive/parse time; they are not CPU
+time or exact SQLite lock time. Original client timings, queues, failures and
+shortfalls remain visible. `csv_timing` separates submit, acceptance and observed
+terminal response from the independently timed Python oracle.
+
+The manual `workbench-performance-pilot-manual` workflow accepts only an exact
+reviewed mainline commit and a fixed `small` or `full` profile. It is separate
+from CI and release. The full profile requests 10 accounts, 1,000 listings,
+2,000,000 historical padding observations, 50,000 facts, a 10,000-row CSV and
+1,000 samples per foreground class, with 12 scheduled background update cycles.
+
+The non-root workload, generator and all child workers share a single Linux
+cgroup. The supervisor must observe the actual four-CPU quota/affinity, 8-GiB
+memory limit, zero swap limit, non-tmpfs local block storage, and pre/post resource
+samples. Kernel nonrotational-device metadata is not independent physical-media
+inspection. CPU throttling, memory/OOM and I/O observations are retained; missing
+or unverified constraints fail the pilot. An outer forced stop cannot prove
+rollback or turn an uncertain writer into a successful result. Only explicitly
+allowlisted synthetic evidence is uploaded; authentication storage is excluded.
+
+The full profile remains a resource/correctness pilot, not formal performance
+acceptance: active holdings are sparse, the bulk historical market rows are not
+published valuation inputs, and true process-cold, representative market-data
+and lock-wait evidence are still separate outstanding work. A passing pilot does
+not complete the failure-injection or independent-host recovery requirements.
+
+### 2026-09-29 local full-size diagnostic (failed)
+
+`artifacts/verification/mixed-workload-v28/full-local-2/report.json` is a retained
+macOS development run, not the four-CPU/eight-GiB Linux pilot. Its fixed arrivals
+were 1,000 per class at 250 ms spacing with a 32-slot per-class queue. The fixture
+reached 10 accounts, 1,000 listings, 2,000,000 market observations and 50,000
+ledger facts. Twelve market/valuation cycles and both 10,000-row CSV flows
+overlapped the foreground requests. Baseline, preview and final independent
+oracles passed; the final database and attachment evidence were retained, and
+the 607-file source snapshot had no drift. The run nevertheless **failed**:
+
+| Foreground class | Successful / planned | Failure breakdown |
+| --- | ---: | --- |
+| Ledger GET | 954 / 1,000 | 45 queue full; 1 client transport failure before server observation |
+| Governance GET | 953 / 1,000 | 47 queue full |
+| Record fact | 797 / 1,000 | 202 queue full; 1 HTTP 503 |
+| Approval | 634 / 1,000 | 352 queue full; 13 queue deadline; 1 HTTP 503 |
+
+The authenticated server trace paired all 6,493 requests that reached the
+server. The one client transport failure had no server trace, so the original
+report also recorded `SERVER_TRACE_TARGET_MISMATCH`. Subsequent harness code
+separates unobserved client failures from missing traces for successful HTTP
+targets; it does not convert the failed sample into a success. The two 503s
+coincided with the CSV confirmation window and were logged as `SqliteError`,
+but the exact SQLite error code was not captured, so lock contention is a
+hypothesis, not an established cause. CSV preview and confirmation finished in
+13.65 s and 19.24 s; those two timings alone do not pass the mixed-workload gate.
+Successful-request server p95 values were below 0.5 s in each class, but this
+excludes the queue-full, deadline, transport and 503 failures and cannot be
+reported as a passing p95. The original failed report is immutable evidence;
+the updated harness requires a new run for its own validation.
+
 ## What remains outside this smoke
 
-- The specified 4 vCPU / 8 GiB / local SSD environment and full dataset.
+- A passing run with the specified 4 vCPU / 8 GiB / local SSD environment and full dataset.
 - At least 1,000 valid samples per required query/atomic-command class, warm/cold
   distinctions, resource use, lock waits and the complete concurrent workload.
 - Queue-to-terminal overlap is not proof of simultaneous SQLite writer locks.

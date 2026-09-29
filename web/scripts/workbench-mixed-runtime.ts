@@ -1,24 +1,26 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, scryptSync } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
 export interface MixedHttpTiming { started_ms: number; headers_ms: number | null; completed_ms: number }
-export interface MixedHttpResponse { status: number; json: any; headers: Headers; timing: MixedHttpTiming; bytes: number }
+export interface MixedHttpResponse { status: number; json: any; headers: Headers; timing: MixedHttpTiming; bytes: number; requestId: string | null }
 export class MixedHttpError extends Error {
-  constructor(readonly code: string, readonly status: number | null, readonly timing: MixedHttpTiming) { super(code); }
+  constructor(readonly code: string, readonly status: number | null, readonly timing: MixedHttpTiming, readonly requestId: string | null = null) { super(code); }
 }
 
 /** Loopback-only transport. Its deadline includes headers and the entire bounded body. */
 export class MixedHttpClient {
   private cookie = "";
   private binding = "";
-  constructor(readonly address: string, readonly origin = "https://workbench.example.test") {
+  private sequence = 0;
+  constructor(readonly address: string, readonly origin = "https://workbench.example.test", readonly traceRunId?: string) {
     const parsed = new URL(address);
     assert.equal(parsed.protocol, "http:"); assert.equal(parsed.hostname, "127.0.0.1");
     assert.ok(parsed.port); assert.equal(parsed.username + parsed.password + parsed.search + parsed.hash, ""); assert.equal(parsed.pathname, "/");
+    assert.ok(traceRunId === undefined || /^[a-f0-9]{32}$/.test(traceRunId), "INVALID_TRACE_RUN_ID");
   }
   async request(url: string, init: RequestInit = {}, options: { signal?: AbortSignal; nowMs?: () => number; timeoutMs?: number; maxBytes?: number; json?: boolean } = {}): Promise<MixedHttpResponse> {
     assert.ok(url.startsWith("/api/") && !url.includes("#"));
@@ -26,9 +28,11 @@ export class MixedHttpClient {
     const timeout = options.timeoutMs ?? 30000, maxBytes = options.maxBytes ?? 16 * 1024 * 1024;
     assert.ok(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 30000);
     assert.ok(Number.isSafeInteger(maxBytes) && maxBytes > 0 && maxBytes <= 16 * 1024 * 1024);
+    const requestId = this.traceRunId ? `${this.traceRunId}:${++this.sequence}` : null;
+    assert.ok(this.sequence <= 999999999, "TRACE_SEQUENCE_EXHAUSTED");
     const now = options.nowMs ?? (() => performance.now()), timing: MixedHttpTiming = { started_ms: now(), headers_ms: null, completed_ms: 0 };
     const controller = new AbortController(); let status: number | null = null, rejectDeadline: (reason: Error) => void = () => {};
-    const failed = (code: string) => new MixedHttpError(code, status, { ...timing, completed_ms: now() });
+    const failed = (code: string) => new MixedHttpError(code, status, { ...timing, completed_ms: now() }, requestId);
     const deadline = new Promise<never>((_, reject) => { rejectDeadline = reject; });
     const abort = () => { controller.abort(); rejectDeadline(failed("HTTP_ABORTED")); };
     const timer = setTimeout(() => { controller.abort(); rejectDeadline(failed("HTTP_DEADLINE")); }, timeout);
@@ -37,6 +41,8 @@ export class MixedHttpClient {
     const operation = async () => {
       if (parentSignal?.aborted) throw failed("HTTP_ABORTED");
       const headers = new Headers(init.headers);
+      headers.delete("X-Workbench-Benchmark-Id");
+      if (requestId) headers.set("X-Workbench-Benchmark-Id", requestId);
       if (this.cookie) headers.set("Cookie", this.cookie);
       if (this.binding) headers.set("X-Workbench-Session-Binding", this.binding);
       if (init.method && init.method !== "GET") headers.set("Origin", this.origin);
@@ -65,7 +71,7 @@ export class MixedHttpClient {
         catch { throw failed("HTTP_INVALID_JSON"); }
       }
       if (controller.signal.aborted || parentSignal?.aborted || now() - timing.started_ms >= timeout) throw failed("HTTP_DEADLINE");
-      return { status, json, headers: response.headers, timing: { ...timing }, bytes: size };
+      return { status, json, headers: response.headers, timing: { ...timing }, bytes: size, requestId };
     };
     try { return await Promise.race([operation(), deadline]); }
     finally { clearTimeout(timer); parentSignal?.removeEventListener("abort", abort); }
@@ -161,12 +167,16 @@ export async function startMixedRuntime(input: { root: string; filename: string;
   const password = randomBytes(24).toString("base64url"), salt = randomBytes(16), hash = scryptSync(password, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
   const base = { PATH: process.env.PATH, HOME: input.dataDir, TMPDIR: process.env.TMPDIR, TZ: "UTC", WORKBENCH_DB_PATH: input.filename,
     WORKBENCH_DATA_DIR: input.dataDir, WORKBENCH_MODE: "ledger", WORKBENCH_RELEASE_SHA256: input.releaseHash };
-  const client = new MixedHttpClient(`http://127.0.0.1:${port}`), processes: OwnedProcess[] = [];
+  const traceDirectory = path.join(input.dataDir, "benchmark-server-trace");
+  mkdirSync(traceDirectory, { mode: 0o700 });
+  const trace = { path: path.join(traceDirectory, "server.jsonl"), runId: randomBytes(16).toString("hex") };
+  const client = new MixedHttpClient(`http://127.0.0.1:${port}`, undefined, trace.runId), processes: OwnedProcess[] = [];
   const stop = async () => { const errors: Error[] = []; for (const child of [...processes].reverse()) { try { await child.stop(); } catch (error) { errors.push(error as Error); } } if (errors.length) throw new AggregateError(errors, "MIXED_PROCESS_CLEANUP_FAILED"); };
   try {
-    const web = spawnOwned(process.execPath, ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], path.join(input.root, "web"), {
+    const web = spawnOwned(process.execPath, ["--import", path.join(input.root, "web/scripts/workbench-server-trace.mjs"), "node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], path.join(input.root, "web"), {
       ...base, NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", DB_PATH: path.join(input.dataDir, "legacy-must-not-exist.db"),
       WORKBENCH_ORIGIN: client.origin, WORKBENCH_PASSWORD_HASH: `scrypt$32768$8$1$${salt.toString("base64url")}$${hash.toString("base64url")}`, WORKBENCH_SESSION_SECRET: randomBytes(48).toString("base64url"),
+      WORKBENCH_SERVER_TRACE_PATH: trace.path, WORKBENCH_SERVER_TRACE_RUN_ID: trace.runId,
     }); processes.push(web);
     const until = performance.now() + 30000; let ready = false;
     while (performance.now() < until) {
@@ -178,6 +188,6 @@ export async function startMixedRuntime(input: { root: string; filename: string;
     for (let index = 0; index < input.coreCount; index++) processes.push(spawnOwned(input.python,
       ["-m", "worker.orchestration", "--db", input.filename, "--role", "core", "--poll-seconds", String(input.pollSeconds)], input.root,
       { ...base, NODE_ENV: "production", PYTHONUNBUFFERED: "1", PYTHONDONTWRITEBYTECODE: "1", WORKBENCH_CSV_TRANSACTION_TIMING: "1" }, { graceMs: 15000, requireCleanExit: true }));
-    return { client, processes, stop, port, buildId: readFileSync(path.join(input.root, "web/.next/BUILD_ID"), "utf8").trim() };
+    return { client, processes, stop, port, trace, buildId: readFileSync(path.join(input.root, "web/.next/BUILD_ID"), "utf8").trim() };
   } catch (error) { await stop(); throw error; }
 }

@@ -1,6 +1,6 @@
 # ETF workbench implementation and release tracker
 
-Updated: 2026-09-25. This is a progress record, not an acceptance certificate.
+Updated: 2026-09-29. This is a progress record, not an acceptance certificate.
 
 ## Objective and authority
 
@@ -26,6 +26,28 @@ approval risk checks. See [mixed-workload verification](mixed-workload-verificat
 It uses normal continuous core workers and an independent read-only Python
 oracle; synthetic prerequisite gate records are not genuine gate verification.
 Small successful smoke runs do not satisfy the formal load or release gates.
+
+The 2026-09-29 increment adds bounded full-size fixture setup, strict benchmark-only
+server HTTP timing, independent rendered-response checks, scheduled background
+cycles and a manual resource-constrained pilot workflow. The full-size local
+diagnostic **failed** under its fixed 250 ms arrival schedule: ledger GET
+954/1,000, governance GET 953/1,000, record fact 797/1,000 and approval
+634/1,000 successes. Queue overflow/deadline, two HTTP 503s and one client
+transport failure remain; the three database oracles passed. See the retained
+failure and caveats in [mixed-workload verification](mixed-workload-verification.md).
+No Linux resource pilot, formal performance pass or production cutover has occurred.
+
+Current local regression after the diagnostic-report fix: Python **666/666**,
+Web **960/960**, Node **247 pass / 1 opt-in lifecycle skip**, authenticated
+workbench HTTP **103/103**, auth HTTP, typecheck, production build, shellcheck
+and dependency audit passed. The new 20-per-class real-HTTP smoke passed with
+all three oracles and 180/180 paired server traces; its `performance_gate` is
+false. Logs and retained synthetic reports are under
+`artifacts/verification/mixed-workload-v28/` and are not public release
+certificates. The latest previously pushed exact-SHA CI remains
+`f9b3fef02b251254bad0ef479fc5594436d5f480` / run
+`36089157117` (test and containers passed); it does **not** cover this later
+increment.
 
 The current v24 increment adds an attachment-audit index, reduces repeated CSV
 evidence reads and instruments fixed-worker transaction API boundaries. The v23

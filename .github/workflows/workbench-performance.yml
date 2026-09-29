@@ -1,0 +1,89 @@
+name: workbench-performance-pilot-manual
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Exact reviewed 40-character mainline commit
+        required: true
+        type: string
+      profile:
+        description: Synthetic correctness/resource pilot, never SLA or release approval
+        required: true
+        type: choice
+        default: small
+        options: [small, full]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workbench-performance-pilot
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      commit_sha: ${{ steps.commit.outputs.commit_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: commit
+        name: Validate exact mainline commit and fixed profile
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          set -euo pipefail
+          [[ "$COMMIT_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$PROFILE" == small || "$PROFILE" == full ]]
+          git cat-file -e "$COMMIT_SHA^{commit}"
+          git merge-base --is-ancestor "$COMMIT_SHA" origin/main
+          printf 'commit_sha=%s\n' "$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+  pilot:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install locked dependencies and build exact production source
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/performance-venv"
+          "$RUNNER_TEMP/performance-venv/bin/python" -m pip install -r requirements-workbench.txt
+          npm --prefix web ci --no-audit --no-fund
+          npm --prefix web run build:evaluation-worker
+          npm --prefix web run build:csv-worker
+          npm --prefix web run build:verification-worker
+          npm --prefix web run build
+      - name: Run one bounded nonroot resource pilot
+        env:
+          COMMIT_SHA: ${{ needs.validate.outputs.commit_sha }}
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$COMMIT_SHA" ]]
+          sudo /usr/bin/python3 scripts/performance/pilot.py \
+            --profile "$PROFILE" --commit "$COMMIT_SHA" \
+            --node "$(command -v node)" --python "$RUNNER_TEMP/performance-venv/bin/python"
+      - name: Retain only allowlisted synthetic pilot evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workbench-performance-pilot-${{ inputs.profile }}-${{ needs.validate.outputs.commit_sha }}
+          path: artifacts/verification/performance-pilot/
+          if-no-files-found: warn
+          retention-days: 14

@@ -220,6 +220,7 @@ def _records(connection, fixture, records):
         command, receipt = entry["command"], entry["receipt"]
         require(command["portfolio_id"] == target["portfolio_id"] and command["fact"] == {"type": "deposit", "account_id": target["account_id"], "currency": "CNY", "amount": "1"}, "SMALL_FACT_SCOPE_INVALID")
         require(command["source_id"] == "synthetic-mixed-small" and command["idempotency_key"].startswith("mixed-small:") and command["source_event_id"] == command["idempotency_key"], "SMALL_FACT_IDENTITY_INVALID")
+        require(command["idempotency_key"] not in keys and command["source_event_id"] not in occurrences and receipt["event_id"] not in ids, "RECORD_DUPLICATE_INPUT")
         semantic = {key: value for key, value in command.items() if key not in ("expected_revision", "idempotency_key")}
         digest = content_hash(semantic)
         event = one(connection, "SELECT * FROM ledger_events WHERE portfolio_id=? AND idempotency_key=?", (target["portfolio_id"], command["idempotency_key"]), "RECORD_IDEMPOTENCY_NOT_UNIQUE")
@@ -234,7 +235,7 @@ def _records(connection, fixture, records):
         require(postings == [{"account_id": target["account_id"], "currency": "CNY", "ledger_account": name, "amount": amount} for name, amount in (("cash_settled", "1"), ("external_capital", "-1"))], "RECORD_POSTINGS_MISMATCH")
         ids.add(event["id"]); keys.add(command["idempotency_key"]); occurrences.add(command["source_event_id"])
     actual = rows(connection, "SELECT id FROM ledger_events WHERE portfolio_id=? AND source_id='synthetic-mixed-small'", (target["portfolio_id"],))
-    require({row["id"] for row in actual} == ids and len(ids) == len(keys) == len(occurrences), "RECORD_COVERAGE_MISMATCH")
+    require({row["id"] for row in actual} == ids and len(records) == len(ids) == len(keys) == len(occurrences), "RECORD_COVERAGE_MISMATCH")
     return len(ids)
 
 
@@ -254,6 +255,7 @@ def _audit_result(connection, action, result_id, portfolio):
 
 def _approvals(connection, fixture, approvals):
     target, seen = fixture["ids"]["approval"], set()
+    event_ids, reservation_ids = set(), set()
     for entry in approvals:
         exact(entry, ("proposal_id", "approval_id", "cancel_id"), "APPROVAL_INPUT_INVALID")
         require(entry["proposal_id"] not in seen, "APPROVAL_DUPLICATE_INPUT")
@@ -273,6 +275,8 @@ def _approvals(connection, fixture, approvals):
         reservation = one(connection, "SELECT * FROM reservations WHERE approval_id=?", (approval["id"],), "RESERVATION_MISSING")
         require(all(reservation[key] == target[key] for key in ("portfolio_id", "account_id", "listing_id")) and reservation["proposal_item_id"] == item["id"]
                 and reservation["status"] == "released" and number(reservation["amount"]) == number(reservation["quantity"]) == 0 and reservation["row_version"] == 1, "RESERVATION_RELEASE_MISMATCH")
+        event_ids.update((approval["id"], cancel["id"]))
+        reservation_ids.add(reservation["id"])
         released = strict_json(cancel["payload_json"])["released"]
         require(released == [{"id": reservation["id"], "amount": "10000", "quantity": "100"}], "RESERVATION_ORIGINAL_BUDGET_MISMATCH")
         accepted = _audit_result(connection, "approve_proposal", approval["id"], target["portfolio_id"])["result"]
@@ -280,8 +284,10 @@ def _approvals(connection, fixture, approvals):
         require(len(accepted["reservations"]) == 1 and accepted["reservations"][0]["id"] == reservation["id"] and number(accepted["reservations"][0]["amount"]) == 10000, "APPROVAL_RESERVATION_AUDIT_MISMATCH")
         cancelled = _audit_result(connection, "cancel_remainder", cancel["id"], target["portfolio_id"])["result"]
         require(cancelled["released"] == 1 and cancelled["facts_changed"] is False and cancelled["ledger_revision"] == fixture["revisions"]["approval"], "CANCEL_AUDIT_RESULT_MISMATCH")
-    actual = rows(connection, "SELECT id FROM proposals WHERE portfolio_id=?", (target["portfolio_id"],))
+    actual = rows(connection, "SELECT id FROM proposals")
     require({row["id"] for row in actual} == seen, "APPROVAL_COVERAGE_MISMATCH")
+    require({row[0] for row in connection.execute("SELECT id FROM approval_events")} == event_ids, "APPROVAL_EVENT_COVERAGE_MISMATCH")
+    require({row[0] for row in connection.execute("SELECT id FROM reservations")} == reservation_ids, "RESERVATION_COVERAGE_MISMATCH")
     require(not connection.execute("SELECT 1 FROM execution_reports WHERE portfolio_id=?", (target["portfolio_id"],)).fetchone(), "UNEXPECTED_EXECUTION_REPORT")
     return len(seen)
 
@@ -396,7 +402,8 @@ def verify(connection, expected):
     dataset = {table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                for table in ("accounts", "listings", "ledger_events", "market_observations")}
     require(dataset["listings"] == fixture["counts"]["listings"], "FIXTURE_LISTING_COUNT_MISMATCH")
-    padding = connection.execute("SELECT COUNT(*) FROM market_observations WHERE source_id='synthetic-mixed-padding' AND provenance='reconstructed'").fetchone()[0]
+    # Every padding row shares one source; its non-covering index causes random table reads at full scale.
+    padding = connection.execute("SELECT COUNT(*) FROM market_observations NOT INDEXED WHERE source_id='synthetic-mixed-padding' AND provenance='reconstructed'").fetchone()[0]
     require(padding == fixture["counts"]["market_observations"] and fixture["expected"]["padding_is_valuation_evidence"] is False, "MARKET_PADDING_SCOPE_MISMATCH")
     return {"schema_version": "workbench-mixed-oracle-result-v1", "status": "passed", "phase": phase,
             "scope": "synthetic_mixed_correctness_only", "baseline": baseline, "current": current,
