@@ -145,6 +145,18 @@ published valuation inputs, and true process-cold, representative market-data
 and lock-wait evidence are still separate outstanding work. A passing pilot does
 not complete the failure-injection or independent-host recovery requirements.
 
+The first exact-SHA manual `small` run on 2026-09-29
+([GitHub run 36543916488](https://github.com/tripplemay/ai-downstream-observatory/actions/runs/36543916488))
+**failed before workload dispatch**. It recorded one live four-CPU/eight-GiB,
+zero-swap cgroup sample and a settled child exit, but no resource preflight or
+HTTP report. The original artifact reports `RESOURCE_PREFLIGHT_MISSING` without
+the child exception; it cannot establish whether storage, affinity, runtime
+binding or another prerequisite failed. The subsequent pilot code writes a
+private, bounded, structured child failure code and validates it before adding
+it to the supervisor report. A new run is required to identify and resolve the
+underlying prerequisite; neither this failed pilot nor its instrumentation
+change is a resource or performance pass.
+
 ### 2026-09-29 local full-size diagnostic (failed)
 
 `artifacts/verification/mixed-workload-v28/full-local-2/report.json` is a retained

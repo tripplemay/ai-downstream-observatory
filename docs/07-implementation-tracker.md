@@ -35,7 +35,10 @@ diagnostic **failed** under its fixed 250 ms arrival schedule: ledger GET
 634/1,000 successes. Queue overflow/deadline, two HTTP 503s and one client
 transport failure remain; the three database oracles passed. See the retained
 failure and caveats in [mixed-workload verification](mixed-workload-verification.md).
-No Linux resource pilot, formal performance pass or production cutover has occurred.
+The first manual Linux `small` pilot failed before workload dispatch, with
+`RESOURCE_PREFLIGHT_MISSING`; the child cause was not retained and diagnostic
+capture now requires a new exact-SHA run. No successful Linux resource pilot,
+formal performance pass or production cutover has occurred.
 
 Current local regression after the diagnostic-report fix: Python **666/666**,
 Web **960/960**, Node **247 pass / 1 opt-in lifecycle skip**, authenticated

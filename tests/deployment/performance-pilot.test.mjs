@@ -185,6 +185,69 @@ assert 'shutil.rmtree' not in source
 assert 'performance_gate": True' not in source
 `));
 
+test('failed pilot child leaves a private bounded preflight diagnostic without leaking arbitrary exception text', () => python(`
+with tempfile.TemporaryDirectory() as temporary:
+    argv=['pilot.py','--child','--profile','small','--commit','a'*40,'--node','/unused/node',
+        '--python','/unused/python','--unit','unit','--cpus','0,1,2,3','--scratch',temporary]
+    with patch.object(p.sys,'argv',argv), patch.object(p,'child',side_effect=ValueError('LOCAL_BLOCK_DEVICE_REQUIRED')):
+        assert p.main() == 1
+    diagnostic=Path(temporary)/'child-failure.json'
+    assert diagnostic.stat().st_mode & 0o777 == 0o600
+    assert json.loads(diagnostic.read_text()) == {'schema_version':'workbench-pilot-child-failure-v1','error':'LOCAL_BLOCK_DEVICE_REQUIRED'}
+    diagnostic.unlink()
+    with patch.object(p.sys,'argv',argv), patch.object(p,'child',side_effect=ValueError('secret=value')):
+        assert p.main() == 1
+    assert json.loads(diagnostic.read_text())['error'] == 'CHILD_FAILURE_UNCLASSIFIED'
+`));
+
+test('supervisor accepts only a private structured child diagnostic', () => python(`
+with tempfile.TemporaryDirectory() as temporary:
+    file=Path(temporary)/'child-failure.json'
+    p.write_json(file,{'schema_version':'workbench-pilot-child-failure-v1','error':'LOCAL_BLOCK_DEVICE_REQUIRED'})
+    assert p.read_child_failure(file)['error'] == 'LOCAL_BLOCK_DEVICE_REQUIRED'
+    file.write_text('secret=value')
+    rejected(lambda: p.read_child_failure(file), 'CHILD_DIAGNOSTIC_INVALID')
+    file.unlink()
+    outside=Path(temporary)/'outside'; outside.write_text('{}')
+    file.symlink_to(outside)
+    rejected(lambda: p.read_child_failure(file), 'CHILD_DIAGNOSTIC_INVALID')
+`));
+
+test('failed Linux preflight reports the child code without turning missing evidence into success', () => python(String.raw`
+with tempfile.TemporaryDirectory() as temporary:
+    root=Path(temporary); cgroup=root/'cgroups'; cgroup.mkdir()
+    executable=root/'executable'; executable.write_text('synthetic'); executable.chmod(0o700)
+    args=SimpleNamespace(profile='small',commit='a'*40,node=str(executable),python=str(executable))
+    process={}
+    def fake_run(command, timeout=10):
+        if command[0] == 'git':
+            return 'a'*40 if command[-1] == 'HEAD' else 'b'*40 if command[-1] == 'HEAD^{tree}' else ''
+        if command[0] == 'systemd-run':
+            scratch=Path(command[command.index('--scratch')+1]); unit=command[command.index('--unit')+1]
+            directory=cgroup/'system.slice'/(unit+'.service'); directory.mkdir(parents=True)
+            (directory/'cgroup.events').write_text('populated 0')
+            p.write_json(scratch/'child-failure.json',{'schema_version':'workbench-pilot-child-failure-v1','error':'LOCAL_BLOCK_DEVICE_REQUIRED'})
+            process.update(scratch=scratch,unit=unit,directory=directory)
+            return ''
+        raise AssertionError(command)
+    def fake_state(unit):
+        return {'ActiveState':'failed','SubState':'failed','Result':'exit-code','ExecMainCode':'1','ExecMainStatus':'1',
+            'ControlGroup':'/system.slice/'+unit+'.service'}
+    with patch.object(p,'ROOT',root), patch.object(p,'CGROUP_ROOT',cgroup), patch.object(p.sys,'platform','linux'), \
+        patch.object(p.os,'geteuid',return_value=0), patch.object(p.os,'chown'), \
+        patch.object(p.os,'sched_getaffinity',return_value={0,1,2,3},create=True), \
+        patch.object(p.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=1001,pw_gid=1001,pw_name='runner')), \
+        patch.object(p,'run',side_effect=fake_run), patch.object(p,'unit_properties',side_effect=fake_state), \
+        patch.object(p,'sample',return_value={'memory_events':{'oom_kill':0}}), patch.object(p,'stop_unit',return_value=True):
+        assert p.supervisor(args) == 1
+    reports=list(root.glob('artifacts/verification/performance-pilot/*/pilot-result.json'))
+    assert len(reports) == 1
+    report=json.loads(reports[0].read_text())
+    assert report['status'] == 'FAILED' and report['errors'] == ['RESOURCE_PREFLIGHT_MISSING']
+    assert report['child_failure']['error'] == 'LOCAL_BLOCK_DEVICE_REQUIRED'
+    assert report['sample_count'] == 1 and report['synthetic_evidence'] == []
+`));
+
 for (const succeeds of [true, false]) test(`mocked unit ${succeeds ? 'success requires final sample and exact source binding' : 'normal business failure preserves verified backup without claiming success'}`, () => python(String.raw`
 succeeds = ${succeeds ? 'True' : 'False'}
 with tempfile.TemporaryDirectory() as temporary:

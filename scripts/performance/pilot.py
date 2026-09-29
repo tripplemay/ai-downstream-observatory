@@ -53,6 +53,27 @@ def write_json(path, value):
     path.chmod(0o600)
 
 
+def child_error_code(error):
+    value = str(error) if isinstance(error, ValueError) else type(error).__name__
+    return value if re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}(?::[A-Za-z0-9_.-]{1,64})?", value) else "CHILD_FAILURE_UNCLASSIFIED"
+
+
+def read_child_failure(path):
+    if not path.exists():
+        return None
+    require(path.is_file() and not path.is_symlink() and path.stat().st_size <= 1024
+            and path.stat().st_mode & 0o777 == 0o600, "CHILD_DIAGNOSTIC_INVALID")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        raise ValueError("CHILD_DIAGNOSTIC_INVALID") from None
+    require(isinstance(value, dict) and set(value) == {"schema_version", "error"}
+            and value["schema_version"] == "workbench-pilot-child-failure-v1"
+            and isinstance(value["error"], str) and child_error_code(ValueError(value["error"])) == value["error"],
+            "CHILD_DIAGNOSTIC_INVALID")
+    return value
+
+
 def file_hash(path):
     digest = sha256()
     with path.open("rb") as stream:
@@ -384,6 +405,12 @@ def supervisor(args):
                 report["group_empty_after_forced_stop"] = False
     finally:
         try:
+            failure = read_child_failure(scratch / "child-failure.json")
+            if failure is not None:
+                report["child_failure"] = failure
+        except Exception:
+            report["errors"].append("CHILD_DIAGNOSTIC_INVALID")
+        try:
             include_database = report.get("retained_backup_verified") is True and not report["unknown_writer_outcome"]
             report["synthetic_evidence"] = safe_collect(scratch / "evidence", output / "synthetic", include_database)
             for name in ("harness-stdout.log", "harness-stderr.log", "resource-preflight.json", "child-result.json"):
@@ -418,7 +445,14 @@ def main():
     try:
         return child(args) if args.child else supervisor(args)
     except Exception as error:
-        print(json.dumps({"status": "FAILED", "error": str(error) if isinstance(error, ValueError) else type(error).__name__, "performance_gate": False}))
+        if args.child and args.scratch:
+            try:
+                scratch = Path(args.scratch)
+                if scratch.is_absolute() and scratch.is_dir() and not scratch.is_symlink() and scratch.stat().st_uid == os.geteuid():
+                    write_json(scratch / "child-failure.json", {"schema_version": "workbench-pilot-child-failure-v1", "error": child_error_code(error)})
+            except (OSError, ValueError):
+                pass
+        print(json.dumps({"status": "FAILED", "error": child_error_code(error) if args.child else str(error) if isinstance(error, ValueError) else type(error).__name__, "performance_gate": False}))
         return 1
 
 
