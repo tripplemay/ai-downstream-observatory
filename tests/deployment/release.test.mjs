@@ -232,7 +232,19 @@ test('release workflow remains manual and failure path cannot restore over actua
   assert.match(workflow, /workflow_dispatch:/); assert.doesNotMatch(workflow, /^  (push|pull_request):/m);
   assert.match(workflow, /environment: production/); assert.match(workflow, /cancel-in-progress: false/);
   const ci = readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8');
-  assert.ok(ci.indexOf('run: npm ci') < ci.indexOf('run: python -m unittest'));
+  assert.ok(ci.indexOf('run: npm ci') < ci.indexOf('run: python scripts/ci_python_tests.py'));
+  assert.match(ci, /shard: \[0, 1, 2, 3, 4, 5, 6, 7\]/);
+  assert.match(ci, /ci_python_tests\.py --shard \$\{\{ matrix\.shard \}\} --shards 8/);
+  assert.match(ci, /fail-fast: false/);
+  assert.doesNotMatch(ci, /continue-on-error:/);
+  const jobs = ci.slice(ci.indexOf('\njobs:\n')).split(/(?=^  [a-z]+:\n)/m);
+  for (const name of ['python', 'web', 'fixtures', 'http']) {
+    const job = jobs.find(value => value.startsWith(`  ${name}:\n`));
+    assert.ok(job, name);
+    assert.match(job, /ref: \$\{\{ inputs\.release_sha \|\| github\.sha \}\}/);
+    assert.ok(job.indexOf('run: npm ci') < job.indexOf('run: pip install -r requirements-workbench.txt'), name);
+    assert.match(job, /pip install --no-deps --require-hashes -r requirements-market-longport\.txt/);
+  }
   const deploy = readFileSync(join(root, 'scripts/deploy-workbench.sh'), 'utf8');
   assert.match(deploy, /RESTORE_PENDING_REVIEW/); assert.doesNotMatch(deploy, /git reset|docker compose down|cp .*etf-workbench\.db/);
   assert.match(deploy, /^compose config --no-env-resolution --quiet$/m);
