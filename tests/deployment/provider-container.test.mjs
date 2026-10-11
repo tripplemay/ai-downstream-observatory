@@ -96,7 +96,9 @@ test('actual role, cross-connection mutex and child kernel deadline regression r
   const result = spawnSync(python, ['-m', 'unittest', 'tests.orchestration.test_provider_roles', 'tests.market.test_provider_deadline', '-v'],
     { cwd: root, env, encoding: 'utf8', timeout: 45000 });
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.match(result.stderr, /Ran 8 tests/); assert.match(result.stderr, /\nOK\s*$/);
+  assert.match(result.stderr, /Ran 9 tests/);
+  assert.match(result.stderr, /test_initial_price_jobs_share_mutex_with_both_provider_job_types[^\n]*\.\.\. ok/);
+  assert.match(result.stderr, /\nOK\s*$/);
 });
 
 test('each CLI preflight failure separately precedes database access and provider mutex spans portfolio scopes', () => {

@@ -130,6 +130,14 @@ jobs:
         run: pip install -r requirements-workbench.txt
       - name: install hash-pinned SDK for offline contract tests
         run: pip install --no-deps --require-hashes -r requirements-market-longport.txt
+      - name: build fixed cross-language publishers before HTTP checks
+        working-directory: web
+        run: |
+          npm run build:evaluation-worker
+          npm run build:csv-worker
+          npm run build:verification-worker
+          npm run build:funded-comparison
+          npm run build:ai-explanation
       - name: Web typecheck
         working-directory: web
         run: npm run typecheck

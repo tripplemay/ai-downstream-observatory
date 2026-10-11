@@ -245,6 +245,12 @@ test('release workflow remains manual and failure path cannot restore over actua
     assert.ok(job.indexOf('run: npm ci') < job.indexOf('run: pip install -r requirements-workbench.txt'), name);
     assert.match(job, /pip install --no-deps --require-hashes -r requirements-market-longport\.txt/);
   }
+  const httpJob = jobs.find(value => value.startsWith('  http:\n'));
+  const httpBuild = httpJob.indexOf('- name: Web production build');
+  for (const publisher of ['evaluation-worker', 'csv-worker', 'verification-worker', 'funded-comparison', 'ai-explanation']) {
+    const index = httpJob.indexOf(`npm run build:${publisher}`);
+    assert.ok(index >= 0 && httpBuild > index, `${publisher}: HTTP checks need their fixed publisher, not another job's files`);
+  }
   const deploy = readFileSync(join(root, 'scripts/deploy-workbench.sh'), 'utf8');
   assert.match(deploy, /RESTORE_PENDING_REVIEW/); assert.doesNotMatch(deploy, /git reset|docker compose down|cp .*etf-workbench\.db/);
   assert.match(deploy, /^compose config --no-env-resolution --quiet$/m);

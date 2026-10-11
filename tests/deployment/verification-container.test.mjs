@@ -67,7 +67,11 @@ test('container smoke performs normal TS request, dedicated real runner and inde
   assert.match(shell, /--entrypoint python verifier \/fixture-smoke\.py "\$web_verification_source"/);
   assert.match(shell, /up -d --no-build --wait --wait-timeout 90 web worker verifier/);
   const ci = read('.github/workflows/ci.yml');
-  assert.ok(ci.indexOf('run: npm run build:verification-worker') < ci.indexOf('run: python -m unittest discover'));
+  const pythonJob = ci.match(/^  python:\n[\s\S]*?(?=^  web:)/m)?.[0];
+  assert.ok(pythonJob, 'Python matrix must be present');
+  const publisherBuild = pythonJob.indexOf('run: npm run build:verification-worker');
+  const pythonTests = pythonJob.indexOf('run: python scripts/ci_python_tests.py');
+  assert.ok(publisherBuild >= 0 && pythonTests > publisherBuild, 'fixed verifier bundle must be built before every Python shard');
   assert.match(ci, /run: sudo --preserve-env=PATH bash tests\/deployment\/container-smoke\.sh/);
   const parsed = spawnSync(process.env.WORKBENCH_TEST_PYTHON || 'python3', ['-c', 'import ast,sys; ast.parse(sys.stdin.read())'],
     { input: probe, encoding: 'utf8', timeout: 10000 });
