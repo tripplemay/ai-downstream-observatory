@@ -12,4 +12,3 @@ export const investorNoticeReceiptSchema = z.object({ schema_version: z.literal(
   publication_hash: investorHash, audit_id: investorId, read_at: investorInstant, financial_state_changed: z.literal(false) }).strict();
 export type InvestorNotice = z.infer<typeof investorNoticeSchema>;
 export type InvestorInbox = z.infer<typeof investorInboxSchema>;
-
