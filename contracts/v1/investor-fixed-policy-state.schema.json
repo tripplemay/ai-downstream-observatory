@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-fixed-policy-state.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["last_review_at", "last_proposed_at", "last_funding_hash", "cash_cny_seen", "cash_repair_pending"],
+  "properties": {
+    "last_review_at": {"$ref": "#/$defs/nullableInstant"},
+    "last_proposed_at": {"$ref": "#/$defs/nullableInstant"},
+    "last_funding_hash": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/hash"}]},
+    "cash_cny_seen": {"oneOf": [{"type": "null"}, {"$ref": "investor-model-monitor-v2.schema.json#/$defs/derived"}]},
+    "cash_repair_pending": {"type": "boolean"}
+  },
+  "$defs": {
+    "nullableInstant": {"oneOf": [{"type": "null"}, {"$ref": "investor-model-monitor.schema.json#/$defs/instant"}]}
+  }
+}

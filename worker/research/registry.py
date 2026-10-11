@@ -25,7 +25,7 @@ class PreparedResearch:
 
 def implementation_manifest(evaluation_timezone="UTC"):
     files = [ROOT / "worker/research/backtest.py", ROOT / "worker/research/snapshot.py",
-             ROOT / "worker/research/rotation.py", ROOT / "worker/research/rotation_signals.py",
+             ROOT / "worker/research/rotation.py", ROOT / "worker/research/rotation_signals.py", ROOT / "worker/research/fixed_policy.py",
              ROOT / "worker/research/registry.py", ROOT / "worker/orchestration/db.py",
              ROOT / "worker/market/contracts.py", ROOT / "requirements-workbench.txt",
              *sorted((ROOT / "worker/accounting").glob("*.py")),
@@ -40,6 +40,7 @@ def implementation_manifest(evaluation_timezone="UTC"):
             raise WorkbenchError("RESEARCH_TIMEZONE_DATA_UNAVAILABLE:" + name) from exc
         timezone_hashes[name] = sha256(payload).hexdigest()
     return {"engine_version": ENGINE_VERSION, "rotation_engine_version": "monthly-rotation-rebalance-v1",
+            "fixed_policy_engine_version": "fixed-policy-rebalance-v2",
             "python_version": sys.version.split()[0], "timezone_hashes": timezone_hashes,
             "source_hashes": {str(path.relative_to(ROOT)): sha256(path.read_bytes()).hexdigest() for path in files}}
 

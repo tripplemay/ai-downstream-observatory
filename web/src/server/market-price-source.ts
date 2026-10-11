@@ -69,7 +69,7 @@ function selectedReferences(db: Database.Database, portfolio: string, input: Pri
     heads: [...mappings, ...calendars].map(row => row.head).sort((a, b) => a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : a.scope_key < b.scope_key ? -1 : a.scope_key > b.scope_key ? 1 : 0) };
   return { proof: { ...proof, binding_id: hash(proof) }, mappings };
 }
-function replayProjection(raw: unknown, mapping: MappingFacts, expectedDates: string[], input: PriceCollectRequest) {
+export function replayLongportProjection(raw: unknown, mapping: Pick<MappingFacts, "listing_id" | "provider_symbol" | "market" | "currency">, expectedDates: string[], input: Pick<PriceCollectRequest, "start_date" | "end_date">) {
   const projection = obj(raw), source = obj(projection.source), started = String(source.call_started_at), returned = String(source.call_returned_at), zone = zones[mapping.market];
   requireTrue(utc6(started) === started && utc6(returned) === returned && priceInstant(started) <= priceInstant(returned));
   const today = localDate(started, zone); requireTrue(input.end_date < today);
@@ -124,7 +124,7 @@ function verify(db: Database.Database, batchId: string, knownAt: string) {
   requireTrue(projections.length === original.mappings.length);
   let previous = started;
   const segments = original.mappings.map((reference, index) => {
-    const proof = original.proof.mappings[index], replay = replayProjection(projections[index], reference.document.facts as MappingFacts, proof.expected_dates, input);
+    const proof = original.proof.mappings[index], replay = replayLongportProjection(projections[index], reference.document.facts as MappingFacts, proof.expected_dates, input);
     requireTrue(priceInstant(previous) <= priceInstant(replay.started)); previous = replay.returned;
     return { listing_id: proof.listing_id, mapping_version_id: proof.version_id, calendar_version_id: proof.calendar_version_id, projection_sha256: replay.digest, records: replay.records };
   });

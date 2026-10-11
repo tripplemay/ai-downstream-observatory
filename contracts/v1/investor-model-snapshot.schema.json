@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-model-snapshot.schema.json",
+  "$defs": {
+    "instant": {"$ref": "investor-model-monitor.schema.json#/$defs/instant"},
+    "coverage": {"type": "object", "required": ["from", "to", "complete"], "properties": {"from": {"$ref": "#/$defs/instant"}, "to": {"$ref": "#/$defs/instant"}, "complete": {"type": "boolean"}}, "additionalProperties": false},
+    "action": {
+      "type": "object", "required": ["id", "listing_id", "kind", "effective_at", "known_at"],
+      "properties": {
+        "id": {"$ref": "common.schema.json#/$defs/id"}, "listing_id": {"$ref": "common.schema.json#/$defs/id"},
+        "kind": {"enum": ["split", "dividend_ex", "dividend_payment"]}, "effective_at": {"$ref": "#/$defs/instant"}, "known_at": {"$ref": "#/$defs/instant"},
+        "ratio": {"$ref": "common.schema.json#/$defs/decimal"}, "currency": {"enum": ["CNY", "HKD", "USD"]},
+        "net_per_unit": {"$ref": "common.schema.json#/$defs/decimal"}, "entitlement_id": {"$ref": "common.schema.json#/$defs/id"}, "ex_at": {"$ref": "#/$defs/instant"}, "tax_assumption_hash": {"$ref": "common.schema.json#/$defs/hash"}
+      }, "additionalProperties": false,
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "split"}}}, "then": {"required": ["ratio"]}},
+        {"if": {"properties": {"kind": {"const": "dividend_ex"}}}, "then": {"required": ["currency", "net_per_unit", "entitlement_id", "tax_assumption_hash"]}},
+        {"if": {"properties": {"kind": {"const": "dividend_payment"}}}, "then": {"required": ["currency", "entitlement_id", "ex_at"]}}
+      ]
+    }
+  },
+  "type": "object", "required": ["schema_version", "model_id", "source_qualification", "quotes", "fx", "corporate_action_coverage", "corporate_actions", "funding_intent", "policy", "quality_gaps"],
+  "properties": {
+    "schema_version": {"const": "investor-model-snapshot-v1"}, "model_id": {"$ref": "common.schema.json#/$defs/id"}, "source_qualification": {"const": "synthetic_test_only"},
+    "quotes": {"$ref": "investor-model-monitor.schema.json#/properties/quotes"}, "fx": {"$ref": "investor-model-monitor.schema.json#/properties/fx"},
+    "corporate_action_coverage": {"type": "object", "minProperties": 1, "properties": {"CN": {"$ref": "#/$defs/coverage"}, "HK": {"$ref": "#/$defs/coverage"}, "US": {"$ref": "#/$defs/coverage"}}, "additionalProperties": false},
+    "corporate_actions": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/action"}},
+    "funding_intent": {"$ref": "investor-model-monitor.schema.json#/properties/funding_intent"},
+    "policy": {"$ref": "investor-model-monitor.schema.json#/properties/policy"}, "quality_gaps": {"$ref": "investor-model-monitor.schema.json#/properties/quality_gaps"}
+  }, "additionalProperties": false
+}

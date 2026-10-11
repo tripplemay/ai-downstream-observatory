@@ -1,0 +1,7 @@
+{
+  "schema_version": "readonly-ai-gateway-v1",
+  "base_url": "https://your-gateway.example.com/v1",
+  "api_key": "replace-with-your-key",
+  "model": "replace-with-an-explicit-model-id",
+  "max_output_tokens": 1024
+}

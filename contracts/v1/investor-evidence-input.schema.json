@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-evidence-input.schema.json",
+  "type": "object",
+  "required": ["schema_version", "workspace_id", "source_qualification", "snapshot", "dataset_hash", "catalog_hash", "plan", "policy", "created_at", "valid_until", "live_advice_eligible"],
+  "properties": {
+    "schema_version": {"const": "investor-evidence-input-v1"},
+    "workspace_id": {"$ref": "common.schema.json#/$defs/id"},
+    "source_qualification": {"const": "owner_reviewed_reconstructed"},
+    "snapshot": {"$ref": "investor-data-snapshot.schema.json"},
+    "dataset_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "catalog_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "plan": {"$ref": "research-plan.schema.json"},
+    "policy": {"$ref": "investor-strategy-policy.schema.json"},
+    "created_at": {"$ref": "common.schema.json#/$defs/instant"},
+    "valid_until": {"$ref": "common.schema.json#/$defs/instant"},
+    "live_advice_eligible": {"const": false}
+  },
+  "additionalProperties": false
+}

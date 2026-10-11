@@ -56,7 +56,7 @@ test('provider Compose is an explicit isolated role with a separate required cre
   const directory = fixture(t), runtime = join(directory, 'runtime.env'), provider = join(directory, 'provider.env');
   writeFileSync(runtime, 'SYNTHETIC_WEB_ONLY=not-a-secret\n', { mode: 0o600 });
   writeFileSync(provider, 'SYNTHETIC_PROVIDER_ONLY=not-a-secret\n', { mode: 0o600 });
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(WORKBENCH_|COMPOSE_|LONGPORT_)/.test(key)));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(WORKBENCH_|COMPOSE_|LONGPORT_|LONGBRIDGE_)/.test(key)));
   Object.assign(env, { WORKBENCH_RUNTIME_ENV_FILE: runtime, WORKBENCH_MARKET_PROVIDER_ENV_FILE: provider,
     WORKBENCH_DATA_DIR_HOST: join(directory, 'missing-data'), WORKBENCH_RELEASE_SHA: 'synthetic-provider', WORKBENCH_HTTP_PORT: '5051' });
   const result = spawnSync('docker', ['compose', '--env-file', '/dev/null', '-p', 'synthetic-provider-config', '--profile', 'market-provider',
@@ -92,7 +92,7 @@ test('real CLI rejects unconfigured SDK credentials or a short lease before even
 });
 
 test('actual role, cross-connection mutex and child kernel deadline regression runs without provider credentials', () => {
-  const env = { ...process.env }; for (const key of Object.keys(env)) if (key.startsWith('LONGPORT_')) delete env[key];
+  const env = { ...process.env }; for (const key of Object.keys(env)) if (/^(LONGPORT|LONGBRIDGE)_/.test(key)) delete env[key];
   const result = spawnSync(python, ['-m', 'unittest', 'tests.orchestration.test_provider_roles', 'tests.market.test_provider_deadline', '-v'],
     { cwd: root, env, encoding: 'utf8', timeout: 45000 });
   assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -127,7 +127,7 @@ try:
 finally: test.doCleanups()
 print('CLI_PREFLIGHT_AND_GLOBAL_SCOPE_MUTEX_PASSED')
 `;
-  const env = { ...process.env }; for (const key of Object.keys(env)) if (key.startsWith('LONGPORT_')) delete env[key];
+  const env = { ...process.env }; for (const key of Object.keys(env)) if (/^(LONGPORT|LONGBRIDGE)_/.test(key)) delete env[key];
   const result = spawnSync(python, ['-c', code], { cwd: root, env, encoding: 'utf8', timeout: 15000 });
   assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout.trim(), 'CLI_PREFLIGHT_AND_GLOBAL_SCOPE_MUTEX_PASSED');
 });

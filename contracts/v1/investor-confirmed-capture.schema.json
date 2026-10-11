@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-confirmed-capture.schema.json",
+  "$defs": {
+    "review_ref": {"type": "object", "required": ["review_id", "review_hash", "source_id", "source_hash"], "properties": {
+      "review_id": {"$ref": "common.schema.json#/$defs/id"}, "review_hash": {"$ref": "common.schema.json#/$defs/hash"},
+      "source_id": {"$ref": "common.schema.json#/$defs/id"}, "source_hash": {"$ref": "common.schema.json#/$defs/hash"}
+    }, "additionalProperties": false},
+    "target": {"type": "object", "required": ["mapping", "session_date", "close_at", "available_at", "calendar_hash"], "properties": {
+      "mapping": {"type": "object", "required": ["listing_id", "provider_symbol", "market", "currency"], "properties": {
+        "listing_id": {"$ref": "common.schema.json#/$defs/id"}, "provider_symbol": {"type": "string", "minLength": 1, "maxLength": 80},
+        "market": {"enum": ["CN", "HK", "US"]}, "currency": {"enum": ["CNY", "HKD", "USD"]}
+      }, "additionalProperties": false},
+      "session_date": {"$ref": "common.schema.json#/$defs/date"}, "close_at": {"$ref": "common.schema.json#/$defs/instant"},
+      "available_at": {"$ref": "common.schema.json#/$defs/instant"}, "calendar_hash": {"$ref": "common.schema.json#/$defs/hash"}
+    }, "additionalProperties": false},
+    "binding": {"type": "object", "required": ["target", "reviews"], "properties": {
+      "target": {"$ref": "#/$defs/target"}, "reviews": {"type": "object", "required": ["rights", "listing", "calendar"], "properties": {
+        "rights": {"$ref": "#/$defs/review_ref"}, "listing": {"$ref": "#/$defs/review_ref"}, "calendar": {"$ref": "#/$defs/review_ref"}
+      }, "additionalProperties": false}
+    }, "additionalProperties": false},
+    "request": {"type": "object", "required": ["schema_version", "watch_id", "watch_seconds", "targets"], "properties": {
+      "schema_version": {"const": "longport-confirmed-watch-v1"}, "watch_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+      "watch_seconds": {"type": "integer", "minimum": 1, "maximum": 900},
+      "targets": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "#/$defs/target"}}
+    }, "additionalProperties": false}
+  },
+  "type": "object", "required": ["schema_version", "capture_id", "workspace_id", "watch_id", "qualification", "status", "request", "bindings", "payload_sha256", "call_started_at", "call_returned_at", "created_at", "retain_until", "publication_time_status", "confirmation_semantics", "network_bytes_preserved", "stream_continuity_verified", "live_advice_eligible"],
+  "properties": {
+    "schema_version": {"const": "investor-confirmed-capture-v1"}, "capture_id": {"$ref": "common.schema.json#/$defs/id"},
+    "workspace_id": {"$ref": "common.schema.json#/$defs/id"}, "watch_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+    "qualification": {"enum": ["isolated_official_sdk_callback", "injected_test_receiver"]}, "status": {"enum": ["complete", "partial", "no_confirmed_events"]},
+    "request": {"$ref": "#/$defs/request"}, "bindings": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "#/$defs/binding"}},
+    "payload_sha256": {"$ref": "common.schema.json#/$defs/hash"}, "call_started_at": {"$ref": "common.schema.json#/$defs/instant"}, "call_returned_at": {"$ref": "common.schema.json#/$defs/instant"},
+    "created_at": {"$ref": "common.schema.json#/$defs/instant"}, "retain_until": {"$ref": "common.schema.json#/$defs/instant"},
+    "publication_time_status": {"const": "not_supplied"}, "confirmation_semantics": {"const": "pinned_sdk_local_engine_not_exchange_signoff"},
+    "network_bytes_preserved": {"const": false}, "stream_continuity_verified": {"const": false}, "live_advice_eligible": {"const": false}
+  }, "additionalProperties": false
+}

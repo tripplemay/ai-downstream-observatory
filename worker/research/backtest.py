@@ -16,7 +16,7 @@ ENGINE_VERSION = "fixed-weight-cash-deployment-v1"
 
 
 @financial
-def run_portfolio(dataset, plan, parameters, phase):
+def run_portfolio(dataset, plan, parameters, phase, *, progress=None):
     window = plan["windows"][phase]
     start, end = instant(window["start"]), instant(window["end"])
     execution = plan["execution"]
@@ -69,6 +69,8 @@ def run_portfolio(dataset, plan, parameters, phase):
         return total, principal, fee, fx_fee, execution_price, spot
 
     for at in sorted(times):
+        if progress is not None:
+            progress()
         for action in actions.get(at, []):
             listing = action["listing_id"]
             quantity = positions.get(listing, ZERO)
@@ -212,7 +214,9 @@ def run_portfolio(dataset, plan, parameters, phase):
 
 
 @financial
-def compare_backtest(dataset, plan, parameters, phase):
+def compare_backtest(dataset, plan, parameters, phase, *, progress=None):
+    if progress is not None:
+        progress()
     validate_dataset(dataset)
     validate_plan(plan, dataset)
     validate_parameters(parameters, dataset)
@@ -226,8 +230,13 @@ def compare_backtest(dataset, plan, parameters, phase):
     if plan["schema_version"] == "research-plan-v2":
         from .rotation import run_rotation_portfolio
         runner = run_rotation_portfolio
-    strategy = runner(dataset, plan, parameters, phase)
-    baseline = runner(dataset, plan, plan["benchmark"], phase)
+    options = {"progress": progress} if progress is not None else {}
+    strategy = runner(dataset, plan, parameters, phase, **options)
+    if progress is not None:
+        progress()
+    baseline = runner(dataset, plan, plan["benchmark"], phase, **options)
+    if progress is not None:
+        progress()
     if strategy["initial_equity_cny"] != baseline["initial_equity_cny"] or strategy["contributions_cny"] != baseline["contributions_cny"]:
         raise WorkbenchError("BENCHMARK_CASHFLOW_MISMATCH")
     report = {"schema_version": "research-result-v1", "dataset_hash": content_hash(dataset), "plan_hash": content_hash(plan),

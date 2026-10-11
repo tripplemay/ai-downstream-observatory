@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "investor-initial-prices.schema.json",
+  "$ref": "#/$defs/request",
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "at": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "engine_version", "workspace_id", "model_id", "model_hash", "control_id", "reference_input_id", "reference_input_hash", "listing_id", "market", "session_date", "rights_review_id", "listing_review_id", "calendar_review_id", "binding_hash", "valid_until", "live_advice_eligible"],
+      "properties": {
+        "schema_version": {"const": "investor-initial-price-request-v1"}, "engine_version": {"const": "investor-initial-price-producer-v1"},
+        "workspace_id": {"$ref": "#/$defs/id"}, "model_id": {"$ref": "#/$defs/id"}, "model_hash": {"$ref": "#/$defs/hash"}, "control_id": {"$ref": "#/$defs/id"},
+        "reference_input_id": {"$ref": "#/$defs/id"}, "reference_input_hash": {"$ref": "#/$defs/hash"}, "listing_id": {"$ref": "#/$defs/id"},
+        "market": {"enum": ["CN", "HK", "US"]}, "session_date": {"type": "string", "format": "date"},
+        "rights_review_id": {"$ref": "#/$defs/id"}, "listing_review_id": {"$ref": "#/$defs/id"}, "calendar_review_id": {"$ref": "#/$defs/id"},
+        "binding_hash": {"$ref": "#/$defs/hash"}, "valid_until": {"$ref": "#/$defs/at"}, "live_advice_eligible": {"const": false}
+      }
+    },
+    "run": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "request_id", "request_hash", "job_id", "capture_id", "receipt_hash", "status", "reason_code", "created_at", "live_advice_eligible"],
+      "properties": {
+        "schema_version": {"const": "investor-initial-price-run-v1"}, "request_id": {"$ref": "#/$defs/id"}, "request_hash": {"$ref": "#/$defs/hash"}, "job_id": {"$ref": "#/$defs/id"},
+        "capture_id": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]}, "receipt_hash": {"anyOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+        "status": {"enum": ["collected", "already_available", "superseded", "transport_failed"]},
+        "reason_code": {"enum": ["INITIAL_PRICE_COLLECTED", "INITIAL_PRICE_ALREADY_AVAILABLE", "INITIAL_PRICE_SUPERSEDED", "INITIAL_PRICE_TRANSPORT_FAILED"]},
+        "created_at": {"$ref": "#/$defs/at"}, "live_advice_eligible": {"const": false}
+      }
+    }
+  }
+}

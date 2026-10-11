@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>ETF 工作台 v2 · 组合优先交互原型</title>
+  <style>
+    :root {
+      --ink: #152d37;
+      --muted: #5d6d73;
+      --line: #dce5e3;
+      --canvas: #f3f7f5;
+      --surface: #fff;
+      --deep: #0e514c;
+      --teal: #167a70;
+      --soft: #e8f4f0;
+      --amber: #a15a1d;
+      --amber-soft: #fff4e6;
+      --red: #a03936;
+      --red-soft: #fff0ee;
+      --shadow: 0 10px 32px rgba(19, 53, 52, .055);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; background: var(--canvas); color: var(--ink); font: 15px/1.55 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
+    button, select, input { font: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid #64b7a9; outline-offset: 3px; }
+    a { color: inherit; text-decoration: none; }
+    .shell { display: grid; grid-template-columns: 224px minmax(0, 1fr); min-height: 100vh; }
+    .rail { position: sticky; top: 0; align-self: start; height: 100vh; padding: 27px 16px; background: #f9fbfa; border-right: 1px solid var(--line); }
+    .brand { display: flex; align-items: center; gap: 11px; padding: 0 11px; font-weight: 760; font-size: 17px; letter-spacing: -.03em; }
+    .mark { display: grid; place-items: center; width: 33px; height: 33px; border-radius: 11px; color: white; background: var(--deep); font-size: 17px; }
+    .rail-label { margin: 37px 12px 9px; color: #85928f; font-size: 11px; font-weight: 750; letter-spacing: .12em; }
+    .rail nav { display: grid; gap: 5px; }
+    .rail nav a { display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 11px; color: #53646a; font-weight: 620; }
+    .rail nav a:hover, .rail nav a.active { background: #e8f2ef; color: var(--deep); }
+    .rail nav a span:first-child { width: 19px; text-align: center; font-size: 17px; }
+    .rail-note { position: absolute; bottom: 25px; left: 28px; right: 25px; color: var(--muted); font-size: 12px; }
+    main { min-width: 0; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 17px max(30px, calc((100% - 1190px) / 2)); background: rgba(255,255,255,.8); border-bottom: 1px solid var(--line); }
+    .topbar strong { font-size: 14px; }
+    .topbar .right { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+    .mode { display: inline-flex; align-items: center; gap: 7px; padding: 5px 10px; border: 1px solid #badbd1; border-radius: 99px; color: var(--deep); background: var(--soft); font-size: 12px; font-weight: 700; }
+    .mode::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--teal); }
+    .content { max-width: 1250px; margin: auto; padding: 30px 30px 70px; }
+    .demo { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid #e4cfab; border-radius: 11px; background: #fff9ee; color: #724a22; font-size: 12px; font-weight: 650; }
+    .demo strong { white-space: nowrap; }
+    .intro { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; margin: 31px 0 23px; }
+    .eyebrow { margin: 0 0 6px; color: var(--teal); font-size: 11px; font-weight: 800; letter-spacing: .14em; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin-bottom: 6px; font-size: clamp(27px, 3vw, 38px); letter-spacing: -.055em; line-height: 1.2; }
+    h2 { margin-bottom: 0; font-size: 20px; letter-spacing: -.035em; }
+    h3 { margin-bottom: 4px; font-size: 15px; }
+    .subtle { color: var(--muted); }
+    .intro p:last-child { margin: 0; }
+    .ghost, .primary, .secondary, .quiet { min-height: 39px; padding: 8px 14px; border-radius: 10px; border: 1px solid var(--line); background: white; color: var(--ink); font-weight: 700; }
+    .ghost:hover, .secondary:hover, .quiet:hover { background: #edf4f1; }
+    .primary { border-color: var(--deep); background: var(--deep); color: #fff; }
+    .primary:hover { background: #0c403c; }
+    .primary:disabled { border-color: #b6c4c0; background: #c7d2ce; cursor: not-allowed; }
+    .quiet { background: transparent; }
+    .switcher { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 18px; }
+    .switcher button { border: 1px solid var(--line); border-radius: 99px; background: #fff; color: var(--muted); padding: 7px 13px; font-size: 12px; font-weight: 700; }
+    .switcher button[aria-pressed="true"] { color: white; background: var(--deep); border-color: var(--deep); }
+    .hero { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(260px, .8fr); gap: 16px; }
+    .card { border: 1px solid var(--line); border-radius: 17px; background: var(--surface); box-shadow: var(--shadow); }
+    .hero-main { padding: 28px 29px 25px; min-height: 245px; background: linear-gradient(132deg, #103d3b 0%, #155c55 75%, #187065 100%); color: white; border-color: #1a6760; }
+    .hero-main .eyebrow { color: #b9e2d7; }
+    .hero-main h2 { font-size: clamp(25px, 3vw, 33px); }
+    .hero-main p { color: #d8eae5; max-width: 680px; margin: 11px 0 23px; }
+    .hero-main .hero-action { background: white; color: var(--deep); border: none; }
+    .hero-main .hero-action:hover { background: #e9f5ee; }
+    .hero-main[data-tone="warning"] { background: linear-gradient(135deg, #70431f, #ac6427); border-color: #b6733d; }
+    .hero-main[data-tone="blocked"] { background: linear-gradient(135deg, #773b3c, #ac5550); border-color: #b8665e; }
+    .health { padding: 21px 22px; }
+    .health header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .pill { padding: 4px 9px; border-radius: 99px; background: var(--soft); color: var(--deep); font-size: 11px; font-weight: 800; }
+    .pill.warn { background: var(--amber-soft); color: var(--amber); }
+    .pill.blocked { background: var(--red-soft); color: var(--red); }
+    .health dl { display: grid; gap: 10px; margin: 18px 0 0; }
+    .health dl div { display: flex; justify-content: space-between; gap: 14px; padding-top: 9px; border-top: 1px solid #edf1ef; font-size: 13px; }
+    .health dt { color: var(--muted); }
+    .health dd { margin: 0; text-align: right; font-weight: 750; }
+    .grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(270px, .8fr); gap: 16px; margin-top: 16px; }
+    .pad { padding: 23px 24px; }
+    .section-head { display: flex; justify-content: space-between; align-items: start; gap: 15px; margin-bottom: 18px; }
+    .section-head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .tiny-link { color: var(--teal); font-size: 12px; font-weight: 760; white-space: nowrap; }
+    .allocation { display: grid; grid-template-columns: 190px 1fr; align-items: center; gap: 24px; }
+    .donut { position: relative; display: grid; place-items: center; width: 170px; height: 170px; border-radius: 50%; background: conic-gradient(#176f67 0 35%, #60aa91 35% 60%, #a6c9a5 60% 80%, #e0c58b 80% 100%); }
+    .donut::before { content: ""; position: absolute; inset: 29px; border-radius: 50%; background: white; }
+    .donut div { z-index: 1; text-align: center; }
+    .donut strong { display: block; font-size: 19px; }
+    .donut span { display: block; color: var(--muted); font-size: 11px; }
+    .weights { display: grid; gap: 12px; }
+    .weight { display: grid; grid-template-columns: 10px 1fr auto; gap: 10px; align-items: start; font-size: 13px; }
+    .weight i { width: 9px; height: 9px; margin-top: 5px; border-radius: 3px; background: var(--color); }
+    .weight b { font-size: 15px; }
+    .weight small { display: block; color: var(--muted); }
+    .caption { margin: 15px 0 0; padding-top: 13px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    .reason-list { display: grid; gap: 11px; margin: 0; padding: 0; list-style: none; }
+    .reason-list li { display: grid; grid-template-columns: 19px 1fr; gap: 8px; font-size: 13px; }
+    .reason-list li::before { content: "✓"; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--soft); color: var(--teal); font-size: 11px; font-weight: 800; }
+    .decision { margin-top: 16px; padding: 23px 24px; }
+    .decision-top { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+    .decision-top .pill { margin-left: auto; }
+    .decision h2 { margin: 10px 0 7px; }
+    .decision p { max-width: 780px; color: var(--muted); }
+    .decision .actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 18px; }
+    .decision details { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 15px; font-size: 13px; }
+    .decision details summary { cursor: pointer; color: var(--teal); font-weight: 750; }
+    .decision details dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 0; }
+    .decision details dt { color: var(--muted); }
+    .decision details dd { margin: 3px 0 0; font-weight: 700; }
+    .lower { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+    .timeline { margin: 0; padding-left: 20px; }
+    .timeline li { margin: 0 0 14px; padding-left: 6px; font-size: 13px; }
+    .timeline li:last-child { margin-bottom: 0; }
+    .timeline time { display: block; color: var(--muted); font-size: 11px; }
+    .ai-box { border-left: 3px solid var(--teal); padding: 2px 0 2px 12px; font-size: 13px; }
+    .ai-box strong { display: block; margin-bottom: 5px; }
+    .ai-box p { margin-bottom: 0; color: var(--muted); }
+    .account-note { margin-top: 16px; padding: 18px 22px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .account-note p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+    .footer { margin-top: 23px; color: var(--muted); font-size: 11px; }
+    dialog { width: min(540px, calc(100% - 28px)); max-height: calc(100dvh - 28px); overflow: auto; border: 1px solid var(--line); border-radius: 17px; padding: 24px; box-shadow: 0 25px 80px rgba(10, 35, 37, .2); }
+    dialog::backdrop { background: rgba(17, 35, 38, .48); }
+    dialog h2 { margin-bottom: 7px; }
+    dialog p { color: var(--muted); font-size: 13px; }
+    dialog form { display: grid; gap: 13px; }
+    dialog label { display: grid; gap: 5px; font-size: 13px; font-weight: 700; }
+    dialog select, dialog input { width: 100%; padding: 9px; border: 1px solid var(--line); border-radius: 9px; background: white; }
+    dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 7px 0 0; }
+    .toast { position: fixed; bottom: 22px; left: 50%; transform: translate(-50%, 25px); opacity: 0; pointer-events: none; z-index: 5; max-width: calc(100% - 30px); padding: 10px 16px; border-radius: 10px; background: var(--ink); color: #fff; box-shadow: var(--shadow); transition: opacity .2s, transform .2s; font-size: 13px; }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    @media (max-width: 1050px) {
+      .shell { grid-template-columns: 72px minmax(0,1fr); }
+      .brand { padding: 0 4px; }
+      .brand .brand-name, .rail-label, .rail nav a .nav-name, .rail-note { display: none; }
+      .rail nav a { justify-content: center; }
+      .rail nav a span:first-child { width: auto; }
+    }
+    @media (max-width: 800px) {
+      .hero, .grid, .lower { grid-template-columns: 1fr; }
+      .intro { align-items: start; }
+      .health dl { grid-template-columns: repeat(3, 1fr); }
+      .health dl div { display: block; }
+      .health dd { text-align: left; }
+    }
+    @media (max-width: 620px) {
+      .shell { display: block; padding-bottom: 62px; }
+      .rail { position: fixed; inset: auto 0 0; z-index: 4; width: 100%; height: 62px; padding: 5px 6px; border-right: 0; border-top: 1px solid var(--line); }
+      .rail .brand, .rail-label, .rail-note { display: none; }
+      .rail nav { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; height: 100%; }
+      .rail nav a { display: grid; justify-items: center; align-content: center; gap: 0; padding: 3px; font-size: 10px; }
+      .rail nav a .nav-name { display: block; }
+      .rail nav a span:first-child { font-size: 18px; }
+      .topbar { padding: 12px 17px; }
+      .content { padding: 19px 15px 40px; }
+      .intro { display: block; margin-top: 25px; }
+      .intro .ghost { margin-top: 15px; }
+      .demo { align-items: start; }
+      .hero-main, .pad, .decision { padding: 21px; }
+      .allocation { grid-template-columns: 1fr; justify-items: center; }
+      .weights { width: 100%; }
+      .health dl { grid-template-columns: 1fr; }
+      .health dl div { display: flex; }
+      .health dd { text-align: right; }
+      .decision details dl { grid-template-columns: 1fr; }
+      .account-note { display: block; }
+      .account-note button { margin-top: 12px; }
+      .toast { bottom: 75px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail" aria-label="主导航">
+      <div class="brand"><span class="mark" aria-hidden="true">◈</span><span class="brand-name">ETF 工作台</span></div>
+      <div class="rail-label">你的投资视图</div>
+      <nav>
+        <a class="active" href="#today" aria-current="page"><span aria-hidden="true">⌂</span><span class="nav-name">总览</span></a>
+        <a href="#model"><span aria-hidden="true">◫</span><span class="nav-name">组合方案</span></a>
+        <a href="#history"><span aria-hidden="true">◎</span><span class="nav-name">观察记录</span></a>
+        <a href="#accounts"><span aria-hidden="true">▤</span><span class="nav-name">账户资料</span></a>
+      </nav>
+      <p class="rail-note">先看结论，按需展开证据。<br>你决定是否交易。</p>
+    </aside>
+    <main id="today">
+      <div class="topbar"><strong>我的 ETF 组合</strong><div class="right"><span class="mode">研究参考模式</span><span class="subtle" style="font-size:12px">未连接券商 · 不自动下单</span></div></div>
+      <div class="content">
+        <div class="demo" role="note"><strong>交互原型 / 合成数据</strong><span>所有 ETF、权重、资金变化、状态和日期均为界面示意；不连接账户、行情或投资策略，不构成真实建议。</span></div>
+        <div class="intro">
+          <div><p class="eyebrow">PORTFOLIO FIRST</p><h1>先看组合，再决定行动</h1><p class="subtle">系统持续观察。只有值得你判断的变化，才打断你。</p></div>
+          <button class="ghost" id="preferencesButton" type="button">查看 4 个研究偏好问题</button>
+        </div>
+        <div class="switcher" aria-label="原型状态切换">
+          <button type="button" data-scenario="normal" aria-pressed="true">常态：无需调整</button>
+          <button type="button" data-scenario="cash" aria-pressed="false">情景：新增资金</button>
+          <button type="button" data-scenario="stale" aria-pressed="false">情景：数据异常</button>
+        </div>
+        <div class="hero">
+          <section class="card hero-main" id="hero" data-tone="normal" aria-live="polite"><p class="eyebrow" id="heroLabel">今日结论 · 合成演示</p><h2 id="heroTitle">当前无需调整</h2><p id="heroDescription">参考权重偏离未触发既定复核条件。继续观察，不因每天有报价就每天交易。</p><button type="button" class="primary hero-action" id="heroAction">查看判断依据</button></section>
+          <section class="card health" aria-label="监测状态"><header><h2>证据状态</h2><span class="pill" id="healthPill">示例数据完整</span></header><dl><div><dt>参考方案</dt><dd>研究快照 v1</dd></div><div><dt>市场数据</dt><dd id="marketStatus">三地最近有效收盘</dd></div><div><dt>实际账户</dt><dd>未连接，不作实盘计算</dd></div><div><dt>下一次复核</dt><dd id="nextReview">各市场下次有效收盘后</dd></div></dl></section>
+        </div>
+        <div class="grid">
+          <section class="card pad" id="model"><div class="section-head"><div><h2>观察中的研究组合</h2><p>目标权重，不是实际持仓或可执行订单</p></div><span class="pill">仅合成示例</span></div><div class="allocation"><div class="donut" role="img" aria-label="合成示例目标权重：ETF A 35%，ETF B 25%，ETF C 20%，ETF D 20%"><div><strong>4 只 ETF</strong><span>示意目标</span></div></div><div class="weights"><div class="weight" style="--color:#176f67"><i></i><div><strong>ETF A · 内地宽基</strong><small>权益 / A 股 · 具体产品待核验</small></div><b>35%</b></div><div class="weight" style="--color:#60aa91"><i></i><div><strong>ETF B · 美国宽基</strong><small>权益 / 美股 · 具体产品待核验</small></div><b>25%</b></div><div class="weight" style="--color:#a6c9a5"><i></i><div><strong>ETF C · 港股宽基</strong><small>权益 / 港股 · 具体产品待核验</small></div><b>20%</b></div><div class="weight" style="--color:#e0c58b"><i></i><div><strong>ETF D · 短久期债券</strong><small>债券 / 市场与产品待核验</small></div><b>20%</b></div></div></div><p class="caption">示例权重只用于测试界面。真实方案须绑定个人约束、合格标的、费用、汇率、数据版本、策略验证和明确的研究状态。</p></section>
+          <section class="card pad"><div class="section-head"><div><h2>为什么这样观察</h2><p>策略先给规则，AI 只解释与质疑</p></div></div><ul class="reason-list"><li><span>先比较简单、可实施的配置基准，不用回测赢家直接替代投资目标。</span></li><li><span>只有目标偏离、风险或新增资金触发条件满足时才形成变化卡。</span></li><li><span>每次变化同时展示数据质量、交易成本和反对理由；证据不足就阻断。</span></li></ul><p class="caption">风险与承受损失能力未确认时，不能将研究示例升级为个人可执行建议。</p></section>
+        </div>
+        <section class="card decision" id="decision" aria-live="polite"><div class="decision-top"><span class="eyebrow" style="margin:0">需要你知道的变化</span><span class="pill" id="decisionPill">无需交易决定</span></div><h2 id="decisionTitle">本次评估：维持观察</h2><p id="decisionDescription">没有触发需要人工处理的条件。系统仍保留本次评估和下一次复核安排。</p><div class="actions"><button type="button" class="primary" id="acceptButton" hidden>采纳思路</button><button type="button" class="secondary" id="deferButton" hidden>暂缓</button><button type="button" class="quiet" id="rejectButton" hidden>不采纳</button></div><details id="evidence"><summary>展开输入、成本与反对理由</summary><dl><div><dt>数据版本</dt><dd id="evidenceData">合成快照 v1</dd></div><div><dt>可能成本</dt><dd id="evidenceCost">无拟议交易</dd></div><div><dt>反对理由 / 缺口</dt><dd id="evidenceCounter">实际账户未连接，不计算可下单数量</dd></div></dl></details></section>
+        <div class="lower" id="history"><section class="card pad"><div class="section-head"><div><h2>观察记录</h2><p>结果留痕，不只在有交易时记录</p></div></div><ol class="timeline" id="timeline"><li><time>本次合成演示</time>参考组合维持观察；无交易决定。</li><li><time>原型基线</time>研究方案已生成；未连接真实账户。</li></ol></section><section class="card pad"><div class="section-head"><div><h2>AI 解释与反证</h2><p>只能解释已核实证据，不产生交易授权</p></div></div><div class="ai-box"><strong>观察摘要</strong><p id="aiText">示例中未发现需要打破原定复核纪律的变化。最重要的未知是实际持仓、交易费用与产品资料；这些未知不能被语言模型补成事实。</p></div><p class="caption">当前真实系统尚未接入在线 AI 研究模型；此处仅展示目标交互。</p></section></div>
+        <section class="card account-note" id="accounts"><div><h3>想比较真实持仓？</h3><p>账户和流水同步是可选的下一步，不是查看研究参考组合的入场券。</p></div><button type="button" class="ghost" id="accountButton">了解账户同步边界</button></section>
+        <p class="footer">独立静态原型。点击情景只切换合成界面状态；所有决定只暂存于本页，刷新即消失。无网络请求、无真实行情、无持久化、无订单。</p>
+      </div>
+    </main>
+  </div>
+  <dialog id="preferencesDialog" aria-labelledby="dialogTitle"><h2 id="dialogTitle">4 个研究偏好问题</h2><p>正式产品会在生成方案前核对这些信息。本原型不会保存答案或据此计算权重。</p><form method="dialog" id="preferencesForm"><label>预计投资期限<select required><option value="">请选择</option><option>3 年以内</option><option>3–10 年</option><option>10 年以上</option></select></label><label>遇到阶段性亏损时的承受能力<select required><option value="">请选择</option><option>优先控制本金波动</option><option>能承受一定阶段性亏损</option><option>可承受较大波动，仍需明确上限</option></select></label><label>近期流动性需求<select required><option value="">请选择</option><option>可能需要提取</option><option>暂不计划提取</option><option>尚不确定</option></select></label><label>允许研究的市场<select required><option value="">请选择</option><option>A 股</option><option>A 股、港股</option><option>A 股、港股、美股</option></select></label><label>其他排除项（可选）<input type="text" maxlength="120" placeholder="例如不研究某类产品"></label><menu><button type="button" class="secondary" id="closeDialog">取消</button><button type="submit" class="primary">预览流程</button></menu></form></dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script>
+    const scenarios = {
+      normal: {
+        tone: "normal", label: "今日结论 · 合成演示", title: "当前无需调整", description: "参考权重偏离未触发既定复核条件。继续观察，不因每天有报价就每天交易。", action: "查看判断依据", health: "示例数据完整", healthClass: "", market: "三地最近有效收盘", next: "各市场下次有效收盘后", decisionPill: "无需交易决定", decisionTitle: "本次评估：维持观察", decisionDescription: "没有触发需要人工处理的条件。系统仍保留本次评估和下一次复核安排。", cost: "无拟议交易", counter: "实际账户未连接，不计算可下单数量", ai: "示例中未发现需要打破原定复核纪律的变化。最重要的未知是实际持仓、交易费用与产品资料；这些未知不能被语言模型补成事实。", actions: false
+      },
+      cash: {
+        tone: "warning", label: "待人工决定 · 合成演示", title: "有一笔新增资金值得复核", description: "合成示例：确认到账 10,000 元后，策略提出优先修复低配方向，而不是机械平均买入。此处仍不是账户级订单。", action: "查看变化依据", health: "需要人工核对", healthClass: "warn", market: "示例收盘有效", next: "用户决定或市场更新后", decisionPill: "需要你的判断", decisionTitle: "研究方案：考虑以新资金修复偏离", decisionDescription: "先核实到账、费用、可买权限和产品价格，再决定是否采纳这一思路。若暂缓，现金仍留在真实账户，不会被系统视为已投资。", cost: "交易费用与税务待账户核实", counter: "若市场价格变化或资金并未实际到账，本思路需作废重算", ai: "支持理由是新资金可减少不必要的卖出；反对理由是账户可买性与真实成本尚未确认。AI 不决定买入，也不推断券商已经成交。", actions: true
+      },
+      stale: {
+        tone: "blocked", label: "证据不足 · 合成演示", title: "暂停形成新建议", description: "合成示例：一个市场的有效收盘价缺失。系统只报告受影响的判断，不能拿旧价格装作今天已完成评估。", action: "查看缺口", health: "行情缺口", healthClass: "blocked", market: "一地收盘缺失", next: "数据恢复并通过校验后", decisionPill: "建议已阻断", decisionTitle: "本轮不是“无需调整”", decisionDescription: "目标偏离与交易成本不能在同一有效数据边界下核对。保留上一版研究方案，但暂停生成新的变化卡。", cost: "不可计算", counter: "缺少有效价格及对应数据发布日期", ai: "不能根据历史价格或模型记忆补造本轮结论。数据恢复后应以原定评估边界重新校验，而不是直接复用旧判断。", actions: false
+      }
+    };
+    const $ = id => document.getElementById(id);
+    let currentScenario = "normal";
+    let toastTimer;
+    function toast(message) {
+      const node = $("toast"); node.textContent = message; node.classList.add("show");
+      clearTimeout(toastTimer); toastTimer = setTimeout(() => node.classList.remove("show"), 4200);
+    }
+    function render(key) {
+      currentScenario = key;
+      const item = scenarios[key];
+      $("hero").dataset.tone = item.tone;
+      $("heroLabel").textContent = item.label;
+      $("heroTitle").textContent = item.title;
+      $("heroDescription").textContent = item.description;
+      $("heroAction").textContent = item.action;
+      $("healthPill").textContent = item.health;
+      $("healthPill").className = `pill ${item.healthClass}`.trim();
+      $("marketStatus").textContent = item.market;
+      $("nextReview").textContent = item.next;
+      $("decisionPill").textContent = item.decisionPill;
+      $("decisionPill").className = `pill ${item.healthClass}`.trim();
+      $("decisionTitle").textContent = item.decisionTitle;
+      $("decisionDescription").textContent = item.decisionDescription;
+      $("evidenceCost").textContent = item.cost;
+      $("evidenceCounter").textContent = item.counter;
+      $("aiText").textContent = item.ai;
+      for (const id of ["acceptButton", "deferButton", "rejectButton"]) $(id).hidden = !item.actions;
+      document.querySelectorAll("[data-scenario]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.scenario === key)));
+      $("evidence").open = false;
+    }
+    document.querySelectorAll("[data-scenario]").forEach(button => button.addEventListener("click", () => render(button.dataset.scenario)));
+    $("heroAction").addEventListener("click", () => { $("decision").scrollIntoView({ behavior: "smooth", block: "center" }); $("evidence").open = true; });
+    const decisionLabels = { acceptButton: "采纳思路", deferButton: "暂缓", rejectButton: "不采纳" };
+    for (const [id, label] of Object.entries(decisionLabels)) $(id).addEventListener("click", () => {
+      if (currentScenario !== "cash") return;
+      const entry = document.createElement("li");
+      const time = document.createElement("time"); time.textContent = "本页临时演示";
+      entry.append(time, document.createTextNode(`你选择了“${label}”。未生成订单或真实记录。`));
+      $("timeline").prepend(entry);
+      toast(`已在本页演示记录“${label}”；刷新后消失。`);
+    });
+    $("preferencesButton").addEventListener("click", () => $("preferencesDialog").showModal());
+    $("closeDialog").addEventListener("click", () => $("preferencesDialog").close());
+    $("preferencesForm").addEventListener("submit", event => { event.preventDefault(); $("preferencesDialog").close(); toast("原型已展示引导流程；答案未保存，也未计算真实组合。"); });
+    $("accountButton").addEventListener("click", () => toast("正式版在此提供可选的券商流水向导；原型不读取账户。"));
+  </script>
+</body>
+</html>

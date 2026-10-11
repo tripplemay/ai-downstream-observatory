@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-model-monitor.schema.json",
+  "$defs": {
+    "decimal": {"$ref": "common.schema.json#/$defs/decimal"},
+    "instant": {"type": "string", "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?Z$"},
+    "weights": {"type": "object", "minProperties": 1, "maxProperties": 20, "propertyNames": {"$ref": "common.schema.json#/$defs/id"}, "additionalProperties": {"$ref": "#/$defs/decimal"}},
+    "quote": {
+      "type": "object", "required": ["listing_id", "market", "currency", "close", "price_basis", "observed_at", "known_at", "valid_until", "expected_close_at", "calendar_hash", "observation_hash"],
+      "properties": {
+        "listing_id": {"$ref": "common.schema.json#/$defs/id"}, "market": {"enum": ["CN", "HK", "US"]}, "currency": {"enum": ["CNY", "HKD", "USD"]},
+        "close": {"$ref": "#/$defs/decimal"}, "price_basis": {"const": "unadjusted"},
+        "observed_at": {"$ref": "#/$defs/instant"}, "known_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"},
+        "expected_close_at": {"$ref": "#/$defs/instant"}, "calendar_hash": {"$ref": "common.schema.json#/$defs/hash"}, "observation_hash": {"$ref": "common.schema.json#/$defs/hash"}
+      }, "additionalProperties": false
+    },
+    "fx": {
+      "type": "object", "required": ["currency", "value", "unit", "observed_at", "known_at", "valid_until", "observation_hash"],
+      "properties": {"currency": {"enum": ["HKD", "USD"]}, "value": {"$ref": "#/$defs/decimal"}, "unit": {"const": "CNY_per_unit_currency"},
+        "observed_at": {"$ref": "#/$defs/instant"}, "known_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"}, "observation_hash": {"$ref": "common.schema.json#/$defs/hash"}
+      }, "additionalProperties": false
+    }
+  },
+  "type": "object", "required": ["schema_version", "profile_id", "profile_version", "profile_hash", "model_id", "model_state_hash", "before_plan_hash", "after_plan_hash", "before_weights", "after_weights", "quantities", "cash_cny", "quotes", "fx", "funding_intent", "policy", "quality_gaps"],
+  "properties": {
+    "schema_version": {"const": "investor-model-monitor-v1"},
+    "profile_id": {"$ref": "common.schema.json#/$defs/id"}, "profile_version": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "profile_hash": {"$ref": "common.schema.json#/$defs/hash"}, "model_id": {"$ref": "common.schema.json#/$defs/id"},
+    "model_state_hash": {"$ref": "common.schema.json#/$defs/hash"}, "before_plan_hash": {"$ref": "common.schema.json#/$defs/hash"}, "after_plan_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "before_weights": {"$ref": "#/$defs/weights"}, "after_weights": {"$ref": "#/$defs/weights"}, "quantities": {"$ref": "#/$defs/weights"},
+    "cash_cny": {"$ref": "#/$defs/decimal"}, "quotes": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"$ref": "#/$defs/quote"}},
+    "fx": {"type": "array", "maxItems": 2, "items": {"$ref": "#/$defs/fx"}},
+    "funding_intent": {"oneOf": [{"type": "null"}, {"type": "object", "required": ["id", "amount_cny", "expected_at"], "properties": {
+      "id": {"$ref": "common.schema.json#/$defs/id"}, "amount_cny": {"$ref": "#/$defs/decimal"}, "expected_at": {"$ref": "#/$defs/instant"}
+    }, "additionalProperties": false}]},
+    "policy": {"type": "object", "required": ["version", "weight_band", "absolute_band_cny", "max_fx_age_seconds", "costs"], "properties": {
+      "version": {"$ref": "common.schema.json#/$defs/id"}, "weight_band": {"$ref": "#/$defs/decimal"}, "absolute_band_cny": {"$ref": "#/$defs/decimal"},
+      "max_fx_age_seconds": {"type": "integer", "minimum": 1, "maximum": 604800},
+      "costs": {"oneOf": [{"type": "null"}, {"type": "object", "required": ["commission_bps", "minimum_fee_cny", "fx_bps", "slippage_bps", "maximum_cost_fraction", "assumption_hash"], "properties": {
+        "commission_bps": {"$ref": "#/$defs/decimal"}, "minimum_fee_cny": {"$ref": "#/$defs/decimal"}, "fx_bps": {"$ref": "#/$defs/decimal"},
+        "slippage_bps": {"$ref": "#/$defs/decimal"}, "maximum_cost_fraction": {"$ref": "#/$defs/decimal"}, "assumption_hash": {"$ref": "common.schema.json#/$defs/hash"}
+      }, "additionalProperties": false}]}
+    }, "additionalProperties": false},
+    "quality_gaps": {"type": "array", "maxItems": 20, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,79}$"}}
+  }, "additionalProperties": false
+}

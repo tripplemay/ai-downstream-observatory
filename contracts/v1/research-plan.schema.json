@@ -33,7 +33,7 @@
       }},
       "else": {"properties": {
         "parameter_candidates": {"type": "array", "items": {"type": "object", "required": ["schema_version"]}},
-        "benchmark": {"type": "object", "required": ["schema_version"], "properties": {"schema_version": {"const": "research-fixed-rebalance-parameters-v1"}}},
+        "benchmark": {"type": "object", "required": ["schema_version"], "properties": {"schema_version": {"enum": ["research-fixed-rebalance-parameters-v1", "research-fixed-rebalance-parameters-v2"]}}},
         "execution": {"type": "object", "required": ["sale_proceeds"], "properties": {"settlement_model": {"const": "explicit_market_calendar"}}}
       }}
     }

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-strategy-result.schema.json",
+  "$defs": {
+    "decimal": {"type": "string", "maxLength": 200, "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,120})?$"},
+    "nullableDecimal": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/decimal"}]},
+    "weights": {"type": "object", "minProperties": 1, "maxProperties": 20, "propertyNames": {"$ref": "common.schema.json#/$defs/id"}, "additionalProperties": {"$ref": "common.schema.json#/$defs/decimal"}},
+    "summary": {
+      "type": "object",
+      "required": ["phase", "result_hash", "window", "twr", "annualized_unit_return", "max_drawdown", "profit_cny", "fees_cny", "fx_fees_cny", "slippage_cny", "execution_failure_count", "sell_turnover_on_mean_observed_nav", "buy_turnover_on_mean_observed_nav", "benchmark_twr", "benchmark_annualized_unit_return", "benchmark_max_drawdown", "benchmark_execution_failure_count", "benchmark_profit_cny", "benchmark_fees_cny", "benchmark_fx_fees_cny", "benchmark_slippage_cny", "excess_twr", "assumptions"],
+      "properties": {
+        "phase": {"enum": ["train", "validation", "holdout"]}, "result_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "window": {"type": "object", "required": ["start", "end"], "properties": {"start": {"$ref": "common.schema.json#/$defs/instant"}, "end": {"$ref": "common.schema.json#/$defs/instant"}}, "additionalProperties": false},
+        "twr": {"$ref": "#/$defs/nullableDecimal"}, "annualized_unit_return": {"$ref": "#/$defs/nullableDecimal"}, "max_drawdown": {"$ref": "#/$defs/nullableDecimal"},
+        "profit_cny": {"$ref": "#/$defs/decimal"}, "fees_cny": {"$ref": "#/$defs/decimal"}, "fx_fees_cny": {"$ref": "#/$defs/decimal"}, "slippage_cny": {"$ref": "#/$defs/decimal"},
+        "execution_failure_count": {"type": "integer", "minimum": 0},
+        "sell_turnover_on_mean_observed_nav": {"$ref": "#/$defs/nullableDecimal"}, "buy_turnover_on_mean_observed_nav": {"$ref": "#/$defs/nullableDecimal"},
+        "benchmark_twr": {"$ref": "#/$defs/nullableDecimal"}, "excess_twr": {"$ref": "#/$defs/nullableDecimal"},
+        "benchmark_annualized_unit_return": {"$ref": "#/$defs/nullableDecimal"}, "benchmark_max_drawdown": {"$ref": "#/$defs/nullableDecimal"}, "benchmark_execution_failure_count": {"type": "integer", "minimum": 0},
+        "benchmark_profit_cny": {"$ref": "#/$defs/decimal"}, "benchmark_fees_cny": {"$ref": "#/$defs/decimal"}, "benchmark_fx_fees_cny": {"$ref": "#/$defs/decimal"}, "benchmark_slippage_cny": {"$ref": "#/$defs/decimal"},
+        "assumptions": {"type": "array", "maxItems": 40, "items": {"type": "string", "minLength": 1, "maxLength": 300}}
+      }, "additionalProperties": false
+    },
+    "stress": {"type": "object", "required": ["id", "label", "portfolio_return", "kind"], "properties": {
+      "id": {"$ref": "common.schema.json#/$defs/id"}, "label": {"type": "string", "minLength": 1, "maxLength": 200},
+      "portfolio_return": {"$ref": "#/$defs/decimal"}, "kind": {"const": "hypothetical_role_shock_not_probability_or_loss_limit"}
+    }, "additionalProperties": false}
+  },
+  "type": "object",
+  "required": ["schema_version", "engine_version", "implementation_hash", "profile_hash", "dataset_hash", "plan_hash", "policy_hash", "data_mode", "selected_parameters", "selection_frozen_before_validation", "holdout_unseen_status", "candidates", "phase_evidence", "reason_codes", "qualification", "live_advice_eligible", "limits", "status", "result_hash"],
+  "properties": {
+    "schema_version": {"const": "investor-strategy-result-v1"}, "engine_version": {"const": "investor-diversified-reference-v1"},
+    "implementation_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "profile_hash": {"$ref": "common.schema.json#/$defs/hash"}, "dataset_hash": {"$ref": "common.schema.json#/$defs/hash"}, "plan_hash": {"$ref": "common.schema.json#/$defs/hash"}, "policy_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "data_mode": {"enum": ["synthetic", "reconstructed", "historical_point_in_time", "actual_replay"]},
+    "selected_parameters": {"oneOf": [{"type": "null"}, {"$ref": "research-fixed-policy-parameters.schema.json"}]},
+    "selection_frozen_before_validation": {"const": true}, "holdout_unseen_status": {"const": "not_independently_verified"},
+    "candidates": {"type": "array", "maxItems": 8, "items": {"type": "object", "required": ["parameters_hash", "weights", "train", "stresses", "risk_budget_pass"], "properties": {
+      "parameters_hash": {"$ref": "common.schema.json#/$defs/hash"}, "weights": {"$ref": "#/$defs/weights"}, "train": {"$ref": "#/$defs/summary"},
+      "stresses": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"$ref": "#/$defs/stress"}}, "risk_budget_pass": {"type": ["boolean", "null"]}
+    }, "additionalProperties": false}},
+    "phase_evidence": {"type": "array", "maxItems": 3, "items": {"$ref": "#/$defs/summary"}},
+    "reason_codes": {"type": "array", "maxItems": 20, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,79}$"}},
+    "qualification": {"const": "exploratory_research_only"}, "live_advice_eligible": {"const": false},
+    "limits": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "string", "minLength": 1, "maxLength": 500}},
+    "status": {"enum": ["risk_options_ready", "reference_ready", "insufficient_evidence"]}, "result_hash": {"$ref": "common.schema.json#/$defs/hash"}
+  }, "additionalProperties": false,
+  "allOf": [
+    {"if": {"properties": {"status": {"const": "risk_options_ready"}}}, "then": {"properties": {"selected_parameters": {"type": "null"}, "phase_evidence": {"type": "array", "maxItems": 0}, "candidates": {"type": "array", "minItems": 1}}}},
+    {"if": {"properties": {"status": {"const": "reference_ready"}}}, "then": {"properties": {"selected_parameters": {"$ref": "research-fixed-policy-parameters.schema.json"}, "phase_evidence": {"type": "array", "minItems": 3}, "reason_codes": {"type": "array", "maxItems": 0}}}},
+    {"if": {"properties": {"status": {"enum": ["risk_options_ready", "insufficient_evidence"]}}}, "then": {"properties": {"reason_codes": {"type": "array", "minItems": 1}}}}
+  ]
+}

@@ -69,7 +69,7 @@ run = persist_trial(db, prepared)
 
 `review_context(db, run_id)` 只导出已成功研究报告的少量数字证据及来源哈希，不导出账户、券商原始文件或完整行情。`request_review()` 给可信 provider 回调的只有静态系统提示和该数据副本，没有数据库连接或工具。
 
-回调必须自行设置真实网络超时；目前没有接入任何真实模型提供商。也可将外部返回文本交给 `record_review()` / `review-file` 做离线验证。
+回调必须自行设置真实网络超时；原 `request_review()` 尚未配置线上提供商。新增独立 `ai_gateway` 的固定虚构探针和限时传输，显式非思考配置的一次真实请求已通过完整响应与事实校验。投资者按需解释另有当前来源/许可绑定的封闭派生合同、受保护 HTTP 入口和文本界面，没有调用原方法或启用 core 持久任务，详见[有界在线解释](../../docs/25-bounded-online-ai-explanation.md)。也可将外部返回文本交给 `record_review()` / `review-file` 做离线验证。
 
 - 输出须满足 `ai-research-review.schema.json`；禁止重复键、非有限数、超限文本、未知字段、无来源事实或伪造数值。
 - 事实必须精确匹配引用指标；派生指标保留计算精度，不强制按账本金钱精度舍入。

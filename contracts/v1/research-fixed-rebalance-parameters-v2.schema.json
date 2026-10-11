@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/research-fixed-rebalance-parameters-v2.schema.json",
+  "type": "object",
+  "required": ["schema_version", "weights", "rebalance", "tolerance", "roles", "class_drift_threshold", "minimum_days_between_rebalances", "contribution_mode", "order_expiry"],
+  "properties": {
+    "schema_version": {"const": "research-fixed-rebalance-parameters-v2"},
+    "weights": {"type": "object", "minProperties": 1, "maxProperties": 1000, "propertyNames": {"$ref": "common.schema.json#/$defs/id"}, "additionalProperties": {"$ref": "common.schema.json#/$defs/decimal"}},
+    "rebalance": {"enum": ["first_decision_each_half_year", "first_decision_each_year"]},
+    "tolerance": {"$ref": "research-fixed-rebalance-parameters.schema.json#/$defs/tolerance"},
+    "roles": {"type": "object", "minProperties": 1, "maxProperties": 1000, "propertyNames": {"$ref": "common.schema.json#/$defs/id"}, "additionalProperties": {"enum": ["growth", "defensive", "diversifier"]}},
+    "class_drift_threshold": {"$ref": "common.schema.json#/$defs/decimal"},
+    "minimum_days_between_rebalances": {"type": "integer", "minimum": 1, "maximum": 366},
+    "contribution_mode": {"const": "repair_underweight_without_sales"},
+    "order_expiry": {"const": "next_month_boundary"}
+  },
+  "additionalProperties": false
+}

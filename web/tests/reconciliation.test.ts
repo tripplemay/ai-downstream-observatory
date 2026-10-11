@@ -143,6 +143,23 @@ test("historical/intraday cutoffs never compare newer current projections", () =
   } finally { f.close(); }
 });
 
+test("statement and resolution cutoffs preserve microseconds instead of rounding to the clock millisecond", () => {
+  const f = fixture();
+  try {
+    const future = f.statement(); future.cutoff_at = "2026-01-03T12:00:00.000001Z";
+    assert.throws(() => f.run(future), /FUTURE_STATEMENT_NOT_ALLOWED/);
+    const invalid = f.statement(); invalid.cutoff_at = "2025-02-30T00:00:00Z";
+    assert.throws(() => f.run(invalid), /INVALID_ACCOUNT_STATEMENT/);
+    const mismatch = f.statement("99"); mismatch.cutoff_at = "2026-01-02T00:00:00.000001Z";
+    const prior = f.run(mismatch), attachment = f.source(f.statement());
+    assert.throws(() => reconcileAccount(f.db, f.actor, { portfolio_id: f.portfolio, account_id: f.account,
+      expected_revision: 1, attachment_id: attachment.id, resolves_issue_ids: prior.issues.map(row => row.id),
+      resolution_reason: "Fictional earlier source must not resolve later evidence" }, f.options), /RESOLUTION_CUTOFF_TOO_EARLY/);
+    assert.equal((f.db.prepare("SELECT COUNT(*) n FROM reconciliation_runs").get() as { n: number }).n, 1);
+    assert.equal((f.db.prepare("SELECT status FROM reconciliation_issues").get() as { status: string }).status, "open");
+  } finally { f.close(); }
+});
+
 test("ledger revision changes and restore guard reject reconciliation without partial state", () => {
   const f = fixture();
   try {

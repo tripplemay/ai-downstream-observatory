@@ -21,9 +21,45 @@ The explicit migration command is the only schema writer. It loads the checked-i
 
 Runtime connections must separately enable `foreign_keys`, verify WAL and use `synchronous=FULL`; `verifyWorkbenchSchema(db)` checks version/checksum history without creating tables. The exported `migrateWorkbench(path)` function supports temporary-database integration tests. A schema `TEXT` column prevents lossy SQLite floating-point storage, but SQLite affinity can stringify numeric bindings; callers must validate JSON decimal types before binding. Exact balance checks are performed with decimal arithmetic by the atomic ledger service, not SQLite floating-point sums.
 
+Migration 42 declares `foreign_key_rebuild: true` for the monitor-input table CHECK change. Following the [SQLite generalized rebuild procedure](https://www.sqlite.org/lang_altertable.html), only the dedicated migration connection disables enforcement before BEGIN. Explicit rowids and columns are copied, original guards/indexes restored, and a whole-database foreign-key check must pass before commit; enforcement is restored on success. Existing migration bytes/checksums and child references are preserved. Synthetic upgrade/rollback tests do not replace quiescing production writers, final backup and rehearsal on an actual database snapshot.
+
+`investor-monitor-data-input-v2` binds at least one monitor-only `investor-monitor-price-snapshot-v1`, optionally alongside legacy historical market segments. Tagged historical/confirmed references use their respective receipt and payload hashes; every watched target still requires complete price coverage. The old research snapshot/reader is not broadened. Date-to-session reconstruction retains assumed availability and reconstructed provenance, not a fabricated provider publication time. No input grants investment eligibility, external AI rights or trading authority.
+
+Migration 43 adds immutable calendar-bound callback request, run and admission metadata only. `investor-confirmed-feed.schema.json` closes each document; runtime replay also binds owner/audit, current model/control/source, internal single-attempt job, exact reviewed targets and callback interval. Capture payload, run metadata and lease-fenced job completion commit together. A missed window, partial/empty callbacks or an expired lease never supplies missing prices. Default core admits only complete, retained and currently authorized receipts; it does not hold provider credentials. Fictional software tests do not qualify a real feed, a ten-year uninterrupted chain or a production release.
+
+Migration 44 adds immutable initial monitoring-price request/run metadata only.
+`investor-initial-prices.schema.json` closes Python's internal producer documents;
+they bind the selected model, original reference input, current reviewed authority,
+past local session and single-attempt job, not caller prices or accounts. Prepared
+bytes become the unchanged historical receipt format in the fenced completion
+transaction. Core and Node independently replay those standard receipts before
+displaying an input; they do not trust the producer metadata as price authority.
+No same-day recovery, provider licence, live-advice or trading eligibility is added.
+
 Core table and ledger ownership is defined in [05](../docs/05-architecture-and-migration.md). SQL enforces per-portfolio account references, append-only facts, unique source identities and research/actual isolation. A same-portfolio event may post to both accounts for an internal transfer or FX; it may not cross portfolios. Financial postings and position projections are replaceable only through authorized ledger commands, never direct AI or worker writes.
 
 Unknown-cost sale proceeds are balanced against `unclassified_income`, not recognized as known investment profit. This clearing account is excluded from NAV just like `inventory_cost` and `income`; retain the unknown-cost warning until an evidenced historical-cost correction can classify the amount. `opening_equity` balancing historical inventory cost is not itself the performance inception fair value: freeze an independently evidenced opening valuation before computing inception returns.
+
+`investor-planned-funding-monitor` is a distinct unadmitted preparation contract.
+It binds a private plan version and declared model origin, excludes annual releases
+before the later declaration/origin instant, and normalizes selected cents against
+the plan's initial capital and fixed 10000 research units. Pure supplied hashes do
+not prove source authority. Independent private readers additionally validate the
+owner, current profile/model, original research and plan command audit. Its result
+does not mutate cash or quantities, and is rejected by existing monitor-input and
+AI-context validators; see [preparation boundaries](../docs/28-planned-funding-monitor-preparation.md).
+
+Default core integration uses the separate `investor-evidence-monitor-request-v2`
+with `investor-evidence-model-watcher-v4`, an owner/audit-bound plan binding and a
+stable release-context hash. `investor-evidence-model-checkpoint-v3` preserves that
+binding for independent archived replay; old v1/v2 checkpoints and v1 requests
+retain their original meaning. Both legacy and fixed-policy definitions are
+supported; fixed-policy checkpoints still require the existing policy state.
+Migration 45 only appends request/payload/run guards, retaining SQL and manifest
+entries 1-44. Current-plan/release changes fence stale publication; a second raw
+funding intent is a conflict, not an added budget. Assessment neither books nor
+consumes funds, and cannot extend quote, model or source validity. Fictional core
+tests do not qualify real data or a release; see [integration boundaries](../docs/29-planned-funding-core-monitor.md).
 
 ## Dividend and corporate-action quality
 

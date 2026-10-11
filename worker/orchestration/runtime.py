@@ -263,6 +263,24 @@ def command_handler(connection, clock=None, lease_seconds=300, stop_requested=No
     clock = (lambda: None) if clock is None else clock
     supported = role_commands(role)
     def handle(job, lease):
+        if job["job_type"] == "investor_initial_prices" and role == "longport":
+            from worker.investor.initial_prices import prepare_initial_price
+            return prepare_initial_price(connection, job, lease, clock=clock, stop_requested=stop_requested)
+        if job["job_type"] == "investor_confirmed_watch" and role == "longport":
+            from worker.investor.confirmed_feed import prepare_confirmed_watch
+            return prepare_confirmed_watch(connection, job, lease, clock=clock, lease_seconds=lease_seconds, stop_requested=stop_requested)
+        if job["job_type"] == "investor_research" and role == "core":
+            from worker.investor.runtime import prepare_research_job
+            return prepare_research_job(connection, job, lease, clock=clock, stop_requested=stop_requested)
+        if job["job_type"] == "investor_funded_study" and role == "core":
+            from worker.investor.funded_study_runtime import prepare_funded_study_job
+            return prepare_funded_study_job(connection, job, lease, clock=clock, stop_requested=stop_requested)
+        if job["job_type"] == "investor_monitor" and role == "core":
+            from worker.investor.model_runtime import prepare_monitor_job
+            return prepare_monitor_job(connection, job, lease, clock=clock, stop_requested=stop_requested)
+        if job["job_type"] == "investor_evidence_monitor" and role == "core":
+            from worker.investor.evidence_monitor_runtime import prepare_evidence_monitor_job
+            return prepare_evidence_monitor_job(connection, job, lease, clock=clock, stop_requested=stop_requested)
         if job["job_type"] not in supported:
             raise WorkbenchError("JOB_REQUIRES_DIFFERENT_WORKER_ROLE")
         request = connection.execute("SELECT * FROM command_requests WHERE id=?", (job["command_request_id"],)).fetchone()
@@ -369,13 +387,33 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
     if role == "longport" and (type(lease_seconds) is not int or lease_seconds < 180):
         raise WorkbenchError("PRICE_WORKER_LEASE_TOO_SHORT")
     if role == "core":
+        from worker.investor.runtime import sync_research_requests
+        from worker.investor.funded_study_runtime import sync_funded_study_requests
+        from worker.investor.funded_result_retention import purge_due_funded_results
+        from worker.investor.source_retention import purge_due_source_payloads
+        from worker.investor.model_runtime import discover_monitor_requests
+        from worker.investor.evidence_monitor_runtime import discover_evidence_monitor_requests
+        from worker.investor.confirmed_feed import admit_completed_feeds
+        from worker.investor.monitor_bootstrap import bootstrap_monitor_inputs
+        purge_due_source_payloads(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        admit_completed_feeds(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        bootstrap_monitor_inputs(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        sync_research_requests(connection, limit=discovery_limit, now=clock())
+        purge_due_funded_results(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        sync_funded_study_requests(connection, limit=discovery_limit, now=clock())
+        discover_monitor_requests(connection, limit=discovery_limit, now=clock())
+        discover_evidence_monitor_requests(connection, limit=discovery_limit, now=clock())
         discover_due_cycles(connection, limit=discovery_limit, now=clock(), state=discovery_state)
         discover_due_collections(connection, limit=collection_discovery_limit, now=clock(), state=collection_discovery_state)
     elif role == "longport":
+        from worker.investor.confirmed_feed import discover_confirmed_watches
+        from worker.investor.initial_prices import discover_initial_prices
+        discover_confirmed_watches(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
+        discover_initial_prices(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
         discover_due_price_collections(connection, limit=price_collection_discovery_limit, now=clock(),
                                       state=price_collection_discovery_state)
     sync_requests(connection, now=clock(), command_types=supported)
     # One oldest-ready selection avoids starving periodic jobs behind a busy
     # ingestion stream while still excluding unsupported modules' jobs.
-    return run_one(connection, owner, command_handler(connection, clock, lease_seconds, stop_requested, role),
-                   job_type=supported, lease_seconds=lease_seconds, clock=clock)
+    types = (*supported, "investor_research", "investor_funded_study", "investor_monitor", "investor_evidence_monitor") if role == "core" else (*supported, "investor_confirmed_watch", "investor_initial_prices") if role == "longport" else supported
+    return run_one(connection, owner, command_handler(connection, clock, lease_seconds, stop_requested, role), job_type=types, lease_seconds=lease_seconds, clock=clock)

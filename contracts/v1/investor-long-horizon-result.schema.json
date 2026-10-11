@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-long-horizon-result.schema.json",
+  "$defs": {
+    "decimal": {"$ref": "investor-strategy-result.schema.json#/$defs/decimal"},
+    "nullableDecimal": {"$ref": "investor-strategy-result.schema.json#/$defs/nullableDecimal"},
+    "snapshot": {"type": "object", "required": ["period", "observed_at", "nav_cny", "unit_nav", "principal_cny", "profit_cny", "cash_cny", "locked_cash_cny", "released_capital_cny", "unreserved_released_cash_cny"], "properties": {
+      "period": {"type": "string", "pattern": "^[0-9]{4}(?:-[0-9]{2})?$"}, "observed_at": {"$ref": "common.schema.json#/$defs/instant"},
+      "nav_cny": {"$ref": "#/$defs/decimal"}, "unit_nav": {"$ref": "#/$defs/decimal"}, "principal_cny": {"$ref": "#/$defs/decimal"}, "profit_cny": {"$ref": "#/$defs/decimal"},
+      "cash_cny": {"$ref": "#/$defs/decimal"}, "locked_cash_cny": {"$ref": "#/$defs/decimal"}, "released_capital_cny": {"$ref": "#/$defs/decimal"}, "unreserved_released_cash_cny": {"$ref": "#/$defs/decimal"}
+    }, "additionalProperties": false},
+    "lot": {"type": "object", "required": ["lot_id", "arrival_at", "amount_cny", "tranches"], "properties": {
+      "lot_id": {"$ref": "common.schema.json#/$defs/id"}, "arrival_at": {"$ref": "common.schema.json#/$defs/instant"}, "amount_cny": {"$ref": "#/$defs/decimal"},
+      "tranches": {"type": "array", "minItems": 1, "maxItems": 12, "items": {"type": "object", "required": ["at", "amount_cny", "within_window"], "properties": {
+        "at": {"$ref": "common.schema.json#/$defs/instant"}, "amount_cny": {"$ref": "#/$defs/decimal"}, "within_window": {"type": "boolean"}
+      }, "additionalProperties": false}}
+    }, "additionalProperties": false},
+    "run": {"type": "object", "required": ["engine_version", "engine_trace_hash", "initial_equity_cny", "contributions_cny", "principal_cny", "ending_nav_cny", "profit_cny", "twr", "return_method", "annualized_unit_return", "xirr", "max_drawdown", "recovered_at", "fees_cny", "fx_fees_cny", "slippage_cny", "cash_rounding_cny", "execution_failure_count", "ending_cash_ratio", "ending_locked_cash_cny", "ending_positions", "event_counts", "monthly", "annual", "funding_schedule", "assumptions"], "properties": {
+      "engine_version": {"const": "continuous-fixed-policy-funding-v1"}, "engine_trace_hash": {"$ref": "common.schema.json#/$defs/hash"},
+      "initial_equity_cny": {"$ref": "#/$defs/decimal"}, "contributions_cny": {"$ref": "#/$defs/decimal"}, "principal_cny": {"$ref": "#/$defs/decimal"}, "ending_nav_cny": {"$ref": "#/$defs/decimal"}, "profit_cny": {"$ref": "#/$defs/decimal"},
+      "twr": {"$ref": "#/$defs/nullableDecimal"}, "return_method": {"type": "string", "minLength": 1, "maxLength": 100}, "annualized_unit_return": {"$ref": "#/$defs/nullableDecimal"},
+      "xirr": {"type": "object", "required": ["status", "rate", "roots", "duration_days"], "properties": {
+        "status": {"type": "string", "minLength": 1, "maxLength": 100}, "rate": {"$ref": "#/$defs/nullableDecimal"}, "roots": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/decimal"}}, "duration_days": {"type": "integer", "minimum": 0}
+      }, "additionalProperties": false},
+      "max_drawdown": {"$ref": "#/$defs/nullableDecimal"}, "recovered_at": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/instant"}]},
+      "fees_cny": {"$ref": "#/$defs/decimal"}, "fx_fees_cny": {"$ref": "#/$defs/decimal"}, "slippage_cny": {"$ref": "#/$defs/decimal"}, "cash_rounding_cny": {"$ref": "#/$defs/decimal"},
+      "execution_failure_count": {"type": "integer", "minimum": 0}, "ending_cash_ratio": {"$ref": "#/$defs/nullableDecimal"}, "ending_locked_cash_cny": {"$ref": "#/$defs/decimal"},
+      "ending_positions": {"type": "object", "maxProperties": 20, "propertyNames": {"$ref": "common.schema.json#/$defs/id"}, "additionalProperties": {"$ref": "#/$defs/decimal"}},
+      "event_counts": {"type": "object", "required": ["external_contribution", "funding_release", "simulated_buy", "simulated_sell", "execution_skipped", "order_expired", "policy_deployment_failed"], "properties": {
+        "external_contribution": {"type": "integer", "minimum": 0}, "funding_release": {"type": "integer", "minimum": 0}, "simulated_buy": {"type": "integer", "minimum": 0}, "simulated_sell": {"type": "integer", "minimum": 0}, "execution_skipped": {"type": "integer", "minimum": 0}, "order_expired": {"type": "integer", "minimum": 0}, "policy_deployment_failed": {"type": "integer", "minimum": 0}
+      }, "additionalProperties": false},
+      "monthly": {"type": "array", "minItems": 1, "maxItems": 122, "items": {"$ref": "#/$defs/snapshot"}}, "annual": {"type": "array", "minItems": 1, "maxItems": 11, "items": {"$ref": "#/$defs/snapshot"}},
+      "funding_schedule": {"type": "array", "minItems": 1, "maxItems": 101, "items": {"$ref": "#/$defs/lot"}},
+      "assumptions": {"type": "array", "minItems": 1, "maxItems": 40, "items": {"type": "string", "minLength": 1, "maxLength": 300}}
+    }, "additionalProperties": false}
+  },
+  "type": "object", "required": ["schema_version", "input_hash", "dataset_hash", "plan_hash", "implementation_hash", "window", "evaluation_timezone", "parameters_hash", "data_mode", "status", "qualification", "source_independently_verified", "parameters_independently_preregistered", "actual_holdings_linked", "execution_authorized", "live_advice_eligible", "runs", "limits", "result_hash"],
+  "properties": {
+    "schema_version": {"const": "investor-long-horizon-result-v1"}, "input_hash": {"$ref": "common.schema.json#/$defs/hash"}, "dataset_hash": {"$ref": "common.schema.json#/$defs/hash"}, "plan_hash": {"$ref": "common.schema.json#/$defs/hash"}, "implementation_hash": {"$ref": "common.schema.json#/$defs/hash"}, "parameters_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "window": {"$ref": "research-plan.schema.json#/$defs/window"}, "evaluation_timezone": {"$ref": "common.schema.json#/$defs/timezone"},
+    "data_mode": {"enum": ["synthetic", "reconstructed", "historical_point_in_time", "actual_replay"]}, "status": {"enum": ["computed", "execution_gaps"]}, "qualification": {"const": "counterfactual_funding_path_comparison_only"},
+    "source_independently_verified": {"const": false}, "parameters_independently_preregistered": {"const": false}, "actual_holdings_linked": {"const": false}, "execution_authorized": {"const": false}, "live_advice_eligible": {"const": false},
+    "runs": {"type": "object", "required": ["immediate", "staged"], "properties": {"immediate": {"$ref": "#/$defs/run"}, "staged": {"$ref": "#/$defs/run"}}, "additionalProperties": false},
+    "limits": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "string", "minLength": 1, "maxLength": 500}}, "result_hash": {"$ref": "common.schema.json#/$defs/hash"}
+  }, "additionalProperties": false
+}

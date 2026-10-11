@@ -1,0 +1,66 @@
+# Explicit opt-in overlay. No broker credential, public port, automatic request creation or trading tool.
+services:
+  web:
+    environment:
+      WORKBENCH_AI_BACKGROUND_ENABLED: ${WORKBENCH_AI_ENABLE_DISPATCH:-0}
+      WORKBENCH_AI_CONFIG_FILE: /run/secrets/ai-gateway.json
+      WORKBENCH_AI_CONSENT_FILE: /run/secrets/ai-sharing-consent.json
+    volumes:
+      - type: bind
+        source: ${WORKBENCH_AI_CONFIG_FILE_HOST:-/etc/etf-workbench/ai-gateway.json}
+        target: /run/secrets/ai-gateway.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${WORKBENCH_AI_CONSENT_FILE_HOST:-/etc/etf-workbench/ai-sharing-consent.json}
+        target: /run/secrets/ai-sharing-consent.json
+        read_only: true
+        bind:
+          create_host_path: false
+
+  ai-explanation:
+    image: etf-workbench-ai-explanation:${WORKBENCH_RELEASE_SHA:-development}
+    build:
+      context: .
+      dockerfile: Dockerfile.ai-explanation
+      args:
+        RELEASE_SHA: ${WORKBENCH_RELEASE_SHA:-development}
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:mode=1777]
+    user: "10001:10001"
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1
+    pids_limit: 64
+    environment:
+      WORKBENCH_DB_PATH: /app/data/etf-workbench.db
+      WORKBENCH_DATA_DIR: /app/data
+      WORKBENCH_MODE: ${WORKBENCH_MODE:-ledger}
+      WORKBENCH_AI_ENABLE_DISPATCH: ${WORKBENCH_AI_ENABLE_DISPATCH:-0}
+      WORKBENCH_AI_CONFIG_FILE: /run/secrets/ai-gateway.json
+      WORKBENCH_AI_CONSENT_FILE: /run/secrets/ai-sharing-consent.json
+    volumes:
+      - type: bind
+        source: ${WORKBENCH_DATA_DIR_HOST:-./data-workbench}
+        target: /app/data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${WORKBENCH_AI_CONFIG_FILE_HOST:-/etc/etf-workbench/ai-gateway.json}
+        target: /run/secrets/ai-gateway.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${WORKBENCH_AI_CONSENT_FILE_HOST:-/etc/etf-workbench/ai-sharing-consent.json}
+        target: /run/secrets/ai-sharing-consent.json
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      web:
+        condition: service_healthy

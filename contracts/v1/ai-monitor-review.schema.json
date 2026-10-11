@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/ai-monitor-review.schema.json",
+  "allOf": [{"$ref": "ai-research-review.schema.json"}],
+  "properties": {
+    "facts": {"minItems": 2, "maxItems": 3},
+    "inferences": {"maxItems": 3, "items": {"properties": {"text": {"maxLength": 600}, "evidence_ids": {"maxItems": 3, "uniqueItems": true}}}},
+    "supporting_evidence": {"maxItems": 3, "uniqueItems": true},
+    "counter_evidence": {"maxItems": 3, "uniqueItems": true},
+    "risks": {"maxItems": 3, "items": {"maxLength": 600}},
+    "reason": {"maxLength": 600},
+    "unknowns": {"maxItems": 3, "items": {"maxLength": 600}},
+    "invalidation_conditions": {"maxItems": 3, "items": {"maxLength": 600}}
+  }
+}

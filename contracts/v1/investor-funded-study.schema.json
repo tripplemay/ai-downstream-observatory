@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-funded-study.schema.json",
+  "$ref": "#/$defs/request",
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "nullableHash": {"anyOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+    "nullableId": {"anyOf": [{"$ref": "common.schema.json#/$defs/id"}, {"type": "null"}]},
+    "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,79}$"},
+    "request": {
+      "type": "object",
+      "required": ["schema_version", "workspace_id", "profile_id", "profile_hash", "funding_plan_id", "funding_plan_hash", "source_head_id", "evidence_input_id", "input_hash", "comparison_declared_at", "window_selection", "historical_start_date", "candidate_hashes", "reason_codes", "economics_independently_replayed", "parameters_independently_preregistered", "actual_arrivals_confirmed", "execution_authorized", "live_advice_eligible"],
+      "properties": {
+        "schema_version": {"const": "investor-funded-study-request-v1"},
+        "workspace_id": {"$ref": "common.schema.json#/$defs/id"}, "profile_id": {"$ref": "common.schema.json#/$defs/id"},
+        "profile_hash": {"$ref": "#/$defs/hash"}, "funding_plan_id": {"$ref": "common.schema.json#/$defs/id"}, "funding_plan_hash": {"$ref": "#/$defs/hash"},
+        "source_head_id": {"$ref": "#/$defs/nullableId"}, "evidence_input_id": {"$ref": "#/$defs/nullableId"}, "input_hash": {"$ref": "#/$defs/nullableHash"},
+        "comparison_declared_at": {"$ref": "common.schema.json#/$defs/instant"},
+        "window_selection": {"const": "earliest_complete_same_calendar_anchor_v1"},
+        "historical_start_date": {"type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+        "candidate_hashes": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"$ref": "#/$defs/hash"}},
+        "reason_codes": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/code"}},
+        "economics_independently_replayed": {"const": false}, "parameters_independently_preregistered": {"const": false},
+        "actual_arrivals_confirmed": {"const": false}, "execution_authorized": {"const": false}, "live_advice_eligible": {"const": false}
+      }, "additionalProperties": false
+    },
+    "candidate": {
+      "type": "object", "required": ["parameters_hash", "input_hash", "projection_hash", "result_hash", "status", "reason_code"],
+      "properties": {
+        "parameters_hash": {"$ref": "#/$defs/hash"}, "input_hash": {"$ref": "#/$defs/hash"}, "projection_hash": {"$ref": "#/$defs/hash"},
+        "result_hash": {"$ref": "#/$defs/nullableHash"}, "status": {"enum": ["calculated_unverified", "failed"]},
+        "reason_code": {"anyOf": [{"$ref": "#/$defs/code"}, {"type": "null"}]}
+      }, "additionalProperties": false
+    },
+    "run": {
+      "type": "object", "required": ["schema_version", "request_id", "input_version", "implementation_hash", "created_at", "status", "reason_codes", "candidates", "economics_independently_replayed", "parameters_independently_preregistered", "actual_arrivals_confirmed", "execution_authorized", "live_advice_eligible"],
+      "properties": {
+        "schema_version": {"const": "investor-funded-study-run-v1"}, "request_id": {"$ref": "common.schema.json#/$defs/id"},
+        "input_version": {"$ref": "#/$defs/hash"}, "implementation_hash": {"$ref": "#/$defs/hash"}, "created_at": {"$ref": "common.schema.json#/$defs/instant"},
+        "status": {"enum": ["blocked", "calculated_unverified", "failed"]},
+        "reason_codes": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"$ref": "#/$defs/code"}},
+        "candidates": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/candidate"}},
+        "economics_independently_replayed": {"const": false}, "parameters_independently_preregistered": {"const": false},
+        "actual_arrivals_confirmed": {"const": false}, "execution_authorized": {"const": false}, "live_advice_eligible": {"const": false}
+      }, "additionalProperties": false
+    }
+  }
+}

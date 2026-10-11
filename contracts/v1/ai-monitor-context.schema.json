@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/ai-monitor-context.schema.json",
+  "type": "object",
+  "required": ["schema_version", "deterministic_outcome", "evaluated_at", "evidence", "trigger_codes", "limitations", "strategy_gates"],
+  "properties": {
+    "schema_version": {"const": "ai-monitor-context-v1"},
+    "deterministic_outcome": {"enum": ["observe", "decision_required"]},
+    "evaluated_at": {"$ref": "common.schema.json#/$defs/instant", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"},
+    "evidence": {"type": "array", "minItems": 2, "maxItems": 3, "items": {
+      "type": "object", "required": ["evidence_id", "metric", "value", "as_of"],
+      "properties": {
+        "evidence_id": {"enum": ["derived:max_abs_target_gap", "derived:target_change_count", "derived:estimated_cost_ratio"]},
+        "metric": {"enum": ["model.max_abs_target_gap", "model.target_change_count", "model.estimated_cost_ratio"]},
+        "value": {"type": "string", "maxLength": 20, "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,18})?$"},
+        "as_of": {"$ref": "common.schema.json#/$defs/instant", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"}
+      }, "additionalProperties": false
+    }},
+    "trigger_codes": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"enum": [
+      "FIXED_POLICY_WITHIN_CLASS_BANDS", "POLICY_TARGETS_WITHIN_TOLERANCE", "POLICY_COOLDOWN_NO_NEW_ADVICE",
+      "CALENDAR_POLICY_REVIEW", "CLASS_WEIGHT_BREACH", "PLANNED_FUNDING_REVIEW_OPEN", "NEW_MODEL_CNY_CASH",
+      "MODEL_CNY_CASH_REVIEW_OPEN", "MODEL_WITHIN_CONFIRMED_BANDS", "NEW_PLANNED_FUNDING", "TARGET_WEIGHTS_CHANGED",
+      "MODEL_DRIFT_OUTSIDE_BAND", "CANNOT_COMPARE_CHANGE_COST", "CHANGE_NOT_COST_QUALIFIED", "NO_COST_QUALIFIED_CONTRIBUTION_REPAIR"
+    ]}},
+    "limitations": {"const": [
+      "Research model only; not actual holdings, cash, a price feed or a forecast.",
+      "Ratio summaries are rounded to 18 decimal places; no personal amounts, risk answers, account IDs or raw market records are supplied.",
+      "The deterministic outcome and trigger codes cannot be changed by AI; individual-security drift is not an asset-class trigger.",
+      "Source and strategy qualification remain exploratory; no trading authority, profit guarantee or statistical probability is granted."
+    ]},
+    "strategy_gates": {"type": "object", "required": ["investment_gate_passed", "live_advice_eligible"],
+      "properties": {"investment_gate_passed": {"const": false}, "live_advice_eligible": {"const": false}}, "additionalProperties": false}
+  },
+  "additionalProperties": false
+}

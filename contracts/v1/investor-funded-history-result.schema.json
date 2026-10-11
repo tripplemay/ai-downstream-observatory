@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-funded-history-result.schema.json",
+  "type": "object", "required": ["schema_version", "input_hash", "projection", "comparison", "qualification", "economics_independently_replayed", "source_independently_verified", "parameters_independently_preregistered", "actual_arrivals_confirmed", "execution_authorized", "live_advice_eligible", "result_hash"],
+  "properties": {
+    "schema_version": {"const": "investor-funded-history-result-v1"},
+    "input_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "projection": {"$ref": "investor-funded-history-input.schema.json#/$defs/projection"},
+    "comparison": {"$ref": "investor-long-horizon-result-v2.schema.json"},
+    "qualification": {"const": "planned_capital_retrospective_exploration_only"},
+    "economics_independently_replayed": {"const": false},
+    "source_independently_verified": {"const": false},
+    "parameters_independently_preregistered": {"const": false},
+    "actual_arrivals_confirmed": {"const": false},
+    "execution_authorized": {"const": false},
+    "live_advice_eligible": {"const": false},
+    "result_hash": {"$ref": "common.schema.json#/$defs/hash"}
+  }, "additionalProperties": false
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-profile.schema.json",
+  "$defs": {"money": {"type": ["string", "null"], "pattern": "^(0|[1-9][0-9]{0,11})(\\.[0-9]{1,2})?$"}},
+  "type": "object",
+  "required": ["schema_version", "horizon_years", "loss_tolerance", "liquidity_need", "markets", "product_scope", "research_direction", "exclusions", "illustrative_budget_cny", "planned_annual_contribution_cny"],
+  "properties": {
+    "schema_version": {"const": "investor-profile-v1"},
+    "horizon_years": {"type": "integer", "minimum": 1, "maximum": 50},
+    "loss_tolerance": {"enum": [null, "0.10", "0.20", "0.30", "0.40", "0.50"]},
+    "liquidity_need": {"enum": ["none_in_horizon", "planned_withdrawal", "uncertain"]},
+    "markets": {"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": {"enum": ["CN", "HK", "US"]}},
+    "product_scope": {"const": "unleveraged_long_only_etfs"},
+    "research_direction": {"enum": [null, "system_design", "diversified_base", "fixed_rebalance", "rotation"]},
+    "exclusions": {"type": "array", "maxItems": 20, "items": {"type": "string", "minLength": 1, "maxLength": 100, "pattern": "\\S"}},
+    "illustrative_budget_cny": {"$ref": "#/$defs/money"},
+    "planned_annual_contribution_cny": {"$ref": "#/$defs/money"}
+  },
+  "additionalProperties": false
+}

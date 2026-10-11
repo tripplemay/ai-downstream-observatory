@@ -120,6 +120,112 @@
       "version": 24,
       "file": "0024_attachment_audit_lookup.sql",
       "sha256": "c42aa8c4eb5b6657769e61de0d55405d575032d24e9c8dff3d925c47a06f2a08"
+    },
+    {
+      "version": 25,
+      "file": "0025_investor_workspace.sql",
+      "sha256": "f25456cfbed0b48a27f8b12a43a9fe4c59515a6d9808775008e875ac690c27b1"
+    },
+    {
+      "version": 26,
+      "file": "0026_investor_research_queue.sql",
+      "sha256": "8229735f22477848cfb50ae1318a5e5c0ddbd5ee3fd3a1493e5e4c39546e0c1a"
+    },
+    {
+      "version": 27,
+      "file": "0027_investor_model_monitor.sql",
+      "sha256": "c9d3c0886564ee71c719254a2a04902878df7f24891a6f123c84675ffbe9eaa6"
+    },
+    {
+      "version": 28,
+      "file": "0028_investor_trial_registry.sql",
+      "sha256": "a4e87ab85d0660b8f79df25f38416cfcbdbc8e4e57d92437fe0f4d6bc153e7fa"
+    },
+    {
+      "version": 29,
+      "file": "0029_investor_data_evidence.sql",
+      "sha256": "81c0c7dbf83f358e7c97434b268c327ce8783a00dc9fa57425368d58123a9fa2"
+    },
+    {
+      "version": 30,
+      "file": "0030_investor_evidence_research.sql",
+      "sha256": "a380da211f642dc2730c56e4dcc617a515c02b6019de2f4f135f1942b464e90f"
+    },
+    {
+      "version": 31,
+      "file": "0031_investor_reference_evidence.sql",
+      "sha256": "5e74902e7e78f983160512997706dd7fc8001be2070aa40a1e27993fa552c6db"
+    },
+    {
+      "version": 32,
+      "file": "0032_investor_monitor_evidence.sql",
+      "sha256": "feb6ff52986f4392714a143dadc892e18925beb52fcc29eead669d6c81b4b37d"
+    },
+    {
+      "version": 33,
+      "file": "0033_investor_evidence_monitor.sql",
+      "sha256": "ee189f396bb37d2dbaaf92fc9cc5e7167c21dc1e340c95e5852ba9e8e4ff72db"
+    },
+    {
+      "version": 34,
+      "file": "0034_investor_portfolio_links.sql",
+      "sha256": "b18cc3dff89c2baf1e50ea6420da68788083b9690730260de35bd37a2ef047b4"
+    },
+    {
+      "version": 35,
+      "file": "0035_investor_funding_plans.sql",
+      "sha256": "d279c2b00fff4045c94fd204aa080c8ad625dec0708697031d88c994629268bc"
+    },
+    {
+      "version": 36,
+      "file": "0036_investor_funded_studies.sql",
+      "sha256": "5673f61519e5b6b90ec358b85c9797c2ddab1ee442e1cd21a14eeffb405ea02f"
+    },
+    {
+      "version": 37,
+      "file": "0037_investor_funded_result_payloads.sql",
+      "sha256": "7797cd744d7eaeea51554c0fd766aa72fdc676adc8b85fde236e2c4b87b3f094"
+    },
+    {
+      "version": 38,
+      "file": "0038_investor_ai_requests.sql",
+      "sha256": "bd2cc47b4673430d03480b55b26663933d58226c8b6ac3a1540dea48b74f62e6"
+    },
+    {
+      "version": 39,
+      "file": "0039_investor_ai_queue_guards.sql",
+      "sha256": "77bd515ea949effd48582e6e211fb01132e41e894c52a261734fb6c9b245b80b"
+    },
+    {
+      "version": 40,
+      "file": "0040_investor_notification_reads.sql",
+    "sha256": "bd80066215411a68d97606d82db663dba08ee7b2233fa27fe2596ca086e785fb"
+    },
+    {
+      "version": 41,
+      "file": "0041_investor_confirmed_captures.sql",
+      "sha256": "897a19b7d4d1f783658b2fa18151822a43e4f9c2cff26ec11a8225d2e6a00512"
+    },
+    {
+      "version": 42,
+      "file": "0042_investor_confirmed_monitor_input.sql",
+      "sha256": "8456ccd7629fa98e4285af37c1e2468d89d725efe0285cbf00a0fb747171565f",
+      "foreign_key_rebuild": true
+    },
+    {
+      "version": 43,
+      "file": "0043_investor_confirmed_feed.sql",
+      "sha256": "d066589ce5dd79e3ea0c50ce453e1a70c4f5c3f5dd7531256ee44e2f63c5c962"
+    },
+    {
+      "version": 44,
+      "file": "0044_investor_initial_prices.sql",
+      "sha256": "b949956b88e760aa28012e711bfbca6215f79284744f3f333481ed9595f1b0d4"
+    },
+    {
+      "version": 45,
+      "file": "0045_investor_planned_funding_monitor.sql",
+      "sha256": "c3eee4dea9ae46aa67382c50d6dd0a789ff359b1166d96895426d8007f481e5b"
     }
   ]
 }

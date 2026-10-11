@@ -11,6 +11,6 @@
       }, "additionalProperties": false
     },
     {"$ref": "research-rotation-parameters.schema.json"},
-    {"$ref": "research-fixed-rebalance-parameters.schema.json"}
+    {"$ref": "research-fixed-policy-parameters.schema.json"}
   ]
 }

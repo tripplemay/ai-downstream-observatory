@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/research-fixed-policy-parameters.schema.json",
+  "oneOf": [
+    {"$ref": "research-fixed-rebalance-parameters.schema.json"},
+    {"$ref": "research-fixed-rebalance-parameters-v2.schema.json"}
+  ]
+}

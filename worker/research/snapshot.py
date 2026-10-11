@@ -70,6 +70,9 @@ def validate_dataset(dataset):
             raise WorkbenchError("RECONSTRUCTED_DATA_CANNOT_BECOME_POINT_IN_TIME")
         if dataset["mode"] == "historical_point_in_time" and not row.get("published_at"):
             raise WorkbenchError("HISTORICAL_PUBLICATION_UNKNOWN")
+        if row.get("assumed_available_at") and (dataset["mode"] not in ("reconstructed", "synthetic") or row["provenance"] != "reconstructed"
+                or row.get("published_at") or not observed <= instant(row["assumed_available_at"]) <= instant(row["ingested_at"])):
+            raise WorkbenchError("ASSUMED_AVAILABILITY_REQUIRES_RECONSTRUCTED_MODE")
         if row["metric"] == "close":
             asset = assets.get(row.get("listing_id"))
             if asset is None or row["unit"] != asset["currency"] or decimal(row["value"]) <= 0 or row["price_basis"] != "unadjusted":
@@ -123,6 +126,9 @@ def validate_parameters(parameters, dataset):
     weights = {key: fact_decimal(value) for key, value in parameters["weights"].items()}
     if set(weights) - assets or any(value < 0 for value in weights.values()) or not Decimal("0") < sum(weights.values()) <= 1:
         raise WorkbenchError("INVALID_RESEARCH_WEIGHTS")
+    if parameters.get("schema_version") == "research-fixed-rebalance-parameters-v2":
+        if set(parameters["roles"]) != set(weights) or not 0 < fact_decimal(parameters["class_drift_threshold"]) <= 1:
+            raise WorkbenchError("INVALID_FIXED_POLICY_CLASS_SCOPE")
     if not parameters.get("schema_version") and not 0 < fact_decimal(parameters["deployment_fraction"]) <= 1:
         raise WorkbenchError("INVALID_DEPLOYMENT_FRACTION")
 
@@ -292,6 +298,8 @@ class MarketView:
 
     def available(self, row):
         times = [instant(row["observed_at"])]
+        if row.get("assumed_available_at"):
+            times.append(instant(row["assumed_available_at"]))
         if row.get("published_at"):
             times.append(instant(row["published_at"]))
         if self.dataset["mode"] == "actual_replay":

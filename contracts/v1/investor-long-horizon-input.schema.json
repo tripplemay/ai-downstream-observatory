@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-long-horizon-input.schema.json",
+  "$defs": {
+    "offsets": {"type": "array", "minItems": 1, "maxItems": 12, "uniqueItems": true, "items": {"type": "integer", "minimum": 0, "maximum": 60}},
+    "plan": {
+      "type": "object",
+      "required": ["schema_version", "window", "evaluation_timezone", "parameters_frozen_at", "parameters", "initial_capital_cny", "contributions", "decision_times", "funding_policy", "execution", "tax_coverage"],
+      "properties": {
+        "schema_version": {"const": "investor-long-horizon-plan-v1"},
+        "window": {"$ref": "research-plan.schema.json#/$defs/window"},
+        "evaluation_timezone": {"$ref": "common.schema.json#/$defs/timezone"},
+        "parameters_frozen_at": {"$ref": "common.schema.json#/$defs/instant"},
+        "parameters": {"allOf": [{"$ref": "research-fixed-rebalance-parameters-v2.schema.json"}, {"type": "object", "properties": {"weights": {"type": "object", "maxProperties": 20}, "roles": {"type": "object", "maxProperties": 20}}}]},
+        "initial_capital_cny": {"$ref": "common.schema.json#/$defs/decimal"},
+        "contributions": {"type": "array", "maxItems": 100, "items": {"type": "object", "required": ["at", "amount_cny"], "properties": {"at": {"$ref": "common.schema.json#/$defs/instant"}, "amount_cny": {"$ref": "common.schema.json#/$defs/decimal"}}, "additionalProperties": false}},
+        "decision_times": {"type": "array", "minItems": 1, "maxItems": 10000, "items": {"$ref": "common.schema.json#/$defs/instant"}},
+        "funding_policy": {"type": "object", "required": ["method", "initial_offsets_days", "contribution_offsets_days"], "properties": {
+          "method": {"const": "equal_tranches_on_frozen_local_day_offsets"},
+          "initial_offsets_days": {"$ref": "#/$defs/offsets"}, "contribution_offsets_days": {"$ref": "#/$defs/offsets"}
+        }, "additionalProperties": false},
+        "execution": {"allOf": [{"$ref": "research-plan.schema.json#/properties/execution"}, {"type": "object", "required": ["sale_proceeds"], "properties": {"settlement_model": {"const": "explicit_market_calendar"}}}]},
+        "tax_coverage": {"type": "string", "minLength": 1, "maxLength": 2000}
+      }, "additionalProperties": false
+    }
+  },
+  "type": "object", "required": ["schema_version", "dataset", "plan"],
+  "properties": {
+    "schema_version": {"const": "investor-long-horizon-input-v1"},
+    "dataset": {"allOf": [{"$ref": "research-dataset.schema.json"}, {"type": "object", "properties": {"schema_version": {"const": "research-dataset-v2"}, "assets": {"type": "array", "maxItems": 20}, "observations": {"type": "array", "maxItems": 100000}, "sessions": {"type": "array", "maxItems": 30000}}}]},
+    "plan": {"$ref": "#/$defs/plan"}
+  }, "additionalProperties": false
+}

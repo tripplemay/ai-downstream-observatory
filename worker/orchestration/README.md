@@ -15,6 +15,15 @@ types below. `--once` returns 2 for a terminal partial/failed result and 1 for a
 exception; daemon mode logs the failed attempt and keeps running. There is no
 external fetch, AI invocation, broker execution or actual email transport.
 
+The core role also runs investor source-retention maintenance before discovery:
+one shared `--discovery-limit` budget covers price, evidence-checkpoint and
+evidence-run BLOB deletion. Each item keeps an immutable owner audit/purge
+receipt, with its own atomic transaction. Cancellation or a later failure leaves
+earlier commits intact. Read-only/recovery locks still apply; GET and provider
+roles do not perform this maintenance. It does not create financial facts,
+observations or notifications, and is not WAL/backup/media erasure or a
+full-scale latency guarantee. See the [private data pipeline](../../docs/14-private-research-data-pipeline.md).
+
 ## Authenticated command requests
 
 Web owns creation of `command_requests`, actor identity, authorization and
@@ -58,6 +67,17 @@ to execute an investment recommendation.
 The default lease is 300 seconds for the command dispatcher. Longer computation
 must heartbeat or use a sufficiently validated lease budget; an expired result
 is discarded. Every write and commit rechecks read-only/recovery markers.
+
+The optional longport role also discovers initial monitoring-price jobs for
+selected reconstructed models that have never had an input. Only the original
+current reviewed authorities and complete past local days are accepted. These
+jobs share the SDK mutex and imminent-watch reserve, have one attempt, and commit
+prepared historical bytes with immutable run metadata inside the fenced effect.
+The historical transport remains bounded at 30 seconds without an in-flight
+heartbeat/stop callback; lease/expiry budgets are checked before I/O, and stop or
+stale leases block commit. Core independently admits all-target/action/FX evidence
+and never acquires quotes. This is not research-source acquisition or data-rights
+approval. See [initial monitoring prices](../../docs/14-private-research-data-pipeline.md#缺失首份监测价格的受控自动采集).
 
 ```sh
 python -m unittest discover -s tests/orchestration -v
