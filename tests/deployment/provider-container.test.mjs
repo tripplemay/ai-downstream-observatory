@@ -26,7 +26,7 @@ test('optional native provider image is hash-pinned Python 3.11 and contains nei
   assert.match(docker, /pip install --no-cache-dir --no-deps --require-hashes -r requirements-market-longport\.txt/);
   assert.match(docker, /pip check/);
   assert.match(docker, /from worker\.market\.providers\.longport import _load_sdk; _load_sdk\(\)/);
-  for (const directory of ['worker/accounting', 'worker/market', 'worker/orchestration', 'worker/performance', 'worker/research', 'contracts', 'migrations'])
+  for (const directory of ['worker/accounting', 'worker/market', 'worker/orchestration', 'worker/performance', 'worker/research', 'worker/investor', 'contracts', 'migrations'])
     assert.ok(docker.includes(`COPY ${directory}/ ./${directory}/`), directory);
   assert.match(docker, /^USER 10001:10001$/m);
   assert.match(docker, /^CMD \["python", "-m", "worker.orchestration", "--role", "longport"\]$/m);
@@ -143,6 +143,9 @@ test('native runtime CI executes without network or credentials and records only
   assert.match(shell, /--entrypoint python "\$image" \/fixture-smoke\.py/);
   assert.doesNotMatch(shell, /--env-file|LONGPORT_APP|LONGPORT_ACCESS|--network host/);
   assert.match(probe, /sdk = longport\._load_sdk\(\)/);
+  assert.match(probe, /from worker\.investor\.initial_prices import prepare_initial_price/);
+  assert.match(probe, /from worker\.investor\.confirmed_feed import prepare_confirmed_watch/);
+  assert.match(probe, /assert callable\(prepare_initial_price\) and callable\(prepare_confirmed_watch\)/);
   assert.match(probe, /inspect\.signature\(sdk\.QuoteContext\.history_candlesticks_by_date\)/);
   assert.match(probe, /sdk_binary = native_sdk_path\(sdk\)/);
   assert.match(probe, /hashlib\.sha256\(sdk_binary\.read_bytes\(\)\)/);
@@ -164,7 +167,7 @@ function reportFixture(t) {
   const proof = { schema_version: 'provider-runtime-smoke-v1', status: 'passed', runtime_uid: 10001,
     python_version: '3.11.99', libc: ['glibc', '2.41'], sdk_version: '4.3.7', sdk_native_sha256: 'b'.repeat(64),
     adapter_sha256: adapterHash, native_sdk_imported: true, sdk_signature_checked: true, provider_role_isolated: true,
-    fixed_child_rejected_untrusted_input: true, credentials_present: false, network_disabled: true,
+    fixed_child_rejected_untrusted_input: true, investor_price_handlers_imported: true, credentials_present: false, network_disabled: true,
     quote_context_constructed: false, real_market_data_verified: false };
   const path = join(directory, 'report.json');
   return { proof, path, run(value) {
@@ -222,6 +225,6 @@ test('actual provider report gate never treats missing checks or SDK/runtime/has
   for (const patch of [{ runtime_uid: 0 }, { runtime_uid: '10001' }, { python_version: '3.12.1' }, { libc: ['glibc', '2.36'] },
     { sdk_version: '4.3.8' }, { sdk_native_sha256: 'invalid' }, { adapter_sha256: 'c'.repeat(64) }, { credentials_present: true },
     { quote_context_constructed: true }, { real_market_data_verified: true }, { provider_role_isolated: false },
-    { sdk_signature_checked: false }, { fixed_child_rejected_untrusted_input: false }, { native_sdk_imported: 'true' },
+    { sdk_signature_checked: false }, { fixed_child_rejected_untrusted_input: false }, { investor_price_handlers_imported: false }, { native_sdk_imported: 'true' },
     { network_disabled: 1 }, { unknown: true }]) assert.notEqual(f.run({ ...f.proof, ...patch }).status, 0, JSON.stringify(patch));
 });

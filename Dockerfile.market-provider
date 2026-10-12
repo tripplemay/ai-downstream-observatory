@@ -16,6 +16,7 @@ COPY worker/market/ ./worker/market/
 COPY worker/orchestration/ ./worker/orchestration/
 COPY worker/performance/ ./worker/performance/
 COPY worker/research/ ./worker/research/
+COPY worker/investor/ ./worker/investor/
 COPY contracts/ ./contracts/
 COPY migrations/ ./migrations/
 
