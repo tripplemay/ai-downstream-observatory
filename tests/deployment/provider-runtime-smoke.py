@@ -16,6 +16,8 @@ sys.path.insert(0, "/app")
 
 from worker.market.providers import longport
 from worker.orchestration.runtime import role_commands
+from worker.investor.initial_prices import prepare_initial_price
+from worker.investor.confirmed_feed import prepare_confirmed_watch
 
 
 def native_sdk_path(sdk):
@@ -33,6 +35,7 @@ assert tuple(map(int, platform.libc_ver()[1].split("."))) >= (2, 39)
 assert all(key not in os.environ for key in longport._CREDENTIAL_NAMES)
 assert "market_collect_prices" not in role_commands("core")
 assert role_commands("longport") == ("market_collect_prices",)
+assert callable(prepare_initial_price) and callable(prepare_confirmed_watch)
 sdk = longport._load_sdk()
 sdk_binary = native_sdk_path(sdk)
 method = inspect.signature(sdk.QuoteContext.history_candlesticks_by_date)
@@ -50,6 +53,6 @@ print(json.dumps({
     "sdk_version": longport.SDK_VERSION, "sdk_native_sha256": hashlib.sha256(sdk_binary.read_bytes()).hexdigest(),
     "adapter_sha256": hashlib.sha256(Path(longport.__file__).read_bytes()).hexdigest(),
     "native_sdk_imported": True, "sdk_signature_checked": True, "provider_role_isolated": True,
-    "fixed_child_rejected_untrusted_input": True, "credentials_present": False,
+    "fixed_child_rejected_untrusted_input": True, "investor_price_handlers_imported": True, "credentials_present": False,
     "network_disabled": True, "quote_context_constructed": False, "real_market_data_verified": False,
 }, separators=(",", ":")))

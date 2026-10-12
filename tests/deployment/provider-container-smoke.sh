@@ -17,7 +17,7 @@ const { readFileSync, writeFileSync } = require('node:fs');
 const { execFileSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const [file, image] = process.argv.slice(2), result = JSON.parse(readFileSync(file, 'utf8'));
-const trueFields = ['native_sdk_imported', 'sdk_signature_checked', 'provider_role_isolated', 'fixed_child_rejected_untrusted_input', 'network_disabled'];
+const trueFields = ['native_sdk_imported', 'sdk_signature_checked', 'provider_role_isolated', 'fixed_child_rejected_untrusted_input', 'investor_price_handlers_imported', 'network_disabled'];
 const falseFields = ['credentials_present', 'quote_context_constructed', 'real_market_data_verified'];
 const keys = ['schema_version', 'status', 'runtime_uid', 'python_version', 'libc', 'sdk_version', 'sdk_native_sha256', 'adapter_sha256', ...trueFields, ...falseFields].sort();
 const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
