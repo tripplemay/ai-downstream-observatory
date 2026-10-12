@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
-from time import perf_counter, process_time
+from time import perf_counter, process_time, sleep
 
 
 @contextmanager
@@ -36,9 +36,16 @@ def main():
         from worker.orchestration.db import open_database
         from worker.orchestration.jobs import run_one
         from worker.orchestration.runtime import command_handler
+        from worker.investor.model_runtime import POLL_SECONDS
     with phase("open"):
         db = open_database(path)
     try:
+        # Use the real clock. A positive HTTP flow must not begin immediately
+        # before its next review deadline; do not extend or bypass that guard.
+        with phase("poll_window"):
+            remaining = POLL_SECONDS - datetime.now(timezone.utc).timestamp() % POLL_SECONDS
+            if remaining < 30:
+                sleep(remaining + 0.05)
         now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         rows = db.execute("SELECT id,owner_id FROM investor_workspaces").fetchall()
         assert len(rows) == 1

@@ -1,11 +1,6 @@
 @import "tailwindcss";
 @config "../../tailwind.config.ts";
 
-@utility outline-none {
-  outline: 2px solid transparent;
-  outline-offset: 2px;
-}
-
 @layer base {
   :root {
     --background: 0 0% 100%;

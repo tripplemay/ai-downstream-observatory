@@ -25,8 +25,11 @@ test("default provider acquires missing prices and core seeds both saved model v
       const at = "2026-01-02T12:00:04.000Z", state = getInvestorState(f.db, actor, at); assert.ok(state.plan);
       executeInvestorCommand(f.db, actor, { action: "save_plan", plan_id: state.plan.id, expected_revision: state.revision,
         idempotency_key: "save-initial-reference" }, at);
-      const saved = getInvestorState(f.db, actor, at), value = helper(f, "tests.investor.initial_price_fixture");
-      assert.equal(value.stubbed_sdk_calls, 2); assert.equal(value.real_provider_called, false); assert.equal(value.real_gateway_called, false);
+      const saved = getInvestorState(f.db, actor, at);
+      const collected = helper(f, "tests.investor.initial_price_fixture", ["--mode", "collect"]);
+      assert.equal(collected.stubbed_sdk_calls, 2); assert.equal(collected.real_provider_called, false); assert.equal(collected.real_gateway_called, false);
+      const value = helper(f, "tests.investor.initial_price_fixture", ["--mode", "bootstrap"]);
+      assert.equal(value.stubbed_sdk_calls, 0); assert.equal(value.real_provider_called, false); assert.equal(value.real_gateway_called, false);
       assert.equal(value.document.schema_version, "investor-monitor-data-input-v1");
       const current = "2026-01-03T12:00:04.000Z", before = f.db.prepare("SELECT total_changes() n").get();
       const source = readInvestorMonitorEvidenceSource(f.db, saved.workspace_id!, saved.model_watch!.id, value.registered_input_id, current);

@@ -139,10 +139,12 @@ test("mutable outbox or job tampering never becomes a trusted message or read au
 });
 
 test("inbox scan is index bounded to 20, counts only visible unread and permits an exact older publication acknowledgement", () => {
-  const f = investorFixture(), checked = "2026-01-03T12:16:00.000Z";
+  const f = investorFixture(), checked = "2026-01-03T16:01:00.000Z";
   try {
     seed(f, false, 19); const before = protectedState(f), feed = readInvestorNotifications(f.db, actor, checked);
     assert.equal((f.db.prepare("SELECT count(*) n FROM investor_evidence_monitor_runs").get() as { n: number }).n, 21);
+    assert.equal((f.db.prepare("SELECT count(*) n FROM investor_evidence_monitor_runs WHERE status='blocked'").get() as { n: number }).n, 19);
+    assert.equal(getInvestorState(f.db, actor, checked).effective_outcome, "insufficient_evidence");
     assert.equal(feed.entries.length, 20); assert.equal(feed.has_more, true); assert.equal(feed.visible_unread_count, 20);
     assert.deepEqual(parseInvestorInbox({ ...feed, session_binding: binding }, binding, feed.workspace_id), feed);
     const scan = f.db.prepare("EXPLAIN QUERY PLAN SELECT id FROM investor_evidence_monitor_runs WHERE workspace_id=? ORDER BY created_at DESC,id DESC LIMIT 21").all(feed.workspace_id);

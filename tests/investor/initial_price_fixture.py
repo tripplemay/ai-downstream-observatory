@@ -22,7 +22,7 @@ NOW = "2026-01-03T12:00:03.000Z"
 
 def main():
     parser = argparse.ArgumentParser(); parser.add_argument("--db", required=True)
-    parser.add_argument("--mode", choices=("discover", "claim", "collect", "failed", "complete"), default="complete"); args = parser.parse_args()
+    parser.add_argument("--mode", choices=("discover", "claim", "collect", "failed", "bootstrap", "complete"), default="complete"); args = parser.parse_args()
     filename = Path(args.db).resolve(strict=True)
     if filename.name != "workbench.db" or filename.parent.parent != Path(tempfile.gettempdir()).resolve() or not filename.parent.name.startswith("etf-investor-synthetic-"):
         raise WorkbenchError("SYNTHETIC_FIXTURE_DATABASE_REQUIRED")
@@ -51,9 +51,13 @@ def main():
         with patch.object(longport, "_collect_isolated", side_effect=collect) as sdk, \
                 patch.object(data_evidence, "_milliseconds", side_effect=lambda value=None: NOW if value is None else value), \
                 patch.object(data_evidence, "instant", side_effect=lambda value=None: instant(NOW if value is None else value)):
-            for _ in json.loads(model["document_json"])["targets"]:
-                job = run_pending_once(db, "fictional-initial-provider", role="longport", clock=lambda: NOW)
-                if not job or job["status"] != ("failed" if args.mode == "failed" else "succeeded"): raise WorkbenchError("SYNTHETIC_INITIAL_COLLECTION_FAILED")
+            if args.mode == "bootstrap":
+                count = db.execute("SELECT count(*) FROM investor_initial_price_runs WHERE status='collected'").fetchone()[0]
+                if count != len(json.loads(model["document_json"])["targets"]): raise WorkbenchError("SYNTHETIC_INITIAL_COLLECTION_REQUIRED")
+            else:
+                for _ in json.loads(model["document_json"])["targets"]:
+                    job = run_pending_once(db, "fictional-initial-provider", role="longport", clock=lambda: NOW)
+                    if not job or job["status"] != ("failed" if args.mode == "failed" else "succeeded"): raise WorkbenchError("SYNTHETIC_INITIAL_COLLECTION_FAILED")
             calls = sdk.call_count
             if db.execute("SELECT 1 FROM investor_monitor_evidence_inputs").fetchone(): raise WorkbenchError("SYNTHETIC_EARLY_INPUT")
             if args.mode in ("collect", "failed"):

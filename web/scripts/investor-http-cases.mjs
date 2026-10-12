@@ -494,7 +494,7 @@ finally: db.close()
       const phases = (worker.stderr ?? '').split(/\r?\n/).flatMap(line => {
         try {
           const value = JSON.parse(line);
-          if (!['imports', 'open', 'collect_admit', 'discover', 'execute_publish'].includes(value.phase)) return [];
+          if (!['imports', 'open', 'poll_window', 'collect_admit', 'discover', 'execute_publish'].includes(value.phase)) return [];
           if (value.event === 'start' && Object.keys(value).length === 2) return [value];
           if (value.event === 'end' && Object.keys(value).length === 4 && [value.elapsed_ms, value.cpu_ms].every(n => Number.isSafeInteger(n) && n >= 0)) return [value];
         } catch { /* Arbitrary child diagnostics are never copied to the report. */ }
@@ -664,7 +664,9 @@ finally: db.close()
       .map(table => [table, db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()])));
     const archived = research();
     assert.equal(before.funding.status, 'not_configured');
-    assert.equal(before.effective_outcome, 'decision_required'); assert.equal(before.model_watch.status, 'research_decision');
+    assert.equal(before.effective_outcome, 'decision_required', JSON.stringify({ gaps: before.effective_gaps.map(gap => gap.code),
+      next_review_at: before.latest?.document.next_review_at, checked_at: new Date().toISOString() }));
+    assert.equal(before.model_watch.status, 'research_decision');
     const fundingPlan = { schema_version: 'investor-funding-plan-v1', start_date: '2026-01-01', horizon_years: 10,
       evaluation_timezone: 'Asia/Shanghai', initial_capital_cny: '1200', annual_contribution_cny: '300', first_annual_date: '2027-01-01',
       entry_method: 'three_tranches_60_days', actual_arrivals_confirmed: false, execution_authorized: false, live_advice_eligible: false };

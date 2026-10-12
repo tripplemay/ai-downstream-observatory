@@ -9,7 +9,8 @@ from unittest.mock import patch
 from tests.investor.test_monitor_data import InvestorMonitorDataTests, NOW
 from worker.investor.monitor_data import build_monitor_data
 from worker.investor.monitor_admission import admit_monitor_data, current_monitor_model
-from worker.orchestration.db import WorkbenchError, canonical_json, open_database
+from worker.orchestration.db import WorkbenchError, canonical_json, new_id, open_database
+from worker.investor.data_evidence import _audit
 
 
 def main():
@@ -22,7 +23,7 @@ def main():
     parser.add_argument("--funding", action="store_true")
     parser.add_argument("--later", action="store_true")
     parser.add_argument("--legacy-monitor", action="store_true")
-    parser.add_argument("--notification-series", type=int, default=0, help="Invented changed-input publications for inbox capacity tests only")
+    parser.add_argument("--notification-series", type=int, default=0, help="Expired-input publications for inbox capacity tests only")
     parser.add_argument("--external-ai", action="store_true", help="Invented regression grant, no real AI call")
     parser.add_argument("--extra-closed-day", action="store_true", help="Invented calendar coverage for a funding-boundary regression only")
     args = parser.parse_args()
@@ -70,11 +71,19 @@ def main():
                     completed = run_pending_once(db, "fictional-qualified-monitor", clock=lambda: "2026-01-03T12:15:03.000Z")
                     if completed["status"] != "succeeded": raise WorkbenchError("SYNTHETIC_MONITOR_NOT_COMPLETED")
                 for index in range(args.notification_series):
-                    at = (datetime(2026, 1, 3, 12, 15, 4, tzinfo=timezone.utc) + timedelta(seconds=index)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-                    settings["funding_intent"] = {"id": "fictional-notification-funding-" + str(index), "amount_cny": "1000", "expected_at": at}
-                    admit_monitor_data(db, model["workspace_id"], "synthetic-investor", model["id"], windows, settings, now=at)
+                    # Capacity tests need authentic publications, not 19 new
+                    # financial model checkpoints. Exercise the expired-input
+                    # branch with invented controls on this empty test DB only.
+                    at = (datetime(2026, 1, 3, 16, 0, 4, tzinfo=timezone.utc) + timedelta(seconds=index)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                    version = db.execute("SELECT MAX(version) FROM investor_model_controls WHERE model_id=?", (model["id"],)).fetchone()[0] + 1
+                    audit_id = _audit(db, "synthetic-investor", "synthetic_notification_control", "investor_workspace", model["workspace_id"],
+                        {"fictional_only": True, "enabled": True, "model_id": model["id"]}, at)
+                    db.execute("INSERT INTO investor_model_controls(id,workspace_id,model_id,version,enabled,actor_id,audit_id,created_at) VALUES(?,?,?,?,1,?,?,?)",
+                        (new_id("fictional-notification-control"), model["workspace_id"], model["id"], version, "synthetic-investor", audit_id, at))
                     completed = run_pending_once(db, "fictional-notification-capacity", clock=lambda: at)
                     if completed["status"] != "succeeded": raise WorkbenchError("SYNTHETIC_MONITOR_NOT_COMPLETED")
+                    publication = db.execute("SELECT status FROM investor_evidence_monitor_runs WHERE job_id=?", (completed["id"],)).fetchone()
+                    if not publication or publication[0] != "blocked": raise WorkbenchError("SYNTHETIC_EXPIRED_PUBLICATION_REQUIRED")
             if args.legacy_monitor:
                 at = "2026-01-03T12:15:03.000Z" if args.later else NOW
                 completed = run_pending_once(db, "fictional-sparse-monitor", clock=lambda: at)
