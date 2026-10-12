@@ -23,7 +23,9 @@ function seed(f: F, funding = false, series = 0) {
   const state = getInvestorState(f.db, actor, "2026-01-02T12:00:04.000Z"); assert.ok(state.plan);
   executeInvestorCommand(f.db, actor, { action: "save_plan", plan_id: state.plan.id, expected_revision: state.revision,
     idempotency_key: "fictional-notification-save" }, "2026-01-02T12:00:04.000Z");
-  helper(f, "tests.investor.monitor_data_fixture", ["--admit", "--monitor", "--later", ...(funding ? ["--funding"] : []), ...(series ? ["--notification-series", String(series)] : [])]);
+  helper(f, "tests.investor.monitor_data_fixture", ["--admit", "--monitor", "--later", ...(funding ? ["--funding"] : [])]);
+  for (let offset = 0; offset < series; offset += 7)
+    helper(f, "tests.investor.monitor_data_fixture", ["--notification-batch", String(Math.min(7, series - offset)), "--notification-offset", String(offset)]);
 }
 function protectedState(f: F) {
   return hash(Object.fromEntries(["investor_workspaces", "investor_profiles", "investor_models", "investor_model_controls", "investor_observations",
@@ -139,11 +141,15 @@ test("mutable outbox or job tampering never becomes a trusted message or read au
 });
 
 test("inbox scan is index bounded to 20, counts only visible unread and permits an exact older publication acknowledgement", () => {
-  const f = investorFixture(), checked = "2026-01-03T16:01:00.000Z";
+  const f = investorFixture(), checked = "2026-01-03T12:16:00.000Z";
   try {
     seed(f, false, 19); const before = protectedState(f), feed = readInvestorNotifications(f.db, actor, checked);
     assert.equal((f.db.prepare("SELECT count(*) n FROM investor_evidence_monitor_runs").get() as { n: number }).n, 21);
     assert.equal((f.db.prepare("SELECT count(*) n FROM investor_evidence_monitor_runs WHERE status='blocked'").get() as { n: number }).n, 19);
+    assert.ok((f.db.prepare("SELECT count(*) n FROM investor_evidence_model_checkpoints").get() as { n: number }).n <= 2);
+    assert.equal((f.db.prepare(`SELECT count(*) n FROM investor_evidence_monitor_runs r JOIN investor_evidence_run_payloads p ON p.run_id=r.id
+      WHERE r.status='blocked' AND r.checkpoint_id IS NULL AND json_extract(CAST(p.payload AS TEXT),'$.observation.gaps[0].code')='REFERENCE_SOURCE_NO_LONGER_CURRENT'`)
+      .get() as { n: number }).n, 19);
     assert.equal(getInvestorState(f.db, actor, checked).effective_outcome, "insufficient_evidence");
     assert.equal(feed.entries.length, 20); assert.equal(feed.has_more, true); assert.equal(feed.visible_unread_count, 20);
     assert.deepEqual(parseInvestorInbox({ ...feed, session_binding: binding }, binding, feed.workspace_id), feed);
