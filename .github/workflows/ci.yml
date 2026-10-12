@@ -58,6 +58,10 @@ jobs:
   web:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -77,7 +81,14 @@ jobs:
         run: pip install --no-deps --require-hashes -r requirements-market-longport.txt
       - name: Web unit and ledger integration tests
         working-directory: web
-        run: npm test
+        run: npm run test:ci:shard -- --shard ${{ matrix.shard }} --shards 8
+      - name: preserve Web file coverage and complete TAP result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workbench-web-${{ matrix.shard }}-${{ inputs.release_sha || github.sha }}
+          path: artifacts/verification/web-shard-*
+          if-no-files-found: ignore
   fixtures:
     runs-on: ubuntu-latest
     timeout-minutes: 30
