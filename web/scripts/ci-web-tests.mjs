@@ -6,10 +6,19 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export function partitionFiles(files, count) {
+const historicalCosts = JSON.parse(readFileSync(path.join(web, 'scripts/ci-web-costs.json'), 'utf8'));
+export function partitionFiles(files, count, costs = historicalCosts.seconds_by_file) {
   if (!Number.isInteger(count) || count < 1 || count > 32 || !files.length || new Set(files).size !== files.length) throw new Error('INVALID_TEST_PARTITION');
+  if (!costs || typeof costs !== 'object' || Array.isArray(costs) || Object.values(costs).some(value => !Number.isSafeInteger(value) || value < 1)) throw new Error('INVALID_TEST_COST');
   const groups = Array.from({ length: count }, () => []);
-  [...files].sort().forEach((file, index) => groups[index % count].push(file));
+  const loads = Array(count).fill(0), weight = file => Object.hasOwn(costs, file) ? costs[file] : historicalCosts.default_seconds;
+  // Costs only influence placement. Discovery, assertions and deadlines stay
+  // unchanged; unknown/new files are always included with a positive weight.
+  [...files].sort((a, b) => weight(b) - weight(a) || (a < b ? -1 : a > b ? 1 : 0)).forEach(file => {
+    const index = loads.indexOf(Math.min(...loads));
+    groups[index].push(file); loads[index] += weight(file);
+  });
+  groups.forEach(group => group.sort());
   return groups;
 }
 
@@ -22,7 +31,8 @@ async function main() {
   const groups = partitionFiles(files, count);
   if (shard >= count || !groups[shard]?.length) throw new Error('INVALID_OR_EMPTY_SHARD');
   const report = { shard, shards: count, discovered: files.length, selected_files: groups[shard],
-    inventory_sha256: createHash('sha256').update(JSON.stringify(files)).digest('hex'), test_concurrency: 1, status: 'DISCOVERED' };
+    inventory_sha256: createHash('sha256').update(JSON.stringify(files)).digest('hex'), test_concurrency: 1, status: 'DISCOVERED',
+    partition_version: 'historical-cost-v1', estimated_seconds: groups[shard].reduce((sum, file) => sum + (historicalCosts.seconds_by_file[file] ?? historicalCosts.default_seconds), 0) };
   if (values.list) { console.log(JSON.stringify(report)); return; }
   report.source_sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: web, encoding: 'utf8' }).trim();
   const directory = path.join(web, '../artifacts/verification');

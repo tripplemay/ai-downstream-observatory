@@ -32,3 +32,14 @@ test('all Web CI shards preserve pretest publishers and serial per-file executio
   assert.match(readFileSync('web/scripts/ci-web-tests.mjs', 'utf8'), /'--test-concurrency=1'/);
   assert.doesNotMatch(web, /continue-on-error:/);
 });
+
+test('measured costs distribute expensive replays without omitting cheap or newly discovered files', () => {
+  const costs = { a: 120, b: 110, c: 100, d: 90, e: 80, f: 70, g: 60, h: 50 };
+  const files = Object.keys(costs), groups = partitionFiles(files, 4, costs);
+  assert.deepEqual(groups.flat().sort(), files);
+  assert.deepEqual(groups.map(group => group.reduce((sum, file) => sum + costs[file], 0)), [170, 170, 170, 170]);
+  assert.ok(partitionFiles([...files, 'new-file'], 4, costs).flat().includes('new-file'));
+  assert.deepEqual(partitionFiles(['constructor', '__proto__', 'toString'], 2, {}).flat().sort(), ['__proto__', 'constructor', 'toString']);
+  assert.deepEqual(partitionFiles([...files].reverse(), 4, costs), groups);
+  for (const value of [0, -1, NaN, Infinity, '1']) assert.throws(() => partitionFiles(files, 4, { a: value }), /INVALID_TEST_COST/);
+});
