@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-model-definition-v2.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "model_id", "profile_id", "profile_version", "profile_hash", "plan_id", "plan_hash", "target_definition_hash", "targets", "created_at", "valid_until", "data_mode", "scope", "live_advice_eligible", "fixed_policy"],
+  "properties": {
+    "schema_version": {"const": "investor-model-definition-v2"},
+    "model_id": {"$ref": "investor-model-definition.schema.json#/properties/model_id"},
+    "profile_id": {"$ref": "investor-model-definition.schema.json#/properties/profile_id"},
+    "profile_version": {"$ref": "investor-model-definition.schema.json#/properties/profile_version"},
+    "profile_hash": {"$ref": "investor-model-definition.schema.json#/properties/profile_hash"},
+    "plan_id": {"$ref": "investor-model-definition.schema.json#/properties/plan_id"},
+    "plan_hash": {"$ref": "investor-model-definition.schema.json#/properties/plan_hash"},
+    "target_definition_hash": {"$ref": "investor-model-definition.schema.json#/properties/target_definition_hash"},
+    "targets": {"$ref": "investor-model-definition.schema.json#/properties/targets"},
+    "created_at": {"$ref": "investor-model-definition.schema.json#/properties/created_at"},
+    "valid_until": {"$ref": "investor-model-definition.schema.json#/properties/valid_until"},
+    "data_mode": {"const": "reconstructed"}, "scope": {"const": "research_model"}, "live_advice_eligible": {"const": false},
+    "fixed_policy": {"$ref": "investor-reference-plan-v2.schema.json#/$defs/binding"}
+  }
+}

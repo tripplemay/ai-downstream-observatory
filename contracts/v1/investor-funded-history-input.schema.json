@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-funded-history-input.schema.json",
+  "$defs": {
+    "projection": {
+      "type": "object",
+      "required": ["schema_version", "funding_plan_hash", "historical_start_date", "translation_years", "window", "evaluation_timezone", "preferred_path", "total_assumed_principal_cny", "lots"],
+      "properties": {
+        "schema_version": {"const": "investor-funding-history-projection-v1"},
+        "funding_plan_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "historical_start_date": {"$ref": "common.schema.json#/$defs/date"},
+        "translation_years": {"type": "integer", "minimum": -229, "maximum": 299},
+        "window": {"$ref": "research-plan.schema.json#/$defs/window"},
+        "evaluation_timezone": {"$ref": "common.schema.json#/$defs/timezone"},
+        "preferred_path": {"enum": ["immediate", "staged"]},
+        "total_assumed_principal_cny": {"$ref": "common.schema.json#/$defs/decimal"},
+        "lots": {"type": "array", "minItems": 1, "maxItems": 11, "items": {
+          "type": "object", "required": ["lot_id", "planned_arrival_date", "historical_arrival_date", "arrival_at", "amount_cny", "staged_releases"],
+          "properties": {
+            "lot_id": {"$ref": "common.schema.json#/$defs/id"},
+            "planned_arrival_date": {"$ref": "common.schema.json#/$defs/date"},
+            "historical_arrival_date": {"$ref": "common.schema.json#/$defs/date"},
+            "arrival_at": {"$ref": "common.schema.json#/$defs/instant"},
+            "amount_cny": {"$ref": "common.schema.json#/$defs/decimal"},
+            "staged_releases": {"type": "array", "minItems": 3, "maxItems": 3, "items": {
+              "type": "object", "required": ["at", "amount_cny", "within_window"],
+              "properties": {"at": {"$ref": "common.schema.json#/$defs/instant"}, "amount_cny": {"$ref": "common.schema.json#/$defs/decimal"}, "within_window": {"type": "boolean"}},
+              "additionalProperties": false
+            }}
+          }, "additionalProperties": false
+        }}
+      }, "additionalProperties": false
+    }
+  },
+  "type": "object", "required": ["schema_version", "funding_plan", "historical_start_date", "dataset", "context"],
+  "properties": {
+    "schema_version": {"const": "investor-funded-history-input-v1"},
+    "funding_plan": {"$ref": "investor-funding-plan.schema.json"},
+    "historical_start_date": {"type": "string", "format": "date", "pattern": "^(19[7-9][0-9]|2[01][0-9]{2})-[0-9]{2}-[0-9]{2}$"},
+    "dataset": {"$ref": "investor-long-horizon-input.schema.json#/properties/dataset"},
+    "context": {"$ref": "investor-long-horizon-input-v2.schema.json#/$defs/context"}
+  }, "additionalProperties": false
+}

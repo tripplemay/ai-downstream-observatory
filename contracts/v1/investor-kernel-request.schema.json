@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-kernel-request.schema.json",
+  "oneOf": [
+    {"type": "object", "required": ["action", "dataset", "plan", "policy", "profile"], "properties": {
+      "action": {"const": "research"}, "dataset": {"$ref": "research-dataset.schema.json"}, "plan": {"$ref": "research-plan.schema.json"},
+      "policy": {"$ref": "investor-strategy-policy.schema.json"}, "profile": {"$ref": "investor-profile.schema.json"}
+    }, "additionalProperties": false},
+    {"type": "object", "required": ["action", "document", "now"], "properties": {
+      "action": {"const": "monitor"}, "document": {"oneOf": [{"$ref": "investor-model-monitor.schema.json"}, {"$ref": "investor-model-monitor-v2.schema.json"}, {"$ref": "investor-model-monitor-v3.schema.json"}]}, "now": {"$ref": "investor-model-monitor.schema.json#/$defs/instant"}
+    }, "additionalProperties": false}
+  ]
+}

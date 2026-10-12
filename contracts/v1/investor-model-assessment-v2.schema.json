@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-model-assessment-v2.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "engine_version", "implementation_hash", "profile_id", "profile_version", "input_version", "evaluated_at", "data_cutoff", "market_cutoffs", "next_review_at", "gaps", "reason_codes", "changes", "model_nav_cny", "estimated_cost_cny", "allocation_method", "hypothetical_cash_remaining_cny", "funding_status", "constraints_not_checked", "scope", "actual_holdings_linked", "execution_authorized", "live_advice_eligible", "outcome", "result_hash", "policy_evaluation", "next_policy_state"],
+  "properties": {
+    "schema_version": {"const": "investor-model-assessment-v2"}, "engine_version": {"const": "investor-fixed-policy-monitor-v1"},
+    "implementation_hash": {"$ref": "common.schema.json#/$defs/hash"}, "profile_id": {"$ref": "common.schema.json#/$defs/id"},
+    "profile_version": {"$ref": "investor-model-assessment.schema.json#/properties/profile_version"}, "input_version": {"$ref": "common.schema.json#/$defs/hash"},
+    "evaluated_at": {"$ref": "common.schema.json#/$defs/instant"}, "data_cutoff": {"$ref": "common.schema.json#/$defs/instant"},
+    "market_cutoffs": {"$ref": "investor-model-assessment.schema.json#/properties/market_cutoffs"},
+    "next_review_at": {"$ref": "investor-model-assessment.schema.json#/properties/next_review_at"},
+    "gaps": {"$ref": "investor-model-assessment.schema.json#/properties/gaps"}, "reason_codes": {"$ref": "investor-model-assessment.schema.json#/properties/reason_codes"},
+    "changes": {"$ref": "investor-model-assessment.schema.json#/properties/changes"},
+    "model_nav_cny": {"$ref": "investor-model-assessment.schema.json#/properties/model_nav_cny"},
+    "estimated_cost_cny": {"$ref": "investor-model-assessment.schema.json#/properties/estimated_cost_cny"},
+    "allocation_method": {"$ref": "investor-model-assessment.schema.json#/properties/allocation_method"},
+    "hypothetical_cash_remaining_cny": {"$ref": "investor-model-assessment.schema.json#/properties/hypothetical_cash_remaining_cny"},
+    "funding_status": {"$ref": "investor-model-assessment.schema.json#/properties/funding_status"},
+    "constraints_not_checked": {"$ref": "investor-model-assessment.schema.json#/properties/constraints_not_checked"},
+    "scope": {"const": "research_model"}, "actual_holdings_linked": {"const": false}, "execution_authorized": {"const": false}, "live_advice_eligible": {"const": false},
+    "outcome": {"$ref": "investor-model-assessment.schema.json#/properties/outcome"}, "result_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "next_policy_state": {"$ref": "investor-fixed-policy-state.schema.json"},
+    "policy_evaluation": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/evaluation"}]}
+  },
+  "allOf": [
+    {"if": {"properties": {"outcome": {"const": "insufficient_evidence"}}}, "then": {"properties": {"gaps": {"type": "array", "minItems": 1}}}, "else": {"properties": {"gaps": {"type": "array", "maxItems": 0}, "model_nav_cny": {"$ref": "investor-model-assessment.schema.json#/$defs/decimal"}, "next_review_at": {"$ref": "common.schema.json#/$defs/instant"}, "policy_evaluation": {"$ref": "#/$defs/evaluation"}}}},
+    {"if": {"properties": {"outcome": {"const": "decision_required"}}}, "then": {"properties": {"estimated_cost_cny": {"$ref": "investor-model-assessment.schema.json#/$defs/decimal"}, "allocation_method": {"enum": ["contribution_repair_without_sales", "band_rebalance_research_not_executable"]}}}}
+  ],
+  "$defs": {
+    "evaluation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["parameters_hash", "evaluation_timezone", "review_period", "calendar_due", "cooldown_active", "new_funding", "new_cny_cash", "cash_repair_pending", "class_drift"],
+      "properties": {
+        "parameters_hash": {"$ref": "common.schema.json#/$defs/hash"}, "evaluation_timezone": {"$ref": "common.schema.json#/$defs/timezone"},
+        "review_period": {"type": "string", "pattern": "^[0-9]{4}(?:-H[12])?$"},
+        "calendar_due": {"type": "boolean"}, "cooldown_active": {"type": "boolean"}, "new_funding": {"type": "boolean"}, "new_cny_cash": {"type": "boolean"}, "cash_repair_pending": {"type": "boolean"},
+        "class_drift": {"type": "array", "minItems": 1, "maxItems": 3, "items": {
+          "type": "object", "additionalProperties": false, "required": ["role", "target_weight", "current_weight", "difference_weight", "threshold_breached"],
+          "properties": {
+            "role": {"enum": ["growth", "defensive", "diversifier"]},
+            "target_weight": {"$ref": "investor-model-assessment.schema.json#/$defs/decimal"}, "current_weight": {"$ref": "investor-model-assessment.schema.json#/$defs/decimal"}, "difference_weight": {"$ref": "investor-model-assessment.schema.json#/$defs/decimal"}, "threshold_breached": {"type": "boolean"}
+          }
+        }}
+      }
+    }
+  }
+}

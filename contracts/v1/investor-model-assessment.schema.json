@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-model-assessment.schema.json",
+  "$defs": {
+    "decimal": {"$ref": "investor-strategy-result.schema.json#/$defs/decimal"},
+    "nullableDecimal": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/decimal"}]},
+    "code": {"type": "string", "maxLength": 100, "pattern": "^[A-Z][A-Z0-9_]*(?::(?:CN|HK|US|CNY|HKD|USD))?$"}
+  },
+  "type": "object",
+  "required": ["schema_version", "engine_version", "implementation_hash", "profile_id", "profile_version", "input_version", "evaluated_at", "data_cutoff", "market_cutoffs", "next_review_at", "gaps", "reason_codes", "changes", "model_nav_cny", "estimated_cost_cny", "allocation_method", "hypothetical_cash_remaining_cny", "funding_status", "constraints_not_checked", "scope", "actual_holdings_linked", "execution_authorized", "live_advice_eligible", "outcome", "result_hash"],
+  "properties": {
+    "schema_version": {"const": "investor-model-assessment-v1"}, "engine_version": {"const": "investor-model-monitor-v1"},
+    "implementation_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "profile_id": {"$ref": "common.schema.json#/$defs/id"}, "profile_version": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}, "input_version": {"$ref": "common.schema.json#/$defs/hash"},
+    "evaluated_at": {"$ref": "common.schema.json#/$defs/instant"}, "data_cutoff": {"$ref": "common.schema.json#/$defs/instant"},
+    "market_cutoffs": {"type": "object", "minProperties": 1, "maxProperties": 3, "propertyNames": {"enum": ["CN", "HK", "US"]}, "additionalProperties": {"$ref": "common.schema.json#/$defs/instant"}},
+    "next_review_at": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/instant"}]},
+    "gaps": {"type": "array", "maxItems": 40, "uniqueItems": true, "items": {"$ref": "#/$defs/code"}},
+    "reason_codes": {"type": "array", "minItems": 1, "maxItems": 20, "uniqueItems": true, "items": {"$ref": "#/$defs/code"}},
+    "changes": {"type": "array", "maxItems": 20, "items": {"type": "object", "required": ["listing_id", "before_target_weight", "after_target_weight", "observed_model_weight", "current_model_value_cny", "hypothetical_target_value_cny", "difference_cny", "within_band", "proposed_change_cny", "remaining_target_difference_cny"], "properties": {
+      "listing_id": {"$ref": "common.schema.json#/$defs/id"}, "before_target_weight": {"$ref": "#/$defs/decimal"}, "after_target_weight": {"$ref": "#/$defs/decimal"}, "observed_model_weight": {"$ref": "#/$defs/decimal"},
+      "current_model_value_cny": {"$ref": "#/$defs/decimal"}, "hypothetical_target_value_cny": {"$ref": "#/$defs/decimal"}, "difference_cny": {"$ref": "#/$defs/decimal"},
+      "within_band": {"type": "boolean"}, "proposed_change_cny": {"$ref": "#/$defs/decimal"}, "remaining_target_difference_cny": {"$ref": "#/$defs/decimal"}
+    }, "additionalProperties": false}},
+    "model_nav_cny": {"$ref": "#/$defs/nullableDecimal"}, "estimated_cost_cny": {"$ref": "#/$defs/nullableDecimal"}, "hypothetical_cash_remaining_cny": {"$ref": "#/$defs/nullableDecimal"},
+    "allocation_method": {"enum": ["none", "contribution_repair_without_sales", "band_rebalance_research_not_executable"]}, "funding_status": {"enum": ["none", "not_due", "hypothetical_due"]},
+    "constraints_not_checked": {"const": ["lot_size", "tradability", "actual_cash", "settlement", "tax", "account_permissions"]},
+    "scope": {"const": "research_model"}, "actual_holdings_linked": {"const": false}, "execution_authorized": {"const": false}, "live_advice_eligible": {"const": false},
+    "outcome": {"enum": ["observe", "decision_required", "insufficient_evidence"]}, "result_hash": {"$ref": "common.schema.json#/$defs/hash"}
+  }, "additionalProperties": false,
+  "allOf": [
+    {"if": {"properties": {"outcome": {"const": "insufficient_evidence"}}}, "then": {"properties": {"gaps": {"type": "array", "minItems": 1}}}, "else": {"properties": {"gaps": {"type": "array", "maxItems": 0}, "model_nav_cny": {"$ref": "#/$defs/decimal"}, "next_review_at": {"$ref": "common.schema.json#/$defs/instant"}}}},
+    {"if": {"properties": {"outcome": {"const": "decision_required"}}}, "then": {"properties": {"estimated_cost_cny": {"$ref": "#/$defs/decimal"}, "allocation_method": {"enum": ["contribution_repair_without_sales", "band_rebalance_research_not_executable"]}}}}
+  ]
+}

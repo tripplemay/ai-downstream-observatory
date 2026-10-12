@@ -1,34 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { z } from "zod";
 import { assertWritableDatabase } from "../workbench-db";
 import { parseStrictJson } from "../strict-json";
 import { amount, exact } from "./decimal";
 import { readJsonAttachment, type AttachmentOptions } from "./attachments";
 import { audit, canonical, revision, type Actor } from "./service";
 import { ledgerFactQualityAt } from "./fact-quality-db";
-
-const BASE_RECONCILIATION_BALANCES = ["cash_settled", "trade_receivable", "trade_payable", "dividend_receivable", "transfer_in_transit", "other_liability", "cash_hold"] as const;
-export const RECONCILIATION_BALANCES = [...BASE_RECONCILIATION_BALANCES, "dividend_tax_payable"] as const;
-const id = z.string().min(1).max(200);
-const currency = z.string().regex(/^[A-Z]{3}$/);
-const decimal = z.string().max(80).superRefine((value, context) => {
-  try { amount(value); } catch { context.addIssue({ code: z.ZodIssueCode.custom, message: "INVALID_DECIMAL" }); }
-});
-export const statementSchema = z.object({
-  schema_version: z.literal(1), portfolio_id: id, account_id: id,
-  cutoff_at: z.string().datetime({ offset: false }),
-  coverage: z.object({
-    currencies: z.array(currency).min(1).max(100),
-    ledger_accounts: z.array(z.enum(RECONCILIATION_BALANCES)).min(1).max(RECONCILIATION_BALANCES.length),
-    positions_complete: z.literal(true), balances_complete: z.literal(true),
-    security_transits_complete: z.literal(true).optional(),
-  }).strict(),
-  balances: z.array(z.object({ currency, ledger_account: z.enum(RECONCILIATION_BALANCES), balance: decimal }).strict()).max(1000),
-  positions: z.array(z.object({ listing_id: id, currency, quantity: decimal }).strict()).max(10000),
-  security_transits: z.array(z.object({ transfer_event_id: id, source_account_id: id, target_account_id: id, listing_id: id, currency, quantity: decimal }).strict()).max(10000).optional(),
-}).strict();
-export type AccountStatement = z.infer<typeof statementSchema>;
+import { BASE_RECONCILIATION_BALANCES, RECONCILIATION_BALANCES, reconciliationInstantMicros, statementSchema, type AccountStatement } from "./reconciliation-schemas";
+export { RECONCILIATION_BALANCES, statementSchema, type AccountStatement } from "./reconciliation-schemas";
 export interface ReconciliationCommand {
   portfolio_id: string; account_id: string; expected_revision: number; attachment_id: string;
   resolves_issue_ids?: string[]; resolution_reason?: string;
@@ -47,14 +26,16 @@ function currentAccount(db: Database.Database, actor: Actor, portfolioId: string
 }
 
 function assertCutoff(db: Database.Database, accountId: string, cutoff: string, now: string): void {
-  const cutoffTime = new Date(cutoff).getTime(), currentTime = new Date(now).getTime();
-  if (!Number.isFinite(currentTime)) throw new Error("INVALID_CLOCK");
+  const cutoffTime = reconciliationInstantMicros(cutoff), currentTime = reconciliationInstantMicros(now);
+  if (currentTime === null) throw new Error("INVALID_CLOCK");
+  if (cutoffTime === null) throw new Error("INVALID_ACCOUNT_STATEMENT");
   if (cutoffTime > currentTime) throw new Error("FUTURE_STATEMENT_NOT_ALLOWED");
   const events = db.prepare("SELECT e.effective_at,e.time_precision,e.source_timezone FROM ledger_events e WHERE e.reversal_of IS NULL AND NOT EXISTS(SELECT 1 FROM ledger_events r WHERE r.reversal_of=e.id) AND (e.account_id=? OR EXISTS(SELECT 1 FROM postings p WHERE p.event_id=e.id AND p.account_id=?) OR EXISTS(SELECT 1 FROM position_movements p WHERE p.event_id=e.id AND p.account_id=?) OR EXISTS(SELECT 1 FROM security_transit_movements t WHERE t.event_id=e.id AND (t.source_account_id=? OR t.target_account_id=?)))")
     .all(accountId, accountId, accountId, accountId, accountId) as { effective_at: string; time_precision: string; source_timezone: string }[];
   for (const event of events) {
     if (event.time_precision === "second") {
-      if (new Date(event.effective_at).getTime() > cutoffTime) throw new Error("HISTORICAL_RECONCILIATION_UNSUPPORTED");
+      const effective = reconciliationInstantMicros(event.effective_at);
+      if (effective === null || effective > cutoffTime) throw new Error("HISTORICAL_RECONCILIATION_UNSUPPORTED");
     } else {
       const parts = new Intl.DateTimeFormat("en-CA", { timeZone: event.source_timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(cutoff));
       const part = (type: string) => parts.find(item => item.type === type)!.value;
@@ -65,25 +46,10 @@ function assertCutoff(db: Database.Database, accountId: string, cutoff: string, 
   }
 }
 
-export function reconcileAccount(db: Database.Database, actor: Actor, input: ReconciliationCommand, options: AttachmentOptions = {}): ReconciliationResult {
-  currentAccount(db, actor, input.portfolio_id, input.account_id);
-  assertWritableDatabase(db);
-  if (!Number.isSafeInteger(input.expected_revision) || input.expected_revision < 0) throw new Error("INVALID_RECONCILIATION_COMMAND");
-  const resolveIds = input.resolves_issue_ids ?? [];
-  if (resolveIds.length > 1000 || new Set(resolveIds).size !== resolveIds.length || resolveIds.some(value => typeof value !== "string" || !value || value.length > 200)
-    || (resolveIds.length && (!input.resolution_reason?.trim() || input.resolution_reason.length > 2000))) throw new Error("INVALID_RECONCILIATION_RESOLUTION");
-  const { bytes, attachment } = readJsonAttachment(db, actor, input.portfolio_id, input.attachment_id, { ...options, accountId: input.account_id });
-  let raw: unknown;
-  try { raw = parseStrictJson(bytes.toString("utf8")); } catch { throw new Error("INVALID_STATEMENT_JSON"); }
-  const parsed = statementSchema.safeParse(raw);
-  if (!parsed.success) throw new Error("INVALID_ACCOUNT_STATEMENT");
-  const statement = parsed.data;
-  if (statement.portfolio_id !== input.portfolio_id || statement.account_id !== input.account_id) throw new Error("STATEMENT_OUT_OF_SCOPE");
-  const now = options.now ?? new Date().toISOString();
-  return db.transaction(() => {
-    assertWritableDatabase(db);
+export function compareReconciliationStatement(db: Database.Database, actor: Actor,
+  input: Pick<ReconciliationCommand, "portfolio_id" | "account_id" | "expected_revision">, statement: AccountStatement, now: string) {
     const account = currentAccount(db, actor, input.portfolio_id, input.account_id);
-    if (revision(db, input.portfolio_id) !== input.expected_revision) throw new Error("VERSION_CONFLICT");
+    if (statement.portfolio_id !== input.portfolio_id || statement.account_id !== input.account_id) throw new Error("STATEMENT_OUT_OF_SCOPE");
     assertCutoff(db, input.account_id, statement.cutoff_at, now);
     const issues: ReconciliationIssue[] = [];
     const issue = (issue_type: string, details: Record<string, unknown>) => issues.push({ id: randomUUID(), issue_type, details });
@@ -174,6 +140,28 @@ export function reconcileAccount(db: Database.Database, actor: Actor, input: Rec
       quality_binding_id: factQuality.binding_id,
       dividend_event_ids: unresolvedDividends.map(row => row.event_id), corporate_action_event_ids: unresolvedActions.map(row => row.event_id),
     });
+    return { account, issues, actualTransits, transitCoverage };
+}
+
+export function reconcileAccount(db: Database.Database, actor: Actor, input: ReconciliationCommand, options: AttachmentOptions = {}): ReconciliationResult {
+  currentAccount(db, actor, input.portfolio_id, input.account_id);
+  assertWritableDatabase(db);
+  if (!Number.isSafeInteger(input.expected_revision) || input.expected_revision < 0) throw new Error("INVALID_RECONCILIATION_COMMAND");
+  const resolveIds = input.resolves_issue_ids ?? [];
+  if (resolveIds.length > 1000 || new Set(resolveIds).size !== resolveIds.length || resolveIds.some(value => typeof value !== "string" || !value || value.length > 200)
+    || (resolveIds.length && (!input.resolution_reason?.trim() || input.resolution_reason.length > 2000))) throw new Error("INVALID_RECONCILIATION_RESOLUTION");
+  const { bytes, attachment } = readJsonAttachment(db, actor, input.portfolio_id, input.attachment_id, { ...options, accountId: input.account_id });
+  let raw: unknown;
+  try { raw = parseStrictJson(bytes.toString("utf8")); } catch { throw new Error("INVALID_STATEMENT_JSON"); }
+  const parsed = statementSchema.safeParse(raw);
+  if (!parsed.success) throw new Error("INVALID_ACCOUNT_STATEMENT");
+  const statement = parsed.data;
+  if (statement.portfolio_id !== input.portfolio_id || statement.account_id !== input.account_id) throw new Error("STATEMENT_OUT_OF_SCOPE");
+  const now = options.now ?? new Date().toISOString();
+  return db.transaction(() => {
+    assertWritableDatabase(db);
+    if (revision(db, input.portfolio_id) !== input.expected_revision) throw new Error("VERSION_CONFLICT");
+    const { account, issues, actualTransits, transitCoverage } = compareReconciliationStatement(db, actor, input, statement, now);
     const runId = randomUUID();
     if (resolveIds.length && issues.length) throw new Error("RESOLUTION_REQUIRES_MATCHED_STATEMENT");
     const resolved: { id: string }[] = [];
@@ -182,7 +170,8 @@ export function reconcileAccount(db: Database.Database, actor: Actor, input: Rec
         .get(issueId, input.account_id, input.portfolio_id) as { id: string; result_json: string } | undefined;
       if (!previous) throw new Error("RECONCILIATION_ISSUE_OUT_OF_SCOPE");
       const prior = JSON.parse(previous.result_json) as { cutoff_at: string };
-      if (!prior.cutoff_at || new Date(prior.cutoff_at).getTime() > new Date(statement.cutoff_at).getTime()) throw new Error("RESOLUTION_CUTOFF_TOO_EARLY");
+      const priorCutoff = typeof prior.cutoff_at === "string" ? reconciliationInstantMicros(prior.cutoff_at) : null;
+      if (priorCutoff === null || priorCutoff > reconciliationInstantMicros(statement.cutoff_at)!) throw new Error("RESOLUTION_CUTOFF_TOO_EARLY");
       resolved.push(previous);
     }
     for (const previous of resolved) db.prepare("UPDATE reconciliation_issues SET status='resolved',resolution_json=?,resolved_by=?,resolved_at=? WHERE id=? AND status='open'")

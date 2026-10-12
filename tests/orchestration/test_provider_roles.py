@@ -72,6 +72,21 @@ class ProviderRoleTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkbenchError, "STALE_OR_EXPIRED_LEASE"):
             complete_job(self.db, first, {"must_not_commit": True}, now=later)
 
+    def test_initial_price_jobs_share_mutex_with_both_provider_job_types(self):
+        other = open_database(self.path); self.addCleanup(other.close)
+        enqueue_job(self.db, "investor_initial_prices", "fictional", "initial", "initial", max_attempts=1, now=NOW)
+        enqueue_job(self.db, "market_collect_prices", "p", "prices", "prices", now=NOW)
+        enqueue_job(self.db, "investor_confirmed_watch", "fictional", "watch", "watch", max_attempts=1, now=NOW)
+        first = claim_job(self.db, "fictional-initial", 300, "investor_initial_prices", now=NOW)
+        self.assertIsNotNone(first)
+        for kind in ("market_collect_prices", "investor_confirmed_watch"):
+            self.assertIsNone(claim_job(other, "fictional-other", 300, kind, now=NOW))
+        complete_job(self.db, first, {}, outcome="skipped", now=NOW)
+        watch = claim_job(other, "fictional-watch", 300, "investor_confirmed_watch", now=NOW)
+        self.assertIsNotNone(watch)
+        enqueue_job(self.db, "investor_initial_prices", "fictional", "initial-2", "initial-2", max_attempts=1, now=NOW)
+        self.assertIsNone(claim_job(self.db, "fictional-initial-2", 300, "investor_initial_prices", now=NOW))
+
     def test_invalid_role_or_short_provider_lease_has_no_writes(self):
         self.request()
         before = list(self.db.iterdump())

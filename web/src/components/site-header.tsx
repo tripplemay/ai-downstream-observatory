@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { ALL_NAV_ITEMS, Brand, navHref, themeSlugFromPath } from "@/components/nav";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { ADVANCED_NAVIGATION, INVESTOR_NAVIGATION } from "@/components/workbench/primary-navigation";
 
 /** nav 为 server 侧注入的 NavLinksLoader 节点（带 slug→type 映射） */
 export function SiteHeader({ nav }: { nav?: React.ReactNode }) {
@@ -36,14 +37,8 @@ export function SiteHeader({ nav }: { nav?: React.ReactNode }) {
           </div>
           <div className="py-3" onClick={() => setOpen(false)}>
             {nav ?? <nav className="space-y-2 px-4">
-              <Link className="block px-3 py-2 text-sm" href="/workbench">ETF 投资工作台</Link>
-              <Link className="block px-3 py-2 text-sm" href="/workbench/funding">资金计划与投入批次</Link>
-              <Link className="block px-3 py-2 text-sm" href="/workbench/catalog">ETF 标的与持仓比较</Link>
-              <Link className="block px-3 py-2 text-sm" href="/workbench/price-schedules">每日价格采集计划</Link>
-              <Link className="block px-3 py-2 text-sm" href="/workbench/research">策略研究与 AI</Link>
-              <Link className="block px-3 py-2 text-sm" href="/workbench/governance">政策与执行审批</Link>
-              <Link className="block px-3 py-2 text-sm" href="/workbench/verifications">受控工程子检查</Link>
-              <Link className="block px-3 py-2 text-sm" href="/legacy">历史研究档案</Link>
+              {INVESTOR_NAVIGATION.map(item => <Link key={item.href} className="block px-3 py-3 text-sm" href={item.href}>{item.label}</Link>)}
+              <details><summary className="cursor-pointer px-3 py-3 text-xs text-muted-foreground">高级 / 运营</summary>{ADVANCED_NAVIGATION.map(item => <Link key={item.href} className="block px-3 py-2 text-sm text-muted-foreground" href={item.href}>{item.label}</Link>)}</details>
             </nav>}
           </div>
         </SheetContent>

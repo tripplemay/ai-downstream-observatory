@@ -88,6 +88,10 @@ WORKBENCH_MARKET_PROVIDER_ENV_FILE=/etc/etf-workbench/market-provider.env
 ```
 
 凭据内容只写独立私有文件，不加入 Git、镜像或本文示例，不传给 core/verifier/Web。
+接受完整的 `LONGPORT_APP_KEY/APP_SECRET/ACCESS_TOKEN` 或
+`LONGBRIDGE_APP_KEY/APP_SECRET/ACCESS_TOKEN` 三项集合；实际每个变量都有相同前缀，
+不能混用或同时配置两套。私有文件格式与显式环境只读检查见
+[API Key / VPS 接入](12-longbridge-apikey-server-access.md)。
 发布工具检查独立路径、root 所有权及无 group/other 权限，以准确 SHA 构建 provider
 镜像，停写前离线检查 SDK 导入与凭据存在，启动后检查角色与 schema。此检查**不请求
 行情**，不证明数据权限、行情新鲜度或许可；真实数据仍需单独验收。

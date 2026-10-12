@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://etf-workbench.invalid/contracts/v1/investor-reference-plan.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "profile_id", "strategy_version", "strategy_evidence", "input_version", "data_cutoff", "created_at", "valid_until", "data_mode", "targets", "estimated_cost", "risk_scenarios", "benchmark_summary", "counterarguments", "uncertainties", "live_advice_eligible"],
+  "properties": {
+    "schema_version": {"const": "investor-reference-plan-v1"}, "profile_id": {"$ref": "common.schema.json#/$defs/id"},
+    "strategy_version": {"type": "string", "minLength": 1, "maxLength": 160}, "strategy_evidence": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "input_version": {"$ref": "common.schema.json#/$defs/hash"}, "data_cutoff": {"$ref": "#/$defs/instant"},
+    "created_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"},
+    "data_mode": {"enum": ["live_observed", "synthetic", "reconstructed"]},
+    "targets": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "object", "additionalProperties": false,
+      "required": ["listing_id", "symbol", "name", "market", "currency", "weight", "role", "overlap_summary"], "properties": {
+        "listing_id": {"$ref": "common.schema.json#/$defs/id"}, "symbol": {"type": "string", "minLength": 1, "maxLength": 40}, "name": {"type": "string", "minLength": 1, "maxLength": 200},
+        "market": {"enum": ["CN", "HK", "US"]}, "currency": {"enum": ["CNY", "HKD", "USD"]}, "weight": {"type": "string", "pattern": "^(0\\.[0-9]{1,8}|1(?:\\.0{1,8})?)$"},
+        "role": {"type": "string", "minLength": 1, "maxLength": 500}, "overlap_summary": {"type": "string", "minLength": 1, "maxLength": 1000}
+      }}},
+    "estimated_cost": {"type": "string", "minLength": 1, "maxLength": 1000},
+    "risk_scenarios": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"type": "string", "minLength": 1, "maxLength": 1500}},
+    "benchmark_summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "counterarguments": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"type": "string", "minLength": 1, "maxLength": 1500}},
+    "uncertainties": {"type": "array", "maxItems": 20, "items": {"type": "string", "minLength": 1, "maxLength": 1500}},
+    "reference_evidence": {"type": "object", "additionalProperties": false, "required": ["request_id", "run_id", "source_input_id", "experiment_id", "manifest_hash", "result_hash", "selected_parameters_hash", "holdout_status", "qualification"], "properties": {
+      "request_id": {"$ref": "common.schema.json#/$defs/id"}, "run_id": {"$ref": "common.schema.json#/$defs/id"}, "source_input_id": {"$ref": "common.schema.json#/$defs/id"}, "experiment_id": {"$ref": "common.schema.json#/$defs/id"},
+      "manifest_hash": {"$ref": "common.schema.json#/$defs/hash"}, "result_hash": {"$ref": "common.schema.json#/$defs/hash"}, "selected_parameters_hash": {"$ref": "common.schema.json#/$defs/hash"},
+      "holdout_status": {"enum": ["previously_exposed", "not_independently_verified"]}, "qualification": {"const": "owner_reviewed_reconstructed"}
+    }}, "live_advice_eligible": {"const": false}
+  },
+  "allOf": [{"if": {"properties": {"data_mode": {"const": "reconstructed"}}}, "then": {"required": ["reference_evidence"]}, "else": {"not": {"required": ["reference_evidence"]}}}],
+  "$defs": {"instant": {"type": "string", "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"}}
+}

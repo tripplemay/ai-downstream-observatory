@@ -13,7 +13,83 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: install Web dependencies before cross-language fixtures
+        working-directory: web
+        run: npm ci
+      - name: install workbench Python dependencies
+        run: pip install -r requirements-workbench.txt
+      - name: install hash-pinned SDK for offline callback contract tests
+        run: pip install --no-deps --require-hashes -r requirements-market-longport.txt
+      - name: build fixed monthly evaluation publisher
+        working-directory: web
+        run: npm run build:evaluation-worker
+      - name: build fixed background CSV publisher
+        working-directory: web
+        run: npm run build:csv-worker
+      - name: build hash-bound synthetic governance fixture before Python checks
+        working-directory: web
+        run: npm run build:verification-worker
+      - name: full Python discovery shard
+        run: python scripts/ci_python_tests.py --shard ${{ matrix.shard }} --shards 8
+      - name: preserve shard coverage and result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workbench-python-${{ matrix.shard }}-${{ inputs.release_sha || github.sha }}
+          path: artifacts/verification/python-shard-*.json
+          if-no-files-found: ignore
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: install Web dependencies before cross-language fixtures
+        working-directory: web
+        run: npm ci
+      - name: install workbench Python dependencies
+        run: pip install -r requirements-workbench.txt
+      - name: install hash-pinned SDK for offline contract tests
+        run: pip install --no-deps --require-hashes -r requirements-market-longport.txt
+      - name: Web unit and ledger integration tests
+        working-directory: web
+        run: npm run test:ci:shard -- --shard ${{ matrix.shard }} --shards 8
+      - name: preserve Web file coverage and complete TAP result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workbench-web-${{ matrix.shard }}-${{ inputs.release_sha || github.sha }}
+          path: artifacts/verification/web-shard-*
+          if-no-files-found: ignore
+  fixtures:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -31,24 +107,48 @@ jobs:
         run: npm ci
       - name: install workbench Python dependencies
         run: pip install -r requirements-workbench.txt
-      - name: build fixed monthly evaluation publisher
+      - name: install hash-pinned SDK for offline contract tests
+        run: pip install --no-deps --require-hashes -r requirements-market-longport.txt
+      - name: build fixed cross-language publishers
         working-directory: web
-        run: npm run build:evaluation-worker
-      - name: build fixed background CSV publisher
-        working-directory: web
-        run: npm run build:csv-worker
-      - name: build hash-bound synthetic governance fixture before Python checks
-        working-directory: web
-        run: npm run build:verification-worker
-      - name: Python accounting, market, worker and performance tests
-        run: python -m unittest discover -s tests -p 'test_*.py' -v
-      - name: Web unit and ledger integration tests
-        working-directory: web
-        run: npm test
+        run: |
+          npm run build:evaluation-worker
+          npm run build:csv-worker
+          npm run build:verification-worker
+          npm run build:funded-comparison
+          npm run build:ai-explanation
       - name: schema, market, recovery and release fixtures
         run: node --test tests/*/*.test.mjs
       - name: shell release checks
         run: shellcheck scripts/deploy-workbench.sh tests/deployment/container-smoke.sh tests/deployment/provider-container-smoke.sh
+  http:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: install Web dependencies before cross-language fixtures
+        working-directory: web
+        run: npm ci
+      - name: install workbench Python dependencies
+        run: pip install -r requirements-workbench.txt
+      - name: install hash-pinned SDK for offline contract tests
+        run: pip install --no-deps --require-hashes -r requirements-market-longport.txt
+      - name: build fixed cross-language publishers before HTTP checks
+        working-directory: web
+        run: |
+          npm run build:evaluation-worker
+          npm run build:csv-worker
+          npm run build:verification-worker
+          npm run build:funded-comparison
+          npm run build:ai-explanation
       - name: Web typecheck
         working-directory: web
         run: npm run typecheck
@@ -70,7 +170,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: workbench-validation-${{ inputs.release_sha || github.sha }}
+          name: workbench-http-validation-${{ inputs.release_sha || github.sha }}
           path: artifacts/verification/
           if-no-files-found: ignore
   containers:

@@ -18,6 +18,7 @@ export function loadMigrations(directory = migrationDirectory) {
     if (entry.version !== index + 1 || !/^\d{4}_[a-z0-9_]+\.sql$/.test(entry.file) || !/^[a-f0-9]{64}$/.test(entry.sha256)) {
       throw new Error('INVALID_MIGRATION_ENTRY');
     }
+    if (Object.hasOwn(entry, 'foreign_key_rebuild') && entry.foreign_key_rebuild !== true) throw new Error('INVALID_MIGRATION_ENTRY');
     const sql = readFileSync(join(directory, entry.file), 'utf8');
     if (createHash('sha256').update(sql).digest('hex') !== entry.sha256) {
       throw new Error(`MIGRATION_CHECKSUM_MISMATCH:${entry.file}`);
@@ -93,9 +94,14 @@ export function migrateWorkbench(path, { directory = migrationDirectory } = {}) 
     if (currentVersion !== applied.length) throw new Error('WORKBENCH_SCHEMA_VERSION_MISMATCH');
     assertNoRecovery(path);
     db.pragma('foreign_keys = ON');
+    if (db.pragma('foreign_key_check').length) throw new Error('WORKBENCH_FOREIGN_KEY_CHECK_FAILED');
     db.pragma('busy_timeout = 5000');
     if (db.pragma('journal_mode = WAL', { simple: true }) !== 'wal') throw new Error('WAL_REQUIRED');
     db.pragma('synchronous = FULL');
+    // SQLite's generalized table rebuild requires disabling enforcement on
+    // this private migration connection before BEGIN, then checking all rows.
+    const rebuild = migrations.slice(applied.length).some(entry => entry.foreign_key_rebuild === true);
+    if (rebuild) db.pragma('foreign_keys = OFF');
     let count = 0;
     db.transaction(() => {
       assertNoRecovery(path);
@@ -113,6 +119,8 @@ export function migrateWorkbench(path, { directory = migrationDirectory } = {}) 
       if (db.pragma('foreign_key_check').length) throw new Error('WORKBENCH_FOREIGN_KEY_CHECK_FAILED');
       assertNoRecovery(path);
     }).immediate();
+    if (rebuild) db.pragma('foreign_keys = ON');
+    if (db.pragma('foreign_keys', { simple: true }) !== 1) throw new Error('WORKBENCH_FOREIGN_KEYS_REQUIRED');
     const result = verifyWorkbenchSchema(db, directory);
     if (db.pragma('quick_check', { simple: true }) !== 'ok') throw new Error('WORKBENCH_QUICK_CHECK_FAILED');
     return { ...result, applied: count, path };

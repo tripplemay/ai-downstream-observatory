@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-funding-plan.schema.json",
+  "title": "Private planned funding, not cash or execution facts",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "start_date", "horizon_years", "evaluation_timezone", "initial_capital_cny", "annual_contribution_cny", "first_annual_date", "entry_method", "actual_arrivals_confirmed", "execution_authorized", "live_advice_eligible"],
+  "properties": {
+    "schema_version": {"const": "investor-funding-plan-v1"},
+    "start_date": {"$ref": "#/$defs/date"},
+    "horizon_years": {"type": "integer", "minimum": 1, "maximum": 10},
+    "evaluation_timezone": {"enum": ["Asia/Shanghai", "Asia/Hong_Kong", "America/New_York"]},
+    "initial_capital_cny": {"$ref": "#/$defs/money"},
+    "annual_contribution_cny": {"$ref": "#/$defs/money"},
+    "first_annual_date": {"oneOf": [{"$ref": "#/$defs/date"}, {"type": "null"}]},
+    "entry_method": {"enum": ["immediate", "three_tranches_60_days"]},
+    "actual_arrivals_confirmed": {"const": false},
+    "execution_authorized": {"const": false},
+    "live_advice_eligible": {"const": false}
+  },
+  "$defs": {
+    "date": {"type": "string", "format": "date", "pattern": "^(19|20|21)[0-9]{2}-[0-9]{2}-[0-9]{2}$"},
+    "money": {"type": "string", "pattern": "^(0|[1-9][0-9]{0,11})(\\.[0-9]{1,2})?$"}
+  }
+}

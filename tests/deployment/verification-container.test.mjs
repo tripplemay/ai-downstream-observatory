@@ -48,13 +48,13 @@ test('Compose verifier is a credential-free no-network role with no personal or 
   assert.equal(service.volumes.length, 1); assert.equal(service.volumes[0].target, '/app/data');
   assert.ok([undefined, false].includes(service.volumes[0].bind?.create_host_path));
   assert.deepEqual(Object.keys(service.environment).sort(), ['WORKBENCH_DATA_DIR', 'WORKBENCH_DB_PATH', 'WORKBENCH_MODE']);
-  assert.doesNotMatch(read('docker-compose.yml'), /LONGPORT_|schedule|portfolio_id|verification_request/);
+  assert.doesNotMatch(read('docker-compose.yml'), /LONGPORT_|LONGBRIDGE_|schedule|portfolio_id|verification_request/);
 });
 
 test('container smoke performs normal TS request, dedicated real runner and independently rechecked TS proof before reporting', () => {
   const probe = read('tests/deployment/verification-runtime-smoke.py'), bridge = read('tests/deployment/verification-container-bridge.ts');
   assert.match(probe, /source = source_manifest\(\)/); assert.match(probe, /web == expected_web/);
-  assert.match(probe, /socket\.if_nameindex\(\)/); assert.match(probe, /key\.startswith\("LONGPORT_"\)/);
+  assert.match(probe, /socket\.if_nameindex\(\)/); assert.match(probe, /key\.startswith\(\("LONGPORT_", "LONGBRIDGE_"\)\)/);
   assert.match(probe, /subprocess\.run\(\[\*bridge, "request", str\(path\)\]/);
   assert.match(probe, /subprocess\.run\(\[\*argv, "verifier"\]/);
   assert.match(probe, /subprocess\.run\(\[\*bridge, "read", str\(path\)\]/);
@@ -67,7 +67,11 @@ test('container smoke performs normal TS request, dedicated real runner and inde
   assert.match(shell, /--entrypoint python verifier \/fixture-smoke\.py "\$web_verification_source"/);
   assert.match(shell, /up -d --no-build --wait --wait-timeout 90 web worker verifier/);
   const ci = read('.github/workflows/ci.yml');
-  assert.ok(ci.indexOf('run: npm run build:verification-worker') < ci.indexOf('run: python -m unittest discover'));
+  const pythonJob = ci.match(/^  python:\n[\s\S]*?(?=^  web:)/m)?.[0];
+  assert.ok(pythonJob, 'Python matrix must be present');
+  const publisherBuild = pythonJob.indexOf('run: npm run build:verification-worker');
+  const pythonTests = pythonJob.indexOf('run: python scripts/ci_python_tests.py');
+  assert.ok(publisherBuild >= 0 && pythonTests > publisherBuild, 'fixed verifier bundle must be built before every Python shard');
   assert.match(ci, /run: sudo --preserve-env=PATH bash tests\/deployment\/container-smoke\.sh/);
   const parsed = spawnSync(process.env.WORKBENCH_TEST_PYTHON || 'python3', ['-c', 'import ast,sys; ast.parse(sys.stdin.read())'],
     { input: probe, encoding: 'utf8', timeout: 10000 });

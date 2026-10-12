@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-model-monitor-v3.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "profile_id", "profile_version", "profile_hash", "model_id", "model_state_hash", "before_plan_hash", "after_plan_hash", "before_weights", "after_weights", "quantities", "cash_cny", "non_cash_assets_cny", "quotes", "fx", "funding_intent", "policy", "quality_gaps", "fixed_policy"],
+  "properties": {
+    "schema_version": {"const": "investor-model-monitor-v3"},
+    "profile_id": {"$ref": "investor-model-monitor-v2.schema.json#/properties/profile_id"},
+    "profile_version": {"$ref": "investor-model-monitor-v2.schema.json#/properties/profile_version"},
+    "profile_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "model_id": {"$ref": "common.schema.json#/$defs/id"}, "model_state_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "before_plan_hash": {"$ref": "common.schema.json#/$defs/hash"}, "after_plan_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "before_weights": {"$ref": "investor-model-monitor.schema.json#/$defs/weights"},
+    "after_weights": {"$ref": "investor-model-monitor.schema.json#/$defs/weights"},
+    "quantities": {"$ref": "investor-model-monitor-v2.schema.json#/$defs/quantities"},
+    "cash_cny": {"$ref": "investor-model-monitor-v2.schema.json#/$defs/derived"},
+    "non_cash_assets_cny": {"$ref": "investor-model-monitor-v2.schema.json#/$defs/derived"},
+    "quotes": {"$ref": "investor-model-monitor.schema.json#/properties/quotes"}, "fx": {"$ref": "investor-model-monitor.schema.json#/properties/fx"},
+    "funding_intent": {"$ref": "investor-model-monitor.schema.json#/properties/funding_intent"},
+    "quality_gaps": {"$ref": "investor-model-monitor.schema.json#/properties/quality_gaps"},
+    "policy": {
+      "type": "object", "additionalProperties": false, "required": ["version", "max_fx_age_seconds", "costs"],
+      "properties": {
+        "version": {"$ref": "common.schema.json#/$defs/id"},
+        "max_fx_age_seconds": {"$ref": "investor-model-monitor.schema.json#/properties/policy/properties/max_fx_age_seconds"},
+        "costs": {"$ref": "investor-model-monitor.schema.json#/properties/policy/properties/costs"}
+      }
+    },
+    "fixed_policy": {
+      "type": "object", "additionalProperties": false, "required": ["parameters", "evaluation_timezone", "state"],
+      "properties": {
+        "parameters": {"$ref": "research-fixed-rebalance-parameters-v2.schema.json"},
+        "evaluation_timezone": {"$ref": "common.schema.json#/$defs/timezone"},
+        "state": {"$ref": "investor-fixed-policy-state.schema.json"}
+      }
+    }
+  }
+}

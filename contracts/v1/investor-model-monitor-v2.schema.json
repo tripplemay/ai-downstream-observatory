@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-model-monitor-v2.schema.json",
+  "$defs": {
+    "derived": {"type": "string", "maxLength": 200, "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,120})?$"},
+    "quantities": {"type": "object", "minProperties": 1, "maxProperties": 20, "propertyNames": {"$ref": "common.schema.json#/$defs/id"}, "additionalProperties": {"$ref": "#/$defs/derived"}}
+  },
+  "type": "object",
+  "required": ["schema_version", "profile_id", "profile_version", "profile_hash", "model_id", "model_state_hash", "before_plan_hash", "after_plan_hash", "before_weights", "after_weights", "quantities", "cash_cny", "non_cash_assets_cny", "quotes", "fx", "funding_intent", "policy", "quality_gaps"],
+  "properties": {
+    "schema_version": {"const": "investor-model-monitor-v2"},
+    "profile_id": {"$ref": "common.schema.json#/$defs/id"}, "profile_version": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "profile_hash": {"$ref": "common.schema.json#/$defs/hash"}, "model_id": {"$ref": "common.schema.json#/$defs/id"},
+    "model_state_hash": {"$ref": "common.schema.json#/$defs/hash"}, "before_plan_hash": {"$ref": "common.schema.json#/$defs/hash"}, "after_plan_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "before_weights": {"$ref": "investor-model-monitor.schema.json#/$defs/weights"}, "after_weights": {"$ref": "investor-model-monitor.schema.json#/$defs/weights"},
+    "quantities": {"$ref": "#/$defs/quantities"}, "cash_cny": {"$ref": "#/$defs/derived"}, "non_cash_assets_cny": {"$ref": "#/$defs/derived"},
+    "quotes": {"$ref": "investor-model-monitor.schema.json#/properties/quotes"}, "fx": {"$ref": "investor-model-monitor.schema.json#/properties/fx"},
+    "funding_intent": {"$ref": "investor-model-monitor.schema.json#/properties/funding_intent"},
+    "policy": {"$ref": "investor-model-monitor.schema.json#/properties/policy"}, "quality_gaps": {"$ref": "investor-model-monitor.schema.json#/properties/quality_gaps"}
+  }, "additionalProperties": false
+}

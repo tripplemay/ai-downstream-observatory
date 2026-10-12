@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-evidence-model-checkpoint.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "model_id", "profile_id", "target_definition_hash", "sequence", "previous_hash", "input_hash", "projection_hash", "created_at", "initialized_at", "market_cutoffs", "quantities", "cash_by_currency", "receivables", "entitlements", "processed_actions", "initial_notional_cny", "assumptions", "scope", "data_mode", "live_advice_eligible"],
+  "properties": {
+    "schema_version": {"const": "investor-evidence-model-checkpoint-v1"},
+    "model_id": {"$ref": "common.schema.json#/$defs/id"}, "profile_id": {"$ref": "common.schema.json#/$defs/id"},
+    "target_definition_hash": {"$ref": "common.schema.json#/$defs/hash"}, "sequence": {"$ref": "investor-model-checkpoint.schema.json#/properties/sequence"},
+    "previous_hash": {"$ref": "investor-model-checkpoint.schema.json#/properties/previous_hash"},
+    "input_hash": {"$ref": "common.schema.json#/$defs/hash"}, "projection_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "created_at": {"$ref": "investor-reference-plan.schema.json#/$defs/instant"},
+    "initialized_at": {"$ref": "investor-model-checkpoint.schema.json#/$defs/cutoffs"}, "market_cutoffs": {"$ref": "investor-model-checkpoint.schema.json#/$defs/cutoffs"},
+    "quantities": {"$ref": "investor-model-monitor-v2.schema.json#/$defs/quantities"},
+    "cash_by_currency": {"$ref": "investor-model-checkpoint.schema.json#/properties/cash_by_currency"},
+    "receivables": {"$ref": "investor-model-checkpoint.schema.json#/properties/receivables"},
+    "entitlements": {"$ref": "investor-model-checkpoint.schema.json#/properties/entitlements"},
+    "processed_actions": {"$ref": "investor-model-checkpoint.schema.json#/properties/processed_actions"},
+    "initial_notional_cny": {"const": "10000"}, "assumptions": {"$ref": "investor-model-checkpoint.schema.json#/properties/assumptions"},
+    "scope": {"const": "research_model"}, "data_mode": {"const": "reconstructed"}, "live_advice_eligible": {"const": false}
+  }
+}

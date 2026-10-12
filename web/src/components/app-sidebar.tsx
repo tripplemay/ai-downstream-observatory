@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Separator } from "@/components/ui/separator";
 import { Brand } from "@/components/nav";
+import { ADVANCED_NAVIGATION, INVESTOR_NAVIGATION } from "@/components/workbench/primary-navigation";
 
 export function AppSidebar() {
   return (
@@ -8,16 +9,8 @@ export function AppSidebar() {
       <Brand />
       <Separator className="bg-sidebar-border" />
       <div className="flex-1 space-y-1 overflow-y-auto px-3 py-3">
-        <Link href="/workbench" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">ETF 投资工作台</Link>
-        <Link href="/workbench/funding" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">资金计划与投入批次</Link>
-        <Link href="/workbench/catalog" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">ETF 标的与持仓比较</Link>
-        <Link href="/workbench/market" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">市场资料与价格采集</Link>
-        <Link href="/workbench/price-schedules" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">每日价格采集计划</Link>
-        <Link href="/workbench/research" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">策略研究与 AI</Link>
-        <Link href="/workbench/governance" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">政策与执行审批</Link>
-        <Link href="/workbench/evaluations" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">月度策略评估</Link>
-        <Link href="/workbench/verifications" className="block rounded-md px-3 py-2 text-sm hover:bg-accent">受控工程子检查</Link>
-        <Link href="/legacy" className="block rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-accent">历史研究档案</Link>
+        <nav aria-label="主要功能">{INVESTOR_NAVIGATION.map(item => <Link key={item.href} href={item.href} className="block rounded-md px-3 py-3 text-sm hover:bg-accent">{item.label}</Link>)}</nav>
+        <details className="pt-4"><summary className="cursor-pointer px-3 py-2 text-xs text-muted-foreground">高级 / 运营</summary><nav aria-label="高级功能" className="mt-2">{ADVANCED_NAVIGATION.map(item => <Link key={item.href} href={item.href} className="block rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-accent">{item.label}</Link>)}</nav></details>
       </div>
       <div className="px-5 py-4 text-xs text-muted-foreground">
         真实账户与研究结果隔离

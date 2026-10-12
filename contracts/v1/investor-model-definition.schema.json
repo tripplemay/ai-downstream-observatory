@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-model-definition.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "model_id", "profile_id", "profile_version", "profile_hash", "plan_id", "plan_hash", "target_definition_hash", "targets", "created_at", "valid_until", "data_mode", "scope", "live_advice_eligible"],
+  "properties": {
+    "schema_version": {"const": "investor-model-definition-v1"},
+    "model_id": {"$ref": "common.schema.json#/$defs/id"},
+    "profile_id": {"$ref": "common.schema.json#/$defs/id"},
+    "profile_version": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "profile_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "plan_id": {"$ref": "common.schema.json#/$defs/id"},
+    "plan_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "target_definition_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "targets": {"type": "array", "minItems": 1, "maxItems": 20, "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["listing_id", "market", "currency", "weight"],
+      "properties": {
+        "listing_id": {"$ref": "common.schema.json#/$defs/id"},
+        "market": {"enum": ["CN", "HK", "US"]}, "currency": {"enum": ["CNY", "HKD", "USD"]},
+        "weight": {"type": "string", "pattern": "^(0\\.[0-9]{1,8}|1(?:\\.0{1,8})?)$"}
+      }
+    }},
+    "created_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"},
+    "data_mode": {"enum": ["live_observed", "synthetic", "reconstructed"]}, "scope": {"const": "research_model"}, "live_advice_eligible": {"const": false}
+  },
+  "$defs": {"instant": {"type": "string", "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?Z$"}}
+}

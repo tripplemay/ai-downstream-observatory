@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import test from 'node:test';
+import { migrateWorkbench, migrationDirectory, verifyWorkbenchSchema } from '../../scripts/migrate-workbench.mjs';
+
+const require = createRequire(new URL('../../web/package.json', import.meta.url)), Database = require('better-sqlite3');
+test('migration 34 preserves populated version 33 rows and checksums without creating any portfolio association', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'investor-portfolio-links-upgrade-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const manifest = JSON.parse(readFileSync(join(migrationDirectory, 'manifest.json'))), prefix = join(directory, 'prefix'); mkdirSync(prefix);
+  for (const migration of manifest.migrations.slice(0, 33)) cpSync(join(migrationDirectory, migration.file), join(prefix, migration.file));
+  writeFileSync(join(prefix, 'manifest.json'), JSON.stringify({ ...manifest, migrations: manifest.migrations.slice(0, 33) }));
+  const filename = join(directory, 'workbench.db'); migrateWorkbench(filename, { directory: prefix });
+  const db = new Database(filename); t.after(() => db.close()); db.pragma('foreign_keys = ON');
+  const now = '2026-01-02T12:00:00.000Z';
+  db.prepare("INSERT INTO portfolios(rowid,id,name,created_at) VALUES(8,'book','Fictional',?)").run(now);
+  db.prepare("INSERT INTO ledger_heads VALUES('book',0,?)").run(now);
+  db.prepare("INSERT INTO accounts(rowid,id,portfolio_id,name,broker,base_currency,created_at) VALUES(17,'account','book','Fictional','Fictional','CNY',?)").run(now);
+  db.prepare("INSERT INTO investor_workspaces VALUES('workspace','fictional-owner',0,?)").run(now);
+  const names = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name!='schema_migrations' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row => row.name);
+  const snapshot = () => names.map(name => ({ name, rows: db.prepare(`SELECT rowid _preserved_rowid,* FROM ${name} ORDER BY rowid`).all() }));
+  const before = snapshot(), applied = db.prepare('SELECT * FROM schema_migrations ORDER BY version').all();
+  migrateWorkbench(filename); verifyWorkbenchSchema(db);
+  assert.deepEqual(snapshot(), before); assert.deepEqual(db.prepare('SELECT * FROM schema_migrations WHERE version<=33 ORDER BY version').all(), applied);
+  assert.equal(db.prepare('SELECT count(*) n FROM investor_portfolio_links').get().n, 0);
+  assert.deepEqual(db.pragma('foreign_key_check'), []); assert.equal(db.pragma('integrity_check', { simple: true }), 'ok');
+  migrateWorkbench(filename); assert.deepEqual(snapshot(), before);
+});

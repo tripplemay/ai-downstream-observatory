@@ -1,0 +1,8 @@
+{
+  "schema_version": "readonly-ai-gateway-config-v2",
+  "base_url": "https://your-gateway.example.com/v1",
+  "api_key": "replace-with-your-key",
+  "model": "deepseek-flash",
+  "max_output_tokens": 1024,
+  "request_profile": "deepseek_non_thinking"
+}

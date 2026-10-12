@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-planned-funding-monitor.schema.json",
+  "title": "Unadmitted normalized annual funding projection, not cash or market evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "funding_plan", "binding", "evaluated_at"],
+  "properties": {
+    "schema_version": {"const": "investor-planned-funding-monitor-v1"},
+    "funding_plan": {"$ref": "investor-funding-plan.schema.json"},
+    "binding": {"$ref": "#/$defs/binding"},
+    "evaluated_at": {"$ref": "#/$defs/instant"}
+  },
+  "$defs": {
+    "instant": {"type": "string", "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"},
+    "normalized_amount": {"type": "string", "pattern": "^(0|[1-9][0-9]{0,19})(\\.[0-9]{1,18})?$"},
+    "binding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["funding_plan_id", "funding_plan_hash", "profile_hash", "model_id", "model_hash", "model_created_at", "plan_declared_at"],
+      "properties": {
+        "funding_plan_id": {"$ref": "common.schema.json#/$defs/id"},
+        "funding_plan_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "profile_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "model_id": {"$ref": "common.schema.json#/$defs/id"},
+        "model_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "model_created_at": {"$ref": "#/$defs/instant"},
+        "plan_declared_at": {"$ref": "#/$defs/instant"}
+      }
+    },
+    "release": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "release_date", "expected_at", "status"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^annual:[0-9]{4}-[0-9]{2}-[0-9]{2}:tranche:[012]$"},
+        "release_date": {"type": "string", "format": "date"},
+        "expected_at": {"$ref": "#/$defs/instant"},
+        "status": {"enum": ["excluded_before_anchor", "excluded_outside_horizon", "due", "scheduled"]}
+      }
+    },
+    "intent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "amount_cny", "expected_at"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^planned-annual:[a-f0-9]{64}$"},
+        "amount_cny": {"$ref": "#/$defs/normalized_amount"},
+        "expected_at": {"$ref": "#/$defs/instant"}
+      }
+    },
+    "projection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "input_version", "binding", "binding_hash", "evaluated_at", "anchor_at", "horizon_end_at", "evaluation_timezone", "initial_notional_cny", "normalization", "status", "releases", "due_amount_normalized_cny", "funding_intent", "next_release_at", "valid_until", "qualification", "actual_arrivals_confirmed", "model_cash_changed", "model_units_changed", "execution_authorized", "live_advice_eligible", "result_hash"],
+      "properties": {
+        "schema_version": {"const": "investor-planned-funding-monitor-projection-v1"},
+        "input_version": {"$ref": "common.schema.json#/$defs/hash"},
+        "binding": {"$ref": "#/$defs/binding"},
+        "binding_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "evaluated_at": {"$ref": "#/$defs/instant"},
+        "anchor_at": {"$ref": "#/$defs/instant"},
+        "horizon_end_at": {"$ref": "#/$defs/instant"},
+        "evaluation_timezone": {"enum": ["Asia/Shanghai", "Asia/Hong_Kong", "America/New_York"]},
+        "initial_notional_cny": {"const": "10000"},
+        "normalization": {"const": "sum_selected_annual_cents_divided_by_initial_cents_times_10000_floor_18_places"},
+        "status": {"enum": ["none", "not_due", "hypothetical_due", "no_eligible_releases", "expired"]},
+        "releases": {"type": "array", "maxItems": 30, "items": {"$ref": "#/$defs/release"}},
+        "due_amount_normalized_cny": {"$ref": "#/$defs/normalized_amount"},
+        "funding_intent": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/intent"}]},
+        "next_release_at": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/instant"}]},
+        "valid_until": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/instant"}]},
+        "qualification": {"const": "unadmitted_planned_funding_projection"},
+        "actual_arrivals_confirmed": {"const": false},
+        "model_cash_changed": {"const": false},
+        "model_units_changed": {"const": false},
+        "execution_authorized": {"const": false},
+        "live_advice_eligible": {"const": false},
+        "result_hash": {"$ref": "common.schema.json#/$defs/hash"}
+      }
+    }
+  }
+}

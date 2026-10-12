@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-evidence-monitor.schema.json",
+  "oneOf": [{"$ref": "#/$defs/request"}, {"$ref": "#/$defs/run"}, {"$ref": "#/$defs/observation_ref"}],
+  "$defs": {
+    "instant": {"$ref": "investor-reference-plan.schema.json#/$defs/instant"},
+    "nullable_hash": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "engine_version", "model_hash", "profile_hash", "control_id", "input_hash", "checkpoint_hash"],
+      "properties": {
+        "schema_version": {"const": "investor-evidence-monitor-request-v1"}, "engine_version": {
+          "enum": ["investor-evidence-model-watcher-v1", "investor-evidence-model-watcher-v2", "investor-evidence-model-watcher-v3"],
+          "description": "v1 always appends; v2 reuses unchanged valuation state; v3 binds frozen low-frequency rules and persists sparse policy state, never applied trades."
+        },
+        "model_hash": {"$ref": "common.schema.json#/$defs/hash"}, "profile_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "control_id": {"$ref": "common.schema.json#/$defs/id"}, "input_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "checkpoint_hash": {"$ref": "#/$defs/nullable_hash"}
+      }
+    },
+    "run": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "request_id", "model_id", "input_version", "implementation_hash", "status", "reason_codes", "projection_hash", "checkpoint_hash", "assessment_hash", "observation_hash", "payload_hash", "next_check_at", "created_at", "valid_until", "live_advice_eligible"],
+      "properties": {
+        "schema_version": {"const": "investor-evidence-monitor-run-v1"}, "request_id": {"$ref": "common.schema.json#/$defs/id"}, "model_id": {"$ref": "common.schema.json#/$defs/id"},
+        "input_version": {"$ref": "common.schema.json#/$defs/hash"}, "implementation_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "status": {"enum": ["blocked", "observe", "decision_required"]},
+        "reason_codes": {"type": "array", "minItems": 1, "maxItems": 40, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,79}$"}},
+        "projection_hash": {"$ref": "#/$defs/nullable_hash"}, "checkpoint_hash": {"$ref": "#/$defs/nullable_hash"}, "assessment_hash": {"$ref": "#/$defs/nullable_hash"},
+        "observation_hash": {"$ref": "common.schema.json#/$defs/hash"}, "payload_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "next_check_at": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/instant"}]},
+        "created_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"}, "live_advice_eligible": {"const": false}
+      }
+    },
+    "observation_ref": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "run_id", "outcome", "profile_id", "profile_version", "input_version", "published_at"],
+      "properties": {
+        "schema_version": {"const": "investor-model-observation-ref-v1"}, "run_id": {"$ref": "common.schema.json#/$defs/id"},
+        "outcome": {"enum": ["observe", "decision_required", "insufficient_evidence"]}, "profile_id": {"$ref": "common.schema.json#/$defs/id"},
+        "profile_version": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "input_version": {"$ref": "common.schema.json#/$defs/hash"}, "published_at": {"$ref": "#/$defs/instant"}
+      }
+    }
+  }
+}

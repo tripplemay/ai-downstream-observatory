@@ -15,6 +15,7 @@ COPY worker/market/ ./worker/market/
 COPY worker/orchestration/ ./worker/orchestration/
 COPY worker/performance/ ./worker/performance/
 COPY worker/research/ ./worker/research/
+COPY worker/investor/ ./worker/investor/
 COPY worker/governance_verification/ ./worker/governance_verification/
 COPY requirements-workbench.txt ./
 COPY scripts/migrate-workbench.mjs scripts/verification-source.mjs ./scripts/
@@ -56,6 +57,7 @@ COPY worker/market/ ./worker/market/
 COPY worker/orchestration/ ./worker/orchestration/
 COPY worker/performance/ ./worker/performance/
 COPY worker/research/ ./worker/research/
+COPY worker/investor/ ./worker/investor/
 COPY worker/governance_verification/ ./worker/governance_verification/
 COPY contracts/ ./contracts/
 COPY migrations/ ./migrations/

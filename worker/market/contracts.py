@@ -50,6 +50,8 @@ def validate_contract(value, name="market-batch.schema.json", fragment=None):
 
 def observation_semantics(row, batch):
     validate_contract(row, "market-observation.schema.json")
+    if "assumed_available_at" in row:
+        raise WorkbenchError("RECONSTRUCTED_AVAILABILITY_IS_RESEARCH_ONLY")
     if row["batch_id"] != batch["id"] or row["source_id"] != batch["source_id"]:
         raise WorkbenchError("OBSERVATION_PARENT_MISMATCH")
     try:

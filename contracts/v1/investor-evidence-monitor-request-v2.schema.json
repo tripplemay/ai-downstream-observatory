@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-evidence-monitor-request-v2.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "engine_version", "model_hash", "profile_hash", "control_id", "input_hash", "checkpoint_hash", "funding_binding", "funding_context_hash"],
+  "properties": {
+    "schema_version": {"const": "investor-evidence-monitor-request-v2"},
+    "engine_version": {"const": "investor-evidence-model-watcher-v4"},
+    "model_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "profile_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "control_id": {"$ref": "common.schema.json#/$defs/id"},
+    "input_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "checkpoint_hash": {"$ref": "investor-evidence-monitor.schema.json#/$defs/nullable_hash"},
+    "funding_binding": {"$ref": "investor-planned-funding-monitor.schema.json#/$defs/binding"},
+    "funding_context_hash": {"$ref": "common.schema.json#/$defs/hash"}
+  }
+}

@@ -286,7 +286,7 @@ class CollectorTests(unittest.TestCase):
             self.assertIs(provider._load_sdk(), module)
             load.assert_called_once_with("longport.openapi")
 
-    def _process(self, script, *, timeout=None):
+    def _process(self, script, *, timeout=None, credentials_file=None):
         """Run a real isolated Python child with synthetic provider code only."""
         directory = tempfile.TemporaryDirectory(prefix="longport-test-")
         self.addCleanup(directory.cleanup)
@@ -316,7 +316,7 @@ class CollectorTests(unittest.TestCase):
         with patch.dict(os.environ, env), patch.object(provider.subprocess, "Popen", side_effect=launch), \
                 patch.object(provider, "CALL_TIMEOUT_SECONDS", provider.CALL_TIMEOUT_SECONDS if timeout is None else timeout):
             try:
-                return provider.collect_longport_candles(**RANGE)
+                return provider.collect_longport_candles(**RANGE, credentials_file=credentials_file)
             finally:
                 for process, cwd in observed:
                     self.assertIsNotNone(process.poll())
@@ -347,6 +347,28 @@ sys.stdout.buffer.write(result['projection_bytes'])
     def test_real_child_timeout_is_killed_and_private_runtime_removed(self):
         with self.assertRaisesRegex(WorkbenchError, "SDK_CALL_TIMEOUT"):
             self._process("import time; time.sleep(10)", timeout=0.1)
+
+    def test_explicit_private_credentials_file_precedes_environment_and_never_reaches_argv(self):
+        directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / "credentials.env"
+        path.write_text("LONGBRIDGE_APP_KEY=fixture-file-key\nLONGBRIDGE_APP_SECRET=fixture-file-secret\nLONGBRIDGE_ACCESS_TOKEN=fixture-file-token\n")
+        path.chmod(0o600)
+        script = """import json, sys
+body = json.load(sys.stdin)
+assert body['credentials']['app_key'] == 'fixture-file-key'
+sys.path.insert(0, %r)
+from worker.market.providers import longport as p
+from tests.market.test_longport_provider import candles
+result = p._normalize(candles(), request=body['request'], sdk_version=p.SDK_VERSION,
+    call_started_at=p.stamp(), call_returned_at=p.stamp(),
+    datetime_basis='runtime_utc_from_unix_timestamp', collector_runtime='isolated_official_sdk')
+sys.stdout.buffer.write(result['projection_bytes'])
+""" % str(Path(provider.__file__).resolve().parents[3])
+        self.assertEqual(len(self._process(script, credentials_file=str(path))["records"]), 2)
+        with patch.object(provider, "read_private_credentials_file") as read:
+            with self.assertRaisesRegex(WorkbenchError, "TEST_CLIENT_CANNOT_READ_CREDENTIALS"):
+                provider.collect_longport_candles(**RANGE, client=Mock(), sdk_version="4.3.7", credentials_file=str(path))
+            read.assert_not_called()
 
     def test_fixed_child_protocol_runs_official_wrapper_with_synthetic_sdk_and_naive_datetimes(self):
         script = """import sys

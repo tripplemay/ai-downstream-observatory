@@ -14,6 +14,7 @@
     "unit": {"type": "string", "minLength": 1},
     "observed_at": {"type": "string"},
     "published_at": {"$ref": "common.schema.json#/$defs/instant"},
+    "assumed_available_at": {"$ref": "common.schema.json#/$defs/instant"},
     "ingested_at": {"$ref": "common.schema.json#/$defs/instant"},
     "source_timezone": {"$ref": "common.schema.json#/$defs/timezone"},
     "time_precision": {"enum": ["date", "second"]},

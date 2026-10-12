@@ -28,6 +28,7 @@ if __name__ == "__main__":
 
 from worker.accounting import fact_decimal
 from worker.orchestration.db import WorkbenchError, canonical_json, stamp
+from worker.market.providers.credentials import CREDENTIAL_ENV_NAMES, credentials_from_environment, read_private_credentials_file
 
 
 ADAPTER_VERSION = "longport-sdk-candles-v1"
@@ -48,7 +49,25 @@ _SYMBOLS = {"CN": re.compile(r"[0-9]{6}\.(?:SH|SZ)\Z", re.ASCII),
             "HK": re.compile(r"[0-9]{1,5}\.HK\Z", re.ASCII),
             "US": re.compile(r"[A-Z][A-Z0-9]{0,14}(?:[.-][A-Z0-9]{1,5})?\.US\Z", re.ASCII)}
 _CANDLE_FIELDS = ("open", "high", "low", "close", "volume", "turnover", "timestamp", "trade_session")
-_CREDENTIAL_NAMES = ("LONGPORT_APP_KEY", "LONGPORT_APP_SECRET", "LONGPORT_ACCESS_TOKEN")
+_CREDENTIAL_NAMES = CREDENTIAL_ENV_NAMES
+_DIAGNOSTIC_NAMES = (
+    "CONFIG_CONSTRUCTION_FAILED", "QUOTE_CONTEXT_SETUP_FAILED", "HISTORY_REQUEST_FAILED",
+    "HISTORY_REQUEST_INVALID", "HISTORY_SERVER_ERROR", "HISTORY_NO_QUOTE_DATA",
+    "HISTORY_PERMISSION_DENIED", "HISTORY_RATE_LIMITED", "HISTORY_SYMBOL_QUOTA_EXCEEDED",
+    "ISOLATED_UTC_REQUIRED", "SDK_VERSION_NOT_APPROVED", "EMPTY_OR_POSSIBLY_TRUNCATED_RESPONSE",
+    "SDK_DATETIME_REQUIRED", "AWARE_DATETIME_REQUIRED", "UTC_INSTANT_REQUIRED",
+    "DECIMAL_INVALID_OR_OUT_OF_RANGE", "EXACT_DECIMAL_REQUIRED", "NEGATIVE_MARKET_VALUE",
+    "CLOSE_NOT_VALUABLE", "OHLC_RANGE_INVALID", "VOLUME_INVALID", "NONREGULAR_OR_INVALID_SESSION",
+    "CALL_CLOCK_INVALID", "INCOMPLETE_OR_FUTURE_LOCAL_DATE", "CANDLE_OUTSIDE_REQUEST",
+    "DUPLICATE_CANDLE_DATE", "EXPECTED_DATE_COVERAGE_MISMATCH", "PROJECTION_TOO_LARGE",
+    "CANDLE_FIELD_MISSING", "EMPTY_OR_INVALID_CANDLES", "POSSIBLY_TRUNCATED_RESPONSE",
+    "UNEXPECTED_CANDLE_COUNT", "SDK_VERSION_REQUIRED", "EMPTY_RESPONSE", "INVALID_RESPONSE_CONTAINER",
+)
+DIAGNOSTIC_EXIT_CODES = {40 + index: name for index, name in enumerate(_DIAGNOSTIC_NAMES)}
+_DIAGNOSTIC_ERRORS = {"LONGPORT_" + name: code for code, name in DIAGNOSTIC_EXIT_CODES.items()}
+_HISTORY_ERROR_CODES = {301600: "HISTORY_REQUEST_INVALID", 301602: "HISTORY_SERVER_ERROR",
+                        301603: "HISTORY_NO_QUOTE_DATA", 301604: "HISTORY_PERMISSION_DENIED",
+                        301606: "HISTORY_RATE_LIMITED", 301607: "HISTORY_SYMBOL_QUOTA_EXCEEDED"}
 
 
 def _day(value):
@@ -212,10 +231,7 @@ def normalize_longport_candles(candles, *, mapping, start_date, end_date, expect
 
 
 def _credentials():
-    values = [os.environ.get(name) for name in _CREDENTIAL_NAMES]
-    if any(not isinstance(value, str) or not value.strip() or len(value.encode("utf-8")) > 8192 for value in values):
-        raise WorkbenchError("LONGPORT_CREDENTIALS_REQUIRED")
-    return dict(zip(("app_key", "app_secret", "access_token"), values))
+    return credentials_from_environment(os.environ)
 
 
 def _load_sdk():
@@ -224,7 +240,23 @@ def _load_sdk():
     return import_module("longport.openapi")
 
 
-def _official_call(request, credentials):
+def _diagnostic_sdk_call(sdk, callback, phase):
+    try:
+        return callback()
+    except Exception as exc:
+        name = phase
+        # Interpret documented business codes only for this history operation.
+        try:
+            if phase == "HISTORY_REQUEST_FAILED" and isinstance(exc, sdk.OpenApiException):
+                code = exc.code
+                if type(code) is int:
+                    name = _HISTORY_ERROR_CODES.get(code, phase)
+        except Exception:
+            pass
+        raise WorkbenchError("LONGPORT_" + name) from None
+
+
+def _official_call(request, credentials, *, diagnostic=False):
     if os.environ.get("TZ") != "UTC" or not hasattr(time, "tzset"):
         raise WorkbenchError("LONGPORT_ISOLATED_UTC_REQUIRED")
     time.tzset()
@@ -232,17 +264,28 @@ def _official_call(request, credentials):
         raise WorkbenchError("LONGPORT_ISOLATED_UTC_REQUIRED")
     # These are fixed public defaults, not user-configurable endpoint overrides.
     sdk = _load_sdk()
-    config = sdk.Config.from_apikey(**credentials, http_url="https://openapi.longportapp.com",
-                                   quote_ws_url="wss://openapi-quote.longportapp.com/v2",
-                                   trade_ws_url="wss://openapi-trade.longportapp.com/v2",
-                                   enable_overnight=False, enable_print_quote_packages=False)
-    client = sdk.QuoteContext(config)
+    def make_config():
+        return sdk.Config.from_apikey(**credentials, http_url="https://openapi.longportapp.com",
+                                     quote_ws_url="wss://openapi-quote.longportapp.com/v2",
+                                     trade_ws_url="wss://openapi-trade.longportapp.com/v2",
+                                     enable_overnight=False, enable_print_quote_packages=False)
+
+    config = _diagnostic_sdk_call(sdk, make_config, "CONFIG_CONSTRUCTION_FAILED") if diagnostic else make_config()
+    client = (_diagnostic_sdk_call(sdk, lambda: sdk.QuoteContext(config), "QUOTE_CONTEXT_SETUP_FAILED")
+              if diagnostic else sdk.QuoteContext(config))
     started = stamp()
-    candles = client.history_candlesticks_by_date(request["mapping"]["provider_symbol"], sdk.Period.Day,
-                                                sdk.AdjustType.NoAdjust, _day(request["start_date"]),
-                                                _day(request["end_date"]), sdk.TradeSessions.Intraday)
+    def history():
+        return client.history_candlesticks_by_date(request["mapping"]["provider_symbol"], sdk.Period.Day,
+                                                  sdk.AdjustType.NoAdjust, _day(request["start_date"]),
+                                                  _day(request["end_date"]), sdk.TradeSessions.Intraday)
+
+    candles = _diagnostic_sdk_call(sdk, history, "HISTORY_REQUEST_FAILED") if diagnostic else history()
     returned = stamp()
     if not isinstance(candles, (list, tuple)) or not 1 <= len(candles) < 1000:
+        if diagnostic:
+            name = ("INVALID_RESPONSE_CONTAINER" if not isinstance(candles, (list, tuple))
+                    else "EMPTY_RESPONSE" if not candles else "POSSIBLY_TRUNCATED_RESPONSE")
+            raise WorkbenchError("LONGPORT_" + name)
         raise WorkbenchError("LONGPORT_EMPTY_OR_POSSIBLY_TRUNCATED_RESPONSE")
     rows = []
     for candle in candles:
@@ -275,7 +318,7 @@ def _strict_json(raw):
     return json.loads(raw, object_pairs_hook=pairs, parse_constant=constant)
 
 
-def _child_main():
+def _child_main(*, diagnostic=False):
     """Fixed private stdin protocol; no arbitrary code, paths, or SDK methods."""
     try:
         import resource
@@ -295,17 +338,19 @@ def _child_main():
                 or not isinstance(credentials, dict) or set(credentials) != {"app_key", "app_secret", "access_token"}
                 or any(not isinstance(value, str) or not value.strip() or len(value.encode("utf-8")) > 8192 for value in credentials.values())):
             raise ValueError("request shape")
-        result = _official_call(request, credentials)
+        result = _official_call(request, credentials, diagnostic=True) if diagnostic else _official_call(request, credentials)
         sys.stdout.buffer.write(result["projection_bytes"])
         sys.stdout.buffer.flush()
         return 0
-    except Exception:
+    except Exception as exc:
         # Provider exception strings may contain credentials or account metadata.
+        if diagnostic and isinstance(exc, WorkbenchError) and len(exc.args) == 1 and type(exc.args[0]) is str:
+            return _DIAGNOSTIC_ERRORS.get(exc.args[0], 1)
         return 1
 
 
-def _collect_isolated(request):
-    credentials = _credentials()
+def _collect_isolated(request, credentials_file=None):
+    credentials = _credentials() if credentials_file is None else read_private_credentials_file(credentials_file)
     encoded = canonical_json({"request": request, "credentials": credentials}).encode("utf-8")
     if len(encoded) > MAX_CHILD_INPUT_BYTES:
         raise WorkbenchError("LONGPORT_CHILD_INPUT_TOO_LARGE")
@@ -349,7 +394,14 @@ def _collect_isolated(request):
             except OSError:
                 raise WorkbenchError("LONGPORT_SDK_RUNTIME_FAILED") from None
     parent_returned = _instant(stamp())
+    return _parse_child_projection(raw, request, parent_started, parent_returned)
+
+
+def _parse_child_projection(raw, request, parent_started, parent_returned):
+    """Rebind and canonically replay a child projection before trusting it."""
     try:
+        if not isinstance(raw, bytes) or not 1 <= len(raw) <= MAX_PROJECTION_BYTES:
+            raise ValueError("response bound")
         projection = _strict_json(raw.decode("utf-8"))
         source = projection["source"]
         if (projection["schema_version"] != "longport-candles-projection-v1" or projection["request"] != request
@@ -374,7 +426,7 @@ def _collect_isolated(request):
         raise WorkbenchError("LONGPORT_CHILD_RESPONSE_INVALID") from None
 
 
-def collect_longport_candles(*, mapping, start_date, end_date, expected_dates, client=None, sdk_version=None):
+def collect_longport_candles(*, mapping, start_date, end_date, expected_dates, client=None, sdk_version=None, credentials_file=None):
     """Collect one <=31-day tile. `client` is internal test injection, never JSON.
 
     Injected clients accept the semantic day/none/regular keyword values below;
@@ -387,7 +439,9 @@ def collect_longport_candles(*, mapping, start_date, end_date, expected_dates, c
     if client is None:
         if sdk_version is not None:
             raise WorkbenchError("LONGPORT_PRODUCTION_VERSION_NOT_CALLER_CONTROLLED")
-        return _collect_isolated(request)
+        return _collect_isolated(request) if credentials_file is None else _collect_isolated(request, credentials_file=credentials_file)
+    if credentials_file is not None:
+        raise WorkbenchError("LONGPORT_TEST_CLIENT_CANNOT_READ_CREDENTIALS")
     if not isinstance(sdk_version, str) or not _VERSION.fullmatch(sdk_version):
         raise WorkbenchError("LONGPORT_SDK_VERSION_REQUIRED")
     started = stamp()
@@ -403,4 +457,8 @@ def collect_longport_candles(*, mapping, start_date, end_date, expected_dates, c
 
 
 if __name__ == "__main__":
-    raise SystemExit(_child_main() if sys.argv[1:] == ["--sdk-child"] else 2)
+    if sys.argv[1:] == ["--sdk-child"]:
+        raise SystemExit(_child_main())
+    if sys.argv[1:] == ["--sdk-diagnostic-child"]:
+        raise SystemExit(_child_main(diagnostic=True))
+    raise SystemExit(2)

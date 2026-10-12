@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-model-checkpoint.schema.json",
+  "$defs": {
+    "instant": {"$ref": "investor-model-monitor.schema.json#/$defs/instant"},
+    "derived": {"$ref": "investor-model-monitor-v2.schema.json#/$defs/derived"},
+    "cutoffs": {"type": "object", "minProperties": 1, "properties": {"CN": {"$ref": "#/$defs/instant"}, "HK": {"$ref": "#/$defs/instant"}, "US": {"$ref": "#/$defs/instant"}}, "additionalProperties": false}
+  },
+  "type": "object",
+  "required": ["schema_version", "model_id", "profile_id", "target_definition_hash", "sequence", "previous_hash", "input_hash", "created_at", "initialized_at", "market_cutoffs", "quantities", "cash_by_currency", "receivables", "entitlements", "processed_actions", "initial_notional_cny", "assumptions", "scope", "data_mode", "live_advice_eligible"],
+  "properties": {
+    "schema_version": {"const": "investor-model-checkpoint-v1"}, "model_id": {"$ref": "common.schema.json#/$defs/id"}, "profile_id": {"$ref": "common.schema.json#/$defs/id"},
+    "target_definition_hash": {"$ref": "common.schema.json#/$defs/hash"}, "sequence": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "previous_hash": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"}, "input_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "created_at": {"$ref": "#/$defs/instant"}, "initialized_at": {"$ref": "#/$defs/cutoffs"}, "market_cutoffs": {"$ref": "#/$defs/cutoffs"},
+    "quantities": {"$ref": "investor-model-monitor-v2.schema.json#/$defs/quantities"},
+    "cash_by_currency": {"type": "object", "required": ["CNY", "HKD", "USD"], "properties": {"CNY": {"$ref": "#/$defs/derived"}, "HKD": {"$ref": "#/$defs/derived"}, "USD": {"$ref": "#/$defs/derived"}}, "additionalProperties": false},
+    "receivables": {"type": "array", "maxItems": 500, "items": {"type": "object", "required": ["id", "listing_id", "currency", "amount", "ex_at", "tax_assumption_hash"], "properties": {
+      "id": {"$ref": "common.schema.json#/$defs/id"}, "listing_id": {"$ref": "common.schema.json#/$defs/id"}, "currency": {"enum": ["CNY", "HKD", "USD"]},
+      "amount": {"$ref": "#/$defs/derived"}, "ex_at": {"$ref": "#/$defs/instant"}, "tax_assumption_hash": {"$ref": "common.schema.json#/$defs/hash"}
+    }, "additionalProperties": false}},
+    "processed_actions": {"type": "object", "maxProperties": 20000, "propertyNames": {"$ref": "common.schema.json#/$defs/id"}, "additionalProperties": {"$ref": "common.schema.json#/$defs/hash"}},
+    "entitlements": {"type": "object", "maxProperties": 20000, "propertyNames": {"$ref": "common.schema.json#/$defs/id"}, "additionalProperties": {
+      "type": "object", "required": ["id", "listing_id", "currency", "amount", "ex_at", "tax_assumption_hash", "paid"], "additionalProperties": false,
+      "properties": {"id": {"$ref": "common.schema.json#/$defs/id"}, "listing_id": {"$ref": "common.schema.json#/$defs/id"}, "currency": {"enum": ["CNY", "HKD", "USD"]},
+        "amount": {"$ref": "#/$defs/derived"}, "ex_at": {"$ref": "#/$defs/instant"}, "tax_assumption_hash": {"$ref": "common.schema.json#/$defs/hash"}, "paid": {"type": "boolean"}}
+    }},
+    "initial_notional_cny": {"const": "10000"}, "assumptions": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "string", "minLength": 1, "maxLength": 500}},
+    "scope": {"const": "research_model"}, "data_mode": {"const": "synthetic"}, "live_advice_eligible": {"const": false}
+  }, "additionalProperties": false
+}

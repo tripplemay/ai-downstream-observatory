@@ -12,6 +12,7 @@ import { probeEarlyRejection } from './http-early-rejection.mjs';
 import { verificationHttpCases } from './verification-http-cases.mjs';
 import { priceScheduleHttpCases } from './price-schedule-http-cases.mjs';
 import { csvBackgroundHttpCases } from './csv-background-http-cases.mjs';
+import { investorHttpCases } from './investor-http-cases.mjs';
 
 const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const root = path.dirname(web);
@@ -20,11 +21,13 @@ const Database = require('better-sqlite3');
 const now = new Date().toISOString();
 const output = path.join(root, 'artifacts', 'verification', 'workbench-http', now.replace(/[:.]/g, '-'));
 mkdirSync(output, { recursive: true });
+const diagnosticsDirectory = process.argv.includes('--diagnose-investor-monitor') ? path.join(output, 'investor-monitor') : null;
 const report = {
   suite: 'workbench-http', version: 1, started_at: now, completed_at: null,
-  case_selection: process.argv.includes('--verification-only') ? 'controlled-verification' : process.argv.includes('--price-schedules-only') ? 'price-schedules' : process.argv.includes('--csv-background-only') ? 'csv-background' : 'full',
+  case_selection: process.argv.includes('--investor-only') ? 'investor-workspace' : process.argv.includes('--verification-only') ? 'controlled-verification' : process.argv.includes('--price-schedules-only') ? 'price-schedules' : process.argv.includes('--csv-background-only') ? 'csv-background' : 'full',
   status: 'RUNNING', build_id: null, build_performed: !process.argv.includes('--no-build'),
   fixture: 'temporary migrated database and random credentials; no production or real accounts',
+  fictional_monitor_snapshots_retained: Boolean(diagnosticsDirectory),
   cases: [], source_sha256: {}, limitations: [
     'HTTP client validates rendered HTML but is not browser interaction or TLS/proxy validation.',
     'This suite covers account creation and supported ledger/import API commands, not investment-strategy eligibility.',
@@ -36,6 +39,7 @@ const report = {
     'Listing reviews use synthetic private human assertions, not issuer verification, live trading authority or weighted holdings look-through; HTTP page output is not native browser interaction acceptance.',
     'Controlled verification executes only E-02.cash-contribution-neutrality.v1 against an isolated synthetic ledger; it is not full E-02, G-03/G-04 acceptance, investment approval or native browser verification.',
     'Background CSV cases use real authenticated HTTP and fixed Python-to-Node execution on synthetic data; bounded pages do not certify bounded proof CPU, 10k-row concurrent-writer SLA, native UI or production acceptance.',
+    'Investor reconstructed admission uses explicitly fictional owner documents and stubbed official SDK transport; it verifies software propagation and independent local replay, not actual provider access, licence, ETF eligibility or strategy profitability.',
   ],
 };
 const sha = (value) => createHash('sha256').update(value).digest('hex');
@@ -45,7 +49,7 @@ function sourceFiles(relative) {
     return entry.isDirectory() && entry.name !== '__pycache__' ? sourceFiles(name) : entry.isFile() && /\.(?:ts|tsx|py|json|sql|mjs|sh)$/.test(entry.name) ? [name] : [];
   });
 }
-const inventory = () => [...['contracts', 'migrations', 'web/src', 'web/tests', 'web/scripts', 'tests', 'scripts', 'worker/accounting', 'worker/market', 'worker/orchestration', 'worker/performance', 'worker/research', 'worker/governance_verification'].flatMap(sourceFiles), 'web/package.json', 'web/package-lock.json', 'web/next.config.ts', 'web/tailwind.config.ts', 'requirements-workbench.txt'].sort();
+const inventory = () => [...['contracts', 'migrations', 'web/src', 'web/tests', 'web/scripts', 'tests', 'scripts', 'worker/accounting', 'worker/ai_explanation', 'worker/investor', 'worker/market', 'worker/orchestration', 'worker/performance', 'worker/research', 'worker/governance_verification'].flatMap(sourceFiles), 'web/package.json', 'web/package-lock.json', 'web/next.config.ts', 'web/tailwind.config.ts', 'requirements-workbench.txt'].sort();
 for (const relative of inventory()) {
   report.source_sha256[relative] = sha(readFileSync(path.join(root, relative)));
 }
@@ -130,6 +134,15 @@ async function main() {
       db.prepare("INSERT INTO listings(id,instrument_id,market,exchange,ticker,currency,created_at) VALUES('http-listing-2','http-instrument','US','SYNTHETIC','TEST02','USD','2026-01-01T00:00:00.000000Z')").run();
       db.close();
       if (report.build_performed) {
+        // Worker proofs bind all server source bytes, not just their own entrypoints.
+        let workerLogs = '';
+        for (const script of ['build-evaluation-worker.mjs', 'build-csv-background.mjs', 'build-governance-fixture.mjs', 'build-funded-comparison.mjs']) {
+          const worker = spawnSync(process.execPath, [`scripts/${script}`], { cwd: web, env: process.env,
+            encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 });
+          workerLogs += (worker.stdout ?? '') + (worker.stderr ?? '');
+          writeFileSync(path.join(output, 'workers-build.log'), workerLogs);
+          assert.equal(worker.status, 0, `Worker build failed (${script}); see workers-build.log.`);
+        }
         const build = spawnSync(process.execPath, ['node_modules/next/dist/bin/next', 'build'], {
           cwd: web, env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1', WORKBENCH_DB_PATH: path.join(directory, 'must-not-open-during-build.db'),
             WORKBENCH_PASSWORD_HASH: '', WORKBENCH_SESSION_SECRET: '', WORKBENCH_ORIGIN: '', WORKBENCH_DATA_DIR: '', DB_PATH: legacy },
@@ -218,6 +231,10 @@ async function main() {
     });
     if (process.argv.includes('--verification-only')) {
       await verificationHttpCases({ check, request, jsonRequest, filename, directory, root, output, origin, password, Database });
+      return;
+    }
+    if (process.argv.includes('--investor-only')) {
+      await investorHttpCases({ check, request, jsonRequest, filename, directory, origin, password, Database, diagnosticsDirectory });
       return;
     }
     if (process.argv.includes('--price-schedules-only')) {
@@ -429,8 +446,8 @@ async function main() {
       assert.deepEqual(results.map(result => result.status).sort(), [200, 409]);
       revision += 1; assert.equal((await state()).revision, revision); assert.equal(cash(await state()), '790231');
     });
-    await check('HTTP-15', 'private workbench renders account facts; response is not cacheable', async () => {
-      const response = await request('/workbench', { headers: { Cookie: cookie } });
+    await check('HTTP-15', 'advanced private ledger still renders account facts; response is not cacheable', async () => {
+      const response = await request('/workbench/ledger', { headers: { Cookie: cookie } });
       assert.equal(response.status, 200); const html = await response.text();
       assert.match(html, /ETF 投资工作台/); assert.match(html, /Domestic fixture/);
       const api = await jsonRequest(`/api/workbench?portfolio=${portfolio}`, { headers: { Cookie: cookie } });
@@ -1990,6 +2007,7 @@ catch(error) { console.log(JSON.stringify({error:error.message})); } finally {db
     });
     await verificationHttpCases({ check, request, jsonRequest, filename, directory, root, output, origin, password, Database });
     await csvBackgroundHttpCases({ check, request, jsonRequest, filename, directory, root, origin, address, password, Database });
+    await investorHttpCases({ check, request, jsonRequest, filename, directory, origin, password, Database, diagnosticsDirectory });
     await check('HTTP-16', 'storage errors do not expose paths or SQL', async () => {
       renameSync(filename, `${filename}.held`);
       try {
@@ -2033,6 +2051,6 @@ finally {
   }
   report.summary = { passed: report.cases.filter(item => item.status === 'PASS').length, failed: report.cases.filter(item => item.status === 'FAIL').length };
   writeFileSync(path.join(output, 'manifest.json'), `${JSON.stringify(report, null, 2)}\n`);
-  writeFileSync(path.join(output, 'report.md'), `# Workbench HTTP integration\n\nStatus: **${report.status}**\n\nStarted: ${report.started_at}\n\nBuild: \`${report.build_id ?? 'not completed'}\`\n\n| Case | Status | Description |\n| --- | --- | --- |\n${report.cases.map(item => `| ${item.id} | ${item.status} | ${item.description} |`).join('\n')}\n\n${report.error ? `Failure: ${report.error}\n\n` : ''}## Boundaries\n\n${report.limitations.map(item => `- ${item}`).join('\n')}\n\nAll account facts and credentials were synthetic. Temporary databases were removed.\n`);
+  writeFileSync(path.join(output, 'report.md'), `# Workbench HTTP integration\n\nStatus: **${report.status}**\n\nStarted: ${report.started_at}\n\nBuild: \`${report.build_id ?? 'not completed'}\`\n\n| Case | Status | Description |\n| --- | --- | --- |\n${report.cases.map(item => `| ${item.id} | ${item.status} | ${item.description} |`).join('\n')}\n\n${report.error ? `Failure: ${report.error}\n\n` : ''}## Boundaries\n\n${report.limitations.map(item => `- ${item}`).join('\n')}\n\nAll account facts and credentials were synthetic. Temporary runtime databases were removed.${diagnosticsDirectory ? ' Opt-in fictional monitor snapshots and bounded phase diagnostics were retained in investor-monitor/; no auth files were copied.' : ''}\n`);
   process.stdout.write(`Evidence: ${path.relative(root, output)}\n`);
 }

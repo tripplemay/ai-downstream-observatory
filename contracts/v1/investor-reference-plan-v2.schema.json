@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-reference-plan-v2.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "profile_id", "strategy_version", "strategy_evidence", "input_version", "data_cutoff", "created_at", "valid_until", "data_mode", "reference_evidence", "targets", "estimated_cost", "risk_scenarios", "benchmark_summary", "counterarguments", "uncertainties", "live_advice_eligible", "fixed_policy"],
+  "properties": {
+    "schema_version": {"const": "investor-reference-plan-v2"},
+    "profile_id": {"$ref": "investor-reference-plan.schema.json#/properties/profile_id"},
+    "strategy_version": {"$ref": "investor-reference-plan.schema.json#/properties/strategy_version"},
+    "strategy_evidence": {"$ref": "investor-reference-plan.schema.json#/properties/strategy_evidence"},
+    "input_version": {"$ref": "investor-reference-plan.schema.json#/properties/input_version"},
+    "data_cutoff": {"$ref": "investor-reference-plan.schema.json#/properties/data_cutoff"},
+    "created_at": {"$ref": "investor-reference-plan.schema.json#/properties/created_at"},
+    "valid_until": {"$ref": "investor-reference-plan.schema.json#/properties/valid_until"},
+    "data_mode": {"const": "reconstructed"},
+    "reference_evidence": {"$ref": "investor-reference-plan.schema.json#/properties/reference_evidence"},
+    "targets": {"$ref": "investor-reference-plan.schema.json#/properties/targets"},
+    "estimated_cost": {"$ref": "investor-reference-plan.schema.json#/properties/estimated_cost"},
+    "risk_scenarios": {"$ref": "investor-reference-plan.schema.json#/properties/risk_scenarios"},
+    "benchmark_summary": {"$ref": "investor-reference-plan.schema.json#/properties/benchmark_summary"},
+    "counterarguments": {"$ref": "investor-reference-plan.schema.json#/properties/counterarguments"},
+    "uncertainties": {"$ref": "investor-reference-plan.schema.json#/properties/uncertainties"},
+    "live_advice_eligible": {"const": false}, "fixed_policy": {"$ref": "#/$defs/binding"}
+  },
+  "$defs": {
+    "binding": {
+      "type": "object", "additionalProperties": false, "required": ["parameters", "evaluation_timezone"],
+      "properties": {
+        "parameters": {"$ref": "research-fixed-rebalance-parameters-v2.schema.json"},
+        "evaluation_timezone": {"$ref": "common.schema.json#/$defs/timezone"}
+      }
+    }
+  }
+}

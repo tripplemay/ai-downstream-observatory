@@ -15,7 +15,7 @@ import { fetchCsvBackground, prepareCsvBackgroundPreview, prepareCsvBackgroundCo
   prepareCsvBackgroundCancellation, sendCsvBackground } from "./csv-background-client";
 
 interface Props {
-  portfolioId: string; accountId: string; revision: number; readOnly?: boolean;
+  portfolioId: string; accountId: string; revision: number; readOnly?: boolean; readOnlyMessage?: string;
   onCommitted: () => void | Promise<void>; onScopeLockChange?: (locked: boolean) => void;
   onRestorePendingScope?: (scope: CsvScope) => void | Promise<void>;
 }
@@ -37,7 +37,7 @@ function Pagination({ pager, next, disabled, label, onPage }: { pager: Pager; ne
     <Button type="button" variant="outline" size="sm" disabled={disabled || !next} onClick={() => { if (next) onPage({ cursor: next, back: [...pager.back, pager.cursor] }); }}>下一页{label}</Button></div>;
 }
 
-export function CsvBackgroundWorkspace({ portfolioId, accountId, revision, readOnly = false, onCommitted, onScopeLockChange, onRestorePendingScope }: Props) {
+export function CsvBackgroundWorkspace({ portfolioId, accountId, revision, readOnly = false, readOnlyMessage, onCommitted, onScopeLockChange, onRestorePendingScope }: Props) {
   const session = useSessionBoundary();
   const current = useRef({ portfolioId, accountId, revision, session, readOnly }); current.current = { portfolioId, accountId, revision, session, readOnly };
   const identity = JSON.stringify([portfolioId, accountId, revision, session?.sessionBinding ?? ""]);
@@ -264,7 +264,7 @@ export function CsvBackgroundWorkspace({ portfolioId, accountId, revision, readO
   return <section aria-label="后台 CSV 导入" aria-busy={busy || wizardBusy} className="min-w-0 space-y-4 rounded-xl border bg-card p-5 shadow-sm">
     <h2 className="text-lg font-semibold">后台 CSV 导入</h2>
     <p className="text-sm text-muted-foreground">检查与映射向导不入账。预览与确认分别明确授权后台执行；一经受理，关闭页面或退出不会取消任务。GET、刷新和历史查询不会执行任务，也不会自动 POST。券商原生格式尚未核验。</p>
-    {(readOnly || serverReadOnly) && <p role="status">恢复只读：允许查询任务和分页证据，所有后台提交、重试与取消均已禁用。</p>}
+    {(readOnly || serverReadOnly) && <p role="status">{!serverReadOnly && readOnlyMessage ? readOnlyMessage : "恢复只读：允许查询任务和分页证据，所有后台提交、重试与取消均已禁用。"}</p>}
     {error && <p role="alert" className="break-all rounded border border-red-500/40 p-3 text-sm">{error}</p>}
     {notice && <p role="status" className="break-words rounded border p-3 text-sm">{notice}</p>}
     <div className="flex flex-wrap gap-2"><Button type="button" variant="outline" disabled={busy || wizardBusy} onClick={() => void refresh()}>刷新任务与状态（只读）</Button><Button type="button" variant="outline" disabled={busy || wizardBusy} onClick={clearPage}>清除本页（不取消任务）</Button></div>
@@ -275,6 +275,7 @@ export function CsvBackgroundWorkspace({ portfolioId, accountId, revision, readO
       <fieldset disabled={mutationDisabled || jobActive} className="min-w-0 space-y-4">
         <legend className="font-medium">1. 原始文件与映射</legend>
         <label className={field}>CSV 原件（非空，最多 4 MiB）<Input key={fileKey} aria-label="后台 CSV 原件" type="file" accept=".csv,text/csv" onChange={event => { setFile(event.target.files?.[0] ?? null); setWizardHash(null); setPreviewAck(false); }} /></label>
+        {file && <p className="break-words text-xs text-muted-foreground">本页已保留原件：{file.name} · {file.size} bytes（仅本页内存；会话复核后文件控件为空不代表原件已丢失）。</p>}
         <label className={field}>映射方式<select aria-label="后台 CSV 映射方式" className={selectClass} value={mode} onChange={event => { setMode(event.target.value as typeof mode); setPreviewAck(false); }}><option value="wizard">只读检查与映射向导</option><option value="advanced">高级：原始映射 JSON</option></select></label>
         {mode === "wizard" && <CsvMappingWizard key={identity} file={file} portfolioId={portfolioId} accountId={accountId} revision={revision} disabled={mutationDisabled || jobActive} previousMapping={previousMapping} onApply={applyMapping} onInvalidate={invalidateMapping} onBusyChange={setWizardBusy} />}
         {mode === "advanced" && <><label className={field}>映射 JSON 文件（最多 256 KiB）<Input aria-label="后台 CSV 映射文件" type="file" accept=".json,application/json" onChange={event => void loadMapping(event.target.files?.[0] ?? null)} /></label><label className={field}>原始映射 JSON<textarea aria-label="后台 CSV 原始映射" className="min-h-44 min-w-0 rounded border bg-background p-3 font-mono text-xs" value={mapping} onChange={event => { setMapping(event.target.value); setWizardHash(null); setPreviewAck(false); }} /></label></>}

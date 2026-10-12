@@ -26,7 +26,7 @@ def require(condition, message):
 require((os.getuid(), os.getgid()) == (10001, 10001), "Verifier must be unprivileged")
 require(ROOT == Path("/app"), "Verifier source root differs from deployed source root")
 require({name for _, name in socket.if_nameindex()} == {"lo"}, "Verifier network is not disabled")
-require(not any(key.startswith("LONGPORT_") or key in ("WORKBENCH_PASSWORD_HASH", "WORKBENCH_SESSION_SECRET") for key in os.environ),
+require(not any(key.startswith(("LONGPORT_", "LONGBRIDGE_")) or key in ("WORKBENCH_PASSWORD_HASH", "WORKBENCH_SESSION_SECRET") for key in os.environ),
         "Verifier inherited unrelated credentials")
 require(role_commands("verifier") == ("governance_verification_v2",), "Verifier role is not isolated")
 require("governance_verification_v2" not in role_commands("core") + role_commands("longport"), "Another role may consume verification work")

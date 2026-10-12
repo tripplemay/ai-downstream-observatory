@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-evidence-model-checkpoint-v2.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "model_id", "profile_id", "target_definition_hash", "sequence", "previous_hash", "input_hash", "projection_hash", "created_at", "initialized_at", "market_cutoffs", "quantities", "cash_by_currency", "receivables", "entitlements", "processed_actions", "initial_notional_cny", "assumptions", "scope", "data_mode", "live_advice_eligible", "policy_state"],
+  "properties": {
+    "schema_version": {"const": "investor-evidence-model-checkpoint-v2"},
+    "model_id": {"$ref": "investor-evidence-model-checkpoint.schema.json#/properties/model_id"},
+    "profile_id": {"$ref": "investor-evidence-model-checkpoint.schema.json#/properties/profile_id"},
+    "target_definition_hash": {"$ref": "investor-evidence-model-checkpoint.schema.json#/properties/target_definition_hash"},
+    "sequence": {"$ref": "investor-evidence-model-checkpoint.schema.json#/properties/sequence"},
+    "previous_hash": {"$ref": "investor-evidence-model-checkpoint.schema.json#/properties/previous_hash"},
+    "input_hash": {"$ref": "investor-evidence-model-checkpoint.schema.json#/properties/input_hash"},
+    "projection_hash": {"$ref": "investor-evidence-model-checkpoint.schema.json#/properties/projection_hash"},
+    "created_at": {"$ref": "investor-evidence-model-checkpoint.schema.json#/properties/created_at"},
+    "initialized_at": {"$ref": "investor-evidence-model-checkpoint.schema.json#/properties/initialized_at"},
+    "market_cutoffs": {"$ref": "investor-evidence-model-checkpoint.schema.json#/properties/market_cutoffs"},
+    "quantities": {"$ref": "investor-evidence-model-checkpoint.schema.json#/properties/quantities"},
+    "cash_by_currency": {"$ref": "investor-evidence-model-checkpoint.schema.json#/properties/cash_by_currency"},
+    "receivables": {"$ref": "investor-evidence-model-checkpoint.schema.json#/properties/receivables"},
+    "entitlements": {"$ref": "investor-evidence-model-checkpoint.schema.json#/properties/entitlements"},
+    "processed_actions": {"$ref": "investor-evidence-model-checkpoint.schema.json#/properties/processed_actions"},
+    "initial_notional_cny": {"const": "10000"},
+    "assumptions": {"$ref": "investor-evidence-model-checkpoint.schema.json#/properties/assumptions"},
+    "scope": {"const": "research_model"}, "data_mode": {"const": "reconstructed"}, "live_advice_eligible": {"const": false},
+    "policy_state": {"$ref": "investor-fixed-policy-state.schema.json"}
+  }
+}

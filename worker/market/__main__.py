@@ -29,7 +29,7 @@ def _load(path):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Explicit ETF workbench market data commands; no live fetching")
+    parser = argparse.ArgumentParser(description="Explicit ETF market commands; live reads require an inspect command")
     commands = parser.add_subparsers(dest="command", required=True)
     ingest = commands.add_parser("ingest")
     ingest.add_argument("--db", required=True)
@@ -46,8 +46,45 @@ def main(argv=None):
     synthetic.add_argument("--listing", required=True)
     synthetic.add_argument("--currency", default="CNY")
     synthetic.add_argument("--price", default="10")
+    preview = commands.add_parser("inspect-longbridge", help="OAuth read-only sample checks; no database or price persistence")
+    preview.add_argument("--cli-binary", required=True)
+    preview.add_argument("--oauth-home", required=True)
+    preview.add_argument("--symbol", required=True)
+    preview.add_argument("--start", required=True)
+    preview.add_argument("--end", required=True)
+    preview.add_argument("--expected-date", action="append", required=True)
+    apikey = commands.add_parser("inspect-longbridge-apikey", help="Private API Key daily sample; no database or price persistence")
+    credential_source = apikey.add_mutually_exclusive_group(required=True)
+    credential_source.add_argument("--credentials-file")
+    credential_source.add_argument("--credentials-env", action="store_true")
+    apikey.add_argument("--symbol", required=True)
+    apikey.add_argument("--currency", required=True)
+    apikey.add_argument("--start", required=True)
+    apikey.add_argument("--end", required=True)
+    apikey.add_argument("--expected-date", action="append", required=True)
+    apikey.add_argument("--diagnose", action="store_true", help="Fixed phase/validation codes only; no exception text")
     args = parser.parse_args(argv)
     try:
+        if args.command == "inspect-longbridge-apikey":
+            from .providers.longbridge_apikey import inspect_longbridge_apikey
+            try:
+                result = inspect_longbridge_apikey(credentials_file=args.credentials_file, credentials_env=args.credentials_env,
+                                                  symbol=args.symbol,
+                                                  currency=args.currency, start_date=args.start, end_date=args.end,
+                                                  expected_dates=args.expected_date, diagnose=args.diagnose)
+            except WorkbenchError:
+                raise
+            except Exception:
+                raise WorkbenchError("LONGPORT_INSPECTION_FAILED") from None
+            print(canonical_json(result))
+            return 0
+        if args.command == "inspect-longbridge":
+            from .providers.longbridge_cli import inspect_longbridge_cli
+            result = inspect_longbridge_cli(binary_path=args.cli_binary, oauth_home=args.oauth_home,
+                                           symbol=args.symbol, start_date=args.start, end_date=args.end,
+                                           expected_dates=args.expected_date)
+            print(canonical_json(result))
+            return 0
         if args.command == "synthetic":
             print(canonical_json(synthetic_document(args.batch, args.listing, args.currency, args.price)))
             return 0
