@@ -72,6 +72,16 @@ def fake_collect(*, mapping, start_date, end_date, expected_dates):
                                datetime_basis="runtime_utc_from_unix_timestamp", collector_runtime="isolated_official_sdk")
 
 
+def fake_repeat_collect(**kwargs):
+    value = fake_collect(**kwargs)
+    rows = [{**row, "volume": int(row["volume"]), "timestamp": datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00"))}
+        for row in value["projection"]["candlesticks"]]
+    rows.insert(1, dict(rows[0]))
+    return longport._normalize(rows, request=value["request"], sdk_version=longport.SDK_VERSION,
+        call_started_at=value["source"]["call_started_at"], call_returned_at=value["source"]["call_returned_at"],
+        datetime_basis="runtime_utc_from_unix_timestamp", collector_runtime="isolated_official_sdk", allow_exact_duplicates=True)
+
+
 class PriceCollectionTests(unittest.TestCase):
     def setUp(self):
         self.db, self.path = fixture(self)
@@ -121,6 +131,17 @@ class PriceCollectionTests(unittest.TestCase):
             self.assertEqual(row["price_basis"], "unadjusted")
             self.assertEqual(row["ingested_at"], prepared.receipt["received_at"])
         self.assertEqual(price_calendar_session(self.db, result["batch_id"], "p", "CN:TEST", "2025-06-07T06:00:00Z", stamp()), "2025-06-06")
+
+    def test_exact_repeat_projection_survives_atomic_capture_and_independent_material_replay(self):
+        before = list(self.db.execute("SELECT * FROM ledger_events"))
+        prepared, lease = self.prepare(collector=fake_repeat_collect)
+        projection = json.loads(prepared.raw)["projections"][0]
+        self.assertEqual(projection["schema_version"], "longport-candles-projection-v2")
+        self.assertEqual(len(projection["candlesticks"]), 3)
+        result = self.commit(prepared, lease)
+        self.assertEqual(verify_provider_capture(self.db, result["batch_id"])["raw_sha256"], sha256(prepared.raw).hexdigest())
+        self.assertEqual(self.db.execute("SELECT count(*) FROM market_observations").fetchone()[0], 2)
+        self.assertEqual(list(self.db.execute("SELECT * FROM ledger_events")), before)
 
     def test_missing_second_listing_aborts_all_without_partial_capture(self):
         self.db.execute("INSERT INTO listings(id,instrument_id,market,exchange,ticker,currency,created_at) VALUES('CN:SECOND','instrument','CN','TEST','000002','CNY','2025-01-01T00:00:00Z')")

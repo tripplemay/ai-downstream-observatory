@@ -32,6 +32,7 @@ from worker.market.providers.credentials import CREDENTIAL_ENV_NAMES, credential
 
 
 ADAPTER_VERSION = "longport-sdk-candles-v1"
+DUPLICATE_ADAPTER_VERSION = "longport-sdk-candles-v2"
 SDK_VERSION = "4.3.7"
 SDK_SOURCE_COMMIT = "72e9be585d2724358ddaf7d6afbb64bb9e01205d"
 MAX_WINDOW_DAYS = 31
@@ -151,7 +152,12 @@ def _session(value):
 
 
 def _normalize(candles, *, request, sdk_version, call_started_at, call_returned_at,
-               datetime_basis="explicit_aware_datetime", collector_runtime="not_verified_by_parser"):
+               datetime_basis="explicit_aware_datetime", collector_runtime="not_verified_by_parser",
+               allow_exact_duplicates=False):
+    if type(allow_exact_duplicates) is not bool or allow_exact_duplicates and (
+            sdk_version != SDK_VERSION or datetime_basis != "runtime_utc_from_unix_timestamp"
+            or collector_runtime != "isolated_official_sdk"):
+        raise WorkbenchError("LONGPORT_DUPLICATE_CANDLE_DATE")
     if not isinstance(sdk_version, str) or not _VERSION.fullmatch(sdk_version) or len(sdk_version) > 64:
         raise WorkbenchError("LONGPORT_SDK_VERSION_REQUIRED")
     started, returned = _instant(call_started_at), _instant(call_returned_at)
@@ -167,7 +173,7 @@ def _normalize(candles, *, request, sdk_version, call_started_at, call_returned_
         raise WorkbenchError("LONGPORT_POSSIBLY_TRUNCATED_RESPONSE")
     if len(candles) > MAX_WINDOW_DAYS:
         raise WorkbenchError("LONGPORT_UNEXPECTED_CANDLE_COUNT")
-    projected, records, seen = [], [], set()
+    projected, records, seen, duplicates = [], [], {}, []
     for index, candle in enumerate(candles):
         prices = {key: _money(_field(candle, key)) for key in ("open", "high", "low", "close", "turnover")}
         if prices["close"][1] == 0:
@@ -187,30 +193,40 @@ def _normalize(candles, *, request, sdk_version, call_started_at, call_returned_
             raise WorkbenchError("LONGPORT_INCOMPLETE_OR_FUTURE_LOCAL_DATE")
         if not request["start_date"] <= day <= request["end_date"]:
             raise WorkbenchError("LONGPORT_CANDLE_OUTSIDE_REQUEST")
-        if day in seen:
-            raise WorkbenchError("LONGPORT_DUPLICATE_CANDLE_DATE")
-        seen.add(day)
         row = {key: value[0] for key, value in prices.items()}
         row.update(volume=str(volume), timestamp=stamp(timestamp),
                    trade_session=_session(_field(candle, "trade_session")))
         projected.append(row)
+        if day in seen:
+            first = seen[day]
+            if not allow_exact_duplicates or projected[first] != row:
+                raise WorkbenchError("LONGPORT_DUPLICATE_CANDLE_DATE")
+            # Preserve both SDK rows in the hashed projection; count the bar once.
+            duplicates.append({"row": index, "first_row": first})
+            continue
+        seen[day] = index
         records.append({"listing_id": request["mapping"]["listing_id"], "currency": request["mapping"]["currency"],
                         "observed_at": day, "time_precision": "date", "value": prices["close"][0],
                         "metric": "close", "price_basis": "unadjusted", "published_at": None,
                         "provider_revision": None, "ingested_at": stamp(returned),
                         "source_timezone": source_zone, "provenance": "live_observed",
                         "provider_timestamp": stamp(timestamp), "projection_row": index})
-    if seen != set(request["expected_dates"]):
+    if set(seen) != set(request["expected_dates"]):
         raise WorkbenchError("LONGPORT_EXPECTED_DATE_COVERAGE_MISMATCH")
     source = {"provider": "longport", "capture_kind": "sdk_projection", "sdk_version": sdk_version,
-              "adapter_version": ADAPTER_VERSION, "call_started_at": stamp(started), "call_returned_at": stamp(returned),
+              "adapter_version": DUPLICATE_ADAPTER_VERSION if duplicates else ADAPTER_VERSION,
+              "call_started_at": stamp(started), "call_returned_at": stamp(returned),
               "source_timezone": source_zone, "sdk_datetime_basis": datetime_basis,
               "collector_runtime": collector_runtime, "publication_time_status": "not_supplied",
               "provider_revision_status": "not_supplied", "network_bytes_preserved": False,
               "calendar_verified_by_adapter": False, "mapping_verified_by_adapter": False,
               "coverage_status": "matches_caller_expected_dates_only", "account_buyability_verified": False,
               "timestamp_semantics": "provider_bar_timestamp_not_confirmed_close", "volume_encoding": "int64_decimal_string"}
-    projection = {"schema_version": "longport-candles-projection-v1", "source": source,
+    version = "longport-candles-projection-v2" if duplicates else "longport-candles-projection-v1"
+    if duplicates:
+        source.update(duplicate_bar_policy="retain_identical_sdk_rows_count_once",
+                      raw_record_count=len(projected), unique_record_count=len(records), duplicate_rows=duplicates)
+    projection = {"schema_version": version, "source": source,
                   "request": request, "candlesticks": projected}
     encoded = canonical_json(projection).encode("utf-8")
     if len(encoded) > MAX_PROJECTION_BYTES:
@@ -218,7 +234,7 @@ def _normalize(candles, *, request, sdk_version, call_started_at, call_returned_
     digest = sha256(encoded).hexdigest()
     for row in records:
         row["projection_sha256"] = digest
-    return {"schema_version": "longport-candles-projection-v1", "source": source, "request": request,
+    return {"schema_version": version, "source": source, "request": request,
             "projection": projection, "projection_sha256": digest, "projection_bytes": encoded,
             "records": sorted(records, key=lambda row: row["observed_at"])}
 
@@ -300,7 +316,7 @@ def _official_call(request, credentials, *, diagnostic=False):
         rows.append(row)
     return _normalize(rows, request=request, sdk_version=SDK_VERSION, call_started_at=started,
                       call_returned_at=returned, datetime_basis="runtime_utc_from_unix_timestamp",
-                      collector_runtime="isolated_official_sdk")
+                      collector_runtime="isolated_official_sdk", allow_exact_duplicates=True)
 
 
 def _strict_json(raw):
@@ -404,7 +420,7 @@ def _parse_child_projection(raw, request, parent_started, parent_returned):
             raise ValueError("response bound")
         projection = _strict_json(raw.decode("utf-8"))
         source = projection["source"]
-        if (projection["schema_version"] != "longport-candles-projection-v1" or projection["request"] != request
+        if (projection["schema_version"] not in ("longport-candles-projection-v1", "longport-candles-projection-v2") or projection["request"] != request
                 or source["sdk_version"] != SDK_VERSION
                 or not parent_started <= _instant(source["call_started_at"]) <= _instant(source["call_returned_at"]) <= parent_returned):
             raise ValueError("child binding")
@@ -418,7 +434,8 @@ def _parse_child_projection(raw, request, parent_started, parent_returned):
             rows.append(item)
         result = _normalize(rows, request=request, sdk_version=SDK_VERSION,
                             call_started_at=source["call_started_at"], call_returned_at=source["call_returned_at"],
-                            datetime_basis="runtime_utc_from_unix_timestamp", collector_runtime="isolated_official_sdk")
+                            datetime_basis="runtime_utc_from_unix_timestamp", collector_runtime="isolated_official_sdk",
+                            allow_exact_duplicates=projection["schema_version"] == "longport-candles-projection-v2")
         if result["projection_bytes"] != raw:
             raise ValueError("noncanonical child projection")
         return result

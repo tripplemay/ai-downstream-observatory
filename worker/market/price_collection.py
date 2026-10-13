@@ -70,7 +70,8 @@ def _replay_projection(projection, selected, payload):
         candles.append({**row, "volume": int(row["volume"]), "timestamp": instant(row["timestamp"])})
     parsed = longport._normalize(candles, request=request, sdk_version=longport.SDK_VERSION,
                                 call_started_at=source["call_started_at"], call_returned_at=source["call_returned_at"],
-                                datetime_basis="runtime_utc_from_unix_timestamp", collector_runtime="isolated_official_sdk")
+                                datetime_basis="runtime_utc_from_unix_timestamp", collector_runtime="isolated_official_sdk",
+                                allow_exact_duplicates=projection.get("schema_version") == "longport-candles-projection-v2")
     _assert(parsed["projection"] == projection, "PRICE_PROVIDER_PROJECTION_MISMATCH")
     return parsed
 

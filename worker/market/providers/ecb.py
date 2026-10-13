@@ -24,6 +24,8 @@ from worker.orchestration.db import WorkbenchError, instant, stamp
 
 PARSER_VERSION = "ecb-reference-xml-v1"
 MAX_BYTES = 2 * 1024 * 1024
+HISTORY_MAX_BYTES = 16 * 1024 * 1024
+HISTORY_URL = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist.xml"
 URLS = {
     "daily": "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml",
     "hist_90d": "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist-90d.xml",
@@ -93,8 +95,8 @@ def _cross(numerator, denominator):
     return value
 
 
-def _xml(raw):
-    if not isinstance(raw, bytes) or not 1 <= len(raw) <= MAX_BYTES:
+def _xml(raw, *, maximum_bytes=MAX_BYTES, maximum_nodes=5000):
+    if not isinstance(raw, bytes) or not 1 <= len(raw) <= maximum_bytes:
         raise WorkbenchError("ECB_RAW_BYTES_INVALID_OR_TOO_LARGE")
     try:
         text = raw.decode("utf-8-sig")
@@ -120,7 +122,7 @@ def _xml(raw):
                         root = element
                     depth += 1
                     count += 1
-                    if depth > 4 or count > 5000:
+                    if depth > 4 or count > maximum_nodes:
                         raise WorkbenchError("ECB_XML_STRUCTURE_LIMIT")
                 else:
                     depth -= 1
@@ -228,6 +230,17 @@ def download_ecb_xml(feed, *, timeout_seconds=15):
     Platform DNS resolution itself is not interruptible by a socket timeout.
     """
     url = _feed_url(feed)
+    return _download_fixed_xml(url, MAX_BYTES, timeout_seconds)
+
+
+def download_ecb_history_xml(*, timeout_seconds=30):
+    """Separate full-history download, not accepted by the daily collector."""
+    return _download_fixed_xml(HISTORY_URL, HISTORY_MAX_BYTES, timeout_seconds)
+
+
+def _download_fixed_xml(url, maximum_bytes, timeout_seconds):
+    if (url, maximum_bytes) not in {(value, MAX_BYTES) for value in URLS.values()} | {(HISTORY_URL, HISTORY_MAX_BYTES)}:
+        raise WorkbenchError("ECB_CONNECTION_TARGET_FORBIDDEN")
     if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int) or not 1 <= timeout_seconds <= 30:
         raise WorkbenchError("ECB_TIMEOUT_INVALID")
     started_at = stamp(datetime.now(timezone.utc))
@@ -271,7 +284,7 @@ def download_ecb_xml(feed, *, timeout_seconds=15):
             raise WorkbenchError("ECB_HTTP_CONTENT_ENCODING_REJECTED")
         length = headers.get("Content-Length")
         if length is not None:
-            if not re.fullmatch(r"[0-9]{1,7}", length) or not 1 <= int(length) <= MAX_BYTES:
+            if not re.fullmatch(r"[0-9]{1," + str(len(str(maximum_bytes))) + r"}", length) or not 1 <= int(length) <= maximum_bytes:
                 raise WorkbenchError("ECB_HTTP_CONTENT_LENGTH_REJECTED")
             if headers.get("Transfer-Encoding") is not None:
                 raise WorkbenchError("ECB_AMBIGUOUS_HTTP_HEADERS")
@@ -280,14 +293,14 @@ def download_ecb_xml(feed, *, timeout_seconds=15):
         body = bytearray()
         while not response.isclosed():
             remaining()
-            chunk = response.read1(min(65536, MAX_BYTES + 1 - len(body)))
+            chunk = response.read1(min(65536, maximum_bytes + 1 - len(body)))
             # HTTPResponse may close its last socket reference at EOF. There is
             # no more I/O to configure, but the elapsed deadline still applies.
             remaining(update_socket=False)
             if not chunk:
                 break
             body.extend(chunk)
-            if len(body) > MAX_BYTES:
+            if len(body) > maximum_bytes:
                 raise WorkbenchError("ECB_DOWNLOAD_TOO_LARGE")
         if not body or length is not None and len(body) != int(length):
             raise WorkbenchError("ECB_DOWNLOAD_INCOMPLETE")

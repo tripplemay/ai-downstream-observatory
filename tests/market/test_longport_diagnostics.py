@@ -81,7 +81,7 @@ class DiagnosticTests(unittest.TestCase):
                  ([candle(volume=True)], "VOLUME_INVALID"),
                  ([candle(timestamp="fixture-private-token")], "SDK_DATETIME_REQUIRED"),
                  ([candle(trade_session=1)], "NONREGULAR_OR_INVALID_SESSION"),
-                 ([candle(), candle()], "DUPLICATE_CANDLE_DATE"),
+                 ([candle(), candle(volume=1)], "DUPLICATE_CANDLE_DATE"),
                  ([candle()], "EXPECTED_DATE_COVERAGE_MISMATCH"))
         for rows, name in cases:
             sdk, _ = fake_sdk(rows)
