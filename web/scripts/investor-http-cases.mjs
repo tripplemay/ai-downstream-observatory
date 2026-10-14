@@ -345,15 +345,20 @@ finally:
     let state = await get(); assert.equal(state.status, 200); assert.equal(state.json.research_task.status, 'calculated');
     assert.equal(state.json.research_task.study.qualification, 'owner_reviewed_reconstructed');
     assert.equal(state.json.research_task.study.status, 'risk_options_ready');
+    assert.deepEqual(state.json.research_task.study.phase_checks, []);
     assert.equal(state.json.research_task.study.source_context.listings.length, 2);
     assert.equal(state.json.research_task.registry.phases.train.completed, 3);
     assert.equal(state.json.research_task.registry.phases.validation.registered, 0);
     assert.equal(state.json.profile.document.loss_tolerance, null); assert.equal(state.json.live_advice_eligible, false);
-    const html = await (await request('/workbench', { headers: headers() })).text(); assert.match(html, /历史重建候选已计算/);
+    const html = await (await request('/workbench', { headers: headers() })).text(); assert.match(html, /候选已计算，等待确认风险范围/);
+    assert.match(html, /当前只有训练期比较，尚未选择最终权重/);
     assert.deepEqual(financial(), initialFinancial);
     const confirmed = await post({ action: 'save_profile', expected_revision: state.json.revision, idempotency_key: 'http-fictional-confirmed-risk', profile: { ...profile, loss_tolerance: '0.30' } });
     assert.equal(confirmed.status, 200); await invoke('calculate'); state = await get(); assert.equal(state.status, 200);
     assert.equal(state.json.research_task.study.status, 'reference_ready');
+    assert.deepEqual(state.json.research_task.study.phase_checks, ['train', 'validation', 'holdout'].map(phase => ({
+      phase, execution_failure_count: 0, benchmark_execution_failure_count: 0,
+    })));
     assert.equal(state.json.plan.document.data_mode, 'reconstructed'); assert.equal(state.json.plan.saved_for_observation, false);
     assert.equal(state.json.plan.document.reference_evidence.result_hash, state.json.research_task.study.result_hash);
     const planId = state.json.plan.id;
