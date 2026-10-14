@@ -59,6 +59,7 @@ services:
     <<: [*hardened, *worker-image]
     restart: unless-stopped
     environment: *runtime
+    command: [python, -m, worker.orchestration, --role, core, --lease-seconds, "${WORKBENCH_CORE_LEASE_SECONDS:-900}"]
     volumes: [*data]
     depends_on:
       web:

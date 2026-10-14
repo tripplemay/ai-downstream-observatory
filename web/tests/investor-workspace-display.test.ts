@@ -9,6 +9,26 @@ import { mountInvestorDisplay } from "./investor-display-fixture";
 import { displayBinding as binding, displayBefore, displayUntil, displayFuture, displayState } from "./investor-display-state-fixture";
 
 const before = Date.parse(displayBefore), until = Date.parse(displayUntil);
+function validationHoldState() {
+  const state = displayState();
+  state.plan = null;
+  state.research_task = schemas.researchTaskSchema.parse({ id: "fictional-validation-hold", profile_id: state.profile!.id,
+    profile_version: state.profile!.version, input_version: "a".repeat(64), engine_version: "investor-diversified-reference-v1",
+    status: "calculated", created_at: displayBefore, completed_at: displayBefore,
+    reason_codes: ["SELECTED_CANDIDATE_FAILED_VALIDATION"], live_advice_eligible: false,
+    registry: { experiment_id: "fictional-validation-experiment", manifest_hash: "b".repeat(64),
+      phases: { train: { registered: 3, completed: 3 }, validation: { registered: 1, completed: 1 }, holdout: { registered: 0, completed: 0 } },
+      freeze_hash: "c".repeat(64), prior_window_exposures: 0, exposure_watermark: 4, holdout_status: "not_independently_verified",
+      coverage: "local_investor_trials_only", live_advice_eligible: false },
+    study: { status: "insufficient_evidence", qualification: "owner_reviewed_reconstructed", result_hash: "d".repeat(64),
+      implementation_hash: "e".repeat(64), candidates: [], source_context: { range_start: "2025-01-01", range_end: "2025-06-01",
+        valid_until: displayUntil, basis: "owner_reviewed_historical_reconstruction",
+        listings: [{ listing_id: "CN:ALPHA", provider_symbol: "501998.SH", market: "CN", role: "growth" }] },
+      phase_checks: [{ phase: "train", execution_failure_count: 0, benchmark_execution_failure_count: 0 },
+        { phase: "validation", execution_failure_count: 1, benchmark_execution_failure_count: 0 }] },
+  });
+  return state;
+}
 function mount(t: { after: (fn: () => void) => void }, state = displayState(), view = "overview") {
   const h = mountInvestorDisplay(t, new URL("../src/components/workbench/investor-workspace.tsx", import.meta.url), "InvestorWorkspace",
     { initial: state, initialSessionBinding: binding, view }, { "next/link": { default: "Link", __esModule: true },
@@ -38,6 +58,24 @@ test("actual workspace invalidates the current headline, card, actions and AI at
   assert.equal(h.requests.length, 0); await h.advance(before, 1000); await h.wake(); assert.equal(h.headline(), "证据不足");
   await h.fundingLock(false); oldClick(); await h.flush(); assert.equal(h.requests.length, 0); assert.match(h.text(), /这条观察已失效/);
   assert.equal(h.button("刷新状态")!.props.disabled, false); assert.equal(h.button("重新检查研究条件")!.props.disabled, false);
+});
+
+test("actual plan and overview explain validation hold before technical details, with no final-plan save or automatic requests", async t => {
+  for (const view of ["overview", "plan"]) {
+    const h = mount(t, validationHoldState(), view); await h.flush();
+    const reference = h.card("研究组合与历史参考"), progress = h.card("后台研究进度");
+    assert.match(h.words(reference), /验证期未通过，未生成参考组合/);
+    assert.match(h.words(reference), /另建研究版本/);
+    assert.match(h.words(progress), /验证期：候选执行缺口 1 项，基准执行缺口 0 项/);
+    assert.match(h.words(progress), /保留期尚未启动，不能显示为通过/);
+    assert.doesNotMatch(h.words(reference), /先比较损失情景并补齐研究证据/);
+    assert.equal(h.button("保存为观察中的研究方案"), undefined);
+    assert.equal(h.requests.length, 0);
+    await h.advance(until);
+    assert.match(h.words(h.card("研究组合与历史参考")), /研究来源或输入已失效/);
+    assert.doesNotMatch(h.words(h.card("后台研究进度")), /冻结候选的阶段执行检查|验证期：候选执行缺口/);
+    assert.equal(h.requests.length, 0); h.close();
+  }
 });
 test("plan expiry applies to observe and decision modes without a successful GET; expired synthetic references cannot be saved", async t => {
   for (const outcome of ["observe", "decision_required"] as const) {

@@ -22,6 +22,19 @@
 
 Web/worker/tools 全部 `10001:10001`、只读 rootfs、丢弃全部 capability、`no-new-privileges`。挂载目录必须预先存在，不由 Compose 静默创建 root 目录；不递归 chown 原生产数据。Web 仅绑定 `127.0.0.1:5051`，沿用经过人工检查的宿主 HTTPS 反代。
 
+### Core 研究任务租约
+
+Compose 显式以 `--role core --lease-seconds 900` 启动 core worker。受控
+`release.env` 可用 `WORKBENCH_CORE_LEASE_SECONDS` 覆盖，发布脚本仅接受
+300–3600 秒的整数，默认 900 秒。发布完成前检查实际容器启动参数，而不是只看
+环境文件或健康状态；verifier、行情采集角色的租约不随此配置变化。
+
+此前主机上的临时 `core-research-lease.override.yml` 不属于不可变源码。
+发布新版本时不得依赖它；应先核对新版本的显式参数和
+`core-lease-readiness.txt`，再单独整理已被替代的临时文件，不在发布脚本中自动删除。
+延长租约仅处理长计算任务的技术失败，不扩大研究试验预算、不重置曝光记录，
+也不替代心跳延迟、满载性能或投资策略验收。
+
 首次生成秘密（授权操作员执行；以下不会在 stdout 输出秘密）：
 
 ```bash

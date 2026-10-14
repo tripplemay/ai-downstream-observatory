@@ -74,6 +74,9 @@ export function readInvestorResearchTask(db: Database.Database, workspaceId: str
         || result.data_mode !== (source.row.source_qualification === "synthetic_test_only" ? "synthetic" : "reconstructed")) throw new Error("INVESTOR_EVIDENCE_INVALID");
       study = { status: result.status as "risk_options_ready" | "reference_ready" | "insufficient_evidence",
         qualification: source.row.source_qualification as "synthetic_test_only" | "owner_reviewed_reconstructed",
+        phase_checks: (result.phase_evidence as { phase: "train" | "validation" | "holdout"; execution_failure_count: number; benchmark_execution_failure_count: number }[])
+          .map(summary => ({ phase: summary.phase, execution_failure_count: summary.execution_failure_count,
+            benchmark_execution_failure_count: summary.benchmark_execution_failure_count })),
         ...(source.document && source.catalog ? { source_context: {
           range_start: (source.document.snapshot as Record<string, string>).range_start,
           range_end: (source.document.snapshot as Record<string, string>).range_end,

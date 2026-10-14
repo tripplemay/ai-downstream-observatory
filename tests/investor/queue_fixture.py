@@ -8,7 +8,7 @@ from contextlib import nullcontext
 
 from tests.investor.fixtures import research_input
 from worker.investor.runtime import prepare_research_job, register_synthetic_input, sync_research_requests
-from worker.orchestration.db import WorkbenchError, canonical_json, open_database
+from worker.orchestration.db import WorkbenchError, canonical_json, content_hash, open_database
 from worker.orchestration.jobs import run_one
 from worker.orchestration.runtime import run_pending_once
 
@@ -19,6 +19,7 @@ def main():
     parser.add_argument("--mode", choices=("register", "compute", "core"), required=True)
     parser.add_argument("--now")
     parser.add_argument("--legacy-fixed-reference", action="store_true")
+    parser.add_argument("--validation-execution-gap", action="store_true")
     args = parser.parse_args()
     path = Path(args.db).resolve(strict=True)
     root = Path(tempfile.gettempdir()).resolve()
@@ -32,8 +33,14 @@ def main():
         if args.mode == "register":
             workspaces = db.execute("SELECT id FROM investor_workspaces").fetchall()
             if len(workspaces) != 1: raise WorkbenchError("SYNTHETIC_SINGLE_WORKSPACE_REQUIRED")
-            register_synthetic_input(db, workspaces[0]["id"], *research_input(), now=args.now or "2026-01-02T12:00:01.000Z")
+            data, plan, policy = research_input()
+            if args.validation_execution_gap:
+                for observation in data["observations"]:
+                    if observation["listing_id"] == "CN:ALPHA" and observation["observed_at"].startswith("2025-03-02"):
+                        observation.update(value="20", raw_hash=content_hash({"synthetic_validation_execution_gap": True}))
+            register_synthetic_input(db, workspaces[0]["id"], data, plan, policy, now=args.now or "2026-01-02T12:00:01.000Z")
         else:
+            if args.validation_execution_gap: raise WorkbenchError("SYNTHETIC_GAP_REGISTRATION_ONLY")
             now = args.now or "2026-01-02T12:00:03.000Z"
             sync_research_requests(db, now=now)
             from worker.investor.reference_plan import render_reference_plan

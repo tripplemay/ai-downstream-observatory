@@ -10,8 +10,8 @@ import { investorActor as actor, investorFixture, investorNow as now, saveSynthe
 
 const currentTime = "2026-01-02T12:00:04.000Z", binding = "a".repeat(64);
 const financialTables = ["portfolios", "accounts", "ledger_events", "postings", "position_movements", "approval_events", "activations", "reservations", "execution_reports"];
-function helper(f: ReturnType<typeof investorFixture>, mode: "register" | "compute" | "core") {
-  const output = execFileSync(process.env.WORKBENCH_TEST_PYTHON ?? "python3", ["-m", "tests.investor.queue_fixture", "--db", f.filename, "--mode", mode],
+function helper(f: ReturnType<typeof investorFixture>, mode: "register" | "compute" | "core", extra: string[] = []) {
+  const output = execFileSync(process.env.WORKBENCH_TEST_PYTHON ?? "python3", ["-m", "tests.investor.queue_fixture", "--db", f.filename, "--mode", mode, ...extra],
     { cwd: path.resolve(process.cwd(), ".."), encoding: "utf8", timeout: 60000, maxBuffer: 65536 });
   assert.equal(JSON.parse(output).status, "synthetic_fixture_complete");
 }
@@ -65,6 +65,7 @@ test("isolated cross-language calculation publishes train-only loss options with
     assert.equal(state.research_task?.study?.status, "risk_options_ready");
     assert.equal(state.research_task?.study?.qualification, "synthetic_test_only");
     assert.equal(state.research_task?.study?.candidates.length, 3);
+    assert.deepEqual(state.research_task?.study?.phase_checks, []);
     assert.deepEqual(state.research_task?.registry?.phases, { train: { registered: 3, completed: 3 }, validation: { registered: 0, completed: 0 }, holdout: { registered: 0, completed: 0 } });
     assert.equal(state.research_task?.registry?.freeze_hash, null);
     assert.equal(state.research_task?.registry?.holdout_status, "not_independently_verified");
@@ -114,6 +115,9 @@ test("confirmed synthetic research binds persisted train freeze and three phase 
     assert.equal(registry.phases.train.completed, 3);
     assert.equal(registry.phases.validation.completed, 1);
     assert.equal(registry.phases.holdout.completed, 1);
+    assert.deepEqual(state.research_task?.study?.phase_checks, ["train", "validation", "holdout"].map(phase => ({
+      phase, execution_failure_count: 0, benchmark_execution_failure_count: 0,
+    })));
     assert.match(registry.freeze_hash!, /^[a-f0-9]{64}$/);
     assert.equal(registry.holdout_status, "not_independently_verified");
     assert.equal(state.plan, null);
@@ -122,6 +126,36 @@ test("confirmed synthetic research binds persisted train freeze and three phase 
     const before = f.db.prepare("SELECT count(*) n FROM investor_trial_intents").get();
     getInvestorState(f.db, actor, currentTime);
     assert.deepEqual(f.db.prepare("SELECT count(*) n FROM investor_trial_intents").get(), before);
+    noFinance(f);
+  } finally { f.close(); }
+});
+
+test("a genuine synthetic next-close budget gap exposes verified phase counts without promoting, retrying or opening holdout", () => {
+  const f = investorFixture();
+  try {
+    executeInvestorCommand(f.db, actor, { action: "save_profile", profile: { ...syntheticProfile, loss_tolerance: "0.30" },
+      expected_revision: 0, idempotency_key: "gap-fixture-only" }, now);
+    helper(f, "register", ["--validation-execution-gap"]);
+    executeInvestorCommand(f.db, actor, { action: "evaluate", expected_revision: 1, idempotency_key: "gap-input" }, "2026-01-02T12:00:02.000Z");
+    helper(f, "compute");
+    const before = f.db.prepare("SELECT total_changes() n FROM investor_research_runs").get();
+    const state = getInvestorState(f.db, actor, currentTime), task = state.research_task!;
+    assert.equal(task.status, "calculated"); assert.equal(task.study!.status, "insufficient_evidence");
+    assert.ok(task.reason_codes.includes("SELECTED_CANDIDATE_FAILED_VALIDATION"));
+    assert.deepEqual(task.study!.phase_checks!.map(row => row.phase), ["train", "validation"]);
+    assert.ok(task.study!.phase_checks![1].execution_failure_count > 0);
+    assert.deepEqual(task.registry!.phases.holdout, { registered: 0, completed: 0 });
+    assert.equal(state.plan, null); assert.equal(state.model_watch, null);
+    assert.deepEqual(parseInvestorState({ ...state, session_binding: binding }, binding), state);
+    assert.deepEqual(f.db.prepare("SELECT total_changes() n FROM investor_research_runs").get(), before);
+    for (const alter of [
+      (value: typeof state) => { value.research_task!.study!.phase_checks![1].execution_failure_count = -1; },
+      (value: typeof state) => { value.research_task!.study!.phase_checks![1].phase = "holdout"; },
+      (value: typeof state) => { value.research_task!.study!.phase_checks!.push({ phase: "holdout", execution_failure_count: 0, benchmark_execution_failure_count: 0 }); },
+    ]) {
+      const forged = structuredClone(state); alter(forged);
+      assert.throws(() => parseInvestorState({ ...forged, session_binding: binding }, binding), /RESPONSE_INVALID/);
+    }
     noFinance(f);
   } finally { f.close(); }
 });

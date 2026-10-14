@@ -19,6 +19,32 @@ export function currentResearchDisplay(task: InvestorResearchTask, nowMs: number
   return { ...task, status: "outdated", reason_codes: ["REFERENCE_SOURCE_EXPIRED", ...task.reason_codes.filter(code => code !== "REFERENCE_SOURCE_EXPIRED")].slice(0, 40),
     study: null, registry: null };
 }
+export function researchTaskStatus(task: InvestorResearchTask) {
+  if (task.status === "outdated") return { title: "研究来源或输入已失效", detail: "以下仅保留历史证据，不能继续作为当前结论。",
+    action: "更新来源或约束后重新核对，不自动重跑旧研究。" };
+  const phase = task.reason_codes.includes("SELECTED_CANDIDATE_FAILED_VALIDATION") ? "验证期"
+    : task.reason_codes.includes("SELECTED_CANDIDATE_FAILED_HOLDOUT") ? "保留期" : null;
+  if (task.status === "calculated" && task.study?.status === "insufficient_evidence" && phase) {
+    return { title: `${phase}未通过，未生成参考组合`,
+      detail: "冻结候选未通过预先登记的执行与风险检查。计算完成不等于策略通过，也不是行情数据尚未就绪。",
+      action: "先核对下方阶段检查。需要改进时另建研究版本，保留原结果和已曝光窗口；不会改选候选或自动启用监测。" };
+  }
+  if (task.status === "calculated") {
+    if (task.study?.status === "risk_options_ready") return { title: task.study.qualification === "synthetic_test_only" ? "测试候选已计算，等待确认风险范围" : "候选已计算，等待确认风险范围",
+      detail: "当前只有训练期比较，尚未选择最终权重。", action: "先比较损失情景，再决定自己的研究风险范围。" };
+    if (task.study?.status === "reference_ready" && task.study.qualification === "synthetic_test_only")
+      return { title: "合成测试计算通过，不能作为真实参考组合", detail: "只验证软件计算与交互，不是真实 ETF 研究或个人投资组合。",
+        action: "接入并核验真实研究证据，不把软件测试结果作为投资结论。" };
+    if (task.study?.status === "reference_ready") return { title: "历史参考计算已通过，不代表实盘验证",
+      detail: "通过本次研究规则不证明未来盈利、保留期独立性或当前可交易性。", action: "核对来源和假设；保存仅登记研究观察，不执行交易。" };
+    return { title: "计算完成，研究证据仍不足", detail: "尚未形成通过研究规则的参考组合。",
+      action: "核对任务证据与研究约束，不以示例或反复重跑替代验证。" };
+  }
+  const titles = { queued: "研究任务已排队", running: "正在计算研究方案", retrying: "计算尚未完成，等待技术重试",
+    blocked: "输入检查已完成，仍缺少研究证据", failed: "研究计算失败，不能推定无需调整" };
+  return { title: titles[task.status], detail: "任务完成前不展示确定组合，也不代表持续监测已启用。",
+    action: task.status === "failed" ? "核对后台故障与原请求状态，不重复提交来绕过失败。" : "系统保留任务状态；你无需建立真实账本或提交交易。" };
+}
 export function currentPlanDisplay(plan: InvestorPlan | null | undefined, nowMs: number): InvestorPlan | null {
   if (!plan) return null;
   if (Date.parse(plan.document.valid_until) > nowMs) return plan;

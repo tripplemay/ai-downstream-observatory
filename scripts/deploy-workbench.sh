@@ -41,6 +41,8 @@ WORKBENCH_RESTORE_PARENT_DIR=${WORKBENCH_RESTORE_PARENT_DIR:-$WORKBENCH_DEPLOY_R
 WORKBENCH_PROJECT=${WORKBENCH_PROJECT:-etf-workbench}
 WORKBENCH_LEGACY_PROJECT=${WORKBENCH_LEGACY_PROJECT:-observatory}
 WORKBENCH_HTTP_PORT=${WORKBENCH_HTTP_PORT:-5051}
+WORKBENCH_CORE_LEASE_SECONDS=${WORKBENCH_CORE_LEASE_SECONDS:-900}
+[[ "$WORKBENCH_CORE_LEASE_SECONDS" =~ ^[1-9][0-9]{2,3}$ ]] && (( WORKBENCH_CORE_LEASE_SECONDS >= 300 && WORKBENCH_CORE_LEASE_SECONDS <= 3600 )) || { printf 'Core lease must be an integer between 300 and 3600 seconds\n' >&2; exit 2; }
 WORKBENCH_MARKET_PROVIDER_ENABLED=${WORKBENCH_MARKET_PROVIDER_ENABLED:-0}
 [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 0 || "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]] || { printf 'Market provider enable flag must be 0 or 1\n' >&2; exit 2; }
 if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then
@@ -60,10 +62,12 @@ done
 (( WORKBENCH_HTTP_PORT > 1024 && WORKBENCH_HTTP_PORT < 65536 )) || exit 2
 export WORKBENCH_RELEASE_SHA WORKBENCH_DATA_DIR_HOST WORKBENCH_BACKUP_DIR_HOST WORKBENCH_RESTORE_PARENT_DIR WORKBENCH_LEGACY_DATA_DIR WORKBENCH_RUNTIME_ENV_FILE WORKBENCH_BACKUP_KEY_FILE WORKBENCH_HTTP_PORT
 export COMPOSE_PARALLEL_LIMIT
+export WORKBENCH_CORE_LEASE_SECONDS
 
 if ((execute == 0)); then
   printf 'PLAN ONLY: %s\n' "$release_sha"
   printf 'Optional market provider enabled: %s\n' "$WORKBENCH_MARKET_PROVIDER_ENABLED"
+  printf 'Core research lease seconds: %s\n' "$WORKBENCH_CORE_LEASE_SECONDS"
   printf '%s\n' 'Validate protected configuration and isolated UID 10001 volumes' 'Build exact release-tagged web/worker images before stopping existing services' 'Back up current workbench with its compatible previous image, or snapshot legacy SQLite online' 'Stop previous writers; take final backup; migrate new schema explicitly' 'Archive legacy rows only as legacy research; never create actual funds' 'Create encrypted backup and restore into a new rehearsal directory' 'Start isolated workbench project; verify schema, auth, HTTP and worker health' 'Failure stops new writers and preserves all new facts; no database overwrite rollback'
   exit 0
 fi
@@ -255,6 +259,7 @@ assert_no_recovery
 timeout 180 docker compose "${compose_options[@]}" up -d --no-build --wait --wait-timeout 150 "${start_services[@]}"
 compose exec -T web node /app/scripts/check-workbench-runtime.mjs --http > "$evidence/runtime-readiness.json"
 compose exec -T worker python -c 'import os; from worker.orchestration.db import open_database; c=open_database(os.environ["WORKBENCH_DB_PATH"]); c.close(); print("worker schema ready")' > "$evidence/worker-readiness.txt"
+docker inspect "$(compose ps -q worker)" --format '{{json .Config.Cmd}}' | python3 -c 'import json,sys; assert json.load(sys.stdin)==["python","-m","worker.orchestration","--role","core","--lease-seconds",sys.argv[1]]; print("core startup lease verified")' "$WORKBENCH_CORE_LEASE_SECONDS" > "$evidence/core-lease-readiness.txt"
 compose exec -T verifier python -c 'import os; from worker.orchestration.db import open_database; from worker.governance_verification.source import source_manifest; from worker.orchestration.runtime import role_commands; assert role_commands("verifier") == ("governance_verification_v2",); assert not any(k.startswith(("LONGPORT_","LONGBRIDGE_")) or k in ("WORKBENCH_PASSWORD_HASH","WORKBENCH_SESSION_SECRET") for k in os.environ); c=open_database(os.environ["WORKBENCH_DB_PATH"]); c.close(); source_manifest(); print("verifier schema and fixed source ready")' > "$evidence/verifier-readiness.txt"
 [[ $(docker inspect "$(compose ps -q verifier)" --format '{{.HostConfig.NetworkMode}}') == none ]]
 if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then
