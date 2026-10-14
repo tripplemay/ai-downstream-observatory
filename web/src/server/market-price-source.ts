@@ -73,23 +73,33 @@ export function replayLongportProjection(raw: unknown, mapping: Pick<MappingFact
   const projection = obj(raw), source = obj(projection.source), started = String(source.call_started_at), returned = String(source.call_returned_at), zone = zones[mapping.market];
   requireTrue(utc6(started) === started && utc6(returned) === returned && priceInstant(started) <= priceInstant(returned));
   const today = localDate(started, zone); requireTrue(input.end_date < today);
-  equal(source, { provider: "longport", capture_kind: "sdk_projection", sdk_version: "4.3.7", adapter_version: "longport-sdk-candles-v1", call_started_at: started, call_returned_at: returned, source_timezone: zone, sdk_datetime_basis: "runtime_utc_from_unix_timestamp", collector_runtime: "isolated_official_sdk", publication_time_status: "not_supplied", provider_revision_status: "not_supplied", network_bytes_preserved: false, calendar_verified_by_adapter: false, mapping_verified_by_adapter: false, coverage_status: "matches_caller_expected_dates_only", account_buyability_verified: false, timestamp_semantics: "provider_bar_timestamp_not_confirmed_close", volume_encoding: "int64_decimal_string" });
+  const duplicateVersion = projection.schema_version === "longport-candles-projection-v2";
+  requireTrue(duplicateVersion || projection.schema_version === "longport-candles-projection-v1");
   const request = { mapping: { listing_id: mapping.listing_id, provider_symbol: mapping.provider_symbol, market: mapping.market, currency: mapping.currency }, start_date: input.start_date, end_date: input.end_date, period: "day", adjust_type: "none", trade_session: "regular", expected_dates: expectedDates };
   equal(projection.request, request);
   const candles = array(projection.candlesticks, 31); requireTrue(candles.length > 0);
-  const seen = new Set<string>();
-  const records = candles.map((value, index) => {
+  const seen = new Map<string, number>(), duplicates: { row: number; first_row: number }[] = [];
+  const records = candles.flatMap((value, index) => {
     const row = obj(value); const decimal = (key: string) => { requireTrue(typeof row[key] === "string" && !String(row[key]).startsWith("-")); const value = amount(String(row[key])); requireTrue(value.gte(0)); return value; };
     const open = decimal("open"), high = decimal("high"), low = decimal("low"), close = decimal("close"); decimal("turnover");
     requireTrue(close.gt(0) && low.lte(open) && low.lte(close) && high.gte(open) && high.gte(close));
     requireTrue(typeof row.volume === "string" && /^(0|[1-9][0-9]{0,18})$/.test(row.volume) && BigInt(row.volume) <= 9223372036854775807n && row.trade_session === 0);
     const timestamp = String(row.timestamp); requireTrue(utc6(timestamp) === timestamp && priceInstant(timestamp) <= priceInstant(returned));
-    const day = localDate(timestamp, zone); requireTrue(!seen.has(day) && input.start_date <= day && day <= input.end_date && day < today); seen.add(day);
+    const day = localDate(timestamp, zone); requireTrue(input.start_date <= day && day <= input.end_date && day < today);
     equal(row, { open: row.open, high: row.high, low: row.low, close: row.close, turnover: row.turnover, volume: row.volume, timestamp, trade_session: 0 });
-    return { listing_id: mapping.listing_id, currency: mapping.currency, observed_at: day, time_precision: "date", value: row.close, metric: "close", price_basis: "unadjusted", published_at: null, provider_revision: null, ingested_at: returned, source_timezone: zone, provenance: "live_observed", provider_timestamp: timestamp, projection_row: index };
+    const first = seen.get(day);
+    if (first !== undefined) {
+      requireTrue(duplicateVersion); equal(row, candles[first]);
+      duplicates.push({ row: index, first_row: first }); return [];
+    }
+    seen.set(day, index);
+    return [{ listing_id: mapping.listing_id, currency: mapping.currency, observed_at: day, time_precision: "date", value: row.close, metric: "close", price_basis: "unadjusted", published_at: null, provider_revision: null, ingested_at: returned, source_timezone: zone, provenance: "live_observed", provider_timestamp: timestamp, projection_row: index }];
   });
-  equal([...seen].sort(), expectedDates);
-  equal(projection, { schema_version: "longport-candles-projection-v1", source, request, candlesticks: candles });
+  equal([...seen.keys()].sort(), expectedDates);
+  requireTrue(!duplicateVersion || duplicates.length > 0);
+  equal(source, { provider: "longport", capture_kind: "sdk_projection", sdk_version: "4.3.7", adapter_version: duplicateVersion ? "longport-sdk-candles-v2" : "longport-sdk-candles-v1", call_started_at: started, call_returned_at: returned, source_timezone: zone, sdk_datetime_basis: "runtime_utc_from_unix_timestamp", collector_runtime: "isolated_official_sdk", publication_time_status: "not_supplied", provider_revision_status: "not_supplied", network_bytes_preserved: false, calendar_verified_by_adapter: false, mapping_verified_by_adapter: false, coverage_status: "matches_caller_expected_dates_only", account_buyability_verified: false, timestamp_semantics: "provider_bar_timestamp_not_confirmed_close", volume_encoding: "int64_decimal_string",
+    ...(duplicateVersion ? { duplicate_bar_policy: "retain_identical_sdk_rows_count_once", raw_record_count: candles.length, unique_record_count: records.length, duplicate_rows: duplicates } : {}) });
+  equal(projection, { schema_version: duplicateVersion ? "longport-candles-projection-v2" : "longport-candles-projection-v1", source, request, candlesticks: candles });
   const digest = hash(projection);
   return { records: records.map(row => ({ ...row, projection_sha256: digest })).sort((a, b) => a.observed_at < b.observed_at ? -1 : 1), digest, started, returned };
 }

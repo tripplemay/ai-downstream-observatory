@@ -24,13 +24,21 @@ function mountComparison(t: { after: (fn: () => void) => void }) {
     { state: data.state, binding, disabled: false, scopeLocked: false }, { "./investor-funded-comparison-client": comparisonClient,
       "./investor-funded-analysis-panel": { InvestorFundedAnalysisPanel: "InvestorFundedAnalysisPanel" } }, before) };
 }
-function mountAnalysis(t: { after: (fn: () => void) => void }) {
+function mountAnalysis(t: { after: (fn: () => void) => void }, beforeParse?: () => Promise<void>) {
   const data = economicDisplayFixture();
+  const parsing = new Set<ReturnType<typeof analysisClient.parseFundedAnalysis>>();
+  const client = { ...analysisClient, parseFundedAnalysis: (...args: Parameters<typeof analysisClient.parseFundedAnalysis>) => {
+    const result = (async () => { await beforeParse?.(); return analysisClient.parseFundedAnalysis(...args); })();
+    parsing.add(result); void result.then(() => parsing.delete(result), () => parsing.delete(result));
+    return result;
+  } };
   const h = mountInvestorDisplay(t, new URL("../src/components/workbench/investor-funded-analysis-panel.tsx", import.meta.url), "InvestorFundedAnalysisPanel",
-    { comparison: data.comparison, binding, parameters: data.parameters }, { "./investor-funded-analysis-client": analysisClient, "./research-format": format }, before);
+    { comparison: data.comparison, binding, parameters: data.parameters }, { "./investor-funded-analysis-client": client, "./research-format": format }, before);
+  const finishParsing = async () => { await h.flush(); await Promise.allSettled([...parsing]); await h.flush(); };
   return { ...data, ...h, result: () => h.nodes().find(node => typeof node.type === "function" && node.type.name === "FundedAnalysisResults"),
-    settle: async () => { for (let i = 0; i < 20; i++) { await h.flush(); if (h.nodes().some(node => typeof node.type === "function" && node.type.name === "FundedAnalysisResults")) return; }
-      assert.fail("Expected strictly parsed analysis result"); } };
+    finishParsing, settle: async () => { await finishParsing();
+      assert.ok(h.nodes().some(node => typeof node.type === "function" && node.type.name === "FundedAnalysisResults"),
+        "Expected strictly parsed analysis result"); } };
 }
 test("risk source deadline retires only candidate evidence, not generic scenarios, risk answers or saved history; rollback cannot revive it", async t => {
   const h = mountRisk(t), original = JSON.stringify(h.state); await h.flush();
@@ -86,6 +94,20 @@ test("analysis consumes the real strict money/hash parser, stays manual GET-only
   await h.advance(before, 1000); await h.wake(); old(); await h.flush(); assert.equal(h.result(), undefined); assert.equal(h.requests.length, 1);
   assert.equal(h.requests[0].method, "GET"); assert.equal(h.timers.size, 0);
 });
+test("analysis settlement waits for real parser completion, not a fixed number of event-loop turns", { timeout: 10000 }, async t => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const h = mountAnalysis(t, () => gate); await h.flush(); await h.click(analysisLabel);
+  await h.reply(0, { ...h.analysis, session_binding: binding });
+  for (let i = 0; i < 25; i++) await h.flush();
+  assert.equal(h.result(), undefined);
+  let completed = false;
+  const settled = h.settle().then(() => { completed = true; });
+  await h.flush(); assert.equal(completed, false); release(); await settled;
+  assert.deepEqual(h.result()!.props.data, h.analysis.analysis);
+  assert.equal(h.requests.length, 1); assert.equal(h.requests[0].method, "GET");
+  await h.advance(until); assert.equal(h.result(), undefined);
+});
 test("analysis render jump remains latched and stale click callbacks cannot read an expired comparison", async t => {
   const h = mountAnalysis(t); await h.flush(); const old = h.button(analysisLabel)!.props.onClick as () => void;
   h.setWall(until); await h.change({ binding }); h.setWall(before); await h.change({ binding }); old(); await h.flush();
@@ -104,7 +126,7 @@ test("analysis rejects inconsistent money and unknown response fields, but suppo
   const invalid = structuredClone(h.analysis); invalid.analysis!.candidate.daily[0].profit_cny = "999";
   for (const response of [{ ...invalid, session_binding: binding }, { ...h.analysis, session_binding: binding, unexpected: true }]) {
     await h.click(analysisLabel); await h.reply(h.requests.length - 1, response);
-    for (let i = 0; i < 10; i++) await h.flush(); assert.equal(h.result(), undefined); assert.match(h.text(), /未通过核验/);
+    await h.finishParsing(); assert.equal(h.result(), undefined); assert.match(h.text(), /未通过核验/);
   }
   await h.click(analysisLabel); await h.reply(2, { ...h.analysis, session_binding: binding }); await h.settle();
   (h.node("select")!.props.onChange as (event: unknown) => void)({ target: { value: "staged" } }); await h.flush(); assert.equal(h.result(), undefined);

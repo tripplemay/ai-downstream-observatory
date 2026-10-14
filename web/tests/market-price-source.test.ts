@@ -17,7 +17,7 @@ import json,sys,sqlite3
 from datetime import timedelta,timezone
 from unittest.mock import patch
 import tests.market.test_price_collection as price_tests
-from tests.market.test_price_collection import PriceCollectionTests
+from tests.market.test_price_collection import PriceCollectionTests,fake_collect,fake_repeat_collect
 from worker.orchestration.db import stamp,content_hash
 t=PriceCollectionTests()
 if sys.argv[2]=='current':
@@ -30,16 +30,16 @@ if sys.argv[2]=='current':
 else: t.setUp()
 try:
  financial={table:content_hash([dict(row) for row in t.db.execute('SELECT * FROM '+table)]) for table in ('ledger_events','approval_events','activations','reservations')}
- prepared,lease=t.prepare(); result=t.commit(prepared,lease)
+ prepared,lease=t.prepare(collector=fake_repeat_collect if len(sys.argv)>3 and sys.argv[3]=='repeat' else fake_collect); result=t.commit(prepared,lease)
  result.update(known_at=stamp(),mapping_id=t.mapping['id'],calendar_id=t.calendar['id'],financial_before=financial)
  target=sqlite3.connect(sys.argv[1]);t.db.backup(target);target.close()
  print(json.dumps(result))
 finally:t.doCleanups()
 `;
-function fixture(current = false) {
+function fixture(current = false, repeats = false) {
   const directory = mkdtempSync(path.join(os.tmpdir(), "sdk-price-web-")), filename = path.join(directory, "workbench.db");
   try {
-    const result = JSON.parse(execFileSync(process.env.WORKBENCH_TEST_PYTHON ?? process.env.PYTHON ?? "python3", ["-c", script, filename, current ? "current" : "historical"], { cwd: path.resolve(process.cwd(), ".."), encoding: "utf8", maxBuffer: 1048576 })) as { batch_id: string; capture_id: string; receipt_hash: string; known_at: string; mapping_id: string; calendar_id: string; financial_before: Record<string, string> };
+    const result = JSON.parse(execFileSync(process.env.WORKBENCH_TEST_PYTHON ?? process.env.PYTHON ?? "python3", ["-c", script, filename, current ? "current" : "historical", repeats ? "repeat" : "legacy"], { cwd: path.resolve(process.cwd(), ".."), encoding: "utf8", maxBuffer: 1048576 })) as { batch_id: string; capture_id: string; receipt_hash: string; known_at: string; mapping_id: string; calendar_id: string; financial_before: Record<string, string> };
     const db = openWorkbench(filename);
     return { db, result, directory, close() { db.close(); rmSync(directory, { recursive: true, force: true }); } };
   } catch (error) { rmSync(directory, { recursive: true, force: true }); throw error; }
@@ -67,6 +67,18 @@ test("actual human Web review and Python SDK-capture chain independently verify 
     assert.doesNotMatch(JSON.stringify(source), /raw_body|"projections"|provider_symbol|secret|token/);
     const values = f.db.prepare("SELECT value,published_at,time_precision,revision_id FROM market_observations WHERE batch_id=? ORDER BY observed_at").all(f.result.batch_id) as { value: string; published_at: null; time_precision: string; revision_id: string }[];
     assert.equal(values.length, 2); assert.equal(values[0].value, "10.100000000000000001"); assert.equal(values[0].published_at, null); assert.equal(values[0].time_precision, "date");
+    for (const [table, before] of Object.entries(f.result.financial_before)) assert.equal(hash(f.db.prepare(`SELECT * FROM ${table}`).all()), before);
+  } finally { f.close(); }
+});
+test("v2 raw repeat evidence survives Python publication and independent Web database replay without double valuation", () => {
+  const f = fixture(false, true); try {
+    const source = verifiedSdkMarketSource(f.db, f.result.batch_id, f.result.known_at);
+    assert.equal(source.capture_id, f.result.capture_id);
+    const raw = f.db.prepare("SELECT raw_body FROM market_sdk_captures").get() as { raw_body: Buffer };
+    const projection = JSON.parse(raw.raw_body.toString("utf8")).projections[0];
+    assert.equal(projection.schema_version, "longport-candles-projection-v2");
+    assert.equal(projection.candlesticks.length, 3);
+    assert.equal((f.db.prepare("SELECT count(*) n FROM market_observations").get() as { n: number }).n, 2);
     for (const [table, before] of Object.entries(f.result.financial_before)) assert.equal(hash(f.db.prepare(`SELECT * FROM ${table}`).all()), before);
   } finally { f.close(); }
 });

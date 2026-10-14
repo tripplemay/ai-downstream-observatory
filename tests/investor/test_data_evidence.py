@@ -68,12 +68,15 @@ class InvestorDataTests(unittest.TestCase):
             return collect_prices(self.db, "w", "synthetic-investor", *(row["id"] for row in refs[:3]), START, END,
                 now=NOW, client=client or FictionalClient(market), sdk_version="4.3.7")
 
-    def stub_official_capture(self, refs):
+    def stub_official_capture(self, refs, *, exact_repeat=False):
         request = longport._request({key: json.loads(refs[1]["document_json"])["facts"][key]
             for key in ("listing_id", "provider_symbol", "market", "currency")}, START, END, [START, END])
-        projection = longport._normalize(FictionalClient().history_candlesticks_by_date("unused"), request=request,
+        rows = FictionalClient().history_candlesticks_by_date("unused")
+        if exact_repeat:
+            rows.insert(1, dict(rows[0]))
+        projection = longport._normalize(rows, request=request,
             sdk_version="4.3.7", call_started_at=NOW, call_returned_at=NOW,
-            datetime_basis="runtime_utc_from_unix_timestamp", collector_runtime="isolated_official_sdk")
+            datetime_basis="runtime_utc_from_unix_timestamp", collector_runtime="isolated_official_sdk", allow_exact_duplicates=exact_repeat)
         # The transport is deliberately stubbed. This tests reconstructed-mode
         # propagation, not network origin, licence approval or real market data.
         with patch.object(longport, "_collect_isolated", return_value=projection), \
@@ -93,6 +96,19 @@ class InvestorDataTests(unittest.TestCase):
         self.assertNotIn("published_at", result["dataset"]["observations"][0])
         self.assertIn("assumed_available_at", result["dataset"]["observations"][0])
         self.assertFalse(result["manifest"]["external_ai_authorized"])
+        self.assert_no_finance()
+
+    def test_stubbed_official_repeat_capture_retains_rows_and_builds_each_observation_once(self):
+        refs = self.prepare(); capture = self.stub_official_capture(refs, exact_repeat=True)
+        value = resolve_capture(self.db, "w", capture["id"], now=NOW)
+        self.assertEqual(len(value["records"]), 2)
+        self.assertEqual(value["receipt"]["source"]["duplicate_rows"], [{"row": 1, "first_row": 0}])
+        raw = self.db.execute("SELECT projection FROM investor_price_payloads WHERE capture_id=?", (capture["id"],)).fetchone()[0]
+        self.assertEqual(len(json.loads(raw)["candlesticks"]), 3)
+        before = self.db.total_changes
+        result = build_dataset(self.db, "w", [capture["id"]], [refs[3]["id"]], [], START, END, now=NOW)
+        self.assertEqual(len(result["dataset"]["observations"]), 2)
+        self.assertEqual(self.db.total_changes, before)
         self.assert_no_finance()
 
     def test_test_capture_cannot_enter_default_reader_or_be_relabelled_as_official(self):
