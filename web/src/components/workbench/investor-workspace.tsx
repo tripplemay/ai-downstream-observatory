@@ -13,7 +13,7 @@ import type { InvestorModelChange, InvestorModelWatch, InvestorResearchTask, Ref
 import type { InvestorPlan, InvestorState } from "@/server/investor/types";
 import { parseInvestorState, verifyInvestorReceipt } from "./investor-client";
 import { illustrateLossScenarios } from "@/server/investor/loss-scenarios";
-import { canResumeInvestorWatch, currentInvestorDisplay, currentModelWatchDisplay, currentResearchDisplay, investorPollInterval, formatResearchMoney, formatResearchPercent } from "./research-format";
+import { canResumeInvestorWatch, currentInvestorDisplay, currentModelWatchDisplay, currentResearchDisplay, investorPollInterval, formatResearchMoney, formatResearchPercent, researchTaskStatus } from "./research-format";
 import { InvestorAccountWorkspace } from "./investor-account-workspace";
 import { InvestorFundingPanel } from "./investor-funding-panel";
 import { InvestorFundedComparisonPanel } from "./investor-funded-comparison-panel";
@@ -63,7 +63,8 @@ const errorLabels: Record<string, string> = {
 function Card({ title, children }: { title: string; children: ReactNode }) {
   return <section className={panel}><h2 className="mb-4 text-lg font-semibold">{title}</h2>{children}</section>;
 }
-function ReferencePlanCard({ plan, disabled, onSave }: { plan: InvestorPlan | null; disabled: boolean; onSave: () => void }) {
+function ReferencePlanCard({ plan, task, disabled, onSave }: { plan: InvestorPlan | null; task: InvestorResearchTask | null; disabled: boolean; onSave: () => void }) {
+  const empty = task ? researchTaskStatus(task) : null;
   return <Card title={plan?.document.data_mode === "reconstructed" ? "历史研究参考组合" : plan?.quality === "current" ? "当前参考组合" : "研究组合与历史参考"}>
     {plan ? <>
       <p className="text-sm">研究参考 · {plan.quality !== "current" ? "历史方案，不能用于当前行动" : plan.saved_for_observation ? "已保存观察" : "待保存"} · 非实际持仓</p>
@@ -78,17 +79,19 @@ function ReferencePlanCard({ plan, disabled, onSave }: { plan: InvestorPlan | nu
       <p className="mt-3 break-words text-sm">基准：{plan.document.benchmark_summary}</p>
       <Button className="mt-4" disabled={disabled || plan.quality !== "current" || plan.saved_for_observation} onClick={onSave}>{plan.saved_for_observation ? "已保存为观察方案" : "保存为观察中的研究方案"}</Button>
       <details className="mt-4 text-sm"><summary className="cursor-pointer">策略依据、反对理由与未确认事项</summary><div className="mt-3 space-y-2 break-words text-muted-foreground"><p>{plan.document.strategy_evidence}</p>{[...plan.document.counterarguments, ...plan.document.uncertainties].map((item, index) => <p key={index}>{item}</p>)}</div></details>
-    </> : <div className="flex min-h-36 flex-col items-start justify-center gap-3"><Eye className="h-7 w-7 text-muted-foreground" /><h3 className="font-medium">暂不展示确定权重</h3><p className="max-w-lg text-sm text-muted-foreground">先比较损失情景并补齐研究证据，再形成可保存的 ETF 参考方案。不要求你先建立账本，也不以示例替代真实研究。</p></div>}
+    </> : <div className="flex min-h-36 flex-col items-start justify-center gap-3"><Eye className="h-7 w-7 text-muted-foreground" /><h3 className="font-medium">{empty?.title ?? "暂不展示确定权重"}</h3><p className="max-w-lg text-sm text-muted-foreground">{empty?.detail ?? "先比较损失情景并补齐研究证据，再形成可保存的 ETF 参考方案。不要求你先建立账本，也不以示例替代真实研究。"}</p>{empty && <p className="max-w-lg text-sm">下一步：{empty.action}</p>}</div>}
   </Card>;
 }
 function ResearchTask({ task: storedTask, nowMs }: { task: InvestorResearchTask; nowMs: number }) {
   const task = currentResearchDisplay(storedTask, nowMs);
   const reconstructed = task.study?.qualification === "owner_reviewed_reconstructed";
   const context = task.study?.source_context;
-  const sourceInvalid = task.reason_codes.some(code => code.startsWith("REFERENCE_SOURCE_"));
-  const taskLabels = { queued: "研究任务已排队", running: "正在计算研究方案", retrying: "计算尚未完成，等待重试",
-    blocked: "输入检查已完成，仍缺少研究证据", calculated: reconstructed ? "历史重建候选已计算" : "合成数据计算已完成", failed: "研究计算失败，不能推定无需调整", outdated: sourceInvalid ? "研究来源已失效，请更新证据" : "研究输入已更新，旧任务已失效" };
-  return <Card title="后台研究进度"><p role="status" className="text-sm font-medium">{taskLabels[task.status]}</p>
+  const presentation = researchTaskStatus(task);
+  const phaseLabels = { train: "训练期", validation: "验证期", holdout: "保留期" };
+  return <Card title="后台研究进度"><p role="status" className="text-sm font-medium">{presentation.title}</p>
+    <div aria-label="研究结论与下一步" className="mt-3 rounded-lg border border-amber-500/40 p-3 text-sm">
+      <p>{presentation.detail}</p><p className="mt-2">下一步：{presentation.action}</p>
+    </div>
     <p className="mt-2 text-xs text-muted-foreground">约束 v{task.profile_version} · {task.engine_version} · {task.completed_at ?? task.created_at}</p>
     <p className="mt-2 text-sm text-muted-foreground">这是研究计算任务，不是交易指令；任务完成也不代表持续监测已启用。</p>
     {task.registry && <div className="mt-3 rounded-lg border p-3 text-sm">
@@ -96,6 +99,14 @@ function ResearchTask({ task: storedTask, nowMs }: { task: InvestorResearchTask;
       <p className="mt-2 text-xs text-muted-foreground">{task.registry.freeze_hash ? "候选已按训练证据冻结，后期失败不会改选。" : "尚未冻结候选。"} {task.registry.holdout_status === "previously_exposed" ? "发现与既有本地试验重叠的保留窗口，不能当作独立验证。" : "尚未独立核验保留期未曝光。"} 登记仅覆盖本工具的本地研究，不证明策略有效。</p>
     </div>}
     {task.study && <div className="mt-4 space-y-3">
+      {!!task.study.phase_checks?.length && <section aria-label="已完成阶段的执行检查" className="rounded-lg border p-3 text-sm">
+        <h3 className="font-semibold">冻结候选的阶段执行检查</h3>
+        <ul className="mt-2 space-y-2">{task.study.phase_checks.map(row => <li key={row.phase}>
+          {phaseLabels[row.phase]}：候选执行缺口 {row.execution_failure_count} 项，基准执行缺口 {row.benchmark_execution_failure_count} 项。
+        </li>)}</ul>
+        <p className="mt-2 text-xs text-muted-foreground">缺口包含模拟订单跳过、到期或部署失败，不是实际交易或亏损金额。汇总不能断言具体成交失败原因；没有缺口也不等于风险检查通过。</p>
+        {task.registry?.phases.holdout.registered === 0 && <p className="mt-2 text-xs text-muted-foreground">保留期尚未启动，不能显示为通过。</p>}
+      </section>}
       <p className="rounded-lg border border-amber-500/40 p-3 text-sm">{reconstructed ? "来源经所有者审阅的历史重建研究：行情可回溯，但发布时间、历史 ETF 目录及使用权限不是独立认证。候选不是实盘持仓；后台观察状态见持续观察卡。" : "合成数据软件测试，仅用于验证计算和交互，不是真实 ETF 研究或可采用的个人组合。"}{task.status === "outdated" ? " 输入已更新，以下仅保留历史证据。" : ""}</p>
       {context && <p className="text-xs text-muted-foreground">研究区间 {context.range_start} 至 {context.range_end} · 来源最晚有效至 {context.valid_until} · 采用记录的费用与税假设，非账户实扣结果。</p>}
       <h3 className="text-sm font-semibold">{task.study.status === "risk_options_ready" ? "先比较损失情景，尚未选择权重" : "训练期候选对照，不等于最终组合"}</h3>
@@ -321,7 +332,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
         {currentOutcome === "decision_required" && latest && <Card title="变化卡 · 决定由你作出"><p className="text-sm">仅记录你的审阅意见，不批准交易、不预占资金，也不代表成交。</p>{latest.document.model_change && <ModelChange change={latest.document.model_change} plan={plan?.document ?? null} />}{plan && <div className="mt-3 space-y-2 text-sm"><p>成本：{plan.document.estimated_cost}</p>{plan.document.counterarguments.map((s, i) => <p key={i}>反对理由：{s}</p>)}</div>}<label className="mt-4 flex flex-col gap-2 text-sm">审阅备注（可选）<textarea ref={note} maxLength={2000} className="min-h-20 rounded-lg border bg-background p-3" /></label><div className="mt-4 flex flex-wrap gap-3">{(["accept_idea", "defer", "reject"] as const).map(decision => <Button key={decision} variant={decision === "accept_idea" ? "default" : "outline"} disabled={locked} onClick={() => command({ action: "review", observation_id: latest.id, decision, note: note.current?.value ?? "" })}>{decisionLabels[decision]}</Button>)}</div></Card>}
         {currentOutcome !== "insufficient_evidence" && latest?.document.model_change?.policy_evaluation && <PolicyReview value={latest.document.model_change.policy_evaluation} />}
         {view === "overview" ? evidenceGaps : riskPanel}
-        <ReferencePlanCard plan={plan} disabled={locked} onSave={() => plan && command({ action: "save_plan", plan_id: plan.id })} />
+        <ReferencePlanCard plan={plan} task={display?.researchTask ?? null} disabled={locked} onSave={() => plan && command({ action: "save_plan", plan_id: plan.id })} />
         {view === "overview" ? <details data-testid="overview-research-details" className="min-w-0 rounded-2xl border bg-card shadow-sm">
           <summary className="cursor-pointer rounded-2xl p-5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring md:p-6">
             <span className="font-semibold">风险、投入与研究详情</span>

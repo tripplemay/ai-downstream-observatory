@@ -51,6 +51,9 @@ export const researchTaskSchema = z.object({
   registry: researchRegistrySchema.nullable(),
   study: z.object({ status: z.enum(["risk_options_ready", "reference_ready", "insufficient_evidence"]),
     qualification: z.enum(["synthetic_test_only", "owner_reviewed_reconstructed"]), result_hash: investorHash, implementation_hash: investorHash,
+    phase_checks: z.array(z.object({ phase: z.enum(["train", "validation", "holdout"]),
+      execution_failure_count: revision, benchmark_execution_failure_count: revision,
+    }).strict()).max(3).refine(value => value.every((row, index) => row.phase === ["train", "validation", "holdout"][index])).optional(),
     source_context: z.object({ range_start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), range_end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
       valid_until: investorInstant, basis: z.literal("owner_reviewed_historical_reconstruction"),
       listings: z.array(z.object({ listing_id: investorId, provider_symbol: z.string().min(1).max(100), market: z.enum(["CN", "HK", "US"]),
@@ -67,7 +70,10 @@ export const researchTaskSchema = z.object({
 }).strict().refine(value => (value.completed_at === null || value.completed_at >= value.created_at)
   && (value.status !== "calculated" || value.study !== null && value.completed_at !== null)
   && (value.status !== "blocked" || value.study === null && value.completed_at !== null && value.reason_codes.length > 0)
-  && (value.study === null || value.status === "calculated" || value.status === "outdated"));
+  && (value.study === null || value.status === "calculated" || value.status === "outdated")
+  && (!value.study?.phase_checks || value.study.phase_checks.every(row => value.registry !== null && value.registry.phases[row.phase].completed > 0))
+  && (value.study?.status !== "reference_ready" || !value.study.phase_checks || value.study.phase_checks.length === 3
+    && value.study.phase_checks.every(row => row.execution_failure_count === 0 && row.benchmark_execution_failure_count === 0)));
 export type InvestorResearchTask = z.infer<typeof researchTaskSchema>;
 
 export const evidenceGapSchema = z.object({
