@@ -12,6 +12,10 @@ function formatFixed(value: string | null, scale: number): string {
   return (negative && cents !== 0n ? "-" : "") + integer + "." + digits.slice(-2);
 }
 export function formatResearchMoney(value: string | null): string { return formatFixed(value, 2); }
+export function formatResearchMoneyDelta(value: string): string {
+  const formatted = formatResearchMoney(value);
+  return formatted === "0.00" && /[1-9]/.test(value) ? (value.startsWith("-") ? "-" : "+") + "<0.01" : formatted;
+}
 export function formatResearchPercent(value: string | null): string { return value === null ? "未能计算" : formatFixed(value, 4) + "%"; }
 export function currentResearchDisplay(task: InvestorResearchTask, nowMs: number): InvestorResearchTask {
   const until = task.study?.source_context?.valid_until;

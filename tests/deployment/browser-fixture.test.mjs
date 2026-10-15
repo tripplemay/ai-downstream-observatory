@@ -35,8 +35,19 @@ test('browser fixture keeps core and verifier independently selectable and waits
   assert.match(source, /\['--with-verifier', 'verifier'\]/u);
   assert.match(source, /'--role', role/u);
   assert.match(source, /process_\.once\('close'/u);
-  assert.match(source, /if \(stopped \|\| children\.size\) return/u);
+  assert.match(source, /if \(stopped \|\| children\.size \|\| !proxyClosed\) return/u);
   assert.match(source, /process\.kill\(-process_\.pid, signal\)/u);
+});
+
+test('fixture help and unknown options never start a server or allocate a temporary database', () => {
+  const output = execFileSync(process.execPath, [fixture, '--help'], { encoding: 'utf8', timeout: 5000 });
+  assert.match(output, /Usage:.*--production/u);
+  assert.doesNotMatch(output, /Synthetic fixture directory|Fixture password/u);
+  assert.throws(() => execFileSync(process.execPath, [fixture, '--unknown-option'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] }),
+    error => error.status === 2 && error.stderr === 'UNKNOWN_FIXTURE_ARGUMENT\n' && !error.stdout);
+  const source = readFileSync(fixture, 'utf8');
+  assert.match(source, /production \? 'start' : 'dev'/u);
+  assert.match(source, /FIXTURE_PRODUCTION_BUILD_REQUIRED/u);
 });
 
 test('opt-in synthetic fixture lifecycle starts empty, stops every recorded process and releases its port and directory', {

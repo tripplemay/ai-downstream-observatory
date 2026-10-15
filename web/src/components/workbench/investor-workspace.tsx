@@ -13,7 +13,7 @@ import type { InvestorModelChange, InvestorModelWatch, InvestorResearchTask, Ref
 import type { InvestorPlan, InvestorState } from "@/server/investor/types";
 import { parseInvestorState, verifyInvestorReceipt } from "./investor-client";
 import { illustrateLossScenarios } from "@/server/investor/loss-scenarios";
-import { canResumeInvestorWatch, currentInvestorDisplay, currentModelWatchDisplay, currentResearchDisplay, investorPollInterval, formatResearchMoney, formatResearchPercent, researchTaskStatus } from "./research-format";
+import { canResumeInvestorWatch, currentInvestorDisplay, currentModelWatchDisplay, currentResearchDisplay, investorPollInterval, formatResearchMoney, formatResearchMoneyDelta, formatResearchPercent, researchTaskStatus } from "./research-format";
 import { InvestorAccountWorkspace } from "./investor-account-workspace";
 import { InvestorFundingPanel } from "./investor-funding-panel";
 import { InvestorFundedComparisonPanel } from "./investor-funded-comparison-panel";
@@ -151,16 +151,23 @@ function PolicyReview({ value }: { value: NonNullable<InvestorModelChange["polic
     </div>)}</div><p className="mt-3 text-xs text-muted-foreground">仅核对参考模型，不证明实际持仓已调整；周期复核不强迫交易，单证券金额容差不替代类别阈值。</p></Card>;
 }
 function ModelChange({ change, plan }: { change: InvestorModelChange; plan: ReferencePlan | null }) {
+  const small = change.changes.some(row => [row.proposed_change_cny, row.remaining_target_difference_cny].some(value => formatResearchMoneyDelta(value).includes("<")));
   return <div className="mt-4 space-y-3 rounded-xl border p-4">
     <h3 className="text-sm font-semibold">模型变化对照 · 非真实持仓</h3>
     <p className="text-xs text-muted-foreground">{change.funding_status === "hypothetical_due" ? "计划投入到复核日期，尚未确认为到账现金。" : "金额来自研究模型，不是你的账户资产。"}
       {change.allocation_method === "contribution_repair_without_sales" ? " 本次先补低配，不卖出高配资产；修复后可能仍有偏离。" : " 不构成可执行交易清单。"}</p>
     <p className="text-sm">模型估值：{formatResearchMoney(change.model_nav_cny)} CNY · 变化成本估算：{change.estimated_cost_cny === null ? "缺少证据" : formatResearchMoney(change.estimated_cost_cny) + " CNY"}</p>
+    {small && <div className="rounded-lg border border-amber-500/40 p-3 text-sm" role="note">
+      <p>部分模型差值小于分币显示精度，不是零。+&lt;0.01 / -&lt;0.01 表示正 / 负方向且绝对值小于 0.01 CNY。冻结容差仍按未舍入值判断，不自动放宽；这不证明值得调整或满足最小交易单位。</p>
+      <details className="mt-2"><summary className="cursor-pointer">查看未舍入的模型差值</summary><ul className="mt-2 space-y-2 break-all">{change.changes.map(row => <li key={row.listing_id}>
+        {plan?.targets.find(target => target.listing_id === row.listing_id)?.name ?? row.listing_id}：研究变化 {row.proposed_change_cny} CNY；剩余目标差值 {row.remaining_target_difference_cny} CNY。
+      </li>)}</ul></details>
+    </div>}
     <div className="grid gap-3 sm:grid-cols-2">{change.changes.map(row => <div key={row.listing_id} className="min-w-0 rounded-lg border p-3 text-sm">
       <h4 className="break-words font-medium">{plan?.targets.find(target => target.listing_id === row.listing_id)?.name ?? row.listing_id}</h4>
       <p className="mt-2">目标权重：{(Number(row.before_target_weight) * 100).toFixed(2)}% → {(Number(row.after_target_weight) * 100).toFixed(2)}%</p>
-      <p className="mt-1 break-words">研究变化：{formatResearchMoney(row.proposed_change_cny)} CNY</p>
-      <p className="mt-1 break-words text-xs text-muted-foreground">距理想目标仍差 {formatResearchMoney(row.remaining_target_difference_cny)} CNY；正数是低配，负数是高配。</p>
+      <p className="mt-1 break-words">研究变化：{formatResearchMoneyDelta(row.proposed_change_cny)} CNY</p>
+      <p className="mt-1 break-words text-xs text-muted-foreground">距理想目标仍差 {formatResearchMoneyDelta(row.remaining_target_difference_cny)} CNY；正数是低配，负数是高配。</p>
     </div>)}</div>
     <p className="text-xs text-muted-foreground">分别核对市场收盘：{Object.entries(change.market_cutoffs).map(([market, cutoff]) => `${marketLabels[market as keyof typeof marketLabels]} ${cutoff}`).join(" / ")}</p>
     <p className="text-xs text-muted-foreground">尚未验证交易单位、可交易性、真实现金、交收、税务或账户权限；采纳思路不会提交交易。</p>
@@ -303,6 +310,8 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
   const display = data ? currentInvestorDisplay(data, displayNow) : null;
   const latest = data?.latest, profile = data?.profile, plan = display?.plan ?? null;
   const currentOutcome = display?.outcome === "not_started" ? null : display?.outcome ?? null;
+  const policyReview = currentOutcome !== "insufficient_evidence" && latest?.document.model_change?.policy_evaluation
+    ? <PolicyReview value={latest.document.model_change.policy_evaluation} /> : null;
   const title = view === "plan" ? "组合方案" : view === "observations" ? "观察记录" : view === "accounts" ? "账户资料" : "ETF 投资工作台";
   const riskPanel = data && <InvestorRiskPanel state={data} binding={initialSessionBinding} disabled={locked || editing} onCommand={command} />;
   const researchDetails = data && profile && <>
@@ -330,7 +339,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
           <div className="mt-5 flex flex-wrap gap-x-6 gap-y-2 border-t pt-4 text-xs text-muted-foreground"><span>研究参考 · 非实际持仓</span><span>{latest?.document.data_cutoff ? `数据截止：${latest.document.data_cutoff}` : data.research_task?.study?.source_context ? `历史研究截止：${data.research_task.study.source_context.range_end}（非当前行情）` : "数据截止：尚无合格数据"}</span><span>约束版本：{profile.version}</span><span>币种：人民币为研究预算口径</span></div>
         </section>
         {currentOutcome === "decision_required" && latest && <Card title="变化卡 · 决定由你作出"><p className="text-sm">仅记录你的审阅意见，不批准交易、不预占资金，也不代表成交。</p>{latest.document.model_change && <ModelChange change={latest.document.model_change} plan={plan?.document ?? null} />}{plan && <div className="mt-3 space-y-2 text-sm"><p>成本：{plan.document.estimated_cost}</p>{plan.document.counterarguments.map((s, i) => <p key={i}>反对理由：{s}</p>)}</div>}<label className="mt-4 flex flex-col gap-2 text-sm">审阅备注（可选）<textarea ref={note} maxLength={2000} className="min-h-20 rounded-lg border bg-background p-3" /></label><div className="mt-4 flex flex-wrap gap-3">{(["accept_idea", "defer", "reject"] as const).map(decision => <Button key={decision} variant={decision === "accept_idea" ? "default" : "outline"} disabled={locked} onClick={() => command({ action: "review", observation_id: latest.id, decision, note: note.current?.value ?? "" })}>{decisionLabels[decision]}</Button>)}</div></Card>}
-        {currentOutcome !== "insufficient_evidence" && latest?.document.model_change?.policy_evaluation && <PolicyReview value={latest.document.model_change.policy_evaluation} />}
+        {view !== "overview" && policyReview}
         {view === "overview" ? evidenceGaps : riskPanel}
         <ReferencePlanCard plan={plan} task={display?.researchTask ?? null} disabled={locked} onSave={() => plan && command({ action: "save_plan", plan_id: plan.id })} />
         {view === "overview" ? <details data-testid="overview-research-details" className="min-w-0 rounded-2xl border bg-card shadow-sm">
@@ -338,7 +347,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
             <span className="font-semibold">风险、投入与研究详情</span>
             <span className="mt-2 block text-sm text-muted-foreground">{profile.document.loss_tolerance ? "已记录损失承受范围" : "风险范围尚未确认"} · 按需展开，或前往组合方案查看完整研究</span>
           </summary>
-          <div className="flex min-w-0 flex-col gap-6 p-3 pt-0 md:p-5 md:pt-0">{riskPanel}{researchDetails}</div>
+          <div className="flex min-w-0 flex-col gap-6 p-3 pt-0 md:p-5 md:pt-0">{policyReview}{riskPanel}{researchDetails}</div>
         </details> : researchDetails}
         {data.model_watch && <ModelWatch watch={data.model_watch} nowMs={displayNow} disabled={locked || !data.model_watch.enabled && !canResumeInvestorWatch(data, displayNow)}
           onToggle={() => command({ action: "set_monitoring", model_id: data.model_watch!.id, enabled: !data.model_watch!.enabled })} />}

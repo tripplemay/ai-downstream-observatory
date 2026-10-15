@@ -5,10 +5,10 @@ import json
 import unittest
 
 from tests.investor import evidence_fixture as fixture, test_runtime as queue
-from tests.investor.fixtures import profile
+from tests.investor.fixtures import profile, fixed_policy_input
 from tests.research.bounded_fixtures import bounded_plan
 from worker.investor.source_inputs import admit_evidence_input
-from worker.orchestration.db import content_hash
+from worker.orchestration.db import WorkbenchError, content_hash
 from worker.orchestration.runtime import run_pending_once
 
 
@@ -72,6 +72,26 @@ class BoundedResearchRuntimeTests(unittest.TestCase):
         self.assertNotEqual(second['request_id'], values['source']['request_id'])
         self.assertEqual(self.db.execute('SELECT count(*) FROM investor_trial_intents').fetchone()[0], 3)
         self.assertEqual(self.db.execute('SELECT count(*) FROM investor_research_runs').fetchone()[0], 1)
+        self.assert_no_finance()
+
+    def test_browser_cent_tolerance_is_explicit_and_frozen_before_the_synthetic_study(self):
+        self.save()
+        with self.assertRaisesRegex(WorkbenchError, 'SYNTHETIC_BROWSER_TOLERANCE_SCOPE'):
+            fixture.create(self.db, 'w', 'synthetic-investor', fixed_policy_v2=True, browser_cent_tolerance=True)
+        self.assertEqual(self.db.execute('SELECT count(*) FROM investor_data_sources').fetchone()[0], 0)
+        _, original, policy = fixed_policy_input()
+        self.assertTrue(all(row['tolerance']['absolute_cny'] == '0' for row in policy['candidates']))
+        values = fixture.create(self.db, 'w', 'synthetic-investor', fixed_policy_v2=True,
+                                bounded_execution_v3=True, browser_cent_tolerance=True)
+        for candidate, baseline in zip(values['policy']['candidates'], policy['candidates']):
+            expected = deepcopy(baseline); expected['tolerance']['absolute_cny'] = '0.01'
+            self.assertEqual(candidate, expected)
+        self.assertEqual(values['plan']['benchmark']['tolerance']['absolute_cny'], '0.01')
+        self.assertEqual(original['benchmark']['tolerance']['absolute_cny'], '0')
+        self.assertEqual(self.db.execute('SELECT count(*) FROM investor_trial_intents').fetchone()[0], 0)
+        result = self.calculate()
+        self.assertEqual(result['result']['status'], 'risk_options_ready')
+        self.assertEqual(result['registry']['phases']['holdout']['registered'], 0)
         self.assert_no_finance()
 
 

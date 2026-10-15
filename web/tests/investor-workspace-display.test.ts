@@ -142,6 +142,27 @@ test("overview prioritizes decisions, evidence gaps and the reference before clo
   assert.equal(h.nodes().some(node => node.props["data-testid"] === "overview-research-details"), false);
   assert.equal(h.node("InvestorFundingPanel"), undefined);
 });
+test("subcent model deltas retain their direction and exact evidence while policy diagnostics stay behind the overview reference", async t => {
+  const state = displayState();
+  state.latest!.document.model_change = schemas.modelChangeSchema.parse({ assessment_hash: "f".repeat(64), model_nav_cny: "1000",
+    estimated_cost_cny: "1", hypothetical_cash_remaining_cny: null, funding_status: "none", allocation_method: "band_rebalance_research_not_executable",
+    market_cutoffs: { CN: displayBefore }, constraints_not_checked: ["lot_size", "tradability", "actual_cash", "settlement", "tax", "account_permissions"],
+    policy_evaluation: { parameters_hash: "e".repeat(64), evaluation_timezone: "UTC", review_period: "2026-H1", calendar_due: true,
+      cooldown_active: false, new_funding: false, new_cny_cash: false, cash_repair_pending: false,
+      class_drift: [{ role: "growth", target_weight: "1", current_weight: "0.999999", difference_weight: "-0.000001", threshold_breached: false }] },
+    changes: [{ listing_id: "fictional", before_target_weight: "1", after_target_weight: "1", observed_model_weight: "0.999999",
+      current_model_value_cny: "999.999", hypothetical_target_value_cny: "1000", difference_cny: "0.001", within_band: false,
+      proposed_change_cny: "0.001", remaining_target_difference_cny: "0" }] });
+  const h = mount(t, state); await h.flush();
+  assert.match(h.words(h.card("变化卡 · 决定由你作出")), /研究变化：\+<0.01/);
+  assert.match(h.words(h.card("变化卡 · 决定由你作出")), /冻结容差仍按未舍入值判断，不自动放宽/);
+  assert.match(h.words(h.card("变化卡 · 决定由你作出")), /研究变化 0.001 CNY/);
+  const fold = h.nodes().find(node => node.props["data-testid"] === "overview-research-details")!;
+  assert.match(h.words(fold), /本次低频规则复核/);
+  assert.equal(!!fold.props.open, false);
+  assert.ok(h.nodes().indexOf(h.card("当前参考组合")!) < h.nodes().indexOf(fold));
+  assert.equal(h.headline(), "需要你做决定"); assert.equal(h.requests.length, 0);
+});
 test("plan keeps full risk and economic panels visible without the overview fold or implicit commands", async t => {
   const h = mount(t, displayState(), "plan"); await h.flush();
   assert.equal(h.nodes().some(node => node.props["data-testid"] === "overview-research-details"), false);
