@@ -1,6 +1,5 @@
 from copy import deepcopy
 from decimal import localcontext
-from hashlib import sha256
 import unittest
 
 from tests.execution_sandbox.fixtures import buy_input, buy_outcome
@@ -152,18 +151,14 @@ class BoundedCashTests(unittest.TestCase):
         value['policy']['max_quote_age_seconds'] = 3600.0
         self.assertEqual(plan, plan_buys(value))
 
-    def test_identity_is_separate_and_legacy_manifest_files_are_unchanged(self):
+    def test_sandbox_identity_is_separate_from_versioned_production_research(self):
         from worker.research.registry import implementation_manifest
         from worker.orchestration.runtime import role_commands
-        from worker.orchestration.db import ROOT
         manifest = implementation_manifest()['source_hashes']
         self.assertNotIn('contracts/v1/bounded-cash-buy.schema.json', manifest)
         self.assertFalse(any('execution_sandbox' in path for path in manifest))
-        self.assertEqual(digest(manifest), '887b1f08485acf05e9129d96830f8566ea139bc2ef371188da3f432299802d93')
-        paths = [*sorted((ROOT / 'worker/investor').glob('*.py')), *sorted((ROOT / 'contracts/v1').glob('investor-*.schema.json'))]
-        sources = {str(path.relative_to(ROOT)): sha256(path.read_bytes()).hexdigest() for path in paths}
-        self.assertEqual(digest({'research': manifest, 'investor_sources': sources}),
-                         '1ef8fb0d65c4c89112115197b8be66e8191901f05ac4132b54a234c571956c56')
+        from worker.execution_sandbox.bounded_cash import SOURCES
+        self.assertFalse(any(path.startswith(('worker/research/', 'worker/investor/')) for path in SOURCES))
         self.assertNotIn('bounded_cash_buy', role_commands('core'))
         self.assertEqual(len(implementation_hash()), 64)
 

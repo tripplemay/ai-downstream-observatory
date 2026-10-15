@@ -41,6 +41,7 @@ def implementation_manifest(evaluation_timezone="UTC"):
         timezone_hashes[name] = sha256(payload).hexdigest()
     return {"engine_version": ENGINE_VERSION, "rotation_engine_version": "monthly-rotation-rebalance-v1",
             "fixed_policy_engine_version": "fixed-policy-rebalance-v2",
+            "bounded_fixed_policy_engine_version": "fixed-policy-bounded-rebalance-v3",
             "python_version": sys.version.split()[0], "timezone_hashes": timezone_hashes,
             "source_hashes": {str(path.relative_to(ROOT)): sha256(path.read_bytes()).hexdigest() for path in files}}
 

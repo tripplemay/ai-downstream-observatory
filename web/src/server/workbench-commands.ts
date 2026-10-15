@@ -14,6 +14,8 @@ import performanceCommand from "../../../contracts/v1/performance-command.schema
 import flowFxRules from "../../../contracts/v1/flow-fx-rules.schema.json";
 import researchCommand from "../../../contracts/v1/research-command.schema.json";
 import researchPlan from "../../../contracts/v1/research-plan.schema.json";
+import researchBoundedPlan from "../../../contracts/v1/research-plan-v3.schema.json";
+import researchPlanInput from "../../../contracts/v1/research-plan-input.schema.json";
 import researchDataset from "../../../contracts/v1/research-dataset.schema.json";
 import researchParameters from "../../../contracts/v1/research-parameters.schema.json";
 import researchRotation from "../../../contracts/v1/research-rotation-parameters.schema.json";
@@ -59,6 +61,8 @@ ajv.addSchema(researchFixedRebalance);
 ajv.addSchema(researchFixedRebalanceV2);
 ajv.addSchema(researchFixedPolicy);
 ajv.addSchema(researchPlan);
+ajv.addSchema(researchBoundedPlan);
+ajv.addSchema(researchPlanInput);
 ajv.addSchema(researchDataset);
 const checkResearch = ajv.compile(researchCommand);
 

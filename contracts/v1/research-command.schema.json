@@ -21,7 +21,7 @@
       "type": "object", "required": ["experiment_id", "plan", "dataset"],
       "properties": {
         "experiment_id": {"$ref": "common.schema.json#/$defs/id"},
-        "plan": {"$ref": "research-plan.schema.json"},
+        "plan": {"$ref": "research-plan-input.schema.json"},
         "dataset": {"$ref": "research-dataset.schema.json"}
       },
       "allOf": [{

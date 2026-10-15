@@ -1,0 +1,5 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://etf-workbench.invalid/contracts/v1/research-plan-input.schema.json",
+  "oneOf":[{"$ref":"research-plan.schema.json"},{"$ref":"research-plan-v3.schema.json"}]
+}

@@ -4,6 +4,8 @@ import common from "../../../../contracts/v1/common.schema.json";
 import observation from "../../../../contracts/v1/market-observation.schema.json";
 import dataset from "../../../../contracts/v1/research-dataset.schema.json";
 import plan from "../../../../contracts/v1/research-plan.schema.json";
+import boundedPlan from "../../../../contracts/v1/research-plan-v3.schema.json";
+import planInput from "../../../../contracts/v1/research-plan-input.schema.json";
 import parameters from "../../../../contracts/v1/research-parameters.schema.json";
 import fixed from "../../../../contracts/v1/research-fixed-rebalance-parameters.schema.json";
 import fixedV2 from "../../../../contracts/v1/research-fixed-rebalance-parameters-v2.schema.json";
@@ -51,9 +53,13 @@ import { parseStrictJson } from "../strict-json";
 import { Decimal } from "../ledger/decimal";
 import { observationSchema, type InvestorObservation, type InvestorModelChange } from "./schemas";
 import { replayEvidenceAssessment } from "./evidence-model-assessment";
+import { verifyBoundedResearchSummary, type BoundedResearchPlan } from "./bounded-research";
+import type { ContinuousDataset } from "./continuous-market";
+import type { ContinuousParameters } from "./continuous-economics";
 
 const ajv = new Ajv2020({ strict: true, strictRequired: false });
 addFormats(ajv);
+ajv.addSchema(boundedPlan); ajv.addSchema(planInput);
 for (const schema of [common, observation, dataset, plan, parameters, fixed, fixedV2, fixedPolicy, rotation, profile, policy, monitor, monitorV2, monitorV3, fixedPolicyState, request, strategyResult, assessment, assessmentV2, modelDefinition, modelDefinitionV2, modelSnapshot, modelCheckpoint, experiment, dataFacts, dataSnapshot, evidenceInput, referencePlan, referencePlanV2, monitorDataInput, monitorDataInputV2, monitorPriceSnapshot, monitorDataProjection, evidenceCheckpoint, evidenceCheckpointV2, evidenceCheckpointV3, evidenceMonitor, evidenceMonitorRequestV2, plannedFunding, fundingPlan, longHorizonInput, longHorizonResult, longHorizonInputV2, longHorizonResultV2, fundedHistoryInput, fundedHistoryResult]) ajv.addSchema(schema);
 const validateRequest = ajv.getSchema(request.$id)!, validateStrategy = ajv.getSchema(strategyResult.$id)!, validateAssessment = ajv.getSchema(assessment.$id)!;
 type JsonObject = Record<string, unknown>;
@@ -158,6 +164,8 @@ export function verifyInvestorKernelResult(rawRequest: unknown, rawResult: unkno
         requireTrue(expected.has(row.parameters_hash as string));
         requireTrue(hash(row.weights) === hash(expected.get(row.parameters_hash as string)!.weights));
         requireTrue(object(row.train).phase === "train");
+        if (object(input.plan).schema_version === "research-plan-v3") verifyBoundedResearchSummary(input.dataset as ContinuousDataset,
+          input.plan as BoundedResearchPlan, expected.get(row.parameters_hash as string)! as unknown as ContinuousParameters, object(row.train), "train");
         const stresses = row.stresses as JsonObject[];
         requireTrue(stresses.length === scenarios.length);
         for (const [index, scenario] of scenarios.entries()) {
@@ -181,6 +189,9 @@ export function verifyInvestorKernelResult(rawRequest: unknown, rawResult: unkno
         requireTrue(loss !== null);
         const chosen = rows.find(row => row.parameters_hash === hash(result.selected_parameters));
         requireTrue(chosen && chosen.risk_budget_pass === true && phases.length > 0 && hash(phases[0]) === hash(chosen.train));
+        if (object(input.plan).schema_version === "research-plan-v3") for (const summary of phases.slice(1))
+          verifyBoundedResearchSummary(input.dataset as ContinuousDataset, input.plan as BoundedResearchPlan,
+            result.selected_parameters as ContinuousParameters, summary, summary.phase as "validation" | "holdout");
         const eligible = rows.filter(row => row.risk_budget_pass === true).sort((a, b) => {
           const left = object(a.train), right = object(b.train);
           return new Decimal(right.annualized_unit_return as string).cmp(left.annualized_unit_return as string)
