@@ -90,8 +90,9 @@ protected release before deployment. Real-source studies need a new explicit
 protocol and exposure registration; no test buffer is silently promoted.
 
 Existing continuous/planned-funding v1/v2 contracts do not accept v3 execution.
-They must be versioned and independently verified before v3 can supply that
-part of the product; do not strip the bounds and call it compatible. Real-source
+[Document 45](45-bounded-continuous-funding.md) adds explicit new continuous and
+funded-history versions through the existing private study/read path; old
+contracts remain closed. Do not strip bounds and call it compatible. Real-source
 end-to-end portfolio/monitoring, permitted AI explanation, the P2 account-level
 loop, operational/recovery acceptance and external production business checks
 remain part of the original v2 objective. This change alone is not v2 completion.

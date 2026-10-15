@@ -21,18 +21,46 @@ function helper(f: ReturnType<typeof investorFixture>, module: string, args: str
   return JSON.parse(execFileSync(process.env.WORKBENCH_TEST_PYTHON ?? "python3", ["-m", module, "--db", f.filename, ...args],
     { cwd: path.resolve(".."), encoding: "utf8", timeout: 120000, maxBuffer: 65536, stdio: ["ignore", "pipe", "pipe"] }));
 }
-function setup(f: ReturnType<typeof investorFixture>, failure = false) {
+function setup(f: ReturnType<typeof investorFixture>, failure = false, bounded = false) {
   saveSyntheticProfile(f);
   executeInvestorCommand(f.db, actor, { action: "save_funding_plan", expected_revision: 1, idempotency_key: "fictional-funding",
     funding_plan: { schema_version: "investor-funding-plan-v1", start_date: "2026-01-01", horizon_years: 1, evaluation_timezone: "Asia/Shanghai",
       initial_capital_cny: "1200", annual_contribution_cny: "300", first_annual_date: "2026-12-31", entry_method: "three_tranches_60_days",
       actual_arrivals_confirmed: false, execution_authorized: false, live_advice_eligible: false } }, registered);
-  helper(f, "tests.investor.evidence_fixture", ["--fixed-policy-v2", "--funded-year"]);
+  helper(f, "tests.investor.evidence_fixture", ["--fixed-policy-v2", "--funded-year", ...(bounded ? ["--bounded-execution-v3"] : [])]);
   executeInvestorCommand(f.db, actor, { action: "compare_funding", expected_revision: getInvestorState(f.db, actor, registered).revision, idempotency_key: "fictional-study" }, registered);
-  helper(f, "tests.investor.funded_study_fixture", failure ? ["--fail-first-candidate"] : []);
+  helper(f, "tests.investor.funded_study_fixture", [...(failure ? ["--fail-first-candidate"] : []), ...(bounded ? ["--default-core"] : [])]);
 }
 function count(f: ReturnType<typeof investorFixture>, table: string) { return (f.db.prepare(`SELECT count(*) n FROM ${table}`).get() as { n: number }).n; }
 function changes(f: ReturnType<typeof investorFixture>) { return (f.db.prepare("SELECT total_changes() n").get() as { n: number }).n; }
+
+test("bounded source reaches existing durable funding study, cold independent replay and analysis without financial writes", async () => {
+  const f = investorFixture();
+  try {
+    setup(f, false, true);
+    const rows = f.db.prepare("SELECT payload FROM investor_funded_result_payloads").all() as { payload: Buffer }[];
+    assert.equal(rows.length, 3);
+    for (const row of rows) {
+      const result = JSON.parse(row.payload.toString("utf8"));
+      assert.equal(result.schema_version, "investor-funded-history-result-v2");
+      assert.equal(result.comparison.schema_version, "investor-long-horizon-result-v3");
+      assert.equal(result.comparison.runs.immediate.engine_version, "continuous-bounded-fixed-policy-funding-v1");
+    }
+    const before = changes(f), state = getInvestorState(f.db, actor, done);
+    const report = await getFundedComparison(f.db, actor, { clock: () => done });
+    assert.equal(report.status, "verified_retrospective"); assert.equal(report.candidates.length, 3);
+    assert.deepEqual(parseFundedComparison({ ...report, session_binding: binding }, state, binding, Date.parse(done)), report);
+    const selector = { parameters_hash: report.candidates[0].parameters_hash, path: "staged" as const };
+    const analysis = await getFundedPathAnalysis(f.db, actor, selector, { clock: () => done });
+    assert.equal(analysis.status, "verified_retrospective"); assert.equal(analysis.analysis?.candidate.summary.principal_cny, "1500");
+    assert.deepEqual(await parseFundedAnalysis({ ...analysis, session_binding: binding }, report, binding, selector.parameters_hash, selector.path, Date.parse(done)), analysis);
+    assert.equal(changes(f), before); assert.equal(state.plan, null); assert.equal(state.profile?.document.loss_tolerance, null);
+    for (const table of ["portfolios", "accounts", "ledger_events", "postings", "position_movements", "approval_events", "activations", "reservations", "execution_reports"])
+      assert.equal(count(f, table), 0, table);
+    const other = await getFundedComparison(f.db, { id: "other-owner" }, { clock: () => done }); assert.equal(other.status, "not_started");
+    const old = await getFundedComparison(f.db, actor, { clock: () => expired }); assert.equal(old.status, "outdated"); assert.equal(old.candidates.length, 0);
+  } finally { f.close(); }
+});
 
 test("private persisted comparison independently replays all candidates, remains read-only and never selects personal risk or weights", async () => {
   const f = investorFixture();

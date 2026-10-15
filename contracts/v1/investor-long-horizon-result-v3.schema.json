@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-long-horizon-result-v3.schema.json",
+  "$defs": {
+    "run": {
+      "type": "object",
+      "required": ["engine_version", "engine_trace_hash", "initial_equity_cny", "contributions_cny", "principal_cny", "ending_nav_cny", "profit_cny", "twr", "return_method", "annualized_unit_return", "xirr", "max_drawdown", "recovered_at", "fees_cny", "fx_fees_cny", "slippage_cny", "cash_rounding_cny", "execution_failure_count", "ending_cash_ratio", "ending_locked_cash_cny", "ending_positions", "event_counts", "monthly", "annual", "funding_schedule", "assumptions"],
+      "properties": {
+        "engine_version": {"const": "continuous-bounded-fixed-policy-funding-v1"},
+        "engine_trace_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "initial_equity_cny": {"$ref": "investor-long-horizon-result.schema.json#/$defs/decimal"},
+        "contributions_cny": {"$ref": "investor-long-horizon-result.schema.json#/$defs/decimal"},
+        "principal_cny": {"$ref": "investor-long-horizon-result.schema.json#/$defs/decimal"},
+        "ending_nav_cny": {"$ref": "investor-long-horizon-result.schema.json#/$defs/decimal"},
+        "profit_cny": {"$ref": "investor-long-horizon-result.schema.json#/$defs/decimal"},
+        "twr": {"$ref": "investor-long-horizon-result.schema.json#/$defs/nullableDecimal"},
+        "return_method": {"$ref": "investor-long-horizon-result.schema.json#/$defs/run/properties/return_method"},
+        "annualized_unit_return": {"$ref": "investor-long-horizon-result.schema.json#/$defs/nullableDecimal"},
+        "xirr": {"$ref": "investor-long-horizon-result.schema.json#/$defs/run/properties/xirr"},
+        "max_drawdown": {"$ref": "investor-long-horizon-result.schema.json#/$defs/nullableDecimal"},
+        "recovered_at": {"$ref": "investor-long-horizon-result.schema.json#/$defs/run/properties/recovered_at"},
+        "fees_cny": {"$ref": "investor-long-horizon-result.schema.json#/$defs/decimal"},
+        "fx_fees_cny": {"$ref": "investor-long-horizon-result.schema.json#/$defs/decimal"},
+        "slippage_cny": {"$ref": "investor-long-horizon-result.schema.json#/$defs/decimal"},
+        "cash_rounding_cny": {"$ref": "investor-long-horizon-result.schema.json#/$defs/decimal"},
+        "execution_failure_count": {"$ref": "investor-long-horizon-result.schema.json#/$defs/run/properties/execution_failure_count"},
+        "ending_cash_ratio": {"$ref": "investor-long-horizon-result.schema.json#/$defs/nullableDecimal"},
+        "ending_locked_cash_cny": {"$ref": "investor-long-horizon-result.schema.json#/$defs/decimal"},
+        "ending_positions": {"$ref": "investor-long-horizon-result.schema.json#/$defs/run/properties/ending_positions"},
+        "event_counts": {"$ref": "investor-long-horizon-result.schema.json#/$defs/run/properties/event_counts"},
+        "monthly": {"$ref": "investor-long-horizon-result.schema.json#/$defs/run/properties/monthly"},
+        "annual": {"$ref": "investor-long-horizon-result.schema.json#/$defs/run/properties/annual"},
+        "funding_schedule": {"$ref": "investor-long-horizon-result.schema.json#/$defs/run/properties/funding_schedule"},
+        "assumptions": {"$ref": "investor-long-horizon-result.schema.json#/$defs/run/properties/assumptions"}
+      }, "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": ["schema_version", "input_hash", "dataset_hash", "plan_hash", "implementation_hash", "window", "evaluation_timezone", "parameters_hash", "parameters_recorded_at", "comparison_declared_at", "information_cutoff_at", "data_mode", "status", "qualification", "source_independently_verified", "parameters_independently_preregistered", "actual_holdings_linked", "execution_authorized", "live_advice_eligible", "runs", "limits", "result_hash"],
+  "properties": {
+    "schema_version": {"const": "investor-long-horizon-result-v3"},
+    "input_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "dataset_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "plan_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "implementation_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "parameters_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "window": {"$ref": "research-plan.schema.json#/$defs/window"},
+    "evaluation_timezone": {"$ref": "common.schema.json#/$defs/timezone"},
+    "parameters_recorded_at": {"$ref": "common.schema.json#/$defs/instant"},
+    "comparison_declared_at": {"$ref": "common.schema.json#/$defs/instant"},
+    "information_cutoff_at": {"$ref": "common.schema.json#/$defs/instant"},
+    "data_mode": {"$ref": "investor-long-horizon-result-v2.schema.json#/properties/data_mode"},
+    "status": {"$ref": "investor-long-horizon-result-v2.schema.json#/properties/status"},
+    "qualification": {"const": "retrospective_exploratory_funding_comparison_only"},
+    "source_independently_verified": {"const": false},
+    "parameters_independently_preregistered": {"const": false},
+    "actual_holdings_linked": {"const": false},
+    "execution_authorized": {"const": false},
+    "live_advice_eligible": {"const": false},
+    "runs": {"type": "object", "required": ["immediate", "staged"], "properties": {
+      "immediate": {"$ref": "#/$defs/run"}, "staged": {"$ref": "#/$defs/run"}
+    }, "additionalProperties": false},
+    "limits": {"$ref": "investor-long-horizon-result-v2.schema.json#/properties/limits"},
+    "result_hash": {"$ref": "common.schema.json#/$defs/hash"}
+  }, "additionalProperties": false
+}

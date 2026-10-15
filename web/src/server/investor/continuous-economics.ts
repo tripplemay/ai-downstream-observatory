@@ -57,14 +57,15 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
   requireEconomic(options.holdingBaseline === undefined || typeof options.holdingBaseline === "boolean");
   const holdingBaseline = options.holdingBaseline === true;
   const research = options.researchPhase !== undefined;
+  const bounded = research || plan.schema_version === "investor-long-horizon-plan-v3";
   requireEconomic(!research || ["train", "validation", "holdout"].includes(options.researchPhase!) && !holdingBaseline
     && releases.size === 0 && plan.schema_version === "bounded-research-window-v1");
   const p = plan.parameters, ex = plan.execution, zone = plan.evaluation_timezone;
-  requireEconomic(p.schema_version === "research-fixed-rebalance-parameters-v2" && ex.model === (research ? "next_session_close_bounded_fixed_quantity" : "next_session_close_fixed_quantity")
+  requireEconomic(p.schema_version === "research-fixed-rebalance-parameters-v2" && ex.model === (bounded ? "next_session_close_bounded_fixed_quantity" : "next_session_close_fixed_quantity")
     && ex.settlement_model === "explicit_market_calendar" && ex.sale_proceeds === "convert_to_cny_at_fill_then_settle");
   requireEconomic(["commission_bps", "minimum_fee_cny", "slippage_bps", "fx_bps"].every(key => economicFact(ex[key as "commission_bps"]).gte(0))
     && economicFact(ex.slippage_bps).lt(10000) && economicFact(ex.cash_quantum).gt(0));
-  if (research) requireEconomic(ex.cash_quantum === "0.01" && [ex.buy_price_buffer_bps, ex.buy_fx_buffer_bps, ex.commission_bps, ex.fx_bps]
+  if (bounded) requireEconomic(ex.cash_quantum === "0.01" && [ex.buy_price_buffer_bps, ex.buy_fx_buffer_bps, ex.commission_bps, ex.fx_bps]
     .every(value => typeof value === "string" && economicFact(value).gte(0) && economicFact(value).lte(10000)));
   const market = new ContinuousMarket(data, ex.max_fx_age_seconds), start = economicInstant(plan.window.start), end = economicInstant(plan.window.end);
   requireEconomic(start < end && Object.keys(p.weights).sort().join() === Object.keys(p.roles).sort().join()
@@ -131,7 +132,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
     const principal = quantity.times(fillPrice).times(spot), fee = Decimal.max(ex.minimum_fee_cny, principal.times(ex.commission_bps).div(10000));
     const fxFee = currency === "CNY" ? zero() : principal.times(ex.fx_bps).div(10000);
     const raw = side === "buy" ? principal.plus(fee).plus(fxFee) : principal.minus(fee).minus(fxFee);
-    const amount = raw.div(ex.cash_quantum).toDecimalPlaces(0, research && side === "buy" ? Decimal.ROUND_CEIL : Decimal.ROUND_HALF_EVEN).times(ex.cash_quantum);
+    const amount = raw.div(ex.cash_quantum).toDecimalPlaces(0, bounded && side === "buy" ? Decimal.ROUND_CEIL : Decimal.ROUND_HALF_EVEN).times(ex.cash_quantum);
     requireEconomic(amount.gt(0), "ORDER_BELOW_CASH_PRECISION");
     return { amount, principal, fee, fxFee, fillPrice, spot, slipCost: quantity.times(price).times(spot).times(slip),
       rounding: side === "buy" ? amount.minus(raw) : raw.minus(amount) };
@@ -243,21 +244,21 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
     const available = Decimal.max(0, cny().minus(floor)).plus(projectedSales), totalNeed = sum(needs.values()), deployment = Decimal.min(available, totalNeed);
     for (const [listing, need] of [...needs].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
       let allocation = totalNeed.isZero() ? zero() : deployment.times(need).div(totalNeed);
-      if (research) allocation = allocation.times(100).floor().div(100);
+      if (bounded) allocation = allocation.times(100).floor().div(100);
       const [price, rate] = quotes.get(listing)!;
       const asset = market.assets.get(listing)!, step = new Decimal(asset.quantity_step);
-      const cap = research ? price.times(new Decimal(1).plus(new Decimal(ex.buy_price_buffer_bps!).div(10000))) : price;
-      const fxCap = research && asset.currency !== "CNY" ? rate.times(new Decimal(1).plus(new Decimal(ex.buy_fx_buffer_bps!).div(10000))) : rate;
+      const cap = bounded ? price.times(new Decimal(1).plus(new Decimal(ex.buy_price_buffer_bps!).div(10000))) : price;
+      const fxCap = bounded && asset.currency !== "CNY" ? rate.times(new Decimal(1).plus(new Decimal(ex.buy_fx_buffer_bps!).div(10000))) : rate;
       if (allocation.lte(0)) { issues.push("NO_SETTLED_OR_DEPENDENT_CASH:" + listing); continue; }
       let low = 0n, high = BigInt(allocation.div(cap.times(fxCap).times(step)).floor().toFixed());
       try {
         while (low < high) {
           const middle = (low + high + 1n) / 2n;
-          if (cost("buy", step.times(middle.toString()), cap, asset.currency, at, research ? fxCap : undefined).amount.lte(allocation)) low = middle; else high = middle - 1n;
+          if (cost("buy", step.times(middle.toString()), cap, asset.currency, at, bounded ? fxCap : undefined).amount.lte(allocation)) low = middle; else high = middle - 1n;
         }
       } catch (error) { issues.push(failure(error) + ":" + listing); continue; }
       if (!low) { issues.push("BUY_BELOW_QUANTITY_STEP_OR_FEES:" + listing); continue; }
-      const bounds: [Decimal, Decimal, Decimal] | undefined = research ? [cap, fxCap, cost("buy", step.times(low.toString()), cap, asset.currency, at, fxCap).amount] : undefined;
+      const bounds: [Decimal, Decimal, Decimal] | undefined = bounded ? [cap, fxCap, cost("buy", step.times(low.toString()), cap, asset.currency, at, fxCap).amount] : undefined;
       const reservedNow = sum(planned.filter(order => order.side === "buy" && order.state === "scheduled").map(order => order.budget));
       if (allocation.lte(cny().minus(floor).minus(reservedNow))) {
         try {
@@ -274,7 +275,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
         quantity: economicText(order.quantity), budget_cny: order.side === "buy" ? economicText(order.budget) : null,
         execute_at: order.execute === undefined ? null : economicStamp(order.execute), expires_at: economicStamp(expiry), funding: order.state,
         dependency_order_ids: order.dependencies, decision_price_observation_id: priceId, decision_fx_observation_id: fxId, decision_price_mark: priceMark,
-        ...(research && order.side === "buy" ? { buy_price_cap: economicText(order.priceCap!), buy_fx_cap: economicText(order.fxCap!), worst_total_cash_cny: economicText(order.worstTotal!) } : {}) });
+        ...(bounded && order.side === "buy" ? { buy_price_cap: economicText(order.priceCap!), buy_fx_cap: economicText(order.fxCap!), worst_total_cash_cny: economicText(order.worstTotal!) } : {}) });
     }
     events.push({ ...base, outcome: planned.length ? "proposed" : "blocked", reason_codes: [...new Set(issues)].sort(), order_ids: planned.map(order => order.id), partial: issues.length > 0 });
     if (planned.length) lastProposal = at;
@@ -284,7 +285,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
     const at = clock.pop();
     for (const order of [...pending]) if (at >= order.expiry) finish(order, "expired", at, "FIXED_POLICY_ORDER_EXPIRED");
     for (const action of [...(actions.get(at) ?? [])].sort((a, b) => a.type !== b.type ? a.type === "split" ? -1 : 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) {
-      if (research) for (const order of [...pending]) if (order.listing === action.listing_id)
+      if (bounded) for (const order of [...pending]) if (order.listing === action.listing_id)
         finish(order, "skipped", at, "CORPORATE_ACTION_INVALIDATES_FROZEN_ORDER", { action_id: action.id });
       const quantity = positions.get(action.listing_id) ?? zero(), currency = market.assets.get(action.listing_id)!.currency;
       if (action.type === "split") {
@@ -329,7 +330,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
       try { const [price, id] = market.price(order.listing, at, false, at); priceId = id; rawPrice = price; actual = cost(order.side, quantity, price, asset.currency, at); }
       catch (error) { finish(order, "skipped", at, failure(error)); continue; }
       if (order.side === "buy") {
-        if (research && (rawPrice.gt(order.priceCap!) || actual.spot.gt(order.fxCap!))) {
+        if (bounded && (rawPrice.gt(order.priceCap!) || actual.spot.gt(order.fxCap!))) {
           finish(order, "skipped", at, "EXECUTION_PRICE_OR_FX_BOUND_EXCEEDED", { buy_price_cap: economicText(order.priceCap!), buy_fx_cap: economicText(order.fxCap!),
             observed_price: economicText(rawPrice), observed_fx: economicText(actual.spot) }); continue;
         }
@@ -363,7 +364,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
   const missing = [...weights].filter(([listing, weight]) => weight.gt(0) && !bought.has(listing)).map(([listing]) => listing).sort();
   if (missing.length) events.push({ type: "policy_deployment_failed", at: economicStamp(end), missing_listings: missing,
     reason: bought.size ? "INITIAL_DEPLOYMENT_INCOMPLETE" : "INITIAL_DEPLOYMENT_NOT_EXECUTED" });
-  return { engine_version: research ? "fixed-policy-bounded-rebalance-v3" : holdingBaseline ? "continuous-hold-new-cash-v1" : "continuous-fixed-policy-funding-v1", phase: options.researchPhase ?? "continuous", window: plan.window,
+  return { engine_version: research ? "fixed-policy-bounded-rebalance-v3" : bounded ? holdingBaseline ? "continuous-bounded-hold-new-cash-v1" : "continuous-bounded-fixed-policy-funding-v1" : holdingBaseline ? "continuous-hold-new-cash-v1" : "continuous-fixed-policy-funding-v1", phase: options.researchPhase ?? "continuous", window: plan.window,
     initial_equity_cny: economicText(initial), contributions_cny: economicText(sum(contributions.values())), ending_nav_cny: economicText(closing),
     profit_cny: economicText(closing.minus(initial).minus(sum(contributions.values()))),
     ...continuousPerformance(start, end, initial, closing, flows, curve as { at: string; nav_cny: string; unit_nav: string }[], zone),
@@ -384,7 +385,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
     assumptions: [research ? "independent_phase_restart_not_continuous_forward_history" : "continuous_single_account_no_phase_or_year_restart", "research_only_no_actual_facts_or_approval", "ex_post_close_valuation_with_point_in_time_decisions",
       "explicit_market_calendar_settlement", "sale_proceeds_converted_to_cny_at_fill_unavailable_until_settlement", "fixed_decision_quantity_and_budget",
       "theoretical_ex_action_carry_between_raw_closes_not_an_observed_or_live_price",
-      ...(research ? ["buy_raw_close_and_fx_caps_frozen_at_decision", "buy_quantity_sized_at_both_caps_with_upward_cent_debit", "allocation_cent_dust_stays_cash", "corporate_action_cancels_frozen_orders_without_resizing"] : []),
+      ...(bounded ? ["buy_raw_close_and_fx_caps_frozen_at_decision", "buy_quantity_sized_at_both_caps_with_upward_cent_debit", "allocation_cent_dust_stays_cash", "corporate_action_cancels_frozen_orders_without_resizing"] : []),
       holdingBaseline ? "no_calendar_or_class_drift_rebalancing" : "half_year_or_year_calendar_review_plus_absolute_class_drift",
       "cooldown_uses_evaluation_local_calendar_days", holdingBaseline ? "new_cny_cash_repairs_without_sales" : "new_cny_cash_repairs_without_sales_before_rebalancing", "orders_expire_at_next_month_boundary",
       "unsettled_assets_block_new_orders", "no_margin", "no_cash_interest", "foreign_dividends_retained_in_original_currency", "turnover_uses_arithmetic_mean_observed_nav",

@@ -46,8 +46,12 @@ import longHorizonInput from "../../../../contracts/v1/investor-long-horizon-inp
 import longHorizonResult from "../../../../contracts/v1/investor-long-horizon-result.schema.json";
 import longHorizonInputV2 from "../../../../contracts/v1/investor-long-horizon-input-v2.schema.json";
 import longHorizonResultV2 from "../../../../contracts/v1/investor-long-horizon-result-v2.schema.json";
+import longHorizonInputV3 from "../../../../contracts/v1/investor-long-horizon-input-v3.schema.json";
+import longHorizonResultV3 from "../../../../contracts/v1/investor-long-horizon-result-v3.schema.json";
 import fundedHistoryInput from "../../../../contracts/v1/investor-funded-history-input.schema.json";
 import fundedHistoryResult from "../../../../contracts/v1/investor-funded-history-result.schema.json";
+import fundedHistoryInputV2 from "../../../../contracts/v1/investor-funded-history-input-v2.schema.json";
+import fundedHistoryResultV2 from "../../../../contracts/v1/investor-funded-history-result-v2.schema.json";
 import { hash } from "../ledger/service";
 import { parseStrictJson } from "../strict-json";
 import { Decimal } from "../ledger/decimal";
@@ -60,7 +64,7 @@ import type { ContinuousParameters } from "./continuous-economics";
 const ajv = new Ajv2020({ strict: true, strictRequired: false });
 addFormats(ajv);
 ajv.addSchema(boundedPlan); ajv.addSchema(planInput);
-for (const schema of [common, observation, dataset, plan, parameters, fixed, fixedV2, fixedPolicy, rotation, profile, policy, monitor, monitorV2, monitorV3, fixedPolicyState, request, strategyResult, assessment, assessmentV2, modelDefinition, modelDefinitionV2, modelSnapshot, modelCheckpoint, experiment, dataFacts, dataSnapshot, evidenceInput, referencePlan, referencePlanV2, monitorDataInput, monitorDataInputV2, monitorPriceSnapshot, monitorDataProjection, evidenceCheckpoint, evidenceCheckpointV2, evidenceCheckpointV3, evidenceMonitor, evidenceMonitorRequestV2, plannedFunding, fundingPlan, longHorizonInput, longHorizonResult, longHorizonInputV2, longHorizonResultV2, fundedHistoryInput, fundedHistoryResult]) ajv.addSchema(schema);
+for (const schema of [common, observation, dataset, plan, parameters, fixed, fixedV2, fixedPolicy, rotation, profile, policy, monitor, monitorV2, monitorV3, fixedPolicyState, request, strategyResult, assessment, assessmentV2, modelDefinition, modelDefinitionV2, modelSnapshot, modelCheckpoint, experiment, dataFacts, dataSnapshot, evidenceInput, referencePlan, referencePlanV2, monitorDataInput, monitorDataInputV2, monitorPriceSnapshot, monitorDataProjection, evidenceCheckpoint, evidenceCheckpointV2, evidenceCheckpointV3, evidenceMonitor, evidenceMonitorRequestV2, plannedFunding, fundingPlan, longHorizonInput, longHorizonResult, longHorizonInputV2, longHorizonResultV2, longHorizonInputV3, longHorizonResultV3, fundedHistoryInput, fundedHistoryResult, fundedHistoryInputV2, fundedHistoryResultV2]) ajv.addSchema(schema);
 const validateRequest = ajv.getSchema(request.$id)!, validateStrategy = ajv.getSchema(strategyResult.$id)!, validateAssessment = ajv.getSchema(assessment.$id)!;
 type JsonObject = Record<string, unknown>;
 type Quote = { listing_id: string; market: "CN" | "HK" | "US"; currency: string; close: string; observed_at: string; known_at: string; expected_close_at: string; valid_until: string };
@@ -80,8 +84,11 @@ export type ModelAssessment = Omit<InvestorModelChange, "assessment_hash" | "mar
 
 function fail(): never { throw new Error("INVESTOR_KERNEL_RESULT_INVALID"); }
 export function validateFundedHistoryDocument(kind: "input" | "projection" | "result" | "continuous_input", value: unknown) {
+  const version = (value as JsonObject | null)?.schema_version;
   const id = kind === "projection" ? fundedHistoryInput.$id + "#/$defs/projection"
-    : kind === "input" ? fundedHistoryInput.$id : kind === "continuous_input" ? longHorizonInputV2.$id : fundedHistoryResult.$id;
+    : kind === "input" ? (version === "investor-funded-history-input-v2" ? fundedHistoryInputV2.$id : fundedHistoryInput.$id)
+    : kind === "continuous_input" ? (version === "investor-long-horizon-input-v3" ? longHorizonInputV3.$id : longHorizonInputV2.$id)
+    : version === "investor-funded-history-result-v2" ? fundedHistoryResultV2.$id : fundedHistoryResult.$id;
   if (!ajv.getSchema(id)!(value)) throw new Error("INVESTOR_FUNDED_HISTORY_INVALID");
 }
 export function validateInvestorModelDocument(kind: "definition" | "snapshot" | "checkpoint", value: unknown) {

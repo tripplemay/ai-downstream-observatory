@@ -39,9 +39,9 @@ def run_continuous_portfolio(dataset, plan, releases, *, progress=None, holding_
 
 def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=None, holding_baseline=False):
     continuous = releases is not None
-    bounded = not continuous and plan["schema_version"] == "research-plan-v3"
+    bounded = plan["schema_version"] in ("research-plan-v3", "investor-long-horizon-plan-v3")
     execution = plan["execution"]
-    expected_plans = ("investor-long-horizon-plan-v1", "investor-long-horizon-plan-v2") if continuous else ("research-plan-v2", "research-plan-v3")
+    expected_plans = ("investor-long-horizon-plan-v1", "investor-long-horizon-plan-v2", "investor-long-horizon-plan-v3") if continuous else ("research-plan-v2", "research-plan-v3")
     if (dataset["schema_version"] != "research-dataset-v2" or plan["schema_version"] not in expected_plans
             or execution["model"] != ("next_session_close_bounded_fixed_quantity" if bounded else "next_session_close_fixed_quantity")
             or execution["settlement_model"] != "explicit_market_calendar"
@@ -52,8 +52,18 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
         raise WorkbenchError("UNSUPPORTED_ROTATION_PARAMETERS")
     low_frequency = kind == FIXED_POLICY_VERSION
     if bounded:
-        from .snapshot import validate_plan
-        validate_plan(plan, dataset)
+        if continuous:
+            from worker.market.contracts import validate_contract
+            validate_contract(plan, "investor-long-horizon-input-v3.schema.json", fragment="$defs/plan")
+            if (decimal(execution["cash_quantum"]) != decimal("0.01")
+                    or any(not ZERO <= decimal(execution[name]) <= 10000 for name in (
+                        "buy_price_buffer_bps", "buy_fx_buffer_bps", "commission_bps", "fx_bps"))
+                    or not ZERO <= decimal(execution["slippage_bps"]) < 10000
+                    or decimal(execution["minimum_fee_cny"]) < ZERO):
+                raise WorkbenchError("INVALID_BOUNDED_EXECUTION_COST")
+        else:
+            from .snapshot import validate_plan
+            validate_plan(plan, dataset)
         if not low_frequency:
             raise WorkbenchError("BOUNDED_RESEARCH_REQUIRES_FIXED_POLICY")
     if not isinstance(holding_baseline, bool) or holding_baseline and not (continuous and low_frequency):
@@ -573,7 +583,8 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
         if missing:
             events.append({"type": "policy_deployment_failed", "at": stamp(end), "missing_listings": missing,
                            "reason": "INITIAL_DEPLOYMENT_INCOMPLETE" if bought else "INITIAL_DEPLOYMENT_NOT_EXECUTED"})
-    return {"engine_version": "fixed-policy-bounded-rebalance-v3" if bounded else "continuous-hold-new-cash-v1" if holding_baseline else "continuous-fixed-policy-funding-v1" if continuous else "fixed-policy-rebalance-v2" if low_frequency else ENGINE_VERSION, "phase": phase, "window": window,
+    engine = ("continuous-bounded-hold-new-cash-v1" if holding_baseline else "continuous-bounded-fixed-policy-funding-v1") if continuous and bounded else "fixed-policy-bounded-rebalance-v3" if bounded else "continuous-hold-new-cash-v1" if holding_baseline else "continuous-fixed-policy-funding-v1" if continuous else "fixed-policy-rebalance-v2" if low_frequency else ENGINE_VERSION
+    return {"engine_version": engine, "phase": phase, "window": window,
             "initial_equity_cny": canonical(initial), "contributions_cny": canonical(sum(flow_map.values(), ZERO)),
             "ending_nav_cny": canonical(closing), "profit_cny": canonical(cashflow_profit(closing, initial, flow_map.values())),
             "twr": canonical(twr.value) if twr.value is not None else None, "return_method": twr.method,

@@ -25,6 +25,8 @@ INPUT_CONTRACT = "investor-long-horizon-input.schema.json"
 OUTPUT_CONTRACT = "investor-long-horizon-result.schema.json"
 RETROSPECTIVE_INPUT_CONTRACT = "investor-long-horizon-input-v2.schema.json"
 RETROSPECTIVE_OUTPUT_CONTRACT = "investor-long-horizon-result-v2.schema.json"
+BOUNDED_INPUT_CONTRACT = "investor-long-horizon-input-v3.schema.json"
+BOUNDED_OUTPUT_CONTRACT = "investor-long-horizon-result-v3.schema.json"
 
 
 def _validate_decisions(dataset, decisions):
@@ -45,8 +47,10 @@ def _validate_decisions(dataset, decisions):
 
 @financial
 def validate_input(document, *, allow_synthetic=False):
-    retrospective = isinstance(document, dict) and document.get("schema_version") == "investor-long-horizon-input-v2"
-    validate_contract(document, RETROSPECTIVE_INPUT_CONTRACT if retrospective else INPUT_CONTRACT)
+    version = document.get("schema_version") if isinstance(document, dict) else None
+    bounded = version == "investor-long-horizon-input-v3"
+    retrospective = bounded or version == "investor-long-horizon-input-v2"
+    validate_contract(document, BOUNDED_INPUT_CONTRACT if bounded else RETROSPECTIVE_INPUT_CONTRACT if retrospective else INPUT_CONTRACT)
     data, plan = document["dataset"], document["plan"]
     validate_time_precision(document)
     registration_fields = ("parameters_recorded_at", "comparison_declared_at", "information_cutoff_at") if retrospective else ("parameters_frozen_at",)
@@ -103,6 +107,9 @@ def validate_input(document, *, allow_synthetic=False):
             raise WorkbenchError("INVESTOR_LONG_HORIZON_COST_INVALID")
     if decimal(plan["execution"]["slippage_bps"]) >= 10000:
         raise WorkbenchError("INVESTOR_LONG_HORIZON_COST_INVALID")
+    if bounded and (quantum != decimal("0.01") or any(not ZERO <= fact_decimal(plan["execution"][name]) <= 10000
+            for name in ("buy_price_buffer_bps", "buy_fx_buffer_bps", "commission_bps", "fx_bps"))):
+        raise WorkbenchError("INVESTOR_LONG_HORIZON_BOUND_INVALID")
     policy = plan["funding_policy"]
     for name in ("initial_offsets_days", "contribution_offsets_days"):
         offsets = policy[name]
@@ -206,8 +213,9 @@ def compare_funding_paths(document, *, allow_synthetic=False, progress=None):
         schedule, releases = funding_schedule(plan, zone, staged=name == "staged")
         run = run_continuous_portfolio(data, plan, releases, progress=progress)
         runs[name] = _summarize(run, schedule, zone)
-    retrospective = document["schema_version"] == "investor-long-horizon-input-v2"
-    result = {"schema_version": "investor-long-horizon-result-v2" if retrospective else "investor-long-horizon-result-v1", "input_hash": content_hash(document),
+    bounded = document["schema_version"] == "investor-long-horizon-input-v3"
+    retrospective = bounded or document["schema_version"] == "investor-long-horizon-input-v2"
+    result = {"schema_version": "investor-long-horizon-result-v3" if bounded else "investor-long-horizon-result-v2" if retrospective else "investor-long-horizon-result-v1", "input_hash": content_hash(document),
               "dataset_hash": content_hash(data), "plan_hash": content_hash(plan),
               "implementation_hash": content_hash({"investor": implementation_hash(),
                   "timezone_hashes": implementation_manifest(plan["evaluation_timezone"])["timezone_hashes"]}),
@@ -230,7 +238,7 @@ def compare_funding_paths(document, *, allow_synthetic=False, progress=None):
         result.update({field: plan[field] for field in ("parameters_recorded_at", "comparison_declared_at", "information_cutoff_at")})
         result["limits"].append("retrospective_declared_times_are_not_independent_preregistration_or_unused_holdout_evidence")
     result["result_hash"] = content_hash(result)
-    validate_contract(result, RETROSPECTIVE_OUTPUT_CONTRACT if retrospective else OUTPUT_CONTRACT)
+    validate_contract(result, BOUNDED_OUTPUT_CONTRACT if bounded else RETROSPECTIVE_OUTPUT_CONTRACT if retrospective else OUTPUT_CONTRACT)
     if len(canonical_json(result).encode("utf-8")) > MAX_OUTPUT_BYTES:
         raise WorkbenchError("INVESTOR_KERNEL_OUTPUT_TOO_LARGE")
     return result
@@ -239,10 +247,13 @@ def compare_funding_paths(document, *, allow_synthetic=False, progress=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Continuous counterfactual ETF funding paths; no DB, broker or advice publication")
     parser.add_argument("--allow-synthetic", action="store_true", help="Explicit fixture permission, not live eligibility")
-    parser.add_argument("--retrospective", action="store_true", help="Explicit v2 retrospective exploration; never backdate registration")
+    versions = parser.add_mutually_exclusive_group()
+    versions.add_argument("--retrospective", action="store_true", help="Explicit v2 retrospective exploration; never backdate registration")
+    versions.add_argument("--bounded-retrospective", action="store_true", help="Explicit v3 bounded execution; caller supplies both buffers")
     args = parser.parse_args(argv)
     try:
-        document = parse_request(sys.stdin.buffer.read(MAX_INPUT_BYTES + 1), RETROSPECTIVE_INPUT_CONTRACT if args.retrospective else INPUT_CONTRACT)
+        contract = BOUNDED_INPUT_CONTRACT if args.bounded_retrospective else RETROSPECTIVE_INPUT_CONTRACT if args.retrospective else INPUT_CONTRACT
+        document = parse_request(sys.stdin.buffer.read(MAX_INPUT_BYTES + 1), contract)
         result = compare_funding_paths(document, allow_synthetic=args.allow_synthetic)
         print(canonical_json(result))
         return 0

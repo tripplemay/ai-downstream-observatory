@@ -24,7 +24,7 @@ def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, 
     if initial_monitor_calendar and (funded_year or funded_calendar): raise WorkbenchError("SYNTHETIC_INITIAL_CALENDAR_CONFLICT")
     data, plan, policy = fixed_policy_input() if fixed_policy_v2 else research_input()
     if bounded_execution_v3:
-        if not fixed_policy_v2 or funded_year or funded_calendar:
+        if not fixed_policy_v2:
             raise WorkbenchError("SYNTHETIC_BOUNDED_EXECUTION_SCOPE")
         from tests.research.bounded_fixtures import bounded_plan
         plan = bounded_plan(plan)
