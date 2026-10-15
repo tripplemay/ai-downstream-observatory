@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/bounded-cash-buy.schema.json",
+  "oneOf": [{"$ref":"#/$defs/input"},{"$ref":"#/$defs/plan"},{"$ref":"#/$defs/outcomeInput"},{"$ref":"#/$defs/result"}],
+  "$defs": {
+    "id": {"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9:._-]{0,79}$"},
+    "hash": {"type":"string","pattern":"^[a-f0-9]{64}$"},
+    "instant": {"type":"string","format":"date-time","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{6}Z$"},
+    "number": {"type":"string","maxLength":27,"pattern":"^(0|[1-9][0-9]{0,17})(\\.[0-9]{1,8})?$"},
+    "cash": {"type":"string","maxLength":21,"pattern":"^(0|[1-9][0-9]{0,17})(\\.[0-9]{1,2})?$"},
+    "derived": {"type":"string","maxLength":200,"pattern":"^(0|[1-9][0-9]*)(\\.[0-9]+)?$"},
+    "policy": {
+      "type":"object","additionalProperties":false,
+      "required":["schema_version","price_buffer_bps","commission_bps","minimum_fee_cny","slippage_bps","cash_quantum","max_quote_age_seconds"],
+      "properties": {
+        "schema_version":{"const":"bounded-cash-buy-policy-v1"},
+        "price_buffer_bps":{"$ref":"#/$defs/number"},"commission_bps":{"$ref":"#/$defs/number"},
+        "minimum_fee_cny":{"$ref":"#/$defs/cash"},"slippage_bps":{"$ref":"#/$defs/number"},
+        "cash_quantum":{"const":"0.01"},"max_quote_age_seconds":{"type":"integer","minimum":1,"maximum":86400}
+      }
+    },
+    "quote": {
+      "type":"object","additionalProperties":false,"required":["id","close","observed_at","known_at","valid_until"],
+      "properties":{"id":{"$ref":"#/$defs/id"},"close":{"$ref":"#/$defs/number"},"observed_at":{"$ref":"#/$defs/instant"},"known_at":{"$ref":"#/$defs/instant"},"valid_until":{"$ref":"#/$defs/instant"}}
+    },
+    "orderInput": {
+      "type":"object","additionalProperties":false,"required":["order_id","listing_id","market","currency","allocated_budget_cny","quantity_step","decision_quote","execute_at","expires_at"],
+      "properties":{"order_id":{"$ref":"#/$defs/id"},"listing_id":{"$ref":"#/$defs/id"},"market":{"const":"CN"},"currency":{"const":"CNY"},"allocated_budget_cny":{"$ref":"#/$defs/cash"},"quantity_step":{"$ref":"#/$defs/number"},"decision_quote":{"$ref":"#/$defs/quote"},"execute_at":{"$ref":"#/$defs/instant"},"expires_at":{"$ref":"#/$defs/instant"}}
+    },
+    "reservation": {
+      "type":"object","additionalProperties":false,"required":["order_id","budget_cny"],
+      "properties":{"order_id":{"$ref":"#/$defs/id"},"budget_cny":{"$ref":"#/$defs/cash"}}
+    },
+    "input": {
+      "type":"object","additionalProperties":false,"required":["schema_version","qualification","batch_id","decision_at","policy","settled_cash_cny","unsettled_receivable_cny","existing_reservations","orders"],
+      "properties":{"schema_version":{"const":"bounded-cash-buy-input-v1"},"qualification":{"const":"synthetic_test_only"},"batch_id":{"$ref":"#/$defs/id"},"decision_at":{"$ref":"#/$defs/instant"},"policy":{"$ref":"#/$defs/policy"},"settled_cash_cny":{"$ref":"#/$defs/cash"},"unsettled_receivable_cny":{"$ref":"#/$defs/cash"},"existing_reservations":{"type":"array","maxItems":20,"items":{"$ref":"#/$defs/reservation"}},"orders":{"type":"array","minItems":1,"maxItems":20,"items":{"$ref":"#/$defs/orderInput"}}}
+    },
+    "orderPlan": {
+      "type":"object","additionalProperties":false,
+      "required":["order_id","listing_id","status","quantity","quantity_step","lot_count","allocated_budget_cny","reserved_cny","price_cap","worst_total_cash_cny","decision_quote_id","execute_at","expires_at"],
+      "properties":{"order_id":{"$ref":"#/$defs/id"},"listing_id":{"$ref":"#/$defs/id"},"status":{"enum":["planned","below_minimum"]},"quantity":{"$ref":"#/$defs/derived"},"quantity_step":{"$ref":"#/$defs/number"},"lot_count":{"type":"string","maxLength":60,"pattern":"^(0|[1-9][0-9]*)$"},"allocated_budget_cny":{"$ref":"#/$defs/cash"},"reserved_cny":{"$ref":"#/$defs/derived"},"price_cap":{"$ref":"#/$defs/derived"},"worst_total_cash_cny":{"$ref":"#/$defs/derived"},"decision_quote_id":{"$ref":"#/$defs/id"},"execute_at":{"$ref":"#/$defs/instant"},"expires_at":{"$ref":"#/$defs/instant"}}
+    },
+    "plan": {
+      "type":"object","additionalProperties":false,"required":["schema_version","engine_version","qualification","implementation_hash","input_hash","policy_hash","batch_id","decision_at","settled_cash_cny","existing_reserved_cny","new_reserved_cny","unreserved_cash_cny","orders","plan_hash"],
+      "properties":{"schema_version":{"const":"bounded-cash-buy-plan-v1"},"engine_version":{"const":"bounded-cash-buy-sandbox-v1"},"qualification":{"const":"synthetic_test_only"},"implementation_hash":{"$ref":"#/$defs/hash"},"input_hash":{"$ref":"#/$defs/hash"},"policy_hash":{"$ref":"#/$defs/hash"},"batch_id":{"$ref":"#/$defs/id"},"decision_at":{"$ref":"#/$defs/instant"},"settled_cash_cny":{"$ref":"#/$defs/derived"},"existing_reserved_cny":{"$ref":"#/$defs/derived"},"new_reserved_cny":{"$ref":"#/$defs/derived"},"unreserved_cash_cny":{"$ref":"#/$defs/derived"},"orders":{"type":"array","minItems":1,"maxItems":20,"items":{"$ref":"#/$defs/orderPlan"}},"plan_hash":{"$ref":"#/$defs/hash"}}
+    },
+    "executionObservation": {
+      "type":"object","additionalProperties":false,"required":["order_id","quote_id","close","observed_at","known_at","corporate_action_since_decision"],
+      "properties":{"order_id":{"$ref":"#/$defs/id"},"quote_id":{"$ref":"#/$defs/id"},"close":{"$ref":"#/$defs/number"},"observed_at":{"$ref":"#/$defs/instant"},"known_at":{"$ref":"#/$defs/instant"},"corporate_action_since_decision":{"type":"boolean"}}
+    },
+    "outcomeInput": {
+      "type":"object","additionalProperties":false,"required":["schema_version","qualification","evaluated_at","observations"],
+      "properties":{"schema_version":{"const":"bounded-cash-buy-outcome-input-v1"},"qualification":{"const":"synthetic_test_only"},"evaluated_at":{"$ref":"#/$defs/instant"},"observations":{"type":"array","maxItems":20,"items":{"$ref":"#/$defs/executionObservation"}}}
+    },
+    "execution": {
+      "type":"object","additionalProperties":false,"required":["order_id","listing_id","status","reason","quantity","execution_price","fee_cny","rounding_cny","total_cash_cny","released_cny","quote_id"],
+      "properties":{"order_id":{"$ref":"#/$defs/id"},"listing_id":{"$ref":"#/$defs/id"},"status":{"enum":["simulated_filled","skipped","below_minimum"]},"reason":{"enum":["SYNTHETIC_NEXT_CLOSE_PROXY","BUDGET_BELOW_ONE_STEP_TOTAL_COST","MISSING_EXECUTION_OBSERVATION","CORPORATE_ACTION_REVIEW_REQUIRED","EXECUTION_TIME_MISMATCH","EXECUTION_EVIDENCE_LATE","PRICE_BOUND_EXCEEDED","PRECOMMITTED_BUDGET_EXCEEDED"]},"quantity":{"$ref":"#/$defs/derived"},"execution_price":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/derived"}]},"fee_cny":{"$ref":"#/$defs/derived"},"rounding_cny":{"$ref":"#/$defs/derived"},"total_cash_cny":{"$ref":"#/$defs/derived"},"released_cny":{"$ref":"#/$defs/derived"},"quote_id":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/id"}]}}
+    },
+    "result": {
+      "type":"object","additionalProperties":false,"required":["schema_version","engine_version","qualification","implementation_hash","input_hash","policy_hash","plan_hash","outcome_input_hash","batch_id","evaluated_at","cash_after_cny","existing_reserved_cny","unreserved_cash_after_cny","new_reserved_released_cny","total_debited_cny","execution_failure_count","orders","live_advice_eligible","result_hash"],
+      "properties":{"schema_version":{"const":"bounded-cash-buy-result-v1"},"engine_version":{"const":"bounded-cash-buy-sandbox-v1"},"qualification":{"const":"synthetic_test_only"},"implementation_hash":{"$ref":"#/$defs/hash"},"input_hash":{"$ref":"#/$defs/hash"},"policy_hash":{"$ref":"#/$defs/hash"},"plan_hash":{"$ref":"#/$defs/hash"},"outcome_input_hash":{"$ref":"#/$defs/hash"},"batch_id":{"$ref":"#/$defs/id"},"evaluated_at":{"$ref":"#/$defs/instant"},"cash_after_cny":{"$ref":"#/$defs/derived"},"existing_reserved_cny":{"$ref":"#/$defs/derived"},"unreserved_cash_after_cny":{"$ref":"#/$defs/derived"},"new_reserved_released_cny":{"$ref":"#/$defs/derived"},"total_debited_cny":{"$ref":"#/$defs/derived"},"execution_failure_count":{"type":"integer","minimum":0,"maximum":20},"orders":{"type":"array","minItems":1,"maxItems":20,"items":{"$ref":"#/$defs/execution"}},"live_advice_eligible":{"const":false},"result_hash":{"$ref":"#/$defs/hash"}}
+    }
+  }
+}

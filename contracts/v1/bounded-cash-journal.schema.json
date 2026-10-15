@@ -1,0 +1,56 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://etf-workbench.invalid/contracts/v1/bounded-cash-journal.schema.json",
+  "$ref":"#/$defs/journal",
+  "$defs": {
+    "id":{"$ref":"bounded-cash-buy.schema.json#/$defs/id"},
+    "hash":{"$ref":"bounded-cash-buy.schema.json#/$defs/hash"},
+    "instant":{"$ref":"bounded-cash-buy.schema.json#/$defs/instant"},
+    "derived":{"$ref":"bounded-cash-buy.schema.json#/$defs/derived"},
+    "declaration": {
+      "type":"object","additionalProperties":false,
+      "required":["schema_version","engine_version","study_id","registered_at","qualification","policy","implementation_hash","buy_implementation_hash","parameters_independently_preregistered","live_advice_eligible"],
+      "properties":{"schema_version":{"const":"bounded-cash-study-declaration-v1"},"engine_version":{"const":"bounded-cash-journal-sandbox-v1"},"study_id":{"$ref":"#/$defs/id"},"registered_at":{"$ref":"#/$defs/instant"},"qualification":{"const":"synthetic_test_only"},"policy":{"$ref":"bounded-cash-buy.schema.json#/$defs/policy"},"implementation_hash":{"$ref":"#/$defs/hash"},"buy_implementation_hash":{"$ref":"#/$defs/hash"},"parameters_independently_preregistered":{"const":false},"live_advice_eligible":{"const":false}}
+    },
+    "contribution": {
+      "type":"object","additionalProperties":false,"required":["contribution_id","amount_cny"],
+      "properties":{"contribution_id":{"$ref":"#/$defs/id"},"amount_cny":{"$ref":"bounded-cash-buy.schema.json#/$defs/cash"}}
+    },
+    "buyPlan": {
+      "type":"object","additionalProperties":false,"required":["input","plan"],
+      "properties":{"input":{"$ref":"bounded-cash-buy.schema.json#/$defs/input"},"plan":{"$ref":"bounded-cash-buy.schema.json#/$defs/plan"}}
+    },
+    "buyResolution": {
+      "type":"object","additionalProperties":false,"required":["batch_id","outcome","result"],
+      "properties":{"batch_id":{"$ref":"#/$defs/id"},"outcome":{"$ref":"bounded-cash-buy.schema.json#/$defs/outcomeInput"},"result":{"$ref":"bounded-cash-buy.schema.json#/$defs/result"}}
+    },
+    "payload":{"oneOf":[{"$ref":"#/$defs/contribution"},{"$ref":"#/$defs/buyPlan"},{"$ref":"#/$defs/buyResolution"}]},
+    "kindPayload": {
+      "type":"object",
+      "allOf":[
+        {"if":{"properties":{"kind":{"const":"cash_contribution"}},"required":["kind"]},"then":{"properties":{"payload":{"$ref":"#/$defs/contribution"}}}},
+        {"if":{"properties":{"kind":{"const":"buy_plan"}},"required":["kind"]},"then":{"properties":{"payload":{"$ref":"#/$defs/buyPlan"}}}},
+        {"if":{"properties":{"kind":{"const":"buy_resolution"}},"required":["kind"]},"then":{"properties":{"payload":{"$ref":"#/$defs/buyResolution"}}}}
+      ]
+    },
+    "command": {
+      "type":"object","additionalProperties":false,"required":["command_id","at","kind","payload"],
+      "properties":{"command_id":{"$ref":"#/$defs/id"},"at":{"$ref":"#/$defs/instant"},"kind":{"enum":["cash_contribution","buy_plan","buy_resolution"]},"payload":{"$ref":"#/$defs/payload"}},
+      "allOf":[{"$ref":"#/$defs/kindPayload"}]
+    },
+    "event": {
+      "type":"object","additionalProperties":false,"required":["schema_version","sequence","command_id","at","kind","payload","previous_hash","before_state_hash","after_state_hash","event_hash"],
+      "properties":{"schema_version":{"const":"bounded-cash-event-v1"},"sequence":{"type":"integer","minimum":1,"maximum":512},"command_id":{"$ref":"#/$defs/id"},"at":{"$ref":"#/$defs/instant"},"kind":{"enum":["cash_contribution","buy_plan","buy_resolution"]},"payload":{"$ref":"#/$defs/payload"},"previous_hash":{"$ref":"#/$defs/hash"},"before_state_hash":{"$ref":"#/$defs/hash"},"after_state_hash":{"$ref":"#/$defs/hash"},"event_hash":{"$ref":"#/$defs/hash"}},
+      "allOf":[{"$ref":"#/$defs/kindPayload"}]
+    },
+    "journal": {
+      "type":"object","additionalProperties":false,"required":["schema_version","declaration","declaration_hash","events","head_hash","journal_hash"],
+      "properties":{"schema_version":{"const":"bounded-cash-journal-v1"},"declaration":{"$ref":"#/$defs/declaration"},"declaration_hash":{"$ref":"#/$defs/hash"},"events":{"type":"array","maxItems":512,"items":{"$ref":"#/$defs/event"}},"head_hash":{"$ref":"#/$defs/hash"},"journal_hash":{"$ref":"#/$defs/hash"}}
+    },
+    "state": {
+      "type":"object","additionalProperties":false,
+      "required":["schema_version","study_id","revision","last_event_at","settled_cash_cny","total_contributions_cny","reserved_cny","free_cash_cny","positions","quantity_steps","open_batches","closed_batches","used_order_ids","contribution_ids","execution_failure_count","state_hash"],
+      "properties":{"schema_version":{"const":"bounded-cash-state-v1"},"study_id":{"$ref":"#/$defs/id"},"revision":{"type":"integer","minimum":0,"maximum":512},"last_event_at":{"$ref":"#/$defs/instant"},"settled_cash_cny":{"$ref":"bounded-cash-buy.schema.json#/$defs/cash"},"total_contributions_cny":{"$ref":"#/$defs/derived"},"reserved_cny":{"$ref":"#/$defs/derived"},"free_cash_cny":{"$ref":"#/$defs/derived"},"positions":{"type":"object","maxProperties":20,"propertyNames":{"$ref":"#/$defs/id"},"additionalProperties":{"$ref":"#/$defs/derived"}},"quantity_steps":{"type":"object","maxProperties":20,"propertyNames":{"$ref":"#/$defs/id"},"additionalProperties":{"$ref":"#/$defs/derived"}},"open_batches":{"type":"object","maxProperties":20,"propertyNames":{"$ref":"#/$defs/id"},"additionalProperties":{"$ref":"#/$defs/buyPlan"}},"closed_batches":{"type":"object","maxProperties":512,"propertyNames":{"$ref":"#/$defs/id"},"additionalProperties":{"$ref":"#/$defs/hash"}},"used_order_ids":{"type":"array","maxItems":10240,"uniqueItems":true,"items":{"$ref":"#/$defs/id"}},"contribution_ids":{"type":"array","maxItems":512,"uniqueItems":true,"items":{"$ref":"#/$defs/id"}},"execution_failure_count":{"type":"integer","minimum":0,"maximum":10240},"state_hash":{"$ref":"#/$defs/hash"}}
+    }
+  }
+}
