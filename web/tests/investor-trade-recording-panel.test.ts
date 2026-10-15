@@ -136,6 +136,6 @@ test("account integration includes manual draft in CSV, selectors, reconciliatio
   assert.match(source, /!csvLocked && !reconciliationLocked && !tradeLocked/);
   assert.match(source, /readOnly=\{disabled \|\| reconciliationLocked \|\| tradeLocked/);
   assert.match(source, /onDraftLockChange=\{setTradeLocked\}/);
-  assert.match(source, /disabled=\{disabled \|\| busy \|\| csvLocked \|\| tradeLocked \|\| !visible\}/);
-  assert.match(source, /disabled=\{disabled \|\| busy \|\| csvLocked \|\| reconciliationLocked \|\| tradeLocked \|\| !visible\}/);
+  assert.match(source, /disabled=\{disabled \|\| busy \|\| csvLocked \|\| tradeLocked \|\| cashLocked \|\| !visible\}/);
+  assert.match(source, /disabled=\{disabled \|\| busy \|\| csvLocked \|\| reconciliationLocked \|\| tradeLocked \|\| cashLocked \|\| !visible\}/);
 });

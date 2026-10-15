@@ -50,7 +50,7 @@ export async function POST(request: Request) {
     const command = await readCommand(request), current = await requireMutationSession();
     if (current.sessionId !== initial.sessionId || current.userId !== initial.userId) throw new AuthError("SESSION_CHANGED", 401);
     assertRequestSessionBinding(request, current.sessionId);
-    if (command && typeof command === "object" && "action" in command && command.action === "record_linked_trade_fact") {
+    if (command && typeof command === "object" && "action" in command && ["record_linked_trade_fact", "record_linked_cash_fact"].includes(String(command.action))) {
       if (!request.headers.get("x-workbench-session-binding")) throw new AuthError("SESSION_BINDING_REQUIRED", 400);
       if (new URL(request.url).searchParams.size) throw new AuthError("INVALID_QUERY", 400);
     }

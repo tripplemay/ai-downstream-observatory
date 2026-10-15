@@ -48,6 +48,13 @@ const errorLabels: Record<string, string> = {
   INVESTOR_ACCOUNT_CAPACITY_REQUIRES_REVIEW: "账户资料超过本页安全读取上限，需先在高级入口复核范围。",
   INVESTOR_RECONCILIATION_CONTEXT_CONFLICT: "关联、账本事实或账户状态已更新。请重新核对范围，不要提交旧版本草稿。",
   INVESTOR_TRADE_CONTEXT_CONFLICT: "成交回录范围已变化。请刷新账户资料，重新核对事实后再回录。",
+  INVESTOR_CASH_CONTEXT_CONFLICT: "资金回录范围已变化。请刷新状态与账户资料，再核对已发生事实。",
+  INVESTOR_CASH_CAPACITY_REQUIRES_REVIEW: "资金资料超过简化入口安全范围，请使用高级账本复核，不截取部分记录。",
+  INVESTOR_CASH_ACCOUNT_DISABLED: "账户已停用，不能通过资金回录绕过停用限制。",
+  INVESTOR_CASH_INPUT_INVALID: "请核对实际资金方向、币种、正数金额、日期及独立来源。计划投入不是已发生事实。",
+  INVESTOR_CASH_SOURCE_SUPERSEDED: "该来源已被修正，不能再次入账。请核对原记录与修正链。",
+  INVESTOR_CASH_SOURCE_DUPLICATE_CONFLICT: "相同资金来源编号已有不同事实。请核对原件，不要换编号重复入账。",
+  INVESTOR_CASH_CHRONOLOGY_REQUIRES_REVIEW: "该资金日期早于已记事实，请通过高级账本复核历史顺序，不在此插入旧资金。",
   INVESTOR_TRADE_CAPACITY_REQUIRES_REVIEW: "回录资料超过安全读取上限，请先在高级账本复核。",
   INVESTOR_TRADE_ACCOUNT_DISABLED: "账户已停用，不能通过成交回录绕过停用限制。",
   INVESTOR_TRADE_INPUT_INVALID: "回录事实无效。请核对证券身份、币种、实际日期、数量、本金和费用。",
@@ -292,8 +299,9 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
       if (!alive.current || invalidated.current || generation.current !== sequence) return;
       setPending(null);
       const recordedTrade = receipt.action === "record_linked_trade_fact";
-      setNotice(recordedTrade ? "人工回录已受理，正在核对最新状态；系统没有下单，重复来源可能复用原事实。" : "记录已保存，正在核对最新状态；这不是成交或交易批准。");
-      if (await load(sequence)) { setEditing(false); setNotice(recordedTrade ? "人工事实回录已保存或复用原记录；系统没有下单或验证券商成交。请重新独立对账，并核对估值版本。" : "记录已保存；不代表已成交或已批准交易。"); }
+      const recordedCash = receipt.action === "record_linked_cash_fact";
+      setNotice(recordedCash ? "资金回录已受理，正在核对最新状态；不是新的转账操作，重复来源可能复用原事实。" : recordedTrade ? "人工回录已受理，正在核对最新状态；系统没有下单，重复来源可能复用原事实。" : "记录已保存，正在核对最新状态；这不是成交或交易批准。");
+      if (await load(sequence)) { setEditing(false); setNotice(recordedCash ? "资金事实已保存或复用原记录；未发起转账或确认计划资金。请重新独立对账，并核对估值版本。" : recordedTrade ? "人工事实回录已保存或复用原记录；系统没有下单或验证券商成交。请重新独立对账，并核对估值版本。" : "记录已保存；不代表已成交或已批准交易。"); }
     } catch (e) { if (alive.current && !invalidated.current) setError(e instanceof Error ? e.message : "INVESTOR_UNAVAILABLE"); }
     finally { if (alive.current && sequence === generation.current) setBusy(false); }
   }
