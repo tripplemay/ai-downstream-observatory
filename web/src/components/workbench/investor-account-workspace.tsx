@@ -133,10 +133,13 @@ export function InvestorAccountWorkspace({ state, binding, disabled, onCommand, 
           portfolio: book.id, ledgerRevision: book.ledger_revision, linkId: data.link.id, linkVersion: data.link.version, accountId: selectedAccount.id,
           accountRowVersion: selectedAccount.row_version }} accountName={selectedAccount.name} disabled={disabled || busy || csvLocked || reconciliationLocked || tradeLocked || !visible}
           onCommand={onCommand} onDraftLockChange={setCashLocked} /></div>}
-        {selectedAccount?.status === "disabled" ? <p className="mt-4 text-sm">该账户已停用，先通过高级账本核对状态，不在这里绕过停用限制。</p> : selectedAccount ? <div className="mt-5 min-w-0"><CsvBackgroundWorkspace portfolioId={book.id} accountId={selectedAccount.id} revision={book.ledger_revision}
+        {selectedAccount?.status === "disabled" ? <p className="mt-4 text-sm">该账户已停用，先通过高级账本核对状态，不在这里绕过停用限制。</p> : selectedAccount ? <details data-testid="optional-account-csv" className="mt-5 min-w-0 rounded-xl border p-4">
+          <summary className="cursor-pointer text-sm font-medium">批量导入 CSV（可选）{csvLocked && <span role="status"> · 请求处理中或仍待核对</span>}</summary>
+          <p className="mt-3 text-sm text-muted-foreground">少量资金或成交可直接逐笔回录。展开不提交任务，收起不清除草稿或取消已受理任务；未决请求仍须在这里核对。</p>
+          <div className="mt-4 min-w-0"><CsvBackgroundWorkspace portfolioId={book.id} accountId={selectedAccount.id} revision={book.ledger_revision}
           readOnly={disabled || reconciliationLocked || tradeLocked || cashLocked || data.read_only || !dataValid}
           readOnlyMessage={data.read_only ? undefined : cashLocked ? "资金草稿尚未结束，暂停 CSV 提交；不会取消已受理任务。" : tradeLocked ? "成交或交收草稿尚未结束，暂停 CSV 提交；不会取消已受理任务。" : reconciliationLocked ? "独立对账草稿或范围核对尚未结束，暂停 CSV 提交；不会取消已受理任务。" : disabled || !dataValid ? "当前资料或提交仍待核对，暂停新的 CSV 操作；不会推定先前请求失败。" : undefined}
-          onScopeLockChange={setCsvLocked} onRestorePendingScope={restoreScope} onCommitted={refresh} /></div> : <p className="mt-4 text-sm">先添加一个账户，再检查 CSV 小样。</p>}
+          onScopeLockChange={setCsvLocked} onRestorePendingScope={restoreScope} onCommitted={refresh} /></div></details> : <p className="mt-4 text-sm">先添加一个账户，再检查 CSV 小样。</p>}
       </section>}
       {book && selectedAccount && selectedAccount.status !== "disabled" && data.link && <InvestorTradeRecordingPanel scope={{ binding, workspace: state.workspace_id, revision: state.revision,
         portfolio: book.id, ledgerRevision: book.ledger_revision, linkId: data.link.id, linkVersion: data.link.version, accountId: selectedAccount.id,
