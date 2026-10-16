@@ -53,7 +53,6 @@ def main():
               "transport_fault": "one real committed cash POST response discarded before the browser receives it",
               "limits": ["invented personal account documents, not real broker or market acceptance",
                          "loopback self-signed HTTPS is not public TLS, container or production acceptance",
-                         "reload acceptance checks a fresh scoped response and hydrated UI, not global network quiescence; an abandoned reconciliation read prevented networkidle in a prior run",
                          "cash transcription and independent reconciliation are not a complete securities execution or valuation loop"]}
     base, endpoint = "https://127.0.0.1:3147", "/api/workbench/investor"
     yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
@@ -233,8 +232,8 @@ def main():
                       and current["latest"]["status"] == "matched" and rows()["ledger_events"] == funded["ledger_events"]
                       and rows()["postings"] == funded["postings"])
                 before_read = len(cash_posts())
-                page.goto(base + "/workbench/accounts", wait_until="domcontentloaded")
-                page.wait_for_selector("[data-hydrated=true]")
+                go("/workbench/accounts")
+                check("funded account reload reaches networkidle without an abandoned response")
                 fresh = get("/reconciliation?account=" + account_id)
                 check("reload independently returns current account and session-bound reconciliation", fresh["account_id"] == account_id
                       and fresh["session_binding"] == session["session_binding"] and fresh["latest"]["current_facts"])
