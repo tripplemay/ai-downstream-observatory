@@ -175,6 +175,19 @@ class DispatcherTests(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM market_batch_pages").fetchone()[0], 1)
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM market_publications").fetchone()[0], 0)
 
+    def test_bound_valuation_rejects_incomplete_or_wrong_mode_bindings_without_a_snapshot(self):
+        ledger_event(self.db, "opening", [("cash_settled", "100000"), ("opening_equity", "-100000")])
+        for index, (binding, mode) in enumerate((
+                (None, "restated"), ({"ledger_revision": True, "market_heads": {}}, "restated"),
+                ({"ledger_revision": 1, "market_heads": {}, "approved": True}, "restated"),
+                ({"ledger_revision": 1, "market_heads": {}}, "as_known"))):
+            with self.subTest(index=index):
+                self.request("req:invalid-bound:" + str(index), "valuation", {
+                    "cutoff_at": stamp(NOW), "rules": rules(), "mode": mode, "expected_inputs": binding})
+                with self.assertRaisesRegex(WorkbenchError, "CONTRACT_INVALID|INVALID_VALUATION_BINDING"):
+                    run_pending_once(self.db, "worker", clock=lambda: NOW)
+                self.assertEqual(self.db.execute("SELECT COUNT(*) FROM valuation_runs").fetchone()[0], 0)
+
     def test_unrelated_job_types_not_claimed(self):
         self.request("req:unrelated", "not_implemented", {})
         enqueue_job(self.db, "research_external", "p", "2025-01-03", "v1", now=NOW)

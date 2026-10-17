@@ -49,6 +49,11 @@ const errorLabels: Record<string, string> = {
   INVESTOR_RECONCILIATION_CONTEXT_CONFLICT: "关联、账本事实或账户状态已更新。请重新核对范围，不要提交旧版本草稿。",
   INVESTOR_TRADE_CONTEXT_CONFLICT: "成交回录范围已变化。请刷新账户资料，重新核对事实后再回录。",
   INVESTOR_CASH_CONTEXT_CONFLICT: "资金回录范围已变化。请刷新状态与账户资料，再核对已发生事实。",
+  INVESTOR_VALUATION_CONTEXT_CONFLICT: "账户、对账或行情版本已变化。请重新核对估值准备情况；不会换用新数据继续计算。",
+  INVESTOR_VALUATION_CAPACITY_REQUIRES_REVIEW: "全账本资料超过简化入口安全范围，请先做容量复核，不截取部分资料估值。",
+  INVESTOR_VALUATION_RECONCILIATION_REQUIRED: "全部账户必须先通过独立对账，包括停用账户；新的事实需要重新对账。",
+  INVESTOR_VALUATION_INPUT_INVALID: "请核对共同估值时点、各市场来源、交易日和汇率时效。",
+  INVESTOR_VALUATION_SOURCE_UNAVAILABLE: "所选来源未通过本用户、本账本的发布证据核验，请补齐来源后重试。",
   INVESTOR_CASH_CAPACITY_REQUIRES_REVIEW: "资金资料超过简化入口安全范围，请使用高级账本复核，不截取部分记录。",
   INVESTOR_CASH_ACCOUNT_DISABLED: "账户已停用，不能通过资金回录绕过停用限制。",
   INVESTOR_CASH_INPUT_INVALID: "请核对实际资金方向、币种、正数金额、日期及独立来源。计划投入不是已发生事实。",
@@ -300,8 +305,9 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
       setPending(null);
       const recordedTrade = receipt.action === "record_linked_trade_fact";
       const recordedCash = receipt.action === "record_linked_cash_fact";
-      setNotice(recordedCash ? "资金回录已受理，正在核对最新状态；不是新的转账操作，重复来源可能复用原事实。" : recordedTrade ? "人工回录已受理，正在核对最新状态；系统没有下单，重复来源可能复用原事实。" : "记录已保存，正在核对最新状态；这不是成交或交易批准。");
-      if (await load(sequence)) { setEditing(false); setNotice(recordedCash ? "资金事实已保存或复用原记录；未发起转账或确认计划资金。请重新独立对账，并核对估值版本。" : recordedTrade ? "人工事实回录已保存或复用原记录；系统没有下单或验证券商成交。请重新独立对账，并核对估值版本。" : "记录已保存；不代表已成交或已批准交易。"); }
+      const requestedValuation = receipt.action === "request_linked_valuation";
+      setNotice(requestedValuation ? "估值请求已受理，正在核对状态；尚不代表结果完整或可交易。" : recordedCash ? "资金回录已受理，正在核对最新状态；不是新的转账操作，重复来源可能复用原事实。" : recordedTrade ? "人工回录已受理，正在核对最新状态；系统没有下单，重复来源可能复用原事实。" : "记录已保存，正在核对最新状态；这不是成交或交易批准。");
+      if (await load(sequence)) { setEditing(false); setNotice(requestedValuation ? "估值已排队；核对估值任务结束后，在下方重新核对持仓对照。只有独立复核通过的完整结果才展示净值。" : recordedCash ? "资金事实已保存或复用原记录；未发起转账或确认计划资金。请重新独立对账，并核对估值版本。" : recordedTrade ? "人工事实回录已保存或复用原记录；系统没有下单或验证券商成交。请重新独立对账，并核对估值版本。" : "记录已保存；不代表已成交或已批准交易。"); }
     } catch (e) { if (alive.current && !invalidated.current) setError(e instanceof Error ? e.message : "INVESTOR_UNAVAILABLE"); }
     finally { if (alive.current && sequence === generation.current) setBusy(false); }
   }

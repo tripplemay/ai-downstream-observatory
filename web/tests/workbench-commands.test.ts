@@ -81,6 +81,22 @@ test("stale revisions, scope, missing actor and restore freeze prevent task writ
   } finally { f.close(); }
 });
 
+test("optional valuation input binding is closed, restated-only and exactly matches the command revision and selected scopes", () => {
+  const f = fixture(); try {
+    for (const [index, extra] of [
+      { mode: "restated", expected_inputs: null }, { mode: "restated", expected_inputs: { ledger_revision: true, market_heads: {} } },
+      { mode: "as_known", expected_inputs: { ledger_revision: 0, market_heads: {} } },
+      { mode: "restated", expected_inputs: { ledger_revision: 1, market_heads: {} } },
+      { mode: "restated", expected_inputs: { ledger_revision: 0, market_heads: {}, approved: true } },
+      { mode: "restated", expected_inputs: { ledger_revision: 0, market_heads: { unknown: { revision: 1, manifest_hash: "a".repeat(64) } } } },
+    ].entries()) assert.throws(() => enqueueWorkbenchTask(f.db, actor, { ...f.base, idempotency_key: "invalid-binding-" + index,
+      command_type: "valuation", payload: { ...valuation.payload, ...extra } }), /INVALID_VALUATION_BINDING/);
+    assert.equal((f.db.prepare("SELECT count(*) n FROM command_requests").get() as { n: number }).n, 0);
+    const result = enqueueWorkbenchTask(f.db, actor, { ...f.base, ...valuation, payload: { ...valuation.payload, mode: "restated", expected_inputs: { ledger_revision: 0, market_heads: {} } } });
+    assert.equal(result.status, "queued");
+  } finally { f.close(); }
+});
+
 test("new facts mark previous valuation stale and do not expose another portfolio tasks", () => {
   const f = fixture();
   try {

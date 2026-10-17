@@ -15,6 +15,7 @@ import { getInvestorAccountWorkspace } from "./accounts";
 import { reconcileInvestorAccount } from "./reconciliation";
 import { recordInvestorTradeFact } from "./trade-recording";
 import { recordInvestorCashFact } from "./cash-recording";
+import { requestInvestorValuation } from "./valuation";
 import type { AttachmentOptions } from "../ledger/attachments";
 import { fixedPolicyMonitorGap, fixedPolicyUnsupported } from "./fixed-policy";
 import { appendInvestorFunding, readInvestorFunding } from "./funding";
@@ -197,6 +198,11 @@ export function executeInvestorCommand(db: Database.Database, actor: Actor, raw:
       auditId = writeAudit(db, owner, input.action, ws.id, input, { ledger_event_id: recorded.event_id, ledger_revision: recorded.revision,
         ledger_audit_id: recorded.audit_id, duplicate: recorded.duplicate === true, warnings: recorded.warnings,
         basis: "operator_external_cash_transcription_not_broker_file", execution_authorized: false }, now);
+    } else if (input.action === "request_linked_valuation") {
+      const request = requestInvestorValuation(db, actor, input, now, options);
+      resourceId = request.request_id;
+      auditId = writeAudit(db, owner, input.action, ws.id, input, { request_id: resourceId, payload_hash: request.payload_hash,
+        status: request.status, basis: input.basis, execution_authorized: false }, now);
     } else if (input.action === "reconcile_linked_account") {
       const run = reconcileInvestorAccount(db, actor, input, now, options);
       resourceId = run.id;
@@ -315,6 +321,7 @@ export function getInvestorState(db: Database.Database, actor: Actor, now = new 
 }
 
 export function isInvestorClientError(code: string) {
+  if (/^INVESTOR_VALUATION_(CONTEXT_CONFLICT|CAPACITY_REQUIRES_REVIEW|RECONCILIATION_REQUIRED|INPUT_INVALID|SOURCE_UNAVAILABLE)$/.test(code)) return true;
   if (/^INVESTOR_CASH_(CONTEXT_CONFLICT|CAPACITY_REQUIRES_REVIEW|ACCOUNT_DISABLED|INPUT_INVALID|SOURCE_SUPERSEDED|SOURCE_DUPLICATE_CONFLICT|CHRONOLOGY_REQUIRES_REVIEW)$/.test(code)) return true;
   if (/^INVESTOR_TRADE_(CONTEXT_CONFLICT|CAPACITY_REQUIRES_REVIEW|ACCOUNT_DISABLED|INPUT_INVALID|SOURCE_SUPERSEDED|SOURCE_DUPLICATE_CONFLICT|CHRONOLOGY_REQUIRES_REVIEW|POSITION_HISTORY_REQUIRED|SETTLEMENT_REVIEW_REQUIRED)$/.test(code)) return true;
   return /^INVESTOR_(VERSION_CONFLICT|DUPLICATE_CONFLICT|PROFILE_REQUIRED|OBSERVATION_OUT_OF_SCOPE|PLAN_OUT_OF_SCOPE|MODEL_OUT_OF_SCOPE|ACCOUNT_OUT_OF_SCOPE|ACCOUNT_INPUT_INVALID|ACCOUNT_CAPACITY_REQUIRES_REVIEW|LEDGER_VERSION_CONFLICT|RECONCILIATION_CONTEXT_CONFLICT|RECONCILIATION_INPUT_INVALID|RECONCILIATION_CUTOFF_UNSUPPORTED|RECONCILIATION_CAPACITY_REQUIRES_REVIEW|FUNDING_HORIZON_CONFLICT|FUNDING_CURRENT_PLAN_REQUIRED|NO_DECISION_REQUIRED|OBSERVATION_NOT_CURRENT|PROFILE_CHANGED|PLAN_EXPIRED|PLAN_SOURCE_UNAVAILABLE|MONITOR_FIXED_POLICY_UNSUPPORTED|INVALID_CLOCK)$/.test(code);

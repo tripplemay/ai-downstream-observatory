@@ -21,9 +21,12 @@ def main():
     parser.add_argument("--worker-python", required=True)
     parser.add_argument("--with-securities", action="store_true", help="Continue through invented security registration, buy/sell, partial settlements and independent position reconciliation")
     parser.add_argument("--with-valuation", action="store_true", help="After securities, use the isolated Python fixture helper to calculate a three-currency NAV and verify later-fact invalidation")
+    parser.add_argument("--with-native-valuation", action="store_true", help="Use the ordinary valuation UI and real queued core worker instead of direct fixture valuation (requires --with-valuation)")
     args = parser.parse_args()
     if args.with_valuation and not args.with_securities:
         parser.error("--with-valuation requires --with-securities")
+    if args.with_native_valuation and not args.with_valuation:
+        parser.error("--with-native-valuation requires --with-valuation")
     root = Path(__file__).resolve().parents[2]
     db, output = Path(args.db).resolve(strict=True), Path(args.output).resolve()
     if (db.parent.parent != Path(tempfile.gettempdir()).resolve()
@@ -45,7 +48,7 @@ def main():
         return json.loads(child.stdout)
 
     def sources():
-        names = ("contracts", "migrations", "web/src", "web/scripts", "tests/investor")
+        names = ("contracts", "migrations", "web/src", "web/scripts", "worker", "tests/investor")
         files = [f for name in names for f in (root / name).rglob("*")
                  if f.is_file() and f.suffix in (".py", ".ts", ".tsx", ".mjs", ".json", ".sql")]
         return {str(f.relative_to(root)): sha256(f.read_bytes()).hexdigest() for f in sorted(files)}
@@ -57,11 +60,12 @@ def main():
               "source_sha256": sources(), "production_changed": False, "real_provider_called": False,
               "securities_transcription": args.with_securities,
               "valuation_fixture": args.with_valuation,
+              "native_valuation_command": args.with_native_valuation,
               "external_ai_called": False, "response_payloads_mocked": False,
-              "transport_fault": "one real committed cash POST response discarded before the browser receives it",
+              "transport_fault": "real committed cash and valuation POST responses each discarded once before the browser receives them" if args.with_native_valuation else "one real committed cash POST response discarded before the browser receives it",
               "limits": ["invented personal account documents, not real broker or market acceptance",
                          "loopback self-signed HTTPS is not public TLS, container or production acceptance",
-                         "valuation setup uses the isolated Python fixture helper, not a native user valuation command or production ingestion",
+                         "market data remains explicitly fictional; native mode publishes through authenticated queue and submits valuation through real UI" if args.with_native_valuation else "valuation setup uses the isolated Python fixture helper, not a native user valuation command or production ingestion",
                          "recorded account facts, snapshots and independent reconciliation are not account-level executable advice or broker certification"]}
     base, endpoint = "https://127.0.0.1:3147", "/api/workbench/investor"
     yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
@@ -383,13 +387,69 @@ def main():
                                 "approval_evidence": "FICTIONAL SOFTWARE TEST ONLY, NOT PROVIDER EVIDENCE", "price_scope_by_market": {"CN": "browser:CN"},
                                 "expected_sessions": {"CN": yesterday}, "corporate_actions_complete": {listing_id: True},
                                 "fx_scope": "browser:FX", "max_fx_age_seconds": 86400}}
-                        child = subprocess.run([args.worker_python, "-m", "tests.investor.holdings_fixture", "--db", str(db)], cwd=root,
-                            input=json.dumps(request), capture_output=True, text=True, timeout=60,
-                            env={"PATH": os.environ["PATH"], "HOME": os.environ["HOME"], "TMPDIR": tempfile.gettempdir(),
-                                 "WORKBENCH_DATA_DIR": str(db.parent / "auth")})
-                        (output / "valuation-fixture.log").write_text(child.stdout + child.stderr)
-                        assert child.returncode == 0, "FICTIONAL_PYTHON_VALUATION_FAILED"
-                        valuation = json.loads(child.stdout)
+                        worker_env = {"PATH": os.environ["PATH"], "HOME": os.environ["HOME"], "TMPDIR": tempfile.gettempdir(), "WORKBENCH_DATA_DIR": str(db.parent / "auth")}
+                        if args.with_native_valuation:
+                            def core(label):
+                                current_time = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                                child = subprocess.run([args.worker_python, "-m", "tests.investor.valuation_fixture", "--db", str(db), "--now", current_time],
+                                    cwd=root, capture_output=True, text=True, timeout=60, env=worker_env)
+                                (output / (label + ".log")).write_text(child.stdout + child.stderr)
+                                assert child.returncode == 0, "FICTIONAL_CORE_QUEUE_FAILED"
+
+                            for document_value in (prices, rates):
+                                response = context.request.post(base + "/api/workbench", headers={**headers, "Origin": base}, data={"action": "enqueue_task", "command": {
+                                    "portfolio_id": request["portfolio_id"], "expected_revision": get("/accounts")["books"][0]["ledger_revision"],
+                                    "idempotency_key": document_value["batch"]["id"], "command_type": "market_ingest", "payload": {"document": document_value, "publish": True}}})
+                                assert response.status == 200, "FICTIONAL_SOURCE_QUEUE_FAILED"
+                            core("native-market-publication")
+                            go("/workbench/accounts")
+                            valuation_panel = page.locator('section[aria-label="组合估值"]')
+                            valuation_panel.get_by_role("button", name="核对估值准备情况与任务", exact=True).click()
+                            expect(valuation_panel.get_by_role("button", name="选择来源并确认本次估值", exact=True)).to_be_enabled(timeout=30000)
+                            check("native preparation verifies whole book and both fictional owner-scoped published sources", len(get("/valuation")["sources"]) == 2 and not get("/valuation")["gaps"])
+                            valuation_panel.get_by_role("button", name="选择来源并确认本次估值", exact=True).click()
+                            expect(page.get_by_label("账户导入目标", exact=True)).to_be_disabled()
+                            expect(panel.get_by_role("button", name="录入已到账或已转出资金", exact=True)).to_be_disabled()
+                            valuation_panel.get_by_label("A 股价格来源", exact=True).select_option("browser:CN")
+                            valuation_panel.get_by_label("A 股预期最近交易日", exact=True).fill(yesterday)
+                            valuation_panel.get_by_label("汇率来源", exact=True).select_option("browser:FX")
+                            valuation_panel.get_by_label("允许的汇率最大时效", exact=True).select_option("86400")
+                            valuation_panel.get_by_label("本次规则核查的独立资料编号或说明", exact=True).fill("FICTIONAL USER RULE REVIEW, NOT PROVIDER CERTIFICATION")
+                            valuation_panel.get_by_role("checkbox").check()
+                            capture("native-valuation-draft")
+                            lost_valuation = []
+
+                            def discard_valuation_once(route):
+                                if route.request.method == "POST" and route.request.post_data_json.get("action") == "request_linked_valuation" and not lost_valuation:
+                                    response = route.fetch()
+                                    assert response.status == 200
+                                    lost_valuation.append(response.json())
+                                    route.abort("failed")
+                                else:
+                                    route.continue_()
+
+                            page.route(base + endpoint, discard_valuation_once)
+                            valuation_panel.get_by_role("button", name="提交本次组合估值", exact=True).click()
+                            expect(retry).to_be_enabled(timeout=30000)
+                            check("unknown valuation response retains one accepted queued request, not a successful NAV", len(lost_valuation) == 1 and get("/valuation")["task"]["status"] == "queued" and get("/holdings")["snapshot"] is None)
+                            retry.click()
+                            expect(retry).to_have_count(0, timeout=30000)
+                            page.unroute(base + endpoint, discard_valuation_once)
+                            valuation_posts = [r["raw_body"] for r in requests if r["body"] and r["body"].get("action") == "request_linked_valuation"]
+                            check("native valuation lost-response retry preserves exact bytes and original idempotency", len(valuation_posts) == 2 and len(set(valuation_posts)) == 1)
+                            core("native-user-valuation")
+                            expect(valuation_panel.get_by_role("button", name="核对估值准备情况与任务", exact=True)).to_be_enabled(timeout=30000)
+                            valuation_panel.get_by_role("button", name="核对估值准备情况与任务", exact=True).click()
+                            expect(valuation_panel).to_contain_text("后台计算已结束", timeout=30000)
+                            result = get("/holdings")["snapshot"]
+                            valuation = {"quality": "complete" if result else "not_complete", "nav_cny": result["nav_cny"] if result else None, "real_provider_called": False}
+                            check("native queued computation produces exactly one immutable valuation", len(rows()["valuation_runs"]) == 1)
+                        else:
+                            child = subprocess.run([args.worker_python, "-m", "tests.investor.holdings_fixture", "--db", str(db)], cwd=root,
+                                input=json.dumps(request), capture_output=True, text=True, timeout=60, env=worker_env)
+                            (output / "valuation-fixture.log").write_text(child.stdout + child.stderr)
+                            assert child.returncode == 0, "FICTIONAL_PYTHON_VALUATION_FAILED"
+                            valuation = json.loads(child.stdout)
                         check("actual Python valuation includes six units and all three currency cash balances", valuation["quality"] == "complete"
                               and valuation["nav_cny"] == "2572.589" and valuation["real_provider_called"] is False)
                         holdings = page.locator('section[aria-label="真实组合对照"]')
@@ -400,8 +460,9 @@ def main():
                         check("real holdings HTTP and hydrated UI verify the exact NAV without fabricating a target or order", snapshot["snapshot"]["nav_cny"] == "2572.589"
                               and snapshot["comparison"] is None and snapshot["execution_authorized"] is False
                               and any(c["category"] == "security" and c["settled_quantity"] == "6" for c in snapshot["snapshot"]["components"]))
+                        valuation_protected = tuple(t for t in protected if not args.with_native_valuation or t not in ("job_runs", "outbox"))
                         check("valuation calculation and display never rewrite recorded facts or strategy authority", rows()["ledger_events"] == settled_rows["ledger_events"]
-                              and rows()["postings"] == settled_rows["postings"] and all(rows()[t] == frozen[t] for t in protected))
+                              and rows()["postings"] == settled_rows["postings"] and all(rows()[t] == frozen[t] for t in valuation_protected))
                         capture("securities-valued")
                         fill("CNY", "deposit", "1", "ui-after-valuation")
                         panel.get_by_role("button", name="保存已发生的资金事实", exact=True).click()

@@ -357,10 +357,18 @@ def command_handler(connection, clock=None, lease_seconds=300, stop_requested=No
                 return JobCommit({"performance_id": result["id"], "quality": result["quality"], "method": result["method"]})
             return {"effect": persist}
         if job["job_type"] == "valuation":
-            if not isinstance(payload, dict) or set(payload) - {"cutoff_at", "rules", "mode"} or not {"cutoff_at", "rules"} <= set(payload):
+            if not isinstance(payload, dict) or set(payload) - {"cutoff_at", "rules", "mode", "expected_inputs"} or not {"cutoff_at", "rules"} <= set(payload):
                 raise WorkbenchError("INVALID_VALUATION_COMMAND")
+            binding = payload.get("expected_inputs")
+            if "expected_inputs" in payload:
+                validate_contract(binding, "valuation-binding.schema.json")
+                if payload.get("mode") != "restated":
+                    raise WorkbenchError("INVALID_VALUATION_BINDING")
             prepared = prepare_valuation(connection, request["portfolio_id"], payload["cutoff_at"], payload["rules"],
                                          payload.get("mode", "as_known"), now=clock())
+            if binding is not None and (binding["ledger_revision"] != prepared.ledger_revision
+                                        or binding["market_heads"] != prepared.market_heads):
+                return {"result": {"code": "VALUATION_INPUTS_CHANGED", "execution_authorized": False}, "outcome": "skipped"}
             def persist(db):
                 result = persist_valuation(db, prepared, now=clock())
                 return JobCommit({"valuation_id": result["id"], "quality": result["quality"], "nav_cny": result["nav_cny"]})
