@@ -6,10 +6,14 @@ import { Input } from "@/components/ui/input";
 import { useSessionBoundary } from "@/components/session-boundary";
 import { SESSION_INVALIDATED_EVENT } from "@/components/session-boundary-state";
 import type { ValuationContext } from "@/server/investor/valuation-schemas";
-import { blankValuationDraft, buildValuationIntent, parseValuationContext, type ValuationDraft, type ValuationScope } from "./investor-valuation-client";
+import { preparedValuationDraft, buildValuationIntent, parseValuationContext, type ValuationDraft, type ValuationScope } from "./investor-valuation-client";
 
 const field = "flex min-w-0 flex-col gap-2 text-sm", select = "h-11 w-full min-w-0 rounded-lg border bg-background px-3";
 const marketLabels = { CN: "A 股", HK: "港股", US: "美股" };
+const preparationLabels = { CALENDAR_REQUIRED: "缺少已审阅日历，不猜交易日", CALENDAR_UNUSABLE: "日历范围或审阅证据不足，不推断节假日",
+  CALENDAR_SESSIONS_DIFFER: "同市场各交易所的完成交易日不同，先核对估值口径", PRICE_SOURCE_REQUIRED: "没有完整覆盖标的和交易日的来源，先补数据",
+  PRICE_SOURCE_AMBIGUOUS: "多个来源均有覆盖，需要你选择", FX_SOURCE_REQUIRED: "缺少完整覆盖外币、时点和可用期限的汇率来源",
+  FX_SOURCE_AMBIGUOUS: "多个汇率来源均有覆盖，需要你选择" };
 const taskLabels = { queued: "已排队", running: "计算中", succeeded: "后台计算已结束", partial: "后台仅完成部分", failed: "任务失败",
   skipped: "任务已停止，请核对输入版本", retry_queued: "后台等待重试", cancelled: "任务已取消" };
 export function InvestorValuationPanel({ scope, disabled, onCommand, onDraftLockChange }: { scope: ValuationScope; disabled: boolean;
@@ -75,18 +79,23 @@ export function InvestorValuationPanel({ scope, disabled, onCommand, onDraftLock
       {context.task && <p role="status">最近任务：{taskLabels[context.task.status]}。任务结束不等于估值完整；请点击下方“复核对照”独立复核结果。</p>}
       {context.gaps.length > 0 ? <p role="status">估值尚未就绪：全部账户（含停用账户）必须通过独立原件对账，且对账后没有新事实。先完成或修复上方各账户对账，再核对准备情况。</p> : <>
         <p className="break-words">共同估值截至：{context.cutoff_at} · 账本版本 {context.ledger_revision} · {context.accounts.length} 个账户。这是各账户已核对范围的最早截至时点，不是实时余额。</p>
-        {!draft && <Button disabled={locked || !!pendingTask} onClick={() => { setDraft(blankValuationDraft(context)); setError(""); }}>选择来源并确认本次估值</Button>}
+        <div className="rounded-xl border p-3 text-muted-foreground"><p>系统按已审阅日历准备交易日，仅在时点和标的覆盖完整且来源唯一时预填。人工来源声明仍不是供应商认证；公司行动、汇率容忍时效和最终提交不自动确认。</p>
+          {context.preparation.markets.map(row => <p key={row.market} className="mt-2">{marketLabels[row.market]}：{row.expected_session ? `日历推导 ${row.expected_session}` : "交易日待核对"} · {row.suggested_scope ? "已找到唯一覆盖来源（待你确认）" : row.gaps.map(code => preparationLabels[code]).join("；")}</p>)}
+          {context.preparation.fx.gap && <p className="mt-2">汇率：{preparationLabels[context.preparation.fx.gap]}</p>}
+        </div>
+        {!draft && <Button disabled={locked || !!pendingTask} onClick={() => { setDraft(preparedValuationDraft(context)); setError(""); }}>选择来源并确认本次估值</Button>}
       </>}
       {draft && <form className="min-w-0 space-y-5" onSubmit={submit}><fieldset disabled={locked} className="min-w-0 space-y-5">
         {draft.prices.map((price, index) => <div key={price.market} className="grid min-w-0 gap-4 sm:grid-cols-2">
           <label className={field}>{marketLabels[price.market]}价格来源<select aria-label={`${marketLabels[price.market]}价格来源`} className={select} required value={price.scope} onChange={event => edit({ prices: draft.prices.map((row, i) => i === index ? { ...row, scope: event.target.value } : row) })}><option value="">请选择，不自动认证</option>{context.sources.filter(row => row.batch_type === "prices" && row.markets.includes(price.market)).map(row => <option key={row.scope} value={row.scope}>{row.scope} · v{row.revision} · {row.mode === "provider_observed" ? "采集回执已核验" : "人工来源声明（非供应商认证）"}</option>)}</select></label>
-          <label className={field}>{marketLabels[price.market]}预期最近交易日<Input type="date" required value={price.session} onChange={event => edit({ prices: draft.prices.map((row, i) => i === index ? { ...row, session: event.target.value } : row) })} /></label>
+          <label className={field}>{marketLabels[price.market]}预期最近交易日<Input type="date" required readOnly={!!context.preparation.markets.find(row => row.market === price.market)?.expected_session} value={price.session} onChange={event => edit({ prices: draft.prices.map((row, i) => i === index ? { ...row, session: event.target.value } : row) })} /></label>
         </div>)}
         {context.currencies.some(currency => currency !== "CNY") && <div className="grid min-w-0 gap-4 sm:grid-cols-2"><label className={field}>汇率来源<select aria-label="汇率来源" className={select} required value={draft.fxScope} onChange={event => edit({ fxScope: event.target.value })}><option value="">请选择</option>{context.sources.filter(row => row.batch_type === "fx").map(row => <option key={row.scope} value={row.scope}>{row.scope} · v{row.revision} · {row.mode === "provider_observed" ? "采集回执已核验" : "人工来源声明"}</option>)}</select></label>
           <label className={field}>允许的汇率最大时效<select aria-label="允许的汇率最大时效" className={select} required value={draft.fxAge} onChange={event => edit({ fxAge: event.target.value })}><option value="">请核对研究口径后选择</option>{[[86400, "1 天"], [259200, "3 天"], [604800, "7 天"], [2592000, "30 天"]].map(([seconds, label]) => <option key={seconds} value={seconds}>{label}</option>)}</select></label></div>}
+        {context.preparation.fx.candidates.find(row => row.scope === draft.fxScope) && <p className="text-muted-foreground">所选来源最旧汇率距共同估值时点 {context.preparation.fx.candidates.find(row => row.scope === draft.fxScope)!.oldest_age_seconds} 秒。容忍上限仍由你选择；超期应更新数据，不为消除缺口而扩大时效。</p>}
         <p className="text-muted-foreground">来源仅列出本用户在本账本提交且已发布、可核验的价格/汇率。无可选项时先补齐行情；不使用演示数据、猜测价格或默认汇率。</p>
         {context.listings.length > 0 && <p className="break-words">需核查公司行动的历史标的：{context.listings.map(row => `${row.ticker} (${marketLabels[row.market]})`).join("、")}。为覆盖共同截至时点，包含曾记账标的；不表示它们当前仍持有。</p>}
-        <label className={field}>本次规则核查的独立资料编号或说明<Input required maxLength={500} autoComplete="off" value={draft.reference} onChange={event => edit({ reference: event.target.value })} /></label>
+        <label className={field}>本次规则核查依据或补充说明<Input required maxLength={500} autoComplete="off" value={draft.reference} onChange={event => edit({ reference: event.target.value })} /></label>
         <label className="flex items-start gap-3"><input type="checkbox" className="mt-1" checked={draft.acknowledged} onChange={event => setDraft(value => value ? { ...value, acknowledged: event.target.checked } : value)} />我已核查截至上述时点的来源、当地交易日及汇率口径；涉及标的的分红、拆并股等公司行动已完整入账。不确定时先补资料；本次仅请求估值，不认证供应商、不批准交易。</label>
         <div className="flex flex-wrap gap-3"><Button disabled={locked || !draft.acknowledged || !!pendingTask}>提交本次组合估值</Button><Button type="button" variant="outline" onClick={() => { setDraft(null); setError(""); }}>取消估值草稿</Button></div>
       </fieldset></form>}

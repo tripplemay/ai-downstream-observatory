@@ -9,6 +9,7 @@ import { getInvestorAccountWorkspace } from "./accounts";
 import { readInvestorReconciliation, reconciliationReadOrderSql } from "./reconciliation-evidence";
 import { holdingsInstantMicros } from "./holdings-schemas";
 import { valuationContextSchema, valuationGapCodes, valuationIntentSchema, type ValuationContext, type ValuationIntent } from "./valuation-schemas";
+import { prepareInvestorValuationInputs } from "./valuation-preparation";
 
 function capacity(): never { throw new Error("INVESTOR_VALUATION_CAPACITY_REQUIRES_REVIEW"); }
 function latestTask(db: Database.Database, actor: Actor, portfolio: string, workspace: string): ValuationContext["task"] {
@@ -93,7 +94,7 @@ export function getInvestorValuationContext(db: Database.Database, actor: Actor,
     }
     if (!accounts.length) gaps.push("ACCOUNT_BOOK_EMPTY");
     // Include historical movements: the common reconciled cutoff can precede the latest positions.
-    const listings = db.prepare(`SELECT DISTINCT l.id,l.ticker,l.market,l.currency FROM listings l WHERE l.id IN (
+    const listings = db.prepare(`SELECT DISTINCT l.id,l.ticker,l.market,l.exchange,l.currency FROM listings l WHERE l.id IN (
       SELECT p.listing_id FROM position_movements p JOIN ledger_events e ON e.id=p.event_id WHERE e.portfolio_id=? UNION
       SELECT p.listing_id FROM security_transit_movements p JOIN ledger_events e ON e.id=p.event_id WHERE e.portfolio_id=?) ORDER BY l.id LIMIT 201`)
       .all(book.id, book.id) as ValuationContext["listings"];
@@ -102,10 +103,14 @@ export function getInvestorValuationContext(db: Database.Database, actor: Actor,
     if (listings.length > 200 || currencies.length > 20) capacity();
     const cutoffs = accounts.flatMap(row => row.reconciliation ? [row.reconciliation.cutoff_at] : [])
       .sort((a, b) => holdingsInstantMicros(a)! < holdingsInstantMicros(b)! ? -1 : 1);
-    const identity = { schema_version: "investor-valuation-v1" as const, workspace_id: scope.workspace_id!, workspace_revision: scope.workspace_revision,
+    const cutoff = gaps.length ? null : cutoffs[0] ?? null, sourceChoices = sources(db, actor, book.id, now);
+    const nativeCurrencies = [...new Set([...currencies.map(row => row.currency), ...listings.map(row => row.currency)])].sort();
+    if (nativeCurrencies.length > 20) capacity();
+    const preparation = prepareInvestorValuationInputs(db, actor, book.id, cutoff, listings, nativeCurrencies, sourceChoices, now);
+    const identity = { schema_version: "investor-valuation-v2" as const, workspace_id: scope.workspace_id!, workspace_revision: scope.workspace_revision,
       portfolio_id: book.id, ledger_revision: book.ledger_revision, link_id: link.id, link_version: link.version,
-      cutoff_at: gaps.length ? null : cutoffs[0] ?? null, accounts, listings, currencies: currencies.map(row => row.currency),
-      sources: sources(db, actor, book.id, now), gaps, basis: "metadata_only_whole_book_historical_requirements" as const, execution_authorized: false as const };
+      cutoff_at: cutoff, accounts, listings, currencies: nativeCurrencies, sources: sourceChoices, preparation, gaps,
+      basis: "metadata_only_whole_book_historical_requirements" as const, execution_authorized: false as const };
     return valuationContextSchema.parse({ ...identity, context_hash: hash(identity), checked_at: now, read_only: scope.read_only,
       task: latestTask(db, actor, book.id, scope.workspace_id!) });
   }).deferred();
@@ -132,6 +137,8 @@ export function requestInvestorValuation(db: Database.Database, actor: Actor, ra
       heads[source.scope] = { revision: source.revision, manifest_hash: source.manifest_hash };
     }
     for (const price of input.prices) {
+      const prepared = context.preparation.markets.find(row => row.market === price.market);
+      if (prepared?.expected_session && prepared.expected_session !== price.expected_session) throw new Error("INVESTOR_VALUATION_INPUT_INVALID");
       const zone = { CN: "Asia/Shanghai", HK: "Asia/Hong_Kong", US: "America/New_York" }[price.market];
       const parts = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(input.cutoff_at));
       const day = ["year", "month", "day"].map(name => parts.find(part => part.type === name)!.value).join("-");
@@ -143,6 +150,7 @@ export function requestInvestorValuation(db: Database.Database, actor: Actor, ra
         rules: { schema_version: "valuation-rules-v1", approved: true, approval_evidence: input.source_reference,
           price_scope_by_market: Object.fromEntries(input.prices.map(row => [row.market, row.scope])),
           expected_sessions: Object.fromEntries(input.prices.map(row => [row.market, row.expected_session])),
+          calendar_checks: context.preparation.markets.flatMap(row => row.calendar_checks),
           corporate_actions_complete: Object.fromEntries(context.listings.map(row => [row.id, true])),
           max_fx_age_seconds: input.fx?.max_age_seconds ?? 0, ...(input.fx ? { fx_scope: input.fx.scope } : {}) } } }, now);
   }).immediate();

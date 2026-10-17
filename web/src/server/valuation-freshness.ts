@@ -18,6 +18,7 @@ import { Decimal } from "./ledger/decimal";
 import { ledgerFactQualityAt } from "./ledger/fact-quality-db";
 import { verifiedMarketSource } from "./market-source";
 import { verifiedPriceCalendarSession } from "./market-price-source";
+import { verifyValuationCalendars } from "./valuation-calendars";
 
 type ObjectValue = Record<string, unknown>;
 type Valuation = { id: string; market_manifest: string; ledger_revision: number };
@@ -90,12 +91,12 @@ function localDayBounds(day: string, zone: string): [bigint, bigint] {
   };
   return [boundary(false), boundary(true)];
 }
-function observedInstant(observation: ObjectValue): bigint | undefined {
+export function observedInstant(observation: ObjectValue): bigint | undefined {
   if (observation.time_precision === "second") return instant(observation.observed_at);
   if (observation.time_precision !== "date" || typeof observation.observed_at !== "string" || typeof observation.source_timezone !== "string") return;
   try { return localDayBounds(observation.observed_at, observation.source_timezone)[1]; } catch { return; }
 }
-function chosenObservation(rows: ObjectValue[], cutoff: bigint, knownAt: bigint): ObjectValue | undefined {
+export function chosenObservation(rows: ObjectValue[], cutoff: bigint, knownAt: bigint): ObjectValue | undefined {
   const eligible = rows.flatMap(row => {
     const observed = observedInstant(row), ingested = instant(row.ingested_at), published = row.published_at === null || row.published_at === undefined ? ingested : instant(row.published_at);
     return observed !== undefined && ingested !== undefined && published !== undefined && observed <= cutoff && ingested <= knownAt && published <= knownAt ? [{ row, order: [observed, published, ingested] }] : [];
@@ -230,6 +231,10 @@ function inspectValuation(db: Database.Database, run: Valuation) {
     return { issues: [...issues, "INPUT_MANIFEST_INVALID"], scopes, manifest, stored };
   }
   const rules = object(manifest.rules)!;
+  if (stored && rules.calendar_checks !== undefined) try {
+    verifyValuationCalendars(db, stored.portfolio_id, stored.cutoff_at, rules.calendar_checks,
+      object(rules.expected_sessions)!, String(object(manifest.ledger_fact_quality)?.knowledge_at));
+  } catch { issues.push("VALUATION_CALENDAR_EVIDENCE_INVALID"); }
   if (rules.approved !== true) issues.push("VALUATION_QUALITY_RULES_UNAPPROVED");
   const publications = object(manifest.publications)!;
   const items = db.prepare("SELECT account_id,item_type,listing_id,currency,amount,fx_rate,value_cny,evidence_json FROM valuation_items WHERE run_id=?").all(run.id) as Item[];
@@ -431,14 +436,24 @@ function restatedReferenceChanged(db: Database.Database, publication: Publicatio
   try { verifiedMarketSource(db, publication.batch_id); return false; } catch { return true; }
 }
 
+function restatedCalendarChanged(db: Database.Database, stored: StoredValuation | undefined, manifest: ObjectValue | undefined): boolean {
+  if (!stored || manifest?.mode !== "restated" || object(manifest.rules)?.calendar_checks === undefined) return false;
+  try {
+    const rules = object(manifest.rules)!;
+    verifyValuationCalendars(db, stored.portfolio_id, stored.cutoff_at, rules.calendar_checks, object(rules.expected_sessions)!, new Date().toISOString(), true);
+    return false;
+  } catch { return true; }
+}
+
 export function valuationFreshness(db: Database.Database, run: Valuation, currentRevision: number): string[] {
-  const { issues, scopes, manifest } = inspectValuation(db, run);
+  const { issues, scopes, manifest, stored } = inspectValuation(db, run);
   if (run.ledger_revision !== currentRevision) issues.push("LEDGER_REVISION_CHANGED");
   // As-known still needs complete evidence, but a newer publication cannot rewrite its history.
   if (manifest?.mode === "restated") for (const [scope, publication] of scopes) {
     if (!headMatches(db, scope, publication)) issues.push("RESTATED_MARKET_CHANGED:" + scope);
     if (restatedReferenceChanged(db, publication)) issues.push("RESTATED_MARKET_REFERENCE_CHANGED:" + scope);
   }
+  if (restatedCalendarChanged(db, stored, manifest)) issues.push("RESTATED_VALUATION_CALENDAR_CHANGED");
   return [...new Set(issues)];
 }
 
@@ -469,6 +484,7 @@ export function performanceFreshness(db: Database.Database, run: { id?: string; 
     previousCutoff = cutoff;
     const evidence = inspectValuation(db, row);
     issues.push(...evidence.issues);
+    if (restatedCalendarChanged(db, row, evidence.manifest)) issues.push("RESTATED_VALUATION_CALENDAR_CHANGED");
     if (evidence.manifest?.mode !== manifest.mode) issues.push("VALUATION_EVIDENCE_INVALID");
     for (const [scope, publication] of evidence.scopes) {
       scopes.add(scope);

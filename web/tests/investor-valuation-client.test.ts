@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { blankValuationDraft, buildValuationIntent, parseValuationContext } from "../src/components/workbench/investor-valuation-client";
-import { valuationContext as c, valuationScope as scope, valuationBinding as binding, validValuationDraft } from "./investor-valuation-fixture";
+import { blankValuationDraft, preparedValuationDraft, buildValuationIntent, parseValuationContext } from "../src/components/workbench/investor-valuation-client";
+import { valuationContext as c, preparedValuationContext as prepared, valuationScope as scope, valuationBinding as binding, validValuationDraft } from "./investor-valuation-fixture";
 import { investorCommandSchema } from "../src/server/investor/schemas";
 
 test("valuation reads bind session, workspace, ledger and link, reject unknown data and never accept another owner scope", () => {
@@ -26,4 +26,21 @@ test("published scope identifiers are preserved exactly rather than silently tri
   const context = { ...c, sources: c.sources.map(row => row.batch_type === "fx" ? { ...row, scope: " fictional-fx " } : row) };
   const parsed = parseValuationContext({ ...context, session_binding: binding }, scope);
   assert.equal(buildValuationIntent(parsed, { ...validValuationDraft(), fxScope: " fictional-fx " }).fx?.scope, " fictional-fx ");
+});
+
+test("prepared draft pre-fills only scoped unambiguous metadata and never acknowledgement, FX policy or another market's session", () => {
+  const draft = preparedValuationDraft(prepared); assert.equal(draft.prices[0].scope, "fictional-prices"); assert.equal(draft.prices[0].session, "2026-01-02");
+  assert.equal(draft.fxScope, "fictional-fx"); assert.equal(draft.fxAge, ""); assert.equal(draft.acknowledged, false); assert.match(draft.reference, /估值准备依据/);
+  assert.throws(() => buildValuationIntent(prepared, draft));
+  assert.throws(() => buildValuationIntent(prepared, { ...draft, prices: [{ ...draft.prices[0], session: "2026-01-01" }], fxAge: "86400", acknowledged: true }));
+  assert.equal(buildValuationIntent(prepared, { ...draft, fxAge: "86400", acknowledged: true }).prices[0].expected_session, "2026-01-02");
+  const ambiguous = { ...prepared, sources: [...prepared.sources, { ...prepared.sources[0], scope: "another" }], preparation: { ...prepared.preparation,
+    markets: [{ ...prepared.preparation.markets[0], candidate_scopes: ["fictional-prices", "another"], suggested_scope: null }] } };
+  assert.equal(preparedValuationDraft(ambiguous).prices[0].scope, "");
+  for (const patch of [
+    { ...prepared, preparation: { ...prepared.preparation, markets: [{ ...prepared.preparation.markets[0], suggested_scope: "foreign" }] } },
+    { ...prepared, preparation: { ...prepared.preparation, fx: { ...prepared.preparation.fx, candidates: [{ scope: "foreign", oldest_age_seconds: 0 }], suggested_scope: "foreign" } } },
+    { ...prepared, preparation: { ...prepared.preparation, markets: [...prepared.preparation.markets, ...prepared.preparation.markets] } },
+    { ...prepared, preparation: { ...prepared.preparation, approval_required: false } },
+  ]) assert.throws(() => parseValuationContext({ ...patch, session_binding: binding }, scope));
 });

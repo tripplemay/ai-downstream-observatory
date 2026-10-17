@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+from zoneinfo import ZoneInfo
 
 from playwright.sync_api import expect, sync_playwright
 
@@ -22,11 +23,14 @@ def main():
     parser.add_argument("--with-securities", action="store_true", help="Continue through invented security registration, buy/sell, partial settlements and independent position reconciliation")
     parser.add_argument("--with-valuation", action="store_true", help="After securities, use the isolated Python fixture helper to calculate a three-currency NAV and verify later-fact invalidation")
     parser.add_argument("--with-native-valuation", action="store_true", help="Use the ordinary valuation UI and real queued core worker instead of direct fixture valuation (requires --with-valuation)")
+    parser.add_argument("--with-prepared-valuation", action="store_true", help="Publish an explicitly fictional reviewed calendar and verify automatic date/source preparation (requires --with-native-valuation)")
     args = parser.parse_args()
     if args.with_valuation and not args.with_securities:
         parser.error("--with-valuation requires --with-securities")
     if args.with_native_valuation and not args.with_valuation:
         parser.error("--with-native-valuation requires --with-valuation")
+    if args.with_prepared_valuation and not args.with_native_valuation:
+        parser.error("--with-prepared-valuation requires --with-native-valuation")
     root = Path(__file__).resolve().parents[2]
     db, output = Path(args.db).resolve(strict=True), Path(args.output).resolve()
     if (db.parent.parent != Path(tempfile.gettempdir()).resolve()
@@ -61,6 +65,7 @@ def main():
               "securities_transcription": args.with_securities,
               "valuation_fixture": args.with_valuation,
               "native_valuation_command": args.with_native_valuation,
+              "prepared_valuation_metadata": args.with_prepared_valuation,
               "external_ai_called": False, "response_payloads_mocked": False,
               "transport_fault": "real committed cash and valuation POST responses each discarded once before the browser receives them" if args.with_native_valuation else "one real committed cash POST response discarded before the browser receives it",
               "limits": ["invented personal account documents, not real broker or market acceptance",
@@ -402,6 +407,24 @@ def main():
                                     "idempotency_key": document_value["batch"]["id"], "command_type": "market_ingest", "payload": {"document": document_value, "publish": True}}})
                                 assert response.status == 200, "FICTIONAL_SOURCE_QUEUE_FAILED"
                             core("native-market-publication")
+                            if args.with_prepared_valuation:
+                                cutoff_day = datetime.fromisoformat(cutoff.replace("Z", "+00:00")).astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
+                                calendar_document = {"kind": "calendar", "facts": {"market": "CN", "exchange": "FICTIONAL-EXCHANGE", "timezone": "Asia/Shanghai",
+                                    "range_start": empty_day, "range_end": cutoff_day, "days": [
+                                        {"date": empty_day, "kind": "full", "close_at": empty_day + "T07:00:00.000000Z"},
+                                        {"date": yesterday, "kind": "half", "close_at": yesterday + "T03:00:00.000000Z"},
+                                        {"date": cutoff_day, "kind": "closed", "close_at": None}]}}
+                                response = context.request.post(base + "/api/workbench/market", headers={**headers, "Origin": base}, data={"action": "store_source", "command": {
+                                    "portfolio_id": request["portfolio_id"], "idempotency_key": "fictional-native-calendar-source", "reference": "FICTIONAL SOFTWARE CALENDAR ONLY, NOT EXCHANGE CERTIFICATION",
+                                    "content_text": json.dumps(calendar_document)}})
+                                assert response.status == 200, "FICTIONAL_CALENDAR_SOURCE_FAILED"
+                                source = response.json()
+                                response = context.request.post(base + "/api/workbench/market", headers={**headers, "Origin": base}, data={"action": "publish_reference", "command": {
+                                    "portfolio_id": request["portfolio_id"], "idempotency_key": "fictional-native-calendar-review", "expected_version": 0,
+                                    "source_id": source["id"], "source_hash": source["content_hash"], "review_reason": "FICTIONAL HUMAN REVIEW, NOT PROVIDER CERTIFICATION", "acknowledgement": True,
+                                    "document": calendar_document}})
+                                assert response.status == 200, "FICTIONAL_CALENDAR_REVIEW_FAILED"
+                                calendar_receipt = response.json()
                             go("/workbench/accounts")
                             valuation_panel = page.locator('section[aria-label="组合估值"]')
                             valuation_panel.get_by_role("button", name="核对估值准备情况与任务", exact=True).click()
@@ -410,11 +433,22 @@ def main():
                             valuation_panel.get_by_role("button", name="选择来源并确认本次估值", exact=True).click()
                             expect(page.get_by_label("账户导入目标", exact=True)).to_be_disabled()
                             expect(panel.get_by_role("button", name="录入已到账或已转出资金", exact=True)).to_be_disabled()
-                            valuation_panel.get_by_label("A 股价格来源", exact=True).select_option("browser:CN")
-                            valuation_panel.get_by_label("A 股预期最近交易日", exact=True).fill(yesterday)
-                            valuation_panel.get_by_label("汇率来源", exact=True).select_option("browser:FX")
+                            if args.with_prepared_valuation:
+                                expect(valuation_panel.get_by_label("A 股价格来源", exact=True)).to_have_value("browser:CN")
+                                expect(valuation_panel.get_by_label("A 股预期最近交易日", exact=True)).to_have_value(yesterday)
+                                expect(valuation_panel.get_by_label("汇率来源", exact=True)).to_have_value("browser:FX")
+                                expect(valuation_panel.get_by_label("允许的汇率最大时效", exact=True)).to_have_value("")
+                                expect(valuation_panel.get_by_role("checkbox")).not_to_be_checked()
+                                expect(valuation_panel.get_by_label("本次规则核查依据或补充说明", exact=True)).to_have_value(re.compile(r"^估值准备依据 #"))
+                                check("reviewed calendar and unique complete sources are prepared, never approval or FX tolerance", valuation_panel.get_by_label("A 股预期最近交易日", exact=True).evaluate("element => element.readOnly")
+                                      and not any(r["body"] and r["body"].get("action") == "request_linked_valuation" for r in requests))
+                            else:
+                                valuation_panel.get_by_label("A 股价格来源", exact=True).select_option("browser:CN")
+                                valuation_panel.get_by_label("A 股预期最近交易日", exact=True).fill(yesterday)
+                                valuation_panel.get_by_label("汇率来源", exact=True).select_option("browser:FX")
                             valuation_panel.get_by_label("允许的汇率最大时效", exact=True).select_option("86400")
-                            valuation_panel.get_by_label("本次规则核查的独立资料编号或说明", exact=True).fill("FICTIONAL USER RULE REVIEW, NOT PROVIDER CERTIFICATION")
+                            if not args.with_prepared_valuation:
+                                valuation_panel.get_by_label("本次规则核查依据或补充说明", exact=True).fill("FICTIONAL USER RULE REVIEW, NOT PROVIDER CERTIFICATION")
                             valuation_panel.get_by_role("checkbox").check()
                             capture("native-valuation-draft")
                             lost_valuation = []
@@ -444,6 +478,12 @@ def main():
                             result = get("/holdings")["snapshot"]
                             valuation = {"quality": "complete" if result else "not_complete", "nav_cny": result["nav_cny"] if result else None, "real_provider_called": False}
                             check("native queued computation produces exactly one immutable valuation", len(rows()["valuation_runs"]) == 1)
+                            if args.with_prepared_valuation:
+                                manifest = json.loads(rows()["valuation_runs"][0]["market_manifest"])
+                                check("actual queued valuation persists the reviewed calendar version and hash, not only a displayed suggestion", len(manifest["rules"]["calendar_checks"]) == 1
+                                      and manifest["rules"]["calendar_checks"][0]["version_id"] == calendar_receipt["id"]
+                                      and manifest["rules"]["calendar_checks"][0]["content_hash"] == calendar_receipt["content_hash"]
+                                      and manifest["rules"]["calendar_checks"][0]["expected_session"] == yesterday)
                         else:
                             child = subprocess.run([args.worker_python, "-m", "tests.investor.holdings_fixture", "--db", str(db)], cwd=root,
                                 input=json.dumps(request), capture_output=True, text=True, timeout=60, env=worker_env)

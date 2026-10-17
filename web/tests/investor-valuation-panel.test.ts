@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as client from "../src/components/workbench/investor-valuation-client";
 import { mountInvestorDisplay } from "./investor-display-fixture";
-import { valuationContext as c, valuationScope as scope, valuationBinding as binding } from "./investor-valuation-fixture";
+import { valuationContext as c, preparedValuationContext as prepared, valuationScope as scope, valuationBinding as binding } from "./investor-valuation-fixture";
 
 type Tree = { type: unknown; props: Record<string, unknown> };
 function mount(t: { after: (fn: () => void) => void }) {
@@ -57,4 +57,15 @@ test("cancelled, edited or externally locked drafts cannot submit through retain
   await h.acknowledge(true); const old = h.handler(); await h.change({ disabled: true }); old({ preventDefault() {} }); await h.flush(); assert.equal(h.commands.length, 0);
   await h.change({ disabled: false }); await h.input("本次规则核查", "Fictional revised review"); old({ preventDefault() {} }); await h.flush(); assert.equal(h.commands.length, 0);
   await h.acknowledge(true); const cancelled = h.handler(); await h.click("取消估值草稿"); cancelled({ preventDefault() {} }); await h.flush(); assert.equal(h.commands.length, 0);
+});
+
+test("prepared sources and readonly calendar date need only an explicit FX tolerance and fresh user confirmation, never an automatic POST", async t => {
+  const h = mount(t); await open(h, prepared); await h.click("选择来源并确认本次估值");
+  const fields = h.nodes().filter(row => ["Input", "select"].includes(String(row.type)));
+  assert.ok(fields.some(row => row.props.value === "2026-01-02" && row.props.readOnly === true));
+  assert.ok(fields.some(row => row.props.value === "fictional-prices")); assert.equal(h.commands.length, 0);
+  assert.match(h.text(), /人工来源声明仍不是供应商认证/);
+  await h.input("允许的汇率最大时效", "86400"); h.handler()({ preventDefault() {} }); await h.flush(); assert.equal(h.commands.length, 0);
+  await h.acknowledge(true); h.handler()({ preventDefault() {} }); await h.flush(); assert.equal(h.commands.length, 1);
+  assert.ok(h.requests.every(row => row.method === "GET"));
 });

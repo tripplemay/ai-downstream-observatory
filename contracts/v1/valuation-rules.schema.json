@@ -31,6 +31,20 @@
       "additionalProperties": {"type": "boolean"}
     },
     "fx_scope": {"$ref": "common.schema.json#/$defs/id"},
+    "calendar_checks": {
+      "type": "array", "maxItems": 200, "uniqueItems": true,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["market", "exchange", "version_id", "content_hash", "expected_session"],
+        "properties": {
+          "market": {"enum": ["CN", "HK", "US"]},
+          "exchange": {"$ref": "common.schema.json#/$defs/id"},
+          "version_id": {"$ref": "common.schema.json#/$defs/id"},
+          "content_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "expected_session": {"$ref": "common.schema.json#/$defs/date"}
+        }
+      }
+    },
     "max_fx_age_seconds": {"type": "integer", "minimum": 0, "maximum": 2592000}
   },
   "allOf": [
