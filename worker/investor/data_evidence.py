@@ -1,5 +1,7 @@
 """Private owner-reviewed evidence; no text or hash certifies provider rights."""
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import date, timedelta
 from hashlib import sha256
 import json
@@ -16,6 +18,18 @@ from .runtime import _milliseconds
 KINDS = ("rights", "listing", "calendar", "actions", "fx")
 USES = {"private_research", "private_retention", "private_display", "private_backup"}
 MAX_REVIEW_BYTES = 8388608
+_FACT_VALIDATIONS = ContextVar("investor_snapshot_fact_validations", default=None)
+_MAX_FACT_VALIDATIONS = 128
+
+
+@contextmanager
+def _fact_validation_scope():
+    """Reuse pure validation only; source/audit/currentness reads never cache."""
+    token = _FACT_VALIDATIONS.set(set())
+    try:
+        yield
+    finally:
+        _FACT_VALIDATIONS.reset(token)
 
 
 def _assert(value, code="INVESTOR_DATA_EVIDENCE_INVALID"):
@@ -83,6 +97,15 @@ def store_source(db, workspace_id, actor_id, kind, document, *, now=None):
 def validate_facts(kind, facts):
     _assert(kind in KINDS and type(facts) is dict)
     _assert(len(canonical_json(facts).encode()) <= MAX_REVIEW_BYTES, "INVESTOR_DATA_REVIEW_LIMIT")
+    validated = _FACT_VALIDATIONS.get()
+    key = None
+    if validated is not None:
+        # Unlike canonical_json, keep JSON numeric representations distinct.
+        # Store only digests, not calendar/FX documents, in this bounded scope.
+        encoded = json.dumps(facts, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+        key = kind, sha256(encoded.encode()).digest()
+        if key in validated:
+            return
     validate_time_precision(facts)
     try:
         validate_contract({"kind": kind, "facts": facts}, "investor-data-facts.schema.json")
@@ -115,6 +138,8 @@ def validate_facts(kind, facts):
             _assert(all(decimal(row["value"]) > 0 and instant(row["observed_at"]) <= instant(row["assumed_available_at"]) for row in facts["rows"]))
     except Exception:
         raise WorkbenchError("INVESTOR_DATA_FACTS_INVALID") from None
+    if validated is not None and len(validated) < _MAX_FACT_VALIDATIONS:
+        validated.add(key)
 
 
 def review_source(db, workspace_id, actor_id, source_id, decision, facts, reason, valid_until, *, now=None):

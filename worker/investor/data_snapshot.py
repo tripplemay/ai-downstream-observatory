@@ -7,7 +7,7 @@ from worker.market.providers import longport
 from worker.market.contracts import validate_contract
 from worker.orchestration.db import canonical_json, content_hash, instant, transaction
 from worker.research.snapshot import validate_dataset
-from .data_evidence import _assert, resolve_capture, resolve_review
+from .data_evidence import _assert, _fact_validation_scope, resolve_capture, resolve_review
 from .runtime import _milliseconds
 
 
@@ -15,15 +15,17 @@ PARSER = "investor-longbridge-reconstructed-v1"
 
 
 def build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_ids, start_date, end_date, *, now=None, allow_synthetic=False, snapshot_at=None):
-    return _build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_ids, start_date, end_date,
-        now=now, allow_synthetic=allow_synthetic, snapshot_at=snapshot_at)
+    with _fact_validation_scope():
+        return _build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_ids, start_date, end_date,
+            now=now, allow_synthetic=allow_synthetic, snapshot_at=snapshot_at)
 
 
 def build_monitor_dataset(db, workspace_id, capture_ids, confirmed_capture_ids, action_review_ids, fx_review_ids, start_date, end_date, *, now=None, snapshot_at=None):
     _assert(type(confirmed_capture_ids) is list and 1 <= len(confirmed_capture_ids) <= 1000
         and all(type(value) is str and value for value in confirmed_capture_ids) and len(set(confirmed_capture_ids)) == len(confirmed_capture_ids))
-    return _build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_ids, start_date, end_date,
-        now=now, snapshot_at=snapshot_at, confirmed_capture_ids=confirmed_capture_ids)
+    with _fact_validation_scope():
+        return _build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_ids, start_date, end_date,
+            now=now, snapshot_at=snapshot_at, confirmed_capture_ids=confirmed_capture_ids)
 
 
 def _build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_ids, start_date, end_date, *, now=None, allow_synthetic=False, snapshot_at=None, confirmed_capture_ids=None):
