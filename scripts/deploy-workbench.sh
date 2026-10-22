@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 umask 077
 
 execute=0
@@ -110,6 +110,9 @@ done
 [[ $(realpath "$WORKBENCH_DATA_DIR_HOST") != $(realpath "$WORKBENCH_LEGACY_DATA_DIR") ]] || { printf 'Resolved legacy and actual data paths collide\n' >&2; exit 2; }
 assert_no_recovery() {
   [[ ! -e "$WORKBENCH_DATA_DIR_HOST/RESTORE_PENDING_REVIEW" && ! -L "$WORKBENCH_DATA_DIR_HOST/RESTORE_PENDING_REVIEW" ]] || { printf 'Pending recovery review prohibits deployment\n' >&2; return 1; }
+}
+assert_release_capacity() {
+  python3 "$release_dir/scripts/check-release-capacity.py" --data-dir "$WORKBENCH_DATA_DIR_HOST" --backup-dir "$WORKBENCH_BACKUP_DIR_HOST" --restore-parent "$WORKBENCH_RESTORE_PARENT_DIR"
 }
 assert_no_recovery
 
@@ -226,6 +229,7 @@ if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then
 fi
 compose run --rm --no-deps --entrypoint node backup --input-type=module -e 'import {readPassphrase} from "/app/scripts/backup-workbench.mjs"; await readPassphrase(); console.log("backup key configured");' > "$evidence/backup-key-check.txt"
 assert_no_recovery
+if ((first_release == 0)); then assert_release_capacity > "$evidence/capacity-after-build.json"; fi
 
 if ((first_release)); then
   compose run --rm --no-deps -e WORKBENCH_DB_PATH= archive-legacy > "$evidence/legacy-online-snapshot.json"
@@ -239,6 +243,7 @@ else
   [[ "$previous_sha" =~ ^[a-f0-9]{40}$ ]]
   WORKBENCH_RELEASE_SHA="$previous_sha" docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$previous/docker-compose.yml" run --rm --no-deps backup > "$evidence/pre-stop-backup.json"
   assert_no_recovery
+  assert_release_capacity > "$evidence/capacity-before-stop.json"
   writers_stopped=1
   stop_market_provider_writers
   WORKBENCH_RELEASE_SHA="$previous_sha" stop_writers docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$previous/docker-compose.yml"
