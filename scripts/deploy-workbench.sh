@@ -6,11 +6,13 @@ execute=0
 release_sha=""
 release_dir=""
 config=""
+image_bundle=""
 while (($#)); do
   case "$1" in
     --release) release_sha="${2:?missing release SHA}"; shift 2 ;;
     --release-dir) release_dir="${2:?missing release directory}"; shift 2 ;;
     --config) config="${2:?missing private configuration}"; shift 2 ;;
+    --image-bundle) image_bundle="${2:?missing image bundle manifest}"; shift 2 ;;
     --execute) execute=1; shift ;;
     *) printf 'Unknown argument\n' >&2; exit 2 ;;
   esac
@@ -66,11 +68,17 @@ done
 export WORKBENCH_RELEASE_SHA WORKBENCH_DATA_DIR_HOST WORKBENCH_BACKUP_DIR_HOST WORKBENCH_RESTORE_PARENT_DIR WORKBENCH_LEGACY_DATA_DIR WORKBENCH_RUNTIME_ENV_FILE WORKBENCH_BACKUP_KEY_FILE WORKBENCH_HTTP_PORT
 export COMPOSE_PARALLEL_LIMIT
 export WORKBENCH_CORE_LEASE_SECONDS
+if [[ -n "$image_bundle" ]]; then
+  safe_path "$image_bundle" || { printf 'Invalid image bundle path\n' >&2; exit 2; }
+  bundle_relative=${image_bundle#"$WORKBENCH_DEPLOY_ROOT/incoming/$release_sha/"}
+  [[ "$bundle_relative" != "$image_bundle" && "$bundle_relative" =~ ^images-[0-9]{1,20}-[0-9]{1,6}/release-images\.json$ ]] || { printf 'Image bundle must belong to this exact release upload\n' >&2; exit 2; }
+fi
 
 if ((execute == 0)); then
   printf 'PLAN ONLY: %s\n' "$release_sha"
   printf 'Optional market provider enabled: %s\n' "$WORKBENCH_MARKET_PROVIDER_ENABLED"
   printf 'Core research lease seconds: %s\n' "$WORKBENCH_CORE_LEASE_SECONDS"
+  printf 'Verified off-host image bundle supplied: %s\n' "$([[ -n "$image_bundle" ]] && printf 1 || printf 0)"
   printf '%s\n' 'Validate protected configuration and isolated UID 10001 volumes' 'Build exact release-tagged web/worker images before stopping existing services' 'Back up current workbench with its compatible previous image, or snapshot legacy SQLite online' 'Stop previous writers; take final backup; migrate new schema explicitly' 'Archive legacy rows only as legacy research; never create actual funds' 'Create encrypted backup and restore into a new rehearsal directory' 'Start isolated workbench project; verify schema, auth, HTTP and worker health' 'Failure stops new writers and preserves all new facts; no database overwrite rollback'
   exit 0
 fi
@@ -112,7 +120,7 @@ assert_no_recovery() {
   [[ ! -e "$WORKBENCH_DATA_DIR_HOST/RESTORE_PENDING_REVIEW" && ! -L "$WORKBENCH_DATA_DIR_HOST/RESTORE_PENDING_REVIEW" ]] || { printf 'Pending recovery review prohibits deployment\n' >&2; return 1; }
 }
 assert_release_capacity() {
-  python3 "$release_dir/scripts/check-release-capacity.py" --data-dir "$WORKBENCH_DATA_DIR_HOST" --backup-dir "$WORKBENCH_BACKUP_DIR_HOST" --restore-parent "$WORKBENCH_RESTORE_PARENT_DIR"
+  python3 "$release_dir/scripts/check-release-capacity.py" --data-dir "$WORKBENCH_DATA_DIR_HOST" --backup-dir "$WORKBENCH_BACKUP_DIR_HOST" --restore-parent "$WORKBENCH_RESTORE_PARENT_DIR" --stage "${1:-before_online_backup}"
 }
 assert_no_recovery
 
@@ -217,7 +225,12 @@ failed() {
 trap failed ERR
 compose config --no-env-resolution --quiet
 timeout 30 docker version --format '{{.Server.Version}}' > "$evidence/docker-version.txt"
-timeout 3600 docker compose "${compose_options[@]}" build --pull "${build_services[@]}"
+if [[ -n "$image_bundle" ]]; then
+  [[ -f "$image_bundle" && ! -L "$image_bundle" && $(stat -c '%u' "$image_bundle") == 0 ]] || { printf 'Root-owned image bundle manifest required\n' >&2; exit 2; }
+  timeout 600 python3 "$release_dir/scripts/release-image-bundle.py" load --release "$release_sha" --directory "$(dirname "$image_bundle")" --market-provider "$WORKBENCH_MARKET_PROVIDER_ENABLED" > "$evidence/image-bundle-verification.json"
+else
+  timeout 3600 docker compose "${compose_options[@]}" build --pull "${build_services[@]}"
+fi
 for image in "${release_images[@]}"; do
   [[ $(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}') == "$release_sha" ]]
   [[ $(docker image inspect "$image" --format '{{.Config.User}}') == '10001:10001' ]]
@@ -243,7 +256,7 @@ else
   [[ "$previous_sha" =~ ^[a-f0-9]{40}$ ]]
   WORKBENCH_RELEASE_SHA="$previous_sha" docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$previous/docker-compose.yml" run --rm --no-deps backup > "$evidence/pre-stop-backup.json"
   assert_no_recovery
-  assert_release_capacity > "$evidence/capacity-before-stop.json"
+  assert_release_capacity after_online_backup > "$evidence/capacity-before-stop.json"
   writers_stopped=1
   stop_market_provider_writers
   WORKBENCH_RELEASE_SHA="$previous_sha" stop_writers docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$previous/docker-compose.yml"

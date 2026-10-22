@@ -33,6 +33,15 @@ export function researchTaskStatus(task: InvestorResearchTask) {
       detail: "冻结候选未通过预先登记的执行与风险检查。计算完成不等于策略通过，也不是行情数据尚未就绪。",
       action: "先核对下方阶段检查。需要改进时另建研究版本，保留原结果和已曝光窗口；不会改选候选或自动启用监测。" };
   }
+  if (task.status === "calculated" && task.study?.status === "insufficient_evidence"
+    && task.reason_codes.includes("NO_CANDIDATE_WITHIN_CONFIRMED_RISK_BUDGET")
+    && task.study.candidates.length > 0 && task.study.candidates.every(candidate => !candidate.usable)) {
+    const gaps = task.study.candidates.some(candidate => candidate.train_checks
+      && (candidate.train_checks.execution_failure_count > 0 || candidate.train_checks.benchmark_execution_failure_count > 0));
+    return { title: gaps ? "训练模拟执行有缺口，未生成参考组合" : "训练或基准证据不完整，未生成参考组合",
+      detail: "候选尚未具备完整的训练与基准证据，不能据此判定你的风险预算过低；这也不是行情数据尚未接入。",
+      action: "先核对下方训练检查与缺口原因，不通过提高风险或反复重跑来绕过。旧记录保留，不自动启动验证、保留期或监测。" };
+  }
   if (task.status === "calculated") {
     if (task.study?.status === "risk_options_ready") return { title: task.study.qualification === "synthetic_test_only" ? "测试候选已计算，等待确认风险范围" : "候选已计算，等待确认风险范围",
       detail: "当前只有训练期比较，尚未选择最终权重。", action: "先比较损失情景，再决定自己的研究风险范围。" };

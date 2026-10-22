@@ -119,6 +119,14 @@ function ResearchTask({ task: storedTask, nowMs }: { task: InvestorResearchTask;
         <p className="mt-2 text-xs text-muted-foreground">缺口包含模拟订单跳过、到期或部署失败，不是实际交易或亏损金额。汇总不能断言具体成交失败原因；没有缺口也不等于风险检查通过。</p>
         {task.registry?.phases.holdout.registered === 0 && <p className="mt-2 text-xs text-muted-foreground">保留期尚未启动，不能显示为通过。</p>}
       </section>}
+      {task.study.candidates.some(candidate => candidate.train_checks) && <section aria-label="训练候选执行检查" className="rounded-lg border p-3 text-sm">
+        <h3 className="font-semibold">训练候选与基准的执行证据</h3>
+        <ul className="mt-2 space-y-2">{task.study.candidates.map((candidate, index) => candidate.train_checks && <li key={candidate.parameters_hash}>
+          候选 {index + 1}：候选模拟执行缺口 {candidate.train_checks.execution_failure_count} 项，基准模拟执行缺口 {candidate.train_checks.benchmark_execution_failure_count} 项；
+          {candidate.train_checks.metrics_complete ? "训练指标已计算。" : "训练指标仍有缺失。"}
+        </li>)}</ul>
+        <p className="mt-2 text-xs text-muted-foreground">这是已登记训练结果的只读汇总，不是实际交易失败。订单跳过、到期或部署失败都可能构成缺口，汇总不推断具体原因；提高风险预算不会修复执行缺口。</p>
+      </section>}
       <p className="rounded-lg border border-amber-500/40 p-3 text-sm">{reconstructed ? "来源经所有者审阅的历史重建研究：行情可回溯，但发布时间、历史 ETF 目录及使用权限不是独立认证。候选不是实盘持仓；后台观察状态见持续观察卡。" : "合成数据软件测试，仅用于验证计算和交互，不是真实 ETF 研究或可采用的个人组合。"}{task.status === "outdated" ? " 输入已更新，以下仅保留历史证据。" : ""}</p>
       {context && <p className="text-xs text-muted-foreground">研究区间 {context.range_start} 至 {context.range_end} · 来源最晚有效至 {context.valid_until} · 采用记录的费用与税假设，非账户实扣结果。</p>}
       <h3 className="text-sm font-semibold">{task.study.status === "risk_options_ready" ? "先比较损失情景，尚未选择权重" : "训练期候选对照，不等于最终组合"}</h3>

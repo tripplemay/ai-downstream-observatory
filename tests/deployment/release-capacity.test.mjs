@@ -52,6 +52,18 @@ usage=lambda path:types.SimpleNamespace(free=100*payload+module.HEADROOM_BYTES i
 assert module.check_capacity(data,backup,restore,usage=usage,device=lambda path:1 if path==backup else 2)['status']=='insufficient'
 `));
 
+test('after the online backup succeeds, only future staging is reserved rather than counting its retained archive twice', () => python(`
+payload=module.payload_bytes(data);remaining=5*payload+module.HEADROOM_BYTES
+usage=lambda unused:types.SimpleNamespace(free=remaining)
+assert module.check_capacity(data,backup,restore,usage=usage,device=lambda unused:1)['status']=='insufficient'
+after=module.check_capacity(data,backup,restore,stage='after_online_backup',usage=usage,device=lambda unused:1)
+assert after['status']=='sufficient' and after['volumes'][0]['required_bytes']==remaining
+assert module.check_capacity(data,backup,restore,stage='after_online_backup',usage=lambda unused:types.SimpleNamespace(free=remaining-1),device=lambda unused:1)['status']=='insufficient'
+try:module.check_capacity(data,backup,restore,stage='unknown')
+except ValueError:pass
+else:raise AssertionError('unknown capacity stage accepted')
+`));
+
 test('missing databases, unsafe file types and invalid attachment sizes are not treated as zero-byte payloads', () => python(`
 (data/'auth.sqlite').unlink();(data/'auth.sqlite').symlink_to(data/'etf-workbench.db')
 try:module.payload_bytes(data)
@@ -71,7 +83,7 @@ else:raise AssertionError('missing database accepted')
 test('release checks capacity after image building and again before stopping existing writers without pruning automatically', () => {
   const source = readFileSync(join(root, 'scripts/deploy-workbench.sh'), 'utf8');
   const first = source.indexOf('if ((first_release == 0)); then assert_release_capacity');
-  const second = source.indexOf('assert_release_capacity > "$evidence/capacity-before-stop.json"');
+  const second = source.indexOf('assert_release_capacity after_online_backup > "$evidence/capacity-before-stop.json"');
   assert.ok(source.indexOf('build --pull') < first && first < source.indexOf('pre-stop-backup.json'));
   assert.ok(source.indexOf('pre-stop-backup.json') < second && second < source.indexOf('writers_stopped=1', second));
   assert.doesNotMatch(source, /(?:builder|buildx|image|system|container|volume) prune/);

@@ -67,7 +67,11 @@ export const researchTaskSchema = z.object({
       decision_rule: z.string().min(1).max(1000).optional(),
       train_net_twr: researchDecimal.nullable(), train_drawdown: researchDecline.nullable(), benchmark_net_twr: researchDecimal.nullable(),
       usable: z.boolean(), stresses: z.array(z.object({ id: investorId, label: z.string().min(1).max(300), portfolio_return: researchDecimal }).strict()).max(10),
-    }).strict()).max(8).refine(value => new Set(value.map(row => row.parameters_hash)).size === value.length),
+      train_checks: z.object({ metrics_complete: z.boolean(), execution_failure_count: revision,
+        benchmark_execution_failure_count: revision }).strict().optional(),
+    }).strict().refine(value => !value.train_checks || value.usable === (value.train_checks.metrics_complete
+      && value.train_checks.execution_failure_count === 0 && value.train_checks.benchmark_execution_failure_count === 0)))
+      .max(8).refine(value => new Set(value.map(row => row.parameters_hash)).size === value.length),
   }).strict().refine(value => (value.qualification === "owner_reviewed_reconstructed") === (value.source_context !== undefined)).nullable(), live_advice_eligible: z.literal(false),
 }).strict().refine(value => (value.completed_at === null || value.completed_at >= value.created_at)
   && (value.status !== "calculated" || value.study !== null && value.completed_at !== null)

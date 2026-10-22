@@ -160,6 +160,44 @@ test("a genuine synthetic next-close budget gap exposes verified phase counts wi
   } finally { f.close(); }
 });
 
+test("all-candidate train execution gaps remain visible without suggesting risk changes or opening later phases", () => {
+  const f = investorFixture();
+  try {
+    executeInvestorCommand(f.db, actor, { action: "save_profile", profile: { ...syntheticProfile, loss_tolerance: "0.50" },
+      expected_revision: 0, idempotency_key: "train-gap-fixture" }, now);
+    helper(f, "register", ["--train-execution-gap"]);
+    executeInvestorCommand(f.db, actor, { action: "evaluate", expected_revision: 1, idempotency_key: "train-gap-input" }, "2026-01-02T12:00:02.000Z");
+    helper(f, "compute");
+    const before = f.db.prepare("SELECT total_changes() n").get();
+    const state = getInvestorState(f.db, actor, currentTime), task = state.research_task!;
+    assert.equal(task.study!.status, "insufficient_evidence");
+    assert.ok(task.reason_codes.includes("NO_CANDIDATE_WITHIN_CONFIRMED_RISK_BUDGET"));
+    assert.equal(task.study!.candidates.length, 3);
+    for (const candidate of task.study!.candidates) {
+      assert.equal(candidate.usable, false); assert.equal(candidate.train_checks!.metrics_complete, true);
+      assert.ok(candidate.train_checks!.execution_failure_count > 0);
+      assert.ok(candidate.train_checks!.benchmark_execution_failure_count > 0);
+    }
+    assert.deepEqual(task.study!.phase_checks, []);
+    assert.deepEqual(task.registry!.phases.validation, { registered: 0, completed: 0 });
+    assert.deepEqual(task.registry!.phases.holdout, { registered: 0, completed: 0 });
+    assert.equal(state.plan, null); assert.equal(state.model_watch, null);
+    assert.equal(state.profile!.document.loss_tolerance, "0.50");
+    assert.deepEqual(parseInvestorState({ ...state, session_binding: binding }, binding), state);
+    assert.deepEqual(f.db.prepare("SELECT total_changes() n").get(), before);
+    type Candidate = NonNullable<typeof task.study>["candidates"][number];
+    for (const change of [
+      (candidate: Candidate) => { candidate.train_checks!.execution_failure_count = -1; },
+      (candidate: Candidate) => { candidate.usable = true; },
+      (candidate: Candidate) => { candidate.train_checks = { metrics_complete: true, execution_failure_count: 0, benchmark_execution_failure_count: 0 }; },
+    ]) {
+      const forged = structuredClone(state); change(forged.research_task!.study!.candidates[0]);
+      assert.throws(() => parseInvestorState({ ...forged, session_binding: binding }, binding), /RESPONSE_INVALID/);
+    }
+    noFinance(f);
+  } finally { f.close(); }
+});
+
 test("a rehashed publication cannot invent trial completion or erase the persisted candidate freeze", () => {
   const f = investorFixture();
   try {

@@ -77,6 +77,28 @@ test("actual plan and overview explain validation hold before technical details,
     assert.equal(h.requests.length, 0); h.close();
   }
 });
+test("all rejected train candidates show simulated execution counts without prompting risk escalation or a final-plan save", async t => {
+  const state = validationHoldState(), task = state.research_task!;
+  task.reason_codes = ["NO_CANDIDATE_WITHIN_CONFIRMED_RISK_BUDGET"];
+  task.registry!.phases.validation = { registered: 0, completed: 0 };
+  task.registry!.freeze_hash = null; task.registry!.exposure_watermark = 3;
+  task.study!.phase_checks = [];
+  task.study!.candidates = [{ parameters_hash: "f".repeat(64), weights: { "CN:ALPHA": "1" },
+    train_net_twr: "0.01", train_drawdown: "-0.01", benchmark_net_twr: "0.02", usable: false, stresses: [],
+    train_checks: { metrics_complete: true, execution_failure_count: 1, benchmark_execution_failure_count: 2 } }];
+  for (const view of ["overview", "plan"]) {
+    const h = mount(t, state, view); await h.flush();
+    assert.match(h.words(h.card("研究组合与历史参考")), /训练模拟执行有缺口/);
+    assert.match(h.words(h.card("后台研究进度")), /候选 1：候选模拟执行缺口 1 项，基准模拟执行缺口 2 项/);
+    assert.match(h.text(), /提高风险预算不会修复执行缺口/);
+    assert.equal(h.button("保存为观察中的研究方案"), undefined);
+    assert.equal(h.requests.length, 0);
+    await h.advance(until);
+    assert.doesNotMatch(h.words(h.card("后台研究进度")), /训练候选与基准的执行证据/);
+    assert.equal(h.requests.length, 0); h.close();
+  }
+});
+
 test("plan expiry applies to observe and decision modes without a successful GET; expired synthetic references cannot be saved", async t => {
   for (const outcome of ["observe", "decision_required"] as const) {
     const h = mount(t, displayState(outcome, "plan")); await h.flush(); await h.fundingLock(true);
