@@ -51,6 +51,7 @@ export function InvestorRiskPanel({ state, binding, disabled, onCommand }: {
     <h2 id="risk-review-title" className="text-lg font-semibold">先看可能损失，再确认研究风险预算</h2>
     <p className="mt-2 text-sm">当前：{state.profile.document.loss_tolerance === null ? "尚未确认；系统不替你选择权重。" : `已记录 ${formatResearchPercent(state.profile.document.loss_tolerance)} 的研究预算；可在此重新核对。`}</p>
     <p className="mt-2 text-sm text-muted-foreground">不是止损承诺或损失上限。实际亏损可能更大；历史回撤、算术冲击与真实账户亏损分开。</p>
+    {study?.candidates.length && study.candidates.every(candidate => !candidate.usable) ? <p className="mt-3 rounded-lg border border-amber-500/40 p-3 text-sm">当前候选的训练或基准证据不完整。先核对研究进度中的执行检查；不要仅为得到组合而提高风险预算。</p> : null}
     <label className="mt-4 flex max-w-md flex-col gap-2 text-sm">用于理解损失的假设组合金额（CNY，可留空）
       <Input inputMode="decimal" value={currentDraft.amount} disabled={disabled || sending} onChange={event => update({ amount: event.target.value })} />
       <span className="text-xs text-muted-foreground">{capital !== null ? "初始值来自当前计划的初始本金或示意预算，不加未来年度追加；可改作本次算术示意。" : "没有自动推定你的资产或投入金额；留空只看比例。"} 这里的编辑不保存金额、不改变资金计划或账户。</span>

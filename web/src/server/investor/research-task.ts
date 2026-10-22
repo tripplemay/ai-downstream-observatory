@@ -85,13 +85,18 @@ export function readInvestorResearchTask(db: Database.Database, workspaceId: str
             market: value.market as "CN" | "HK" | "US", role: value.role as "growth" | "defensive" | "diversifier" })),
         } } : {}), result_hash: result.result_hash as string, implementation_hash: run.implementation_hash,
         candidates: (result.candidates as { parameters_hash: string; weights: Record<string, string>; train: { twr: string | null; annualized_unit_return: string | null; max_drawdown: string | null; benchmark_twr: string | null; benchmark_annualized_unit_return: string | null; benchmark_max_drawdown: string | null; excess_twr: string | null; execution_failure_count: number; benchmark_execution_failure_count: number }; stresses: { id: string; label: string; portfolio_return: string }[] }[])
-          .map(candidate => ({ parameters_hash: candidate.parameters_hash, weights: candidate.weights,
+          .map(candidate => {
+            const metricsComplete = [candidate.train.twr, candidate.train.annualized_unit_return, candidate.train.max_drawdown,
+              candidate.train.benchmark_twr, candidate.train.benchmark_annualized_unit_return, candidate.train.benchmark_max_drawdown,
+              candidate.train.excess_twr].every(value => value !== null);
+            return { parameters_hash: candidate.parameters_hash, weights: candidate.weights,
             ...(fixedPolicyDecisionRule(frozenCandidates.get(candidate.parameters_hash)!, true) ? { decision_rule: fixedPolicyDecisionRule(frozenCandidates.get(candidate.parameters_hash)!, true) } : {}),
             train_net_twr: candidate.train.twr, train_drawdown: candidate.train.max_drawdown, benchmark_net_twr: candidate.train.benchmark_twr,
-            usable: [candidate.train.twr, candidate.train.annualized_unit_return, candidate.train.max_drawdown,
-              candidate.train.benchmark_twr, candidate.train.benchmark_annualized_unit_return, candidate.train.benchmark_max_drawdown, candidate.train.excess_twr].every(value => value !== null)
-              && candidate.train.execution_failure_count === 0 && candidate.train.benchmark_execution_failure_count === 0,
-            stresses: candidate.stresses.map(stress => ({ id: stress.id, label: stress.label, portfolio_return: stress.portfolio_return })) })) };
+            usable: metricsComplete && candidate.train.execution_failure_count === 0 && candidate.train.benchmark_execution_failure_count === 0,
+            train_checks: { metrics_complete: metricsComplete, execution_failure_count: candidate.train.execution_failure_count,
+              benchmark_execution_failure_count: candidate.train.benchmark_execution_failure_count },
+            stresses: candidate.stresses.map(stress => ({ id: stress.id, label: stress.label, portfolio_return: stress.portfolio_return })) };
+          }) };
     }
   }
   else if (!source?.unavailable_reason) registry = readInvestorTrialRegistry(db, workspaceId, row, profile.content_hash, now, undefined, source);

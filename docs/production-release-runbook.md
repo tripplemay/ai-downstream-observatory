@@ -82,7 +82,7 @@ bash scripts/deploy-workbench.sh \
 只有另加 `--execute` 才执行。正式执行顺序：
 
 1. 校验代码/配置/路径/UID，获取独占发布锁，拒绝未经接管的既有新库或待恢复标记。
-2. **先构建**准确 SHA 镜像、检查 UID/OCI revision/auth/备份密钥；此时旧服务保持运行。
+2. **先构建或加载已核验镜像**，检查准确 SHA、UID/OCI revision/auth/备份密钥；此时旧服务保持运行。受保护工作流默认在 Runner 构建并传输有界镜像包，不在 VPS 重复冷构建；手工无镜像包时保留原构建路径。
 3. 首次切换：对实际旧库在线快照，再停止旧 web/worker。升级：使用旧版本兼容镜像在线备份新账本，停止旧版本写者，再取最终迁移前备份。
 4. 显式迁移 `etf-workbench.db`；首次切换再取旧库最终一致快照，逐表归档为 `legacy_archives` 和原 SQLite 附件。旧整数/BLOB 保留类型，旧模拟账户不是实际资金。
 5. 当前库加密备份，并**恢复到全新演练目录**验证。该步骤只证明同机恢复，不冒充异机灾难恢复。
@@ -90,12 +90,19 @@ bash scripts/deploy-workbench.sh \
 
 所有备份、schema、镜像 ID、恢复和健康结果写入 `release-evidence/<SHA>-<UTC>/`。旧库及旧容器保留，不自动清理旧镜像、备份或归档。
 
+工作流的 `market_provider` 参数仅决定是否包含 provider 镜像，必须与受控服务器配置一致，
+不负责启用角色或授权采集。镜像包使用每次上传独立路径和内容/运行时指纹校验，
+加载失败不会转为本机重建或跳过后续门槛。完整边界与限制见
+[`51` 低峰值发布](51-research-execution-diagnostics-and-image-release.md)。
+
 ### 升级备份空间与错误传播
 
 已有工作台升级时，构建完成后及在线备份完成、停写之前分别执行
 `scripts/check-release-capacity.py`，保留 `capacity-after-build.json` 和
 `capacity-before-stop.json`。估算包含主库、WAL、认证库、附件声明大小和打包开销；
-备份设备预留四份 payload、恢复设备预留两份 payload，每个设备另留 1 GiB。
+在线备份前，备份设备预留四份 payload；该备份成功保留后，仅为后续步骤预留三份，
+不把已占用且已反映在空闲量中的那份归档再次计入未来开销。
+恢复设备均预留两份 payload，每个设备另留 1 GiB。
 同设备需求相加，不将另一文件系统的空闲容量借给当前设备。
 
 这是偏保守的备份/恢复空间检查，不是空间锁，也不保证并发项目、迁移或后续增长

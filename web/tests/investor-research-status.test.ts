@@ -63,3 +63,21 @@ test("queued, running, retrying, blocked and failed remain distinct technical st
     assert.match(status.detail, /不代表持续监测已启用/);
   }
 });
+
+test("unusable train evidence is not described as a confirmed low risk budget or missing data feed", () => {
+  const value = task(); value.reason_codes = ["NO_CANDIDATE_WITHIN_CONFIRMED_RISK_BUDGET"];
+  value.study!.phase_checks = [];
+  value.study!.candidates = [{ parameters_hash: "f".repeat(64), weights: { "CN:ALPHA": "1" },
+    train_net_twr: "0.01", train_drawdown: "-0.01", benchmark_net_twr: "0.02", usable: false, stresses: [],
+    train_checks: { metrics_complete: true, execution_failure_count: 1, benchmark_execution_failure_count: 2 } }];
+  const original = structuredClone(value), status = researchTaskStatus(value);
+  assert.equal(status.title, "训练模拟执行有缺口，未生成参考组合");
+  assert.match(status.detail, /不能据此判定你的风险预算过低/);
+  assert.match(status.action, /不通过提高风险/); assert.deepEqual(value, original);
+  delete value.study!.candidates[0].train_checks;
+  assert.equal(researchTaskStatus(value).title, "训练或基准证据不完整，未生成参考组合");
+  value.study!.candidates[0].usable = true;
+  assert.equal(researchTaskStatus(value).title, "计算完成，研究证据仍不足");
+  value.status = "outdated";
+  assert.equal(researchTaskStatus(value).title, "研究来源或输入已失效");
+});

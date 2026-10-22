@@ -38,13 +38,16 @@ def payload_bytes(data_dir):
     return total + max(1024 ** 2, (count + 3) * 4096)
 
 
-def check_capacity(data_dir, backup_dir, restore_parent, *, usage=shutil.disk_usage, device=None):
+def check_capacity(data_dir, backup_dir, restore_parent, *, stage="before_online_backup", usage=shutil.disk_usage, device=None):
+    if stage not in ("before_online_backup", "after_online_backup"):
+        raise ValueError("INVALID_CAPACITY_STAGE")
     payload = payload_bytes(data_dir)
     device = device or (lambda path: path.stat().st_dev)
     requirements = {}
     # Three retained archives plus snapshot/encryption staging; restore retains
     # an authenticated tar and extracted payload. Summing shared devices is conservative.
-    for role, path, multiplier in (("backup", Path(backup_dir), 4), ("restore", Path(restore_parent), 2)):
+    backup_multiplier = 3 if stage == "after_online_backup" else 4
+    for role, path, multiplier in (("backup", Path(backup_dir), backup_multiplier), ("restore", Path(restore_parent), 2)):
         if not path.is_dir() or path.is_symlink():
             raise ValueError("EXISTING_PRIVATE_DIRECTORY_REQUIRED")
         identity = device(path)
@@ -54,7 +57,7 @@ def check_capacity(data_dir, backup_dir, restore_parent, *, usage=shutil.disk_us
         entry["available_bytes"] = min(entry["available_bytes"], usage(path).free)
     volumes = list(requirements.values())
     sufficient = all(row["available_bytes"] >= row["required_bytes"] for row in volumes)
-    return {"status": "sufficient" if sufficient else "insufficient", "estimated_payload_bytes": payload,
+    return {"status": "sufficient" if sufficient else "insufficient", "stage": stage, "estimated_payload_bytes": payload,
         "headroom_bytes_per_device": HEADROOM_BYTES, "volumes": volumes,
         "cleanup_performed": False, "first_release_capacity_assessed": False}
 
@@ -64,9 +67,10 @@ def main():
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--backup-dir", required=True)
     parser.add_argument("--restore-parent", required=True)
+    parser.add_argument("--stage", choices=("before_online_backup", "after_online_backup"), default="before_online_backup")
     args = parser.parse_args()
     try:
-        result = check_capacity(args.data_dir, args.backup_dir, args.restore_parent)
+        result = check_capacity(args.data_dir, args.backup_dir, args.restore_parent, stage=args.stage)
     except (OSError, ValueError, sqlite3.Error):
         print("RELEASE_CAPACITY_CHECK_FAILED", file=sys.stderr)
         return 1

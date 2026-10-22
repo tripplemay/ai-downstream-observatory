@@ -7,7 +7,8 @@ cd "$root"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 temporary=$(mktemp -d "${TMPDIR:-/tmp}/workbench-container-$run_id-XXXXXX")
 project="etf-fixture-$$"
-export WORKBENCH_RELEASE_SHA="verify-$run_id"
+WORKBENCH_RELEASE_SHA=$(git rev-parse --verify HEAD)
+export WORKBENCH_RELEASE_SHA
 export WORKBENCH_MODE=ledger
 export WORKBENCH_DATA_DIR_HOST="$temporary/data"
 export WORKBENCH_LEGACY_DATA_DIR="$temporary/legacy"
@@ -33,6 +34,15 @@ timeout 30 docker version --format '{{.Server.Version}}'
 timeout 1200 docker compose --env-file /dev/null -p "$project" -f "$root/docker-compose.yml" build web worker
 web_image="etf-workbench-web:$WORKBENCH_RELEASE_SHA"
 worker_image="etf-workbench-worker:$WORKBENCH_RELEASE_SHA"
+python3 scripts/release-image-bundle.py pack --release "$WORKBENCH_RELEASE_SHA" --directory "$temporary/image-bundle"
+python3 scripts/release-image-bundle.py load --release "$WORKBENCH_RELEASE_SHA" --directory "$temporary/image-bundle" > "$temporary/image-bundle-roundtrip.json"
+python3 - "$temporary/image-bundle-roundtrip.json" <<'PY_IMAGE_BUNDLE'
+import json,sys
+value=json.load(open(sys.argv[1]))
+assert value['status']=='loaded_images_verified' and value['image_count']==2
+assert len(value['runtime_fingerprints'])==2
+print('Native image save/load fingerprints verified; subsequent fixture runs use loaded image tags')
+PY_IMAGE_BUNDLE
 docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges:true --tmpfs /tmp --volume "$temporary:/fixture" --entrypoint node "$web_image" --input-type=module -e '
   import {randomBytes,scryptSync} from "node:crypto"; import {writeFileSync} from "node:fs";
   import Database from "better-sqlite3";

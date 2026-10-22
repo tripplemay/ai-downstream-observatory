@@ -7,6 +7,11 @@ on:
         description: Exact reviewed 40-character commit SHA on main
         required: true
         type: string
+      market_provider:
+        description: Include the optional provider image; must match protected server configuration
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -43,6 +48,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release_sha }}
+      - name: build and verify public-source image bundle on the runner
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          INCLUDE_MARKET_PROVIDER: ${{ inputs.market_provider && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 scripts/release-image-bundle.py build --release "$RELEASE_SHA" --directory "$RUNNER_TEMP/etf-release-images" --market-provider "$INCLUDE_MARKET_PROVIDER"
       - name: prepare exact source archive and pinned SSH trust
         env:
           RELEASE_SHA: ${{ inputs.release_sha }}
@@ -55,6 +68,7 @@ jobs:
           set -euo pipefail
           umask 077
           [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$GITHUB_RUN_ID" =~ ^[0-9]{1,20}$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]{1,6}$ ]]
           [[ "$VPS_HOST" =~ ^[a-zA-Z0-9.-]+$ && "$VPS_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
           [[ "$VPS_PATH" =~ ^/[a-zA-Z0-9._/-]+$ && "$VPS_PATH" != *'/../'* && "$VPS_PATH" != */.. && "$VPS_PATH" != '/' ]]
           [[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" ]]
@@ -64,8 +78,10 @@ jobs:
           [[ -s ~/.ssh/id_ed25519 && -s ~/.ssh/known_hosts ]]
           git archive --format=tar.gz --output=release.tar.gz "$RELEASE_SHA"
           sha256sum release.tar.gz > release.tar.gz.sha256
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" "umask 077; mkdir -p '$VPS_PATH/incoming/$RELEASE_SHA'"
+          image_upload="images-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" "set -eu; umask 077; mkdir -p '$VPS_PATH/incoming/$RELEASE_SHA/$image_upload'; test ! -e '$VPS_PATH/incoming/$RELEASE_SHA/$image_upload/release-images.json'; test ! -e '$VPS_PATH/incoming/$RELEASE_SHA/$image_upload/release-images.tar.gz'"
           scp -o BatchMode=yes -o StrictHostKeyChecking=yes release.tar.gz release.tar.gz.sha256 "$VPS_USER@$VPS_HOST:$VPS_PATH/incoming/$RELEASE_SHA/"
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes "$RUNNER_TEMP/etf-release-images/release-images.tar.gz" "$RUNNER_TEMP/etf-release-images/release-images.json" "$VPS_USER@$VPS_HOST:$VPS_PATH/incoming/$RELEASE_SHA/$image_upload/"
       - name: stage immutable source and run guarded cutover
         env:
           RELEASE_SHA: ${{ inputs.release_sha }}
@@ -74,11 +90,14 @@ jobs:
           VPS_PATH: ${{ secrets.VPS_PATH }}
         run: |
           set -euo pipefail
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" bash -s -- "$VPS_PATH" "$RELEASE_SHA" <<'REMOTE'
+          [[ "$GITHUB_RUN_ID" =~ ^[0-9]{1,20}$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]{1,6}$ ]]
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" bash -s -- "$VPS_PATH" "$RELEASE_SHA" "images-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" <<'REMOTE'
           set -euo pipefail
           umask 077
           root=$1
           sha=$2
+          image_upload=$3
+          [[ "$image_upload" =~ ^images-[0-9]{1,20}-[0-9]{1,6}$ ]]
           incoming="$root/incoming/$sha"
           release="$root/releases/$sha"
           cd "$incoming"
@@ -95,7 +114,7 @@ jobs:
             (cd "$stage" && find . -type f ! -name .release-files.sha256 -print0 | sort -z | xargs -0 sha256sum > .release-files.sha256)
             mv -T "$stage" "$release"
           fi
-          bash "$release/scripts/deploy-workbench.sh" --release "$sha" --release-dir "$release" --config /etc/etf-workbench/release.env --execute
+          bash "$release/scripts/deploy-workbench.sh" --release "$sha" --release-dir "$release" --config /etc/etf-workbench/release.env --image-bundle "$incoming/$image_upload/release-images.json" --execute
           REMOTE
       - name: remove runner SSH key
         if: always()
