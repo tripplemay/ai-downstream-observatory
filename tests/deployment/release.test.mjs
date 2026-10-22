@@ -289,7 +289,7 @@ test('release rechecks recovery after build, before stopping writers, migration 
   assert.notEqual(check().status, 0); assert.match(check().stderr, /Pending recovery review/);
   assert.match(deploy, /backup-key-check\.txt"\nassert_no_recovery/);
   assert.match(deploy, /legacy-online-snapshot\.json"\n  assert_no_recovery\n  writers_stopped=1/);
-  assert.match(deploy, /pre-stop-backup\.json"\n  assert_no_recovery\n  writers_stopped=1/);
+  assert.match(deploy, /pre-stop-backup\.json"\n  assert_no_recovery\n  assert_release_capacity > "\$evidence\/capacity-before-stop\.json"\n  writers_stopped=1/);
   assert.match(deploy, /assert_no_recovery\nmutation_started=1\ncompose run --rm --no-deps migrate/);
   assert.match(deploy, /local-restore-rehearsal\.json"\nassert_no_recovery\ntimeout 180/);
   assert.match(deploy, /assert_no_recovery\nln -s /);
