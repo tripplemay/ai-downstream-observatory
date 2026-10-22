@@ -77,7 +77,7 @@ export function InvestorTradeRecordingPanel({ scope, accountName, disabled, onCo
   const listing = context?.listings.find(row => row.id === draft?.listing), parent = context?.unsettled_trades.find(row => row.event_id === draft?.related);
   return <section aria-label="人工成交回录" className="min-w-0 rounded-2xl border bg-card p-5 shadow-sm md:p-6">
     <h2 className="text-lg font-semibold">2b · 直接回录已发生的成交或交收</h2>
-    <p className="mt-3 text-sm text-muted-foreground">你在券商自行交易后，可逐笔转录。这里不生成委托，不验证券商成交，也不绑定策略执行报告。成交只记录证券及应收应付；现金变化须另有实际交收资料。</p>
+    <p className="mt-3 text-sm text-muted-foreground">你在券商自行交易后，可逐笔转录。这里不生成委托、不验证券商成交，也不自动关联清单；如需关联，在下方执行跟进中单独确认。成交只记录证券及应收应付；现金变化须另有实际交收资料。</p>
     {error && <p role="alert" className="mt-4 break-words text-sm text-red-600">{error}</p>}
     {busy && <p role="status" className="mt-4 text-sm">正在核对账户与版本，不读取行情或预填成交金额。</p>}
     {!draft && <div className="mt-4 flex flex-wrap gap-3"><Button variant="outline" disabled={disabled || busy || !verified} onClick={() => void begin("trade")}>录入已发生成交</Button>

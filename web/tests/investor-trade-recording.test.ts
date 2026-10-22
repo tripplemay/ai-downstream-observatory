@@ -6,7 +6,7 @@ import { executeInvestorCommand, getInvestorState } from "../src/server/investor
 import { getTradeRecordingContext } from "../src/server/investor/trade-recording";
 import { tradeRecordingIntentSchema, type TradeRecordingIntent } from "../src/server/investor/trade-recording-schemas";
 import { getInvestorReconciliationContext } from "../src/server/investor/reconciliation";
-import { createAccount, createPortfolio, revision } from "../src/server/ledger/service";
+import { createAccount, createPortfolio, recordFact, revision } from "../src/server/ledger/service";
 import { registerListing } from "../src/server/workbench-commands";
 import { correctLedger } from "../src/server/ledger/corrections";
 import { storeJsonAttachment } from "../src/server/ledger/attachments";
@@ -35,6 +35,17 @@ function balance(f: Fixture, ledger: string) {
   return (f.db.prepare("SELECT balance FROM account_projections WHERE account_id=? AND currency='CNY' AND ledger_account=?").get(f.account, ledger) as { balance: string } | undefined)?.balance ?? "0";
 }
 function position(f: Fixture) { return f.db.prepare("SELECT quantity,cost_amount FROM position_projections WHERE account_id=? AND listing_id=?").get(f.account, f.alpha) as { quantity: string; cost_amount: string }; }
+
+test("a valid local date ahead of UTC remains readable without inventing an intraday timestamp", () => {
+  const at = "2026-01-01T20:00:20.000Z", f = investorHoldingsFixture({ securities: true, now: at }); try {
+    const event = recordFact(f.db, f.actor, { portfolio_id: f.portfolio, expected_revision: revision(f.db, f.portfolio),
+      idempotency_key: "fictional-local-date", source_id: "FICTIONAL", source_event_id: "local-date", effective_at: "2026-01-02", time_precision: "date",
+      source_timezone: "Asia/Shanghai", reason: "Fictional date precision only, not real trade evidence",
+      fact: { type: "buy", account_id: f.account, listing_id: f.alpha!, currency: "CNY", quantity: "1", consideration: "10", fee: "0" } }, at);
+    const current = getTradeRecordingContext(f.db, f.actor, f.account, at), saved = current.unsettled_trades.find(row => row.event_id === event.event_id);
+    assert.equal(saved?.effective_at, "2026-01-02"); assert.equal(saved?.source_timezone, "Asia/Shanghai");
+  } finally { f.close(); }
+});
 
 test("manual context is owned, zero-write metadata; it never prefills money, quantity, fees or a trade", () => {
   const f = investorHoldingsFixture({ securities: true, twoAccounts: true }); try {
