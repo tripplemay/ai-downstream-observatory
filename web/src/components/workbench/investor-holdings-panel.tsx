@@ -104,7 +104,7 @@ export function InvestorHoldingsPanel({ state, accounts, binding, disabled }: {
     Date.parse(reading.value.checked_at) + Math.max(0, clock.mono - reading.observedMono)) : 0;
   const comparison = value?.comparison && Date.parse(value.comparison.valid_until) > now ? value.comparison : null;
   return <section className="min-w-0 rounded-2xl border bg-card p-5 shadow-sm md:p-6" aria-label="真实组合对照">
-    <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-semibold">4 · 真实组合对照</h2>
+    <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-semibold">5 · 真实组合对照</h2>
       <Button variant="outline" disabled={!enabled || busy} onClick={() => void refresh()}>复核对照</Button></div>
     <p className="mt-3 text-sm text-muted-foreground">分母是整个账本的人民币净值，包含现金、其他证券、应收应付与在途资产，不只看目标 ETF。读取不会入账、估值或下单。</p>
     {error && <p role="alert" className="mt-4 text-sm text-red-600">{error}</p>}

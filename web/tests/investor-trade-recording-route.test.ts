@@ -9,6 +9,10 @@ import { AuthError, requireSameOrigin } from "../src/server/auth/core";
 import { parseStrictJson } from "../src/server/strict-json";
 import { investorCommandSchema } from "../src/server/investor/schemas";
 import { isInvestorClientError } from "../src/server/investor/service";
+import { buildCashRecordingIntent } from "../src/components/workbench/investor-cash-recording-client";
+import { cashContext, validCashDraft } from "./investor-cash-recording-fixture";
+import { buildValuationIntent } from "../src/components/workbench/investor-valuation-client";
+import { valuationContext, validValuationDraft } from "./investor-valuation-fixture";
 
 const binding = "a".repeat(64), origin = "https://synthetic.example.test";
 const input = { action: "record_linked_trade_fact", expected_revision: 2, idempotency_key: "fictional-command", portfolio_id: "fictional-book", account_id: "fictional-account",
@@ -19,8 +23,8 @@ function request(body: BodyInit = JSON.stringify(input), headers: Record<string,
   return new Request(`${origin}/api/workbench/investor${query}`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json",
     "X-Workbench-Session-Binding": binding, ...headers }, body });
 }
-function readRequest(query = "?account=fictional-account") { return new Request(`${origin}/api/workbench/investor/trade-recording${query}`, { headers: { "X-Workbench-Session-Binding": binding } }); }
-function harness(options: { denied?: boolean; changed?: "sid" | "owner"; effectError?: Error } = {}) {
+function readRequest(query = "?account=fictional-account", cash = false) { return new Request(`${origin}/api/workbench/investor/${cash ? "cash-recording" : "trade-recording"}${query}`, { headers: { "X-Workbench-Session-Binding": binding } }); }
+function harness(options: { denied?: boolean; changed?: "sid" | "owner"; effectError?: Error; cash?: boolean; valuation?: boolean } = {}) {
   const calls: string[] = [], captured: unknown[][] = []; let count = 0, currentRequest: Request;
   const authenticate = async () => { calls.push("authenticate"); count++;
     if (options.denied) throw new AuthError("UNAUTHENTICATED", 401);
@@ -40,14 +44,16 @@ function harness(options: { denied?: boolean; changed?: "sid" | "owner"; effectE
     } },
     "@/server/workbench-db": { openWorkbench: () => { calls.push("open"); return db; } }, "@/server/strict-json": { parseStrictJson },
     "@/server/investor/service": { executeInvestorCommand: (...args: unknown[]) => effect("execute", ...args), getInvestorState: () => ({}), isInvestorClientError },
-    "@/server/investor/trade-recording": { getTradeRecordingContext: (...args: unknown[]) => effect("context", ...args) } };
+    "@/server/investor/trade-recording": { getTradeRecordingContext: (...args: unknown[]) => effect("context", ...args) },
+    "@/server/investor/cash-recording": { getCashRecordingContext: (...args: unknown[]) => effect("context", ...args) },
+    "@/server/investor/valuation": { getInvestorValuationContext: (...args: unknown[]) => effect("context", ...args) } };
   function load(file: string) {
     const code = ts.transpileModule(readFileSync(new URL(file, import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
     const module = { exports: {} as { GET?: (req: Request) => Promise<Response>; POST?: (req: Request) => Promise<Response> } };
     const initialize = runInNewContext(`(function(require,module,exports){${code}\n})`, { Error, Buffer, URL, TextDecoder }) as (require: (name: string) => unknown, module: unknown, exports: unknown) => void;
     initialize(name => { assert.ok(name in dependencies, name); return dependencies[name]; }, module, module.exports); return module.exports;
   }
-  const read = load("../src/app/api/workbench/investor/trade-recording/route.ts"), write = load("../src/app/api/workbench/investor/route.ts");
+  const read = load(`../src/app/api/workbench/investor/${options.valuation ? "valuation" : options.cash ? "cash-recording" : "trade-recording"}/route.ts`), write = load("../src/app/api/workbench/investor/route.ts");
   return { calls, captured, GET: (req: Request) => { currentRequest = req; return read.GET!(req); }, POST: (req: Request) => { currentRequest = req; return write.POST!(req); } };
 }
 
@@ -58,6 +64,53 @@ test("manual metadata requires authentication, mandatory binding and one valid a
     if (kind === "missing") req.headers.delete("x-workbench-session-binding"); if (kind === "stale") req.headers.set("x-workbench-session-binding", "b".repeat(64));
     assert.equal((await h.GET(req)).status, kind === "anonymous" || kind === "stale" ? 401 : 400, kind); assert.equal(h.calls.includes("open"), false);
   }
+});
+
+test("whole-book valuation requires a bound unchanged session on both methods, closed JSON and no query or origin injection", async () => {
+  const body = JSON.stringify({ ...buildValuationIntent(valuationContext, validValuationDraft()), expected_revision: 2, idempotency_key: "fictional-valuation" });
+  for (const method of ["GET", "POST"] as const) {
+    const req = () => method === "GET" ? new Request(`${origin}/api/workbench/investor/valuation`, { headers: { "X-Workbench-Session-Binding": binding } }) : request(body);
+    const h = harness({ valuation: true }), response = await h[method](req()); assert.equal(response.status, 200); assert.equal(response.headers.get("cache-control"), "private, no-store");
+    assert.equal(h.calls.at(-1), "close"); assert.deepEqual(JSON.parse(JSON.stringify(h.captured[0][1])), { id: "fictional-owner" });
+    for (const kind of ["anonymous", "missing", "stale", "sid", "owner", "query"]) {
+      const guard = harness({ valuation: true, denied: kind === "anonymous", changed: kind === "sid" || kind === "owner" ? kind : undefined });
+      let input = req();
+      if (kind === "missing") input.headers.delete("x-workbench-session-binding");
+      if (kind === "stale") input.headers.set("x-workbench-session-binding", "b".repeat(64));
+      if (kind === "query") input = method === "GET" ? new Request(`${origin}/api/workbench/investor/valuation?owner=foreign`, input) : request(body, {}, "?owner=foreign");
+      assert.equal((await guard[method](input)).status, ["missing", "query"].includes(kind) ? 400 : 401, kind); assert.equal(guard.calls.includes("open"), false);
+    }
+  }
+  const foreign = harness({ valuation: true }), cross = request(body, { Origin: "https://foreign.example.test" });
+  assert.equal((await foreign.POST(cross)).status, 403); assert.equal(cross.bodyUsed, false);
+  const injected = harness({ valuation: true }); assert.equal((await injected.POST(request(body.replace('"acknowledgement":true', '"acknowledgement":true,"owner_id":"foreign"')))).status, 400);
+  for (const [code, status] of [["INVESTOR_VALUATION_CONTEXT_CONFLICT", 409], ["INVESTOR_VALUATION_SOURCE_UNAVAILABLE", 400], ["WORKBENCH_READ_ONLY", 423]] as const) {
+    assert.equal((await harness({ valuation: true, effectError: new Error(code) }).POST(request(body))).status, status);
+  }
+});
+
+test("cash endpoint and command use the same strict session/origin/body boundary without allowing implicit cash facts", async () => {
+  const body = JSON.stringify({ ...buildCashRecordingIntent(cashContext, validCashDraft()), expected_revision: 2, idempotency_key: "fictional-cash" });
+  for (const method of ["GET", "POST"] as const) {
+    const h = harness({ cash: true }), response = await h[method](method === "GET" ? readRequest(undefined, true) : request(body));
+    assert.equal(response.status, 200); assert.equal(response.headers.get("cache-control"), "private, no-store"); assert.equal(h.calls.at(-1), "close");
+    for (const denied of ["anonymous", "missing", "stale", "changed-owner", "query"]) {
+      const guard = harness({ cash: true, denied: denied === "anonymous", changed: denied === "changed-owner" ? "owner" : undefined });
+      const req = method === "GET" ? readRequest(denied === "query" ? "?account=fictional-account&owner=foreign" : undefined, true)
+        : request(body, {}, denied === "query" ? "?owner=foreign" : "");
+      if (denied === "missing") req.headers.delete("x-workbench-session-binding");
+      if (denied === "stale") req.headers.set("x-workbench-session-binding", "b".repeat(64));
+      assert.equal((await guard[method](req)).status, ["missing", "query"].includes(denied) ? 400 : 401, denied);
+      assert.equal(guard.calls.includes("open"), false);
+    }
+  }
+  for (const [code, status] of [["INVESTOR_CASH_CONTEXT_CONFLICT", 409], ["INVESTOR_CASH_ACCOUNT_DISABLED", 400], ["INVESTOR_CASH_SOURCE_DUPLICATE_CONFLICT", 409], ["WORKBENCH_READ_ONLY", 423]] as const) {
+    const h = harness({ cash: true, effectError: new Error(code) }); assert.equal((await h.POST(request(body))).status, status);
+  }
+  const h = harness({ cash: true, effectError: new Error("PRIVATE_CASH_MARKER /private/fixture") }), response = await h.GET(readRequest(undefined, true));
+  assert.equal(response.status, 503); assert.deepEqual(await response.json(), { error: "INVESTOR_CASH_UNAVAILABLE" });
+  const noOrigin = harness({ cash: true }), req = request(body, { Origin: "https://foreign.example.test" });
+  assert.equal((await noOrigin.POST(req)).status, 403); assert.equal(req.bodyUsed, false);
 });
 
 test("manual writes reject anonymous, stale sessions and cross-origin requests before reading the body; both methods recheck owner and SID", async () => {

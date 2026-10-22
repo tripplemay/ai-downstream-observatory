@@ -28,7 +28,8 @@ export function mountInvestorDisplay<P>(t: { after: (fn: () => void) => void }, 
   const listeners = (map: typeof windowListeners) => ({ addEventListener(event: string, fn: () => void) {
     if (!map.has(event)) map.set(event, new Set()); map.get(event)!.add(fn);
   }, removeEventListener(event: string, fn: () => void) { map.get(event)?.delete(fn); } });
-  const document = { ...listeners(documentListeners), visibilityState: "visible" }, window = { ...listeners(windowListeners), confirm: () => false };
+  const document = { ...listeners(documentListeners), visibilityState: "visible" }, window = { ...listeners(windowListeners), confirm: () => false,
+    dispatchEvent(event: { type: string }) { for (const fn of windowListeners.get(event.type) ?? []) fn(); return true; } };
   const requests: { url: string; method: string; options: RequestInit; resolve: (value: Response) => void; reject: (error: Error) => void }[] = [];
   const schedule = () => { if (!scheduled && mounted) { scheduled = true; queueMicrotask(() => { scheduled = false; if (mounted) render(); }); } };
   const react = { Fragment: "Fragment", useState(initial: unknown) { const index = cursor++; if (!(index in hooks)) hooks[index] = typeof initial === "function" ? initial() : initial;
@@ -53,7 +54,8 @@ export function mountInvestorDisplay<P>(t: { after: (fn: () => void) => void }, 
   const arm = (callback: () => void, delay: number, interval?: number) => {
     const id = ++timerId; timers.set(id, { callback, at: elapsed + delay, interval }); return id;
   };
-  const context = { window, document, AbortController, TextEncoder, crypto: { randomUUID: () => "fictional-display-command", subtle: webcrypto.subtle },
+  const context = { window, document, AbortController, TextEncoder, Element: class {}, CustomEvent: class { constructor(public type: string) {} },
+    crypto: { randomUUID: () => "fictional-display-command", subtle: webcrypto.subtle },
     Date: class extends Date { static now() { return wall; } }, performance: { now: () => elapsed },
     setTimeout: (fn: () => void, delay: number) => arm(fn, delay), clearTimeout: (id: number) => timers.delete(id),
     setInterval: (fn: () => void, delay: number) => arm(fn, delay, delay), clearInterval: (id: number) => timers.delete(id),

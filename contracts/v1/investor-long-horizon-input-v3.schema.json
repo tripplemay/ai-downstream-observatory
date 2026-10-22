@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-long-horizon-input-v3.schema.json",
+  "$defs": {
+    "context": {
+      "type": "object",
+      "required": ["parameters_recorded_at", "comparison_declared_at", "information_cutoff_at", "parameters", "decision_times", "execution", "tax_coverage"],
+      "properties": {
+        "parameters_recorded_at": {"$ref": "common.schema.json#/$defs/instant"},
+        "comparison_declared_at": {"$ref": "common.schema.json#/$defs/instant"},
+        "information_cutoff_at": {"$ref": "common.schema.json#/$defs/instant"},
+        "parameters": {"$ref": "investor-long-horizon-input-v2.schema.json#/$defs/context/properties/parameters"},
+        "decision_times": {"$ref": "investor-long-horizon-input-v2.schema.json#/$defs/context/properties/decision_times"},
+        "execution": {"$ref": "research-plan-v3.schema.json#/properties/execution"},
+        "tax_coverage": {"$ref": "investor-long-horizon-input-v2.schema.json#/$defs/context/properties/tax_coverage"}
+      }, "additionalProperties": false
+    },
+    "plan": {
+      "type": "object",
+      "required": ["schema_version", "study_basis", "window", "evaluation_timezone", "parameters_recorded_at", "comparison_declared_at", "information_cutoff_at", "parameters", "initial_capital_cny", "contributions", "decision_times", "funding_policy", "execution", "tax_coverage"],
+      "properties": {
+        "schema_version": {"const": "investor-long-horizon-plan-v3"},
+        "study_basis": {"const": "retrospective_exploratory"},
+        "window": {"$ref": "research-plan.schema.json#/$defs/window"},
+        "evaluation_timezone": {"$ref": "common.schema.json#/$defs/timezone"},
+        "parameters_recorded_at": {"$ref": "common.schema.json#/$defs/instant"},
+        "comparison_declared_at": {"$ref": "common.schema.json#/$defs/instant"},
+        "information_cutoff_at": {"$ref": "common.schema.json#/$defs/instant"},
+        "parameters": {"$ref": "#/$defs/context/properties/parameters"},
+        "initial_capital_cny": {"$ref": "investor-long-horizon-input-v2.schema.json#/$defs/plan/properties/initial_capital_cny"},
+        "contributions": {"$ref": "investor-long-horizon-input-v2.schema.json#/$defs/plan/properties/contributions"},
+        "decision_times": {"$ref": "#/$defs/context/properties/decision_times"},
+        "funding_policy": {"$ref": "investor-long-horizon-input-v2.schema.json#/$defs/plan/properties/funding_policy"},
+        "execution": {"$ref": "#/$defs/context/properties/execution"},
+        "tax_coverage": {"$ref": "#/$defs/context/properties/tax_coverage"}
+      }, "additionalProperties": false
+    }
+  },
+  "type": "object", "required": ["schema_version", "dataset", "plan"],
+  "properties": {
+    "schema_version": {"const": "investor-long-horizon-input-v3"},
+    "dataset": {"$ref": "investor-long-horizon-input.schema.json#/properties/dataset"},
+    "plan": {"$ref": "#/$defs/plan"}
+  }, "additionalProperties": false
+}

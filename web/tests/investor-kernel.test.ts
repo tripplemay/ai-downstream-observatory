@@ -6,7 +6,7 @@ import { modelAssessmentObservation, parseInvestorKernelOutput, verifyInvestorKe
 import { investorProfileSchema, modelChangeSchema } from "../src/server/investor/schemas";
 import { executeInvestorCommand, getInvestorState } from "../src/server/investor/service";
 import { investorActor, investorFixture, saveSyntheticProfile, seedSyntheticCandidate } from "./investor-fixture";
-import { formatResearchMoney } from "../src/components/workbench/research-format";
+import { formatResearchMoney, formatResearchMoneyDelta } from "../src/components/workbench/research-format";
 import { fixedPolicyDecisionRule } from "../src/server/investor/fixed-policy";
 
 const python = process.env.WORKBENCH_TEST_PYTHON ?? process.env.WORKBENCH_PYTHON ?? "python3";
@@ -215,4 +215,16 @@ test("research money presentation rounds half-even with exact cents, never float
   for (const invalid of ["NaN", "1e3", "01", " 1", "1.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"]) {
     assert.throws(() => formatResearchMoney(invalid));
   }
+});
+
+test("nonzero model deltas cannot masquerade as exact zero after cent display rounding", () => {
+  for (const value of ["0.001", "0.005", "0." + "0".repeat(118) + "1"]) {
+    assert.equal(formatResearchMoneyDelta(value), "+<0.01");
+    assert.equal(formatResearchMoneyDelta("-" + value), "-<0.01");
+  }
+  for (const value of ["0", "0.00", "-0.000"]) assert.equal(formatResearchMoneyDelta(value), "0.00");
+  assert.equal(formatResearchMoneyDelta("0.006"), "0.01");
+  assert.equal(formatResearchMoneyDelta("-0.006"), "-0.01");
+  assert.equal(formatResearchMoneyDelta("1200"), "1,200.00");
+  assert.throws(() => formatResearchMoneyDelta("1e-50"));
 });

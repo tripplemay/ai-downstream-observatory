@@ -10,10 +10,13 @@ import marketCollect from "../../../contracts/v1/market-collect.schema.json";
 import referenceFacts from "../../../contracts/v1/market-reference-facts.schema.json";
 import marketPriceCollect from "../../../contracts/v1/market-price-collect.schema.json";
 import valuationRules from "../../../contracts/v1/valuation-rules.schema.json";
+import valuationBinding from "../../../contracts/v1/valuation-binding.schema.json";
 import performanceCommand from "../../../contracts/v1/performance-command.schema.json";
 import flowFxRules from "../../../contracts/v1/flow-fx-rules.schema.json";
 import researchCommand from "../../../contracts/v1/research-command.schema.json";
 import researchPlan from "../../../contracts/v1/research-plan.schema.json";
+import researchBoundedPlan from "../../../contracts/v1/research-plan-v3.schema.json";
+import researchPlanInput from "../../../contracts/v1/research-plan-input.schema.json";
 import researchDataset from "../../../contracts/v1/research-dataset.schema.json";
 import researchParameters from "../../../contracts/v1/research-parameters.schema.json";
 import researchRotation from "../../../contracts/v1/research-rotation-parameters.schema.json";
@@ -41,13 +44,15 @@ export const listingCommandSchema = envelope.extend({
 export const taskCommandSchema = envelope.extend({
   command_type: z.enum(["valuation", "market_ingest", "market_collect", "market_collect_prices", "performance", "research_register", "research_register_trial", "research_trial", "research_freeze", "research_unseal", "research_ai_context", "research_ai_review"]), payload: z.unknown(),
 }).strict();
-const valuationPayload = z.object({ cutoff_at: z.string().datetime(), rules: z.unknown(), mode: z.enum(["as_known", "restated"]).optional() }).strict();
+const valuationPayload = z.object({ cutoff_at: z.string().datetime(), rules: z.unknown(), mode: z.enum(["as_known", "restated"]).optional(),
+  expected_inputs: z.unknown().optional() }).strict();
 const marketPayload = z.object({ document: z.unknown(), publish: z.boolean() }).strict();
 const ajv = new Ajv2020({ strict: true, strictRequired: false, allErrors: true });
 addFormats(ajv);
 ajv.addSchema(common);
 ajv.addSchema(observation);
 const checkBatch = ajv.compile(batch), checkRules = ajv.compile(valuationRules);
+const checkValuationBinding = ajv.compile(valuationBinding);
 const checkMarketCollect = ajv.compile(marketCollect);
 ajv.addSchema(referenceFacts);
 const checkPriceCollect = ajv.compile(marketPriceCollect);
@@ -59,6 +64,8 @@ ajv.addSchema(researchFixedRebalance);
 ajv.addSchema(researchFixedRebalanceV2);
 ajv.addSchema(researchFixedPolicy);
 ajv.addSchema(researchPlan);
+ajv.addSchema(researchBoundedPlan);
+ajv.addSchema(researchPlanInput);
 ajv.addSchema(researchDataset);
 const checkResearch = ajv.compile(researchCommand);
 
@@ -104,6 +111,13 @@ export function enqueueWorkbenchTask(db: Database.Database, actor: Actor, raw: u
   if (input.command_type === "valuation") {
     const parsed = valuationPayload.parse(input.payload);
     if (!checkRules(parsed.rules)) throw new Error("INVALID_VALUATION_RULES");
+    if (parsed.expected_inputs !== undefined && (parsed.mode !== "restated" || !checkValuationBinding(parsed.expected_inputs))) throw new Error("INVALID_VALUATION_BINDING");
+    if (parsed.expected_inputs !== undefined) {
+      const binding = parsed.expected_inputs as { ledger_revision: number; market_heads: Record<string, unknown> };
+      const rules = parsed.rules as { price_scope_by_market: Record<string, string>; fx_scope?: string };
+      const scopes = [...new Set([...Object.values(rules.price_scope_by_market), ...(rules.fx_scope ? [rules.fx_scope] : [])])].sort();
+      if (binding.ledger_revision !== input.expected_revision || canonical(Object.keys(binding.market_heads).sort()) !== canonical(scopes)) throw new Error("INVALID_VALUATION_BINDING");
+    }
     if (Date.parse(parsed.cutoff_at) > Date.parse(now)) throw new Error("FUTURE_VALUATION_NOT_ALLOWED");
     payload = parsed;
   } else if (input.command_type === "performance") {

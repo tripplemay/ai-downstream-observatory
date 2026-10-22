@@ -14,6 +14,8 @@ import { parseInvestorAccounts } from "./investor-accounts-client";
 import { InvestorHoldingsPanel } from "./investor-holdings-panel";
 import { InvestorReconciliationPanel } from "./investor-reconciliation-panel";
 import { InvestorTradeRecordingPanel } from "./investor-trade-recording-panel";
+import { InvestorCashRecordingPanel } from "./investor-cash-recording-panel";
+import { InvestorValuationPanel } from "./investor-valuation-panel";
 
 const panel = "min-w-0 rounded-2xl border bg-card p-5 shadow-sm md:p-6";
 const field = "flex min-w-0 flex-col gap-2 text-sm";
@@ -33,6 +35,8 @@ export function InvestorAccountWorkspace({ state, binding, disabled, onCommand, 
   const [dataValid, setDataValid] = useState(false);
   const [reconciliationLocked, setReconciliationLocked] = useState(false);
   const [tradeLocked, setTradeLocked] = useState(false);
+  const [cashLocked, setCashLocked] = useState(false);
+  const [valuationLocked, setValuationLocked] = useState(false);
   const [busy, setBusy] = useState(false), [csvLocked, setCsvLocked] = useState(false), [accountId, setAccountId] = useState(""), [bookChoice, setBookChoice] = useState("");
   const active = useRef<AbortController | null>(null), epoch = useRef(0), alive = useRef(true), invalidated = useRef(false);
   const current = useRef({ state, session }); current.current = { state, session };
@@ -42,7 +46,7 @@ export function InvestorAccountWorkspace({ state, binding, disabled, onCommand, 
   const retained = fresh && !invalidated.current;
   const book = retained ? data.books.find(row => row.id === data.link?.document.portfolio_id) : undefined;
   const selectedAccount = retained ? data.accounts.find(row => row.id === accountId) : undefined;
-  const locked = disabled || busy || csvLocked || reconciliationLocked || tradeLocked || !visible || data.read_only;
+  const locked = disabled || busy || csvLocked || reconciliationLocked || tradeLocked || cashLocked || valuationLocked || !visible || data.read_only;
 
   const refresh = useCallback(async () => {
     const context = current.current;
@@ -88,10 +92,10 @@ export function InvestorAccountWorkspace({ state, binding, disabled, onCommand, 
   }, []);
   useEffect(() => {
     if (!verified) { epoch.current++; active.current?.abort(); setBusy(false); return; }
-    if (!csvLocked && !reconciliationLocked && !tradeLocked) void refresh().catch(() => {});
+    if (!csvLocked && !reconciliationLocked && !tradeLocked && !cashLocked && !valuationLocked) void refresh().catch(() => {});
     return () => { epoch.current++; active.current?.abort(); };
   }, [verified, state.workspace_id, state.revision, refresh]);
-  useEffect(() => { onScopeLockChange(verified && (busy || csvLocked || reconciliationLocked || tradeLocked)); }, [verified, busy, csvLocked, reconciliationLocked, tradeLocked, onScopeLockChange]);
+  useEffect(() => { onScopeLockChange(verified && (busy || csvLocked || reconciliationLocked || tradeLocked || cashLocked || valuationLocked)); }, [verified, busy, csvLocked, reconciliationLocked, tradeLocked, cashLocked, valuationLocked, onScopeLockChange]);
   useEffect(() => () => onScopeLockChange(false), [onScopeLockChange]);
 
   function submitAccount(event: FormEvent<HTMLFormElement>, createBook: boolean) {
@@ -110,7 +114,7 @@ export function InvestorAccountWorkspace({ state, binding, disabled, onCommand, 
       <ol className="mt-4 grid gap-3 text-sm sm:grid-cols-3"><li className="rounded-xl border p-3">1 · 选择私有账本与账户</li><li className="rounded-xl border p-3">2 · 导入流水或逐笔回录已发生事实</li><li className="rounded-xl border p-3">3 · 录入独立资料，对账后看对照</li></ol>
       {!state.profile && <p className="mt-4 text-sm">先在<Link className="underline" href="/workbench">总览</Link>保存研究偏好；账户仍可不建立。</p>}
       {error && <p role="alert" className="mt-4 break-words text-sm text-red-600">{error}</p>}
-      <Button className="mt-4" variant="outline" disabled={!verified || busy || csvLocked || reconciliationLocked || tradeLocked || disabled} onClick={() => void refresh().catch(() => {})}>核对账户资料</Button>
+      <Button className="mt-4" variant="outline" disabled={!verified || busy || csvLocked || reconciliationLocked || tradeLocked || cashLocked || valuationLocked || disabled} onClick={() => void refresh().catch(() => {})}>核对账户资料</Button>
       {!visible && <p role="status" className="mt-3 text-sm text-muted-foreground">正在核对当前登录与研究版本；不显示缓存中的账户资料。</p>}
     </section>
     {retained && state.profile && <div hidden={!verified} inert={!verified} style={{ display: verified ? undefined : "none" }} className="flex min-w-0 flex-col gap-6">
@@ -124,23 +128,33 @@ export function InvestorAccountWorkspace({ state, binding, disabled, onCommand, 
         <details className="mt-5" open={!book && data.books.length === 0}><summary className="cursor-pointer text-sm">新建空账本与首个账户</summary><form className="mt-4 grid gap-4 sm:grid-cols-2" onSubmit={event => submitAccount(event, true)}><fieldset disabled={locked} className="contents"><label className={field}>账本名称<Input name="book_name" required maxLength={120} autoComplete="off" /></label><AccountFields /><Button className="sm:col-span-2" disabled={locked}>仅建档并关联，不生成现金或持仓</Button></fieldset></form></details>
         {book && <details className="mt-4"><summary className="cursor-pointer text-sm">添加另一个账户</summary><form className="mt-4 grid gap-4 sm:grid-cols-2" onSubmit={event => submitAccount(event, false)}><fieldset disabled={locked} className="contents"><AccountFields /><Button disabled={locked}>添加待对账账户</Button></fieldset></form></details>}
       </section>
-      {book && <section className={panel}><h2 className="text-lg font-semibold">2 · 从券商导出的 CSV 核对已发生事实</h2><p className="mt-2 text-sm text-muted-foreground">先读取少量样本确认列含义，再校验整份文件和重复记录，最后由你确认。原生券商格式尚未认证，不猜费用、日期或数量；少量成交也可在下方逐笔回录。</p>
-        <label className={`${field} mt-4`}>导入账户<select aria-label="账户导入目标" className={select} value={accountId} disabled={locked} onChange={event => setAccountId(event.target.value)}>{data.accounts.map(row => <option key={row.id} value={row.id}>{row.name} · {row.base_currency}{row.status === "disabled" ? " · 已停用" : ""}</option>)}</select></label>
+      {book && <section className={panel}><h2 className="text-lg font-semibold">2 · 回录或导入已发生事实</h2><p className="mt-2 text-sm text-muted-foreground">少量外部资金可逐笔回录；批量流水先核对 CSV 小样，再由你确认。原生券商格式尚未认证，不猜费用、日期或数量；成交和交收保留在下方独立回录。</p>
+        <label className={`${field} mt-4`}>本次回录或导入账户<select aria-label="账户导入目标" className={select} value={accountId} disabled={locked} onChange={event => setAccountId(event.target.value)}>{data.accounts.map(row => <option key={row.id} value={row.id}>{row.name} · {row.base_currency}{row.status === "disabled" ? " · 已停用" : ""}</option>)}</select></label>
         {selectedAccount && <p className="mt-2 text-xs text-muted-foreground">{selectedAccount.broker} · {statusNames[selectedAccount.status]}</p>}
-        {selectedAccount?.status === "disabled" ? <p className="mt-4 text-sm">该账户已停用，先通过高级账本核对状态，不在这里绕过停用限制。</p> : selectedAccount ? <div className="mt-5 min-w-0"><CsvBackgroundWorkspace portfolioId={book.id} accountId={selectedAccount.id} revision={book.ledger_revision}
-          readOnly={disabled || reconciliationLocked || tradeLocked || data.read_only || !dataValid}
-          readOnlyMessage={data.read_only ? undefined : tradeLocked ? "成交或交收草稿尚未结束，暂停 CSV 提交；不会取消已受理任务。" : reconciliationLocked ? "独立对账草稿或范围核对尚未结束，暂停 CSV 提交；不会取消已受理任务。" : disabled || !dataValid ? "当前资料或提交仍待核对，暂停新的 CSV 操作；不会推定先前请求失败。" : undefined}
-          onScopeLockChange={setCsvLocked} onRestorePendingScope={restoreScope} onCommitted={refresh} /></div> : <p className="mt-4 text-sm">先添加一个账户，再检查 CSV 小样。</p>}
+        {selectedAccount && selectedAccount.status !== "disabled" && data.link && <div className="mt-5"><InvestorCashRecordingPanel scope={{ binding, workspace: state.workspace_id, revision: state.revision,
+          portfolio: book.id, ledgerRevision: book.ledger_revision, linkId: data.link.id, linkVersion: data.link.version, accountId: selectedAccount.id,
+          accountRowVersion: selectedAccount.row_version }} accountName={selectedAccount.name} disabled={disabled || busy || csvLocked || reconciliationLocked || tradeLocked || valuationLocked || !visible}
+          onCommand={onCommand} onDraftLockChange={setCashLocked} /></div>}
+        {selectedAccount?.status === "disabled" ? <p className="mt-4 text-sm">该账户已停用，先通过高级账本核对状态，不在这里绕过停用限制。</p> : selectedAccount ? <details data-testid="optional-account-csv" className="mt-5 min-w-0 rounded-xl border p-4">
+          <summary className="cursor-pointer text-sm font-medium">批量导入 CSV（可选）{csvLocked && <span role="status"> · 请求处理中或仍待核对</span>}</summary>
+          <p className="mt-3 text-sm text-muted-foreground">少量资金或成交可直接逐笔回录。展开不提交任务，收起不清除草稿或取消已受理任务；未决请求仍须在这里核对。</p>
+          <div className="mt-4 min-w-0"><CsvBackgroundWorkspace portfolioId={book.id} accountId={selectedAccount.id} revision={book.ledger_revision}
+          readOnly={disabled || reconciliationLocked || tradeLocked || cashLocked || valuationLocked || data.read_only || !dataValid}
+          readOnlyMessage={data.read_only ? undefined : valuationLocked ? "估值草稿或范围核对尚未结束，暂停 CSV 提交；不会取消已受理任务。" : cashLocked ? "资金草稿尚未结束，暂停 CSV 提交；不会取消已受理任务。" : tradeLocked ? "成交或交收草稿尚未结束，暂停 CSV 提交；不会取消已受理任务。" : reconciliationLocked ? "独立对账草稿或范围核对尚未结束，暂停 CSV 提交；不会取消已受理任务。" : disabled || !dataValid ? "当前资料或提交仍待核对，暂停新的 CSV 操作；不会推定先前请求失败。" : undefined}
+          onScopeLockChange={setCsvLocked} onRestorePendingScope={restoreScope} onCommitted={refresh} /></div></details> : <p className="mt-4 text-sm">先添加一个账户，再检查 CSV 小样。</p>}
       </section>}
       {book && selectedAccount && selectedAccount.status !== "disabled" && data.link && <InvestorTradeRecordingPanel scope={{ binding, workspace: state.workspace_id, revision: state.revision,
         portfolio: book.id, ledgerRevision: book.ledger_revision, linkId: data.link.id, linkVersion: data.link.version, accountId: selectedAccount.id,
-        accountRowVersion: selectedAccount.row_version }} accountName={selectedAccount.name} disabled={disabled || busy || csvLocked || reconciliationLocked || !visible}
+        accountRowVersion: selectedAccount.row_version }} accountName={selectedAccount.name} disabled={disabled || busy || csvLocked || reconciliationLocked || cashLocked || valuationLocked || !visible}
         onCommand={onCommand} onDraftLockChange={setTradeLocked} />}
       {book && selectedAccount && data.link && <InvestorReconciliationPanel scope={{ binding, workspace: state.workspace_id, revision: state.revision,
         portfolio: book.id, ledgerRevision: book.ledger_revision, linkId: data.link.id, linkVersion: data.link.version, accountId: selectedAccount.id,
-        accountRowVersion: selectedAccount.row_version }} accountName={selectedAccount.name} disabled={disabled || busy || csvLocked || tradeLocked || !visible}
+        accountRowVersion: selectedAccount.row_version }} accountName={selectedAccount.name} disabled={disabled || busy || csvLocked || tradeLocked || cashLocked || valuationLocked || !visible}
         onCommand={onCommand} onDraftLockChange={setReconciliationLocked} />}
-      <InvestorHoldingsPanel state={state} accounts={data} binding={binding} disabled={disabled || busy || csvLocked || reconciliationLocked || tradeLocked || !visible} />
+      {book && data.link && <InvestorValuationPanel scope={{ binding, workspace: state.workspace_id, revision: state.revision, portfolio: book.id,
+        ledgerRevision: book.ledger_revision, linkId: data.link.id, linkVersion: data.link.version }} disabled={disabled || busy || csvLocked || reconciliationLocked || tradeLocked || cashLocked || !visible}
+        onCommand={onCommand} onDraftLockChange={setValuationLocked} />}
+      <InvestorHoldingsPanel state={state} accounts={data} binding={binding} disabled={disabled || busy || csvLocked || reconciliationLocked || tradeLocked || cashLocked || valuationLocked || !visible} />
     </div>}
   </>;
 }

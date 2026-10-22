@@ -3,7 +3,7 @@
   "$id": "https://etf-workbench.invalid/contracts/v1/investor-kernel-request.schema.json",
   "oneOf": [
     {"type": "object", "required": ["action", "dataset", "plan", "policy", "profile"], "properties": {
-      "action": {"const": "research"}, "dataset": {"$ref": "research-dataset.schema.json"}, "plan": {"$ref": "research-plan.schema.json"},
+      "action": {"const": "research"}, "dataset": {"$ref": "research-dataset.schema.json"}, "plan": {"$ref": "research-plan-input.schema.json"},
       "policy": {"$ref": "investor-strategy-policy.schema.json"}, "profile": {"$ref": "investor-profile.schema.json"}
     }, "additionalProperties": false},
     {"type": "object", "required": ["action", "document", "now"], "properties": {

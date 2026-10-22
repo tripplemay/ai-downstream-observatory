@@ -20,9 +20,19 @@ EXPIRY = "2027-01-01T00:00:00.000Z"
 START, END = "2025-01-01", "2025-06-10"
 
 
-def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, funded_year=False, funded_calendar=False, external_ai=False, initial_monitor_calendar=False):
+def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, funded_year=False, funded_calendar=False, external_ai=False, initial_monitor_calendar=False, bounded_execution_v3=False, browser_cent_tolerance=False):
     if initial_monitor_calendar and (funded_year or funded_calendar): raise WorkbenchError("SYNTHETIC_INITIAL_CALENDAR_CONFLICT")
     data, plan, policy = fixed_policy_input() if fixed_policy_v2 else research_input()
+    if browser_cent_tolerance:
+        if not bounded_execution_v3 or not fixed_policy_v2:
+            raise WorkbenchError("SYNTHETIC_BROWSER_TOLERANCE_SCOPE")
+        for parameters in [*plan["parameter_candidates"], plan["benchmark"], *policy["candidates"]]:
+            parameters["tolerance"]["absolute_cny"] = "0.01"
+    if bounded_execution_v3:
+        if not fixed_policy_v2:
+            raise WorkbenchError("SYNTHETIC_BOUNDED_EXECUTION_SCOPE")
+        from tests.research.bounded_fixtures import bounded_plan
+        plan = bounded_plan(plan)
     start_date, end_date = START, END
     if funded_calendar or funded_year:
         plan["evaluation_timezone"] = "Asia/Shanghai"
@@ -98,6 +108,8 @@ def main():
     parser.add_argument("--db", required=True)
     parser.add_argument("--now", default=NOW)
     parser.add_argument("--fixed-policy-v2", action="store_true")
+    parser.add_argument("--bounded-execution-v3", action="store_true", help="Explicit synthetic v3 plan; no production parameters")
+    parser.add_argument("--browser-cent-tolerance", action="store_true", help="Explicit fixture-only cent tolerance frozen before study")
     parser.add_argument("--funded-year", action="store_true")
     parser.add_argument("--funded-calendar", action="store_true")
     parser.add_argument("--initial-monitor-calendar", action="store_true", help="Invented future calendar, declared before study freeze")
@@ -112,7 +124,7 @@ def main():
         if len(rows) != 1 or db.execute("SELECT count(*) FROM portfolios").fetchone()[0]:
             raise WorkbenchError("SYNTHETIC_EMPTY_FINANCIAL_DATABASE_REQUIRED")
         create(db, rows[0]["id"], rows[0]["owner_id"], now=args.now, fixed_policy_v2=args.fixed_policy_v2, funded_year=args.funded_year,
-            funded_calendar=args.funded_calendar, external_ai=args.external_ai, initial_monitor_calendar=args.initial_monitor_calendar)
+            funded_calendar=args.funded_calendar, external_ai=args.external_ai, initial_monitor_calendar=args.initial_monitor_calendar, bounded_execution_v3=args.bounded_execution_v3, browser_cent_tolerance=args.browser_cent_tolerance)
         print(canonical_json({"status": "fictional_stub_evidence_fixture_complete", "real_provider_called": False}))
     finally:
         db.close()

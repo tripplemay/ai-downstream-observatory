@@ -880,4 +880,83 @@ finally:
     return { explicit_choice: true, original_preferences_preserved: true, existing_funding_not_automatically_rebound: true,
       current_research_registered: true, withdrawn_source_stays_unavailable: true, duplicate_replay_safe: true, source_qualification_upgraded: false, automatic_orders: false };
   });
+  await check('HTTP-I21', 'manual external cash uses the live authenticated route, exact currency postings and immutable retry without changing research or trading authority', async () => {
+    const before = (await get()).json;
+    assert.equal((await post({ action: 'create_account_book', expected_revision: before.revision, idempotency_key: 'http-cash-book',
+      book_name: 'Fictional cash-only HTTP book', account: { name: 'Fictional cash account', broker: 'Fictional broker', currency: 'CNY' } })).status, 200);
+    const accounts = (await jsonRequest(`${endpoint}/accounts`, { headers: headers() })).json;
+    const account = accounts.accounts[0], portfolio = accounts.link.document.portfolio_id;
+    const route = `${endpoint}/cash-recording?account=${account.id}`;
+    const protectedRows = () => read(db => Object.fromEntries(['position_movements', 'approval_events', 'activations', 'reservations', 'execution_reports',
+      'investor_profiles', 'investor_funding_plans', 'investor_models', 'investor_ai_requests', 'outbox', 'job_runs']
+      .map(table => [table, db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()])));
+    const protectedBefore = protectedRows(), initial = financial();
+    assert.equal((await jsonRequest(route)).status, 401);
+    assert.equal((await jsonRequest(route, { headers: { Cookie: cookie } })).status, 400);
+    assert.equal((await jsonRequest(route, { headers: headers({ 'X-Workbench-Session-Binding': 'b'.repeat(64) }) })).status, 401);
+    for (const query of ['', '?account=x&account=y', `?account=${account.id}&actor_id=other`])
+      assert.equal((await jsonRequest(`${endpoint}/cash-recording${query}`, { headers: headers() })).status, 400);
+    assert.equal((await jsonRequest(`${endpoint}/cash-recording?account=foreign`, { headers: headers() })).status, 403);
+    const context = async () => {
+      const response = await jsonRequest(route, { headers: headers() });
+      assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'private, no-store');
+      assert.equal(response.json.session_binding, binding); assert.equal(response.json.execution_authorized, false);
+      assert.equal(response.json.portfolio_id, portfolio); assert.equal(response.json.account_id, account.id);
+      assert.doesNotMatch(JSON.stringify(response.json), /"(?:amount|balance|budget|planned|effective_date)"/);
+      return response.json;
+    };
+    const firstContext = await context(); assert.deepEqual(financial(), initial);
+    const date = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const body = (c, currency, type, source, amount = '300.01') => ({ action: 'record_linked_cash_fact', expected_revision: c.workspace_revision,
+      idempotency_key: source, portfolio_id: c.portfolio_id, account_id: c.account_id, expected_ledger_revision: c.ledger_revision,
+      expected_account_row_version: c.account_row_version, expected_link_id: c.link_id, expected_link_version: c.link_version,
+      expected_context_hash: c.context_hash, basis: 'operator_external_cash_transcription_not_broker_file', acknowledgement: true,
+      source_id: 'FICTIONAL-HTTP-CASH', source_event_id: source, source_reference: 'Fictional independent external cash document',
+      effective_date: date, source_timezone: 'Asia/Shanghai', entry: { type, currency, amount } });
+    const original = body(firstContext, 'CNY', 'deposit', 'http-cash-in-CNY');
+    assert.equal((await post(original, { Origin: 'https://wrong.example.test' })).status, 403);
+    assert.equal((await post(original, { 'X-Workbench-Session-Binding': '' })).status, 401);
+    assert.equal((await jsonRequest(endpoint, { method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify(original) })).status, 400);
+    for (const extra of [{ execution_authorized: true }, { acknowledgement: false }, { entry: { ...original.entry, fee: '0' } }])
+      assert.equal((await post({ ...original, ...extra })).status, 400);
+    const first = await post(original); assert.equal(first.status, 200, JSON.stringify(first.json));
+    const saved = financial();
+    assert.deepEqual((await post(original)).json, first.json); assert.deepEqual(financial(), saved);
+    assert.equal((await post({ ...original, idempotency_key: 'http-cash-stale-context' })).status, 409);
+    const repeated = body(await context(), 'CNY', 'deposit', original.source_event_id);
+    repeated.idempotency_key = 'http-cash-same-source';
+    const duplicate = await post(repeated); assert.equal(duplicate.status, 200);
+    assert.equal(duplicate.json.resource_id, first.json.resource_id); assert.deepEqual(financial(), saved);
+    const conflicting = body(await context(), 'CNY', 'deposit', original.source_event_id, '301');
+    conflicting.idempotency_key = 'http-cash-conflicting-source';
+    const conflict = await post(conflicting); assert.equal(conflict.status, 409);
+    assert.equal(conflict.json.error, 'INVESTOR_CASH_SOURCE_DUPLICATE_CONFLICT'); assert.deepEqual(financial(), saved);
+    for (const currency of ['HKD', 'USD']) {
+      const added = await post(body(await context(), currency, 'deposit', 'http-cash-in-' + currency));
+      assert.equal(added.status, 200, JSON.stringify(added.json));
+    }
+    const withdrawal = await post(body(await context(), 'USD', 'withdrawal', 'http-cash-out-USD', '100'));
+    assert.equal(withdrawal.status, 200, JSON.stringify(withdrawal.json));
+    const balances = read(db => db.prepare('SELECT currency,ledger_account,balance FROM account_projections WHERE account_id=? ORDER BY currency,ledger_account').all(account.id));
+    assert.deepEqual(balances, ['CNY', 'HKD', 'USD'].flatMap(currency => [
+      { currency, ledger_account: 'cash_settled', balance: currency === 'USD' ? '200.01' : '300.01' },
+      { currency, ledger_account: 'external_capital', balance: currency === 'USD' ? '-200.01' : '-300.01' },
+    ]));
+    const end = await context(); assert.equal(end.ledger_revision, 4); assert.equal(end.account_status, 'reconciliation_required');
+    const reconciliation = await jsonRequest(`${endpoint}/reconciliation?account=${account.id}`, { headers: headers() });
+    assert.equal(reconciliation.status, 200); assert.deepEqual(reconciliation.json.requirements.currencies, ['CNY', 'HKD', 'USD']);
+    assert.equal(reconciliation.json.latest, null); assert.equal(reconciliation.json.scope, 'metadata_only_no_prefilled_balances');
+    const html = await (await request('/workbench/accounts', { headers: headers() })).text();
+    assert.match(html, /账户导入是可选的/); assert.match(html, /不会连接券商下单/);
+    const marker = path.join(directory, 'auth', 'RESTORE_PENDING_REVIEW'), final = financial();
+    writeFileSync(marker, 'FICTIONAL CASH RECOVERY LOCK\n');
+    try {
+      assert.equal((await context()).read_only, true);
+      assert.equal((await post(original)).status, 423); assert.deepEqual(financial(), final);
+    } finally { rmSync(marker); }
+    assert.deepEqual(protectedRows(), protectedBefore);
+    return { real_authenticated_route: true, currencies: ['CNY', 'HKD', 'USD'], cash_events: 4, exact_external_capital: true,
+      immutable_receipt_replay: true, semantic_source_deduplication: true, recovery_lock_blocks_retry: true,
+      planned_funding_unchanged: true, auto_reconciliation: false, automatic_orders: false, provider_called: false };
+  });
 }

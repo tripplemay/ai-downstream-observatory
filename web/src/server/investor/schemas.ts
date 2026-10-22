@@ -2,6 +2,8 @@ import { z } from "zod";
 import { reconciliationIntentSchema } from "./reconciliation-schemas";
 import { fundingPlanSchema } from "./funding-schemas";
 import { tradeRecordingIntentSchema } from "./trade-recording-schemas";
+import { cashRecordingIntentSchema } from "./cash-recording-schemas";
+import { valuationIntentSchema } from "./valuation-schemas";
 
 export const investorId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/);
 export const investorHash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -216,8 +218,10 @@ export const investorCommandSchema = z.discriminatedUnion("action", [
   envelope.extend({ action: z.literal("add_linked_account"), portfolio_id: investorId, expected_ledger_revision: revision, account: accountBookInputSchema }).strict(),
   reconciliationIntentSchema.extend(envelope.shape).strict(),
   tradeRecordingIntentSchema.extend(envelope.shape).strict(),
+  cashRecordingIntentSchema.extend(envelope.shape).strict(),
+  valuationIntentSchema.extend(envelope.shape).strict(),
 ]);
 export type InvestorCommand = z.infer<typeof investorCommandSchema>;
 
 export const investorReceiptSchema = z.object({ workspace_id: investorId, revision: revision.refine(value => value > 0),
-  action: z.enum(["save_profile", "save_funding_plan", "compare_funding", "evaluate", "review", "save_plan", "set_monitoring", "link_portfolio", "create_account_book", "add_linked_account", "reconcile_linked_account", "record_linked_trade_fact"]), resource_id: investorId, audit_id: investorId }).strict();
+  action: z.enum(["save_profile", "save_funding_plan", "compare_funding", "evaluate", "review", "save_plan", "set_monitoring", "link_portfolio", "create_account_book", "add_linked_account", "reconcile_linked_account", "record_linked_trade_fact", "record_linked_cash_fact", "request_linked_valuation"]), resource_id: investorId, audit_id: investorId }).strict();

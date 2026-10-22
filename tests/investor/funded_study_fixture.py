@@ -9,7 +9,7 @@ from unittest.mock import patch
 from worker.investor.funded_study_runtime import JOB_TYPE, sync_funded_study_requests
 from worker.orchestration.db import WorkbenchError, canonical_json, open_database
 from worker.orchestration.jobs import run_one
-from worker.orchestration.runtime import command_handler
+from worker.orchestration.runtime import command_handler, run_pending_once
 
 
 def main():
@@ -17,6 +17,7 @@ def main():
     parser.add_argument("--db", required=True)
     parser.add_argument("--now", default="2026-01-02T12:00:05.000Z")
     parser.add_argument("--fail-first-candidate", action="store_true")
+    parser.add_argument("--default-core", action="store_true", help="Exercise ordinary core discovery and dispatch")
     parser.add_argument("--purge-due", action="store_true")
     parser.add_argument("--purge-first", action="store_true")
     parser.add_argument("--actor")
@@ -45,7 +46,8 @@ def main():
                 results = purge_due_funded_results(db, now=args.now)
             print(canonical_json({"status": "fictional_retention_fixture_complete", "purge_count": len(results), "real_provider_called": False}))
             return
-        sync_funded_study_requests(db, now=args.now)
+        if not args.default_core:
+            sync_funded_study_requests(db, now=args.now)
         outcomes = []
         from worker.investor.funded_history import calculate_funded_history
         calls = 0
@@ -57,8 +59,8 @@ def main():
             return calculate_funded_history(*a, **k)
         with patch("worker.investor.funded_study_runtime.calculate_funded_history", side_effect=calculate) if args.fail_first_candidate else nullcontext():
             for _ in range(10):
-                result = run_one(db, "funded-study-fixture", command_handler(db, clock=lambda: args.now),
-                                 job_type=JOB_TYPE, lease_seconds=300, clock=lambda: args.now)
+                result = run_pending_once(db, "funded-study-fixture", lease_seconds=300, clock=lambda: args.now) if args.default_core else run_one(
+                    db, "funded-study-fixture", command_handler(db, clock=lambda: args.now), job_type=JOB_TYPE, lease_seconds=300, clock=lambda: args.now)
                 if result is None:
                     break
                 outcomes.append(result["status"])

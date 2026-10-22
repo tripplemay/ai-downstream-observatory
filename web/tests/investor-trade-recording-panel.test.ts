@@ -130,12 +130,31 @@ test("loss of session verification clears amounts, and a current metadata 401 in
   const g = mount(t); await g.click("录入已发生成交"); await g.reply(0, {}, 401); assert.deepEqual(g.emitted, [SESSION_INVALIDATED_EVENT]); assert.equal(g.commands.length, 0);
 });
 
+test("optional account CSV is a native initially closed fold with its existing workspace always mounted inside", () => {
+  const source = ts.createSourceFile("account.tsx", readFileSync(new URL("../src/components/workbench/investor-account-workspace.tsx", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let fold: ts.JsxElement | undefined;
+  function find(node: ts.Node) {
+    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(source) === "details" && node.openingElement.attributes.properties.some(attribute =>
+      ts.isJsxAttribute(attribute) && attribute.name.getText(source) === "data-testid" && attribute.initializer && ts.isStringLiteral(attribute.initializer) && attribute.initializer.text === "optional-account-csv")) fold = node;
+    ts.forEachChild(node, find);
+  }
+  find(source); const section = fold as ts.JsxElement | undefined; assert.ok(section);
+  assert.ok(!section.openingElement.attributes.properties.some(attribute => ts.isJsxAttribute(attribute) && ["open", "onToggle"].includes(attribute.name.getText(source))));
+  const workspaces: ts.JsxSelfClosingElement[] = [];
+  function workspacesIn(node: ts.Node) { if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === "CsvBackgroundWorkspace") workspaces.push(node); ts.forEachChild(node, workspacesIn); }
+  workspacesIn(section); assert.equal(workspaces.length, 1);
+  assert.ok(ts.isJsxElement(workspaces[0].parent)); assert.equal(workspaces[0].parent.parent, section);
+  assert.match(section.getText(source), /csvLocked && <span role="status">/);
+});
+
 test("account integration includes manual draft in CSV, selectors, reconciliation, holdings and parent scope locks", () => {
   const source = readFileSync(new URL("../src/components/workbench/investor-account-workspace.tsx", import.meta.url), "utf8");
   assert.match(source, /csvLocked \|\| reconciliationLocked \|\| tradeLocked/);
   assert.match(source, /!csvLocked && !reconciliationLocked && !tradeLocked/);
   assert.match(source, /readOnly=\{disabled \|\| reconciliationLocked \|\| tradeLocked/);
   assert.match(source, /onDraftLockChange=\{setTradeLocked\}/);
-  assert.match(source, /disabled=\{disabled \|\| busy \|\| csvLocked \|\| tradeLocked \|\| !visible\}/);
-  assert.match(source, /disabled=\{disabled \|\| busy \|\| csvLocked \|\| reconciliationLocked \|\| tradeLocked \|\| !visible\}/);
+  assert.match(source, /disabled=\{disabled \|\| busy \|\| csvLocked \|\| tradeLocked \|\| cashLocked \|\| valuationLocked \|\| !visible\}/);
+  assert.match(source, /disabled=\{disabled \|\| busy \|\| csvLocked \|\| reconciliationLocked \|\| tradeLocked \|\| cashLocked \|\| valuationLocked \|\| !visible\}/);
+  assert.match(source, /onDraftLockChange=\{setValuationLocked\}/);
+  assert.match(source, /readOnly=\{disabled \|\| reconciliationLocked \|\| tradeLocked \|\| cashLocked \|\| valuationLocked/);
 });

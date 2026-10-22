@@ -142,6 +142,27 @@ def verify_reference_version(connection, identity, portfolio_id, known_at, *, re
         raise WorkbenchError("MARKET_REFERENCE_INVALID") from None
 
 
+def verify_valuation_calendars(connection, portfolio_id, cutoff_at, rules, known_at, *, require_current=False):
+    try:
+        cutoff, scopes = instant(cutoff_at), set()
+        for check in rules.get("calendar_checks", []):
+            scope = check["market"] + ":" + check["exchange"]
+            _assert(scope not in scopes)
+            scopes.add(scope)
+            reference = verify_reference_version(connection, check["version_id"], portfolio_id, known_at,
+                                                 require_current=require_current)
+            row, facts = reference["version"], reference["document"]["facts"]
+            _assert(row["kind"] == "calendar" and row["scope_key"] == scope and row["content_hash"] == check["content_hash"])
+            day = cutoff.astimezone(ZoneInfo(facts["timezone"])).date().isoformat()
+            _assert(facts["range_start"] <= day <= facts["range_end"])
+            sessions = [entry["date"] for entry in facts["days"]
+                        if entry["kind"] != "closed" and entry["close_at"] and instant(entry["close_at"]) <= cutoff]
+            _assert(sessions and sessions[-1] == check["expected_session"]
+                    and rules["expected_sessions"].get(check["market"]) == check["expected_session"])
+    except (WorkbenchError, ValueError, TypeError, KeyError, IndexError, AttributeError):
+        raise WorkbenchError("VALUATION_CALENDAR_INPUTS_CHANGED") from None
+
+
 def select_references(connection, portfolio_id, payload, known_at, *, require_current=False):
     try:
         validate_contract(payload, "market-price-collect.schema.json")

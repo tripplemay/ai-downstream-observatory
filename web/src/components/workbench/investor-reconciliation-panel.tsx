@@ -44,7 +44,11 @@ export function InvestorReconciliationPanel({ scope, accountName, disabled, onCo
       const value = parseInvestorReconciliation(await response.json(), start.scope);
       if (valid()) setReading({ key: start.key, context: value });
     } catch { if (valid()) setError("对账范围读取未通过核验。请先核对顶部状态与账户资料，再重读；不会使用旧范围提交。"); }
-    finally { clearTimeout(timer); if (active.current === controller) { active.current = null; if (alive.current) setBusy(false); } }
+    finally {
+      // Discarded or rejected responses can still own an unread streaming body.
+      clearTimeout(timer); controller.abort();
+      if (active.current === controller) { active.current = null; if (alive.current) setBusy(false); }
+    }
   }, []);
   useEffect(() => {
     alive.current = true;

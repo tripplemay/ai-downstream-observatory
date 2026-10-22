@@ -76,7 +76,7 @@ export function verifiedFundedHistoryReplay(raw: FundedHistoryInput, claimed: Ob
     "INVESTOR_FUNDED_HISTORY_ECONOMICS_INVALID");
   const economics = Object.fromEntries(Object.entries(independent.paths).map(([name, value]) => [name, value.summary]));
   const verification = { ...binding, economics_independently_replayed: true as const, publication_eligible: false as const,
-    verification_version: "funded-history-economic-replay-v1", relative_decimal_tolerance: "0.0000000000000000000000000000000000000001",
+    verification_version: raw.schema_version === "investor-funded-history-input-v2" ? "funded-history-economic-replay-v2" : "funded-history-economic-replay-v1", relative_decimal_tolerance: "0.0000000000000000000000000000000000000001",
     absolute_decimal_tolerance_ceiling: "0.000000000001",
     independently_replayed_economics_hash: hash(economics), engine_trace_hash_independently_certified: false as const,
     source_independently_verified: false as const, parameters_independently_preregistered: false as const,

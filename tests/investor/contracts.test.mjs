@@ -11,6 +11,30 @@ const directory = new URL('../../contracts/v1/', import.meta.url);
 for (const name of fs.readdirSync(directory).filter(name => name.endsWith('.schema.json')))
   ajv.addSchema(JSON.parse(fs.readFileSync(new URL(name, directory), 'utf8')));
 
+test('bounded funding has explicit closed versions and does not relabel old economics or grant execution', () => {
+  const child = spawnSync(process.env.WORKBENCH_TEST_PYTHON ?? process.env.WORKBENCH_PYTHON ?? 'python3', ['-c',
+    "import json; from tests.investor.bounded_funding_fixtures import bounded_input; from worker.investor.funded_history import prepare_funded_history,calculate_funded_history; d=bounded_input(); p,k=prepare_funded_history(d,allow_synthetic=True); print(json.dumps({'input':d,'continuous':k,'result':calculate_funded_history(d,allow_synthetic=True)}))"],
+    { cwd: new URL('../../', import.meta.url), encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, timeout: 30000 });
+  assert.equal(child.status, 0, child.stderr);
+  const value = JSON.parse(child.stdout), validate = name => ajv.getSchema('https://etf-workbench.invalid/contracts/v1/' + name + '.schema.json');
+  for (const [document, current, legacy] of [[value.input, 'investor-funded-history-input-v2', 'investor-funded-history-input'],
+    [value.result, 'investor-funded-history-result-v2', 'investor-funded-history-result'],
+    [value.continuous, 'investor-long-horizon-input-v3', 'investor-long-horizon-input-v2'],
+    [value.result.comparison, 'investor-long-horizon-result-v3', 'investor-long-horizon-result-v2']]) {
+    assert.equal(validate(current)(document), true, JSON.stringify(validate(current).errors));
+    assert.equal(validate(legacy)(document), false);
+    assert.equal(validate(current)({ ...document, unexpected: true }), false);
+  }
+  assert.equal(validate('investor-funded-history-request')(value.input), true);
+  for (const key of ['buy_price_buffer_bps', 'buy_fx_buffer_bps']) {
+    const missing = structuredClone(value.input); delete missing.context.execution[key];
+    assert.equal(validate('investor-funded-history-request')(missing), false);
+  }
+  for (const key of ['actual_arrivals_confirmed', 'economics_independently_replayed', 'execution_authorized',
+    'parameters_independently_preregistered', 'source_independently_verified', 'live_advice_eligible'])
+    assert.equal(validate('investor-funded-history-result-v2')({ ...value.result, [key]: true }), false);
+});
+
 test('private funded-study registration and digest-only run are closed and cannot claim economic replay or contain raw economics', () => {
   const id = 'https://etf-workbench.invalid/contracts/v1/investor-funded-study.schema.json', digest = 'a'.repeat(64);
   const denied = { economics_independently_replayed: false, parameters_independently_preregistered: false,

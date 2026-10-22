@@ -2,7 +2,7 @@
 
 from bisect import bisect_right
 from datetime import datetime
-from decimal import ROUND_FLOOR
+from decimal import ROUND_CEILING, ROUND_FLOOR
 from heapq import heappop, heappush
 from zoneinfo import ZoneInfo
 
@@ -39,10 +39,11 @@ def run_continuous_portfolio(dataset, plan, releases, *, progress=None, holding_
 
 def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=None, holding_baseline=False):
     continuous = releases is not None
+    bounded = plan["schema_version"] in ("research-plan-v3", "investor-long-horizon-plan-v3")
     execution = plan["execution"]
-    expected_plans = ("investor-long-horizon-plan-v1", "investor-long-horizon-plan-v2") if continuous else ("research-plan-v2",)
+    expected_plans = ("investor-long-horizon-plan-v1", "investor-long-horizon-plan-v2", "investor-long-horizon-plan-v3") if continuous else ("research-plan-v2", "research-plan-v3")
     if (dataset["schema_version"] != "research-dataset-v2" or plan["schema_version"] not in expected_plans
-            or execution["model"] != "next_session_close_fixed_quantity"
+            or execution["model"] != ("next_session_close_bounded_fixed_quantity" if bounded else "next_session_close_fixed_quantity")
             or execution["settlement_model"] != "explicit_market_calendar"
             or execution["sale_proceeds"] != "convert_to_cny_at_fill_then_settle"):
         raise WorkbenchError("UNSUPPORTED_ROTATION_EXECUTION_MODEL")
@@ -50,6 +51,21 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
     if kind not in ("research-rotation-parameters-v1", "research-fixed-rebalance-parameters-v1", FIXED_POLICY_VERSION):
         raise WorkbenchError("UNSUPPORTED_ROTATION_PARAMETERS")
     low_frequency = kind == FIXED_POLICY_VERSION
+    if bounded:
+        if continuous:
+            from worker.market.contracts import validate_contract
+            validate_contract(plan, "investor-long-horizon-input-v3.schema.json", fragment="$defs/plan")
+            if (decimal(execution["cash_quantum"]) != decimal("0.01")
+                    or any(not ZERO <= decimal(execution[name]) <= 10000 for name in (
+                        "buy_price_buffer_bps", "buy_fx_buffer_bps", "commission_bps", "fx_bps"))
+                    or not ZERO <= decimal(execution["slippage_bps"]) < 10000
+                    or decimal(execution["minimum_fee_cny"]) < ZERO):
+                raise WorkbenchError("INVALID_BOUNDED_EXECUTION_COST")
+        else:
+            from .snapshot import validate_plan
+            validate_plan(plan, dataset)
+        if not low_frequency:
+            raise WorkbenchError("BOUNDED_RESEARCH_REQUIRES_FIXED_POLICY")
     if not isinstance(holding_baseline, bool) or holding_baseline and not (continuous and low_frequency):
         raise WorkbenchError("UNSUPPORTED_HOLDING_BASELINE")
     if continuous and not low_frequency:
@@ -141,8 +157,8 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                 total += quantity * price * fx(market.assets[listing]["currency"], at)
         return total
 
-    def cost(side, quantity, price, currency, at):
-        spot = fx(currency, at)
+    def cost(side, quantity, price, currency, at, *, spot_override=None):
+        spot = fx(currency, at) if spot_override is None else spot_override
         slip = decimal(execution["slippage_bps"]) / 10000
         execution_price = price * (ONE + slip if side == "buy" else ONE - slip)
         if execution_price <= ZERO:
@@ -151,7 +167,8 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
         fee = max(decimal(execution["minimum_fee_cny"]), principal * decimal(execution["commission_bps"]) / 10000)
         fx_fee = principal * decimal(execution["fx_bps"]) / 10000 if currency != "CNY" else ZERO
         unrounded = principal + fee + fx_fee if side == "buy" else principal - fee - fx_fee
-        amount = quantize_cash(unrounded, execution["cash_quantum"])
+        amount = ((unrounded / decimal(execution["cash_quantum"])).to_integral_value(rounding=ROUND_CEILING)
+                  * decimal(execution["cash_quantum"])) if bounded and side == "buy" else quantize_cash(unrounded, execution["cash_quantum"])
         if amount <= ZERO:
             raise WorkbenchError("ORDER_BELOW_CASH_PRECISION")
         rounding = amount - unrounded if side == "buy" else unrounded - amount
@@ -301,12 +318,14 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
         foreign_cash = sum((amount * fx(currency, at) for currency, amount in cash.items() if currency != "CNY" and amount), ZERO)
         cash_floor = locked_cash + max(ZERO, deployment_value * (ONE - sum(weights.values(), ZERO)) - foreign_cash)
 
-        def make_order(listing, side, quantity, budget=ZERO, dependencies=()):
+        def make_order(listing, side, quantity, budget=ZERO, dependencies=(), bounds=None):
             order = {"id": "order:%06d" % (len(orders) + 1), "listing_id": listing, "side": side,
                      "quantity": quantity, "budget": budget, "cash_floor": cash_floor,
                      "decision_at": at, "expires_at": expiry, "dependencies": list(dependencies), "state": "planned"}
             if continuous:
                 order["locked_cash_at_decision"] = locked_cash
+            if bounds is not None:
+                order.update(price_cap=bounds[0], fx_cap=bounds[1], worst_total_cash=bounds[2])
             orders[order["id"]] = order
             planned.append(order)
             return order
@@ -346,16 +365,20 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
         deployment = min(available, total_need)
         for listing, need in sorted(needs.items()):
             allocation = deployment * need / total_need if total_need else ZERO
+            if bounded:
+                allocation = (allocation * 100).to_integral_value(rounding=ROUND_FLOOR) / 100
             price, rate, _, _, _ = quotes[listing]
             asset, step = market.assets[listing], decimal(market.assets[listing]["quantity_step"])
+            cap = price * (ONE + decimal(execution["buy_price_buffer_bps"]) / 10000) if bounded else price
+            fx_cap = rate * (ONE + decimal(execution["buy_fx_buffer_bps"]) / 10000) if bounded and asset["currency"] != "CNY" else rate
             if allocation <= ZERO:
                 issues.append("NO_SETTLED_OR_DEPENDENT_CASH:" + listing)
                 continue
-            low, high = 0, int((allocation / (price * rate * step)).to_integral_value(rounding=ROUND_FLOOR))
+            low, high = 0, int((allocation / (cap * fx_cap * step)).to_integral_value(rounding=ROUND_FLOOR))
             try:
                 while low < high:
                     middle = (low + high + 1) // 2
-                    if cost("buy", step * middle, price, asset["currency"], at)[0] <= allocation:
+                    if cost("buy", step * middle, cap, asset["currency"], at, spot_override=fx_cap if bounded else None)[0] <= allocation:
                         low = middle
                     else:
                         high = middle - 1
@@ -365,6 +388,7 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
             if not low:
                 issues.append("BUY_BELOW_QUANTITY_STEP_OR_FEES:" + listing)
                 continue
+            bounds = (cap, fx_cap, cost("buy", step * low, cap, asset["currency"], at, spot_override=fx_cap)[0]) if bounded else None
             immediate_reserved = sum((order["budget"] for order in planned if order["side"] == "buy" and order["state"] == "scheduled"), ZERO)
             if allocation <= cash["CNY"] - cash_floor - immediate_reserved:
                 try:
@@ -374,10 +398,10 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                 except WorkbenchError as exc:
                     issues.append(str(exc))
                     continue
-                order = make_order(listing, "buy", step * low, allocation)
+                order = make_order(listing, "buy", step * low, allocation, bounds=bounds)
                 order.update(state="scheduled", execute_at=execute_at)
             elif sales:
-                order = make_order(listing, "buy", step * low, allocation, sales)
+                order = make_order(listing, "buy", step * low, allocation, sales, bounds=bounds)
                 order["state"] = "waiting_for_sales"
             else:
                 issues.append("NO_SETTLED_OR_DEPENDENT_CASH:" + listing)
@@ -392,7 +416,9 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                            "execute_at": stamp(order["execute_at"]) if order["state"] == "scheduled" else None,
                            "expires_at": stamp(expiry), "funding": order["state"], "dependency_order_ids": order["dependencies"],
                            "decision_price_observation_id": price_id, "decision_fx_observation_id": fx_id,
-                           "decision_price_mark": price_mark})
+                           "decision_price_mark": price_mark,
+                           **({"buy_price_cap": canonical(order["price_cap"]), "buy_fx_cap": canonical(order["fx_cap"]),
+                               "worst_total_cash_cny": canonical(order["worst_total_cash"])} if bounded and order["side"] == "buy" else {})})
         events.append({**base, "outcome": "proposed" if planned else "blocked", "reason_codes": sorted(set(issues)),
                        "order_ids": [row["id"] for row in planned], "partial": bool(issues)})
         if low_frequency and planned:
@@ -407,6 +433,10 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                 finish(order, "expired", at, "FIXED_POLICY_ORDER_EXPIRED" if low_frequency else "MONTHLY_ORDER_EXPIRED")
         for action in sorted(actions.get(at, []), key=lambda row: (row["type"] != "split", row["id"])):
             listing = action["listing_id"]
+            if bounded:
+                for order in list(pending):
+                    if order["listing_id"] == listing:
+                        finish(order, "skipped", at, "CORPORATE_ACTION_INVALIDATES_FROZEN_ORDER", action_id=action["id"])
             quantity = positions.get(listing, ZERO)
             currency = market.assets[listing]["currency"]
             if action["type"] == "split":
@@ -483,6 +513,11 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                 finish(order, "skipped", at, str(exc))
                 continue
             if side == "buy":
+                if bounded and (price > order["price_cap"] or spot > order["fx_cap"]):
+                    finish(order, "skipped", at, "EXECUTION_PRICE_OR_FX_BOUND_EXCEEDED",
+                           buy_price_cap=canonical(order["price_cap"]), buy_fx_cap=canonical(order["fx_cap"]),
+                           observed_price=canonical(price), observed_fx=canonical(spot))
+                    continue
                 other_reserved = reserved() - order["budget"]
                 if amount > order["budget"] or amount > cash["CNY"] - other_reserved - locked_cash:
                     finish(order, "skipped", at, "EXECUTION_EXCEEDS_PRECOMMITTED_CASH_BUDGET",
@@ -525,9 +560,10 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
         curve.append({"at": stamp(at), "nav_cny": canonical(total), "unit_nav": canonical(total / units),
                       "cash_cny": canonical(sum((amount * fx(currency, at) for currency, amount in cash.items() if amount), ZERO)),
                       "derived_carry_marks": sorted(carry_marks, key=lambda row: row["listing_id"])})
-        if continuous:
+        if continuous or bounded:
             if locked_cash < ZERO or cash["CNY"] - locked_cash - reserved() < ZERO:
                 raise WorkbenchError("INVESTOR_LONG_HORIZON_CASH_RESERVATION_INVALID")
+        if continuous:
             curve[-1].update(principal_cny=canonical(cumulative_principal), profit_cny=canonical(total - cumulative_principal),
                             locked_cash_cny=canonical(locked_cash), released_capital_cny=canonical(cumulative_principal - locked_cash),
                             unreserved_released_cash_cny=canonical(cash["CNY"] - locked_cash - reserved()))
@@ -547,7 +583,8 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
         if missing:
             events.append({"type": "policy_deployment_failed", "at": stamp(end), "missing_listings": missing,
                            "reason": "INITIAL_DEPLOYMENT_INCOMPLETE" if bought else "INITIAL_DEPLOYMENT_NOT_EXECUTED"})
-    return {"engine_version": "continuous-hold-new-cash-v1" if holding_baseline else "continuous-fixed-policy-funding-v1" if continuous else "fixed-policy-rebalance-v2" if low_frequency else ENGINE_VERSION, "phase": phase, "window": window,
+    engine = ("continuous-bounded-hold-new-cash-v1" if holding_baseline else "continuous-bounded-fixed-policy-funding-v1") if continuous and bounded else "fixed-policy-bounded-rebalance-v3" if bounded else "continuous-hold-new-cash-v1" if holding_baseline else "continuous-fixed-policy-funding-v1" if continuous else "fixed-policy-rebalance-v2" if low_frequency else ENGINE_VERSION
+    return {"engine_version": engine, "phase": phase, "window": window,
             "initial_equity_cny": canonical(initial), "contributions_cny": canonical(sum(flow_map.values(), ZERO)),
             "ending_nav_cny": canonical(closing), "profit_cny": canonical(cashflow_profit(closing, initial, flow_map.values())),
             "twr": canonical(twr.value) if twr.value is not None else None, "return_method": twr.method,
@@ -580,6 +617,8 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                             "ex_post_close_valuation_with_point_in_time_decisions", "explicit_market_calendar_settlement",
                             "sale_proceeds_converted_to_cny_at_fill_unavailable_until_settlement", "fixed_decision_quantity_and_budget",
                             "theoretical_ex_action_carry_between_raw_closes_not_an_observed_or_live_price",
+                            *(["buy_raw_close_and_fx_caps_frozen_at_decision", "buy_quantity_sized_at_both_caps_with_upward_cent_debit",
+                               "allocation_cent_dust_stays_cash", "corporate_action_cancels_frozen_orders_without_resizing"] if bounded else []),
                             *( ["no_calendar_or_class_drift_rebalancing" if holding_baseline else "half_year_or_year_calendar_review_plus_absolute_class_drift", "cooldown_uses_evaluation_local_calendar_days",
                                 "new_cny_cash_repairs_without_sales" if holding_baseline else "new_cny_cash_repairs_without_sales_before_rebalancing", "orders_expire_at_next_month_boundary", "unsettled_assets_block_new_orders"]
                                if low_frequency else ["monthly_first_decision_only", "unsettled_assets_block_new_monthly_orders"]), "no_margin", "no_cash_interest",

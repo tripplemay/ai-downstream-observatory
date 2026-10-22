@@ -31,9 +31,10 @@
   "include": [
     "**/*.ts",
     "**/*.tsx",
+    ".next-fixture/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-fixture/types/**/*.ts"
+    ".next-fixture-production/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

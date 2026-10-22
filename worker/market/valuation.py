@@ -13,6 +13,7 @@ from worker.orchestration.db import (
 )
 from .contracts import validate_contract
 from .collection import source_verified
+from .references import verify_valuation_calendars
 
 
 ASSET_ACCOUNTS = {
@@ -109,6 +110,7 @@ def prepare_valuation(connection, portfolio_id, cutoff_at, rules, mode="as_known
         scopes.add(rules["fx_scope"])
     with transaction(connection, immediate=False):
         revision = _head(connection, portfolio_id)
+        verify_valuation_calendars(connection, portfolio_id, cutoff_at, rules, known_at, require_current=mode == "restated")
         accounts = {row["id"]: dict(row) for row in connection.execute("SELECT * FROM accounts WHERE portfolio_id=?", (portfolio_id,))}
         events = [dict(row) for row in connection.execute("SELECT * FROM ledger_events WHERE portfolio_id=? AND ledger_revision<=?", (portfolio_id, revision))]
         postings = [dict(row) for row in connection.execute("""SELECT p.* FROM postings p JOIN ledger_events e ON e.id=p.event_id
@@ -374,6 +376,9 @@ def persist_valuation(connection, prepared, now=None):
                 raise ValueError("invalid")
         except (ValueError, TypeError, KeyError) as exc:
             raise WorkbenchError("VALUATION_FACT_QUALITY_INVALID") from exc
+        verify_valuation_calendars(connection, prepared.portfolio_id, prepared.cutoff_at, manifest["rules"],
+                                   now if manifest["mode"] == "restated" else prepared.cutoff_at,
+                                   require_current=manifest["mode"] == "restated")
         if any(_market_head(connection, scope) != expected for scope, expected in prepared.market_heads.items()):
             raise WorkbenchError("STALE_MARKET_PUBLICATION")
         key = (prepared.portfolio_id, prepared.ledger_revision, prepared.market_manifest, prepared.method_version, prepared.cutoff_at)
