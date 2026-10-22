@@ -60,7 +60,11 @@ class StudyRunTests(unittest.TestCase):
         self.assertEqual(result['execution_failure_count'], 1)
         self.assertEqual(result['curve'][2]['settled_cash_cny'], '900')
         event = result['journal']['events'][2]
-        self.assertEqual(event['payload']['result']['orders'][0]['reason'], 'PRICE_BOUND_EXCEEDED')
+        orders = {row['listing_id']: row for row in event['payload']['result']['orders']}
+        self.assertEqual(orders['CN:SYNTHETIC_A']['reason'], 'PRICE_BOUND_EXCEEDED')
+        self.assertEqual(orders['CN:SYNTHETIC_A']['status'], 'skipped')
+        self.assertEqual(orders['CN:SYNTHETIC_B']['reason'], 'SYNTHETIC_NEXT_CLOSE_PROXY')
+        self.assertEqual(orders['CN:SYNTHETIC_B']['status'], 'simulated_filled')
         self.assertEqual(original['decisions'][0]['decision']['command']['payload']['plan'], result['decisions'][0]['decision']['command']['payload']['plan'])
 
     def test_missing_execution_is_counted_and_never_imputed_from_valuation_mark(self):
