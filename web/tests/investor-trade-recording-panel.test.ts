@@ -153,8 +153,14 @@ test("account integration includes manual draft in CSV, selectors, reconciliatio
   assert.match(source, /!csvLocked && !reconciliationLocked && !tradeLocked/);
   assert.match(source, /readOnly=\{disabled \|\| reconciliationLocked \|\| tradeLocked/);
   assert.match(source, /onDraftLockChange=\{setTradeLocked\}/);
-  assert.match(source, /disabled=\{disabled \|\| busy \|\| csvLocked \|\| tradeLocked \|\| cashLocked \|\| valuationLocked \|\| executionLocked \|\| !visible\}/);
-  assert.match(source, /disabled=\{disabled \|\| busy \|\| csvLocked \|\| reconciliationLocked \|\| tradeLocked \|\| cashLocked \|\| valuationLocked \|\| !visible\}/);
+  const tree = ts.createSourceFile("accounts.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX), guards = new Map<string, string>();
+  function visit(node: ts.Node) { if (ts.isJsxSelfClosingElement(node)) {
+    const attribute = node.attributes.properties.find(value => ts.isJsxAttribute(value) && value.name.getText(tree) === "disabled");
+    if (attribute && ts.isJsxAttribute(attribute)) guards.set(node.tagName.getText(tree), attribute.initializer?.getText(tree) ?? "");
+  } ts.forEachChild(node, visit); } visit(tree);
+  for (const name of ["InvestorReconciliationPanel", "InvestorHoldingsPanel"])
+    for (const lock of ["disabled", "busy", "csvLocked", "tradeLocked", "cashLocked", "valuationLocked", "executionLocked", "proposalLocked", "!visible"])
+      assert.ok(guards.get(name)?.includes(lock), `${name}: ${lock}`);
   assert.match(source, /onDraftLockChange=\{setValuationLocked\}/);
   assert.match(source, /readOnly=\{disabled \|\| reconciliationLocked \|\| tradeLocked \|\| cashLocked \|\| valuationLocked/);
 });
