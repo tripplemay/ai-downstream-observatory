@@ -37,11 +37,18 @@ test("non-event price frames reveal missed peaks without double-subtracting lock
   assert.equal(result.candidate.curve[1].nav_cny,"1000");assert.equal(result.candidate.curve[1].reserved_cny,"1000");
 });
 test("future execution gaps cannot resize a frozen quantity or change an earlier decision",()=>{
-  const f=clone(),input=runInput(f.input);input.frames[2].execution_observations[0].close="10.01";
+  const f=clone(),input=runInput(f.input),changed=input.frames[2].execution_observations.find(row=>row.listing_id==="CN:SYNTHETIC_A")!;
+  assert.ok(changed);changed.close="10.01";
   const result=runProgram(input);assert.deepEqual(result.decisions[0],f.comparison.candidate.decisions[0]);
   assert.equal(result.execution_failure_count,1);assert.equal(result.curve[2].settled_cash_cny,"900");
-  const event=result.journal.events[2];assert.equal(event.kind,"buy_resolution");if(event.kind!=="buy_resolution")throw Error();
-  assert.equal(event.payload.result.orders[0].reason,"PRICE_BOUND_EXCEEDED");
+  const event=result.journal.events.find(row=>row.kind==="buy_resolution")!;assert.ok(event);if(event.kind!=="buy_resolution")throw Error();
+  // Order IDs include the locked implementation hash; their sort order is not listing identity.
+  const affected=event.payload.result.orders.find(row=>row.listing_id===changed.listing_id)!;
+  const unaffected=event.payload.result.orders.find(row=>row.listing_id==="CN:SYNTHETIC_B")!;
+  assert.ok(affected);assert.ok(unaffected);
+  assert.equal(affected.reason,"PRICE_BOUND_EXCEEDED");assert.equal(affected.status,"skipped");
+  assert.equal(unaffected.reason,"SYNTHETIC_NEXT_CLOSE_PROXY");assert.equal(unaffected.status,"simulated_filled");
+  assert.deepEqual(result,python("import json,sys; from worker.execution_sandbox.study_run import run_program; print(json.dumps(run_program(json.load(sys.stdin))))",input));
 });
 test("valuation marks are never substituted for absent execution evidence",()=>{
   const input=runInput();input.frames[2].execution_observations=[];const result=runProgram(input);
