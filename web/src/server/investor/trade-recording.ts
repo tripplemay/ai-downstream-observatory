@@ -9,7 +9,7 @@ import { reconciliationInstantMicros } from "../ledger/reconciliation-schemas";
 import { tradeRecordingContextSchema, tradeRecordingIntentSchema, type TradeRecordingContext, type TradeRecordingIntent } from "./trade-recording-schemas";
 
 function invalid(): never { throw new Error("INVESTOR_TRADE_EVIDENCE_INVALID"); }
-function command(row: ReturnType<typeof getActiveLedgerEvents>[number], portfolio: string, account: string, now: string) {
+export function readTradeLedgerCommand(row: ReturnType<typeof getActiveLedgerEvents>[number], portfolio: string, account: string, now: string) {
   try {
     const value = parseStrictJson(row.payload_json) as LedgerCommand; assertLedgerCommand(value);
     const stored = row as typeof row & { source_id: string; source_event_id: string | null };
@@ -49,7 +49,7 @@ export function getTradeRecordingContext(db: Database.Database, actor: Actor, ac
       ORDER BY l.market,l.ticker,l.id LIMIT 201`).all(book.id, actor.id, book.id, book.id) as TradeRecordingContext["listings"];
     if (listings.length > 200) throw new Error("INVESTOR_TRADE_CAPACITY_REQUIRES_REVIEW");
     const active = getActiveLedgerEvents(db, book.id, book.ledger_revision).filter(row => row.account_id === account.id);
-    const entries = active.filter(row => ["buy", "sell", "settlement"].includes(row.event_type)).map(row => ({ row, value: command(row, book.id, account.id, now) }));
+    const entries = active.filter(row => ["buy", "sell", "settlement"].includes(row.event_type)).map(row => ({ row, value: readTradeLedgerCommand(row, book.id, account.id, now) }));
     const parents = new Map(entries.filter(item => item.row.event_type !== "settlement").map(item => [item.row.id, item]));
     const settlements = new Map<string, typeof entries>();
     for (const item of entries.filter(item => item.row.event_type === "settlement")) {
@@ -81,7 +81,7 @@ export function getTradeRecordingContext(db: Database.Database, actor: Actor, ac
       }
       // Negative-net legacy sells need the signed advanced ledger workflow, not this positive-amount form.
       if (remaining.gt(0)) unsettled.push({ event_id: row.id, direction: row.event_type as "buy" | "sell", currency: value.fact.currency,
-        effective_at: row.effective_at, source_id: value.source_id, source_event_id: value.source_event_id ?? null });
+        effective_at: row.effective_at, source_timezone: value.source_timezone, source_id: value.source_id, source_event_id: value.source_event_id ?? null });
     }
     if (unsettled.length > 50) throw new Error("INVESTOR_TRADE_CAPACITY_REQUIRES_REVIEW");
     const identity = { schema_version: "investor-trade-recording-v1" as const, workspace_id: scope.workspace_id!, workspace_revision: scope.workspace_revision,

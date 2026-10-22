@@ -13,6 +13,8 @@ import { buildCashRecordingIntent } from "../src/components/workbench/investor-c
 import { cashContext, validCashDraft } from "./investor-cash-recording-fixture";
 import { buildValuationIntent } from "../src/components/workbench/investor-valuation-client";
 import { valuationContext, validValuationDraft } from "./investor-valuation-fixture";
+import { buildExecutionFollowup, blankExecutionDraft } from "../src/components/workbench/investor-execution-followup-client";
+import { executionContext } from "./investor-execution-fixture";
 
 const binding = "a".repeat(64), origin = "https://synthetic.example.test";
 const input = { action: "record_linked_trade_fact", expected_revision: 2, idempotency_key: "fictional-command", portfolio_id: "fictional-book", account_id: "fictional-account",
@@ -24,7 +26,7 @@ function request(body: BodyInit = JSON.stringify(input), headers: Record<string,
     "X-Workbench-Session-Binding": binding, ...headers }, body });
 }
 function readRequest(query = "?account=fictional-account", cash = false) { return new Request(`${origin}/api/workbench/investor/${cash ? "cash-recording" : "trade-recording"}${query}`, { headers: { "X-Workbench-Session-Binding": binding } }); }
-function harness(options: { denied?: boolean; changed?: "sid" | "owner"; effectError?: Error; cash?: boolean; valuation?: boolean } = {}) {
+function harness(options: { denied?: boolean; changed?: "sid" | "owner"; effectError?: Error; cash?: boolean; valuation?: boolean; execution?: boolean } = {}) {
   const calls: string[] = [], captured: unknown[][] = []; let count = 0, currentRequest: Request;
   const authenticate = async () => { calls.push("authenticate"); count++;
     if (options.denied) throw new AuthError("UNAUTHENTICATED", 401);
@@ -46,6 +48,7 @@ function harness(options: { denied?: boolean; changed?: "sid" | "owner"; effectE
     "@/server/investor/service": { executeInvestorCommand: (...args: unknown[]) => effect("execute", ...args), getInvestorState: () => ({}), isInvestorClientError },
     "@/server/investor/trade-recording": { getTradeRecordingContext: (...args: unknown[]) => effect("context", ...args) },
     "@/server/investor/cash-recording": { getCashRecordingContext: (...args: unknown[]) => effect("context", ...args) },
+    "@/server/investor/execution-followup": { getExecutionFollowupContext: (...args: unknown[]) => effect("context", ...args) },
     "@/server/investor/valuation": { getInvestorValuationContext: (...args: unknown[]) => effect("context", ...args) } };
   function load(file: string) {
     const code = ts.transpileModule(readFileSync(new URL(file, import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
@@ -53,9 +56,36 @@ function harness(options: { denied?: boolean; changed?: "sid" | "owner"; effectE
     const initialize = runInNewContext(`(function(require,module,exports){${code}\n})`, { Error, Buffer, URL, TextDecoder }) as (require: (name: string) => unknown, module: unknown, exports: unknown) => void;
     initialize(name => { assert.ok(name in dependencies, name); return dependencies[name]; }, module, module.exports); return module.exports;
   }
-  const read = load(`../src/app/api/workbench/investor/${options.valuation ? "valuation" : options.cash ? "cash-recording" : "trade-recording"}/route.ts`), write = load("../src/app/api/workbench/investor/route.ts");
+  const read = load(`../src/app/api/workbench/investor/${options.execution ? "execution-followup" : options.valuation ? "valuation" : options.cash ? "cash-recording" : "trade-recording"}/route.ts`), write = load("../src/app/api/workbench/investor/route.ts");
   return { calls, captured, GET: (req: Request) => { currentRequest = req; return read.GET!(req); }, POST: (req: Request) => { currentRequest = req; return write.POST!(req); } };
 }
+
+test("execution history and both followup mutations preserve bound-session, origin, strict-body and sanitized-error guards", async () => {
+  for (const mode of ["link", "report"] as const) {
+    const draft = { ...blankExecutionDraft(mode), item: "fictional-item", fact: "fictional-fact", evidence: "fictional-evidence", acknowledged: true,
+      status: "filled", quantity: "200", source: "FICTIONAL", sourceEvent: "report-1", reason: "Fictional source only" };
+    const body = JSON.stringify({ ...buildExecutionFollowup(executionContext, draft), expected_revision: 2, idempotency_key: "execution-test" });
+    const GET = () => new Request(`${origin}/api/workbench/investor/execution-followup?account=fictional-account`, { headers: { "X-Workbench-Session-Binding": binding } });
+    for (const method of ["GET", "POST"] as const) {
+      const h = harness({ execution: true }), response = await h[method](method === "GET" ? GET() : request(body));
+      assert.equal(response.status, 200); assert.equal(response.headers.get("cache-control"), "private, no-store"); assert.equal(h.calls.at(-1), "close");
+      for (const kind of ["anonymous", "sid", "owner", "missing", "query"]) {
+        const guard = harness({ execution: true, denied: kind === "anonymous", changed: kind === "sid" || kind === "owner" ? kind : undefined });
+        let req = method === "GET" ? GET() : request(body);
+        if (kind === "missing") req.headers.delete("x-workbench-session-binding");
+        if (kind === "query") req = method === "POST" ? request(body, {}, "?owner=foreign") : new Request(req.url + "&owner=foreign", req);
+        assert.equal((await guard[method](req)).status, kind === "missing" || kind === "query" ? 400 : 401); assert.ok(!guard.calls.includes("open"));
+      }
+    }
+    for (const [code, status] of [["INVESTOR_EXECUTION_CONTEXT_CONFLICT", 409], ["INVESTOR_EXECUTION_SELECTION_INVALID", 400],
+      ["INVESTOR_EXECUTION_REPORT_DUPLICATE_CONFLICT", 409], ["WORKBENCH_READ_ONLY", 423]] as const)
+      assert.equal((await harness({ execution: true, effectError: new Error(code) }).POST(request(body))).status, status);
+    const foreign = request(body, { Origin: "https://foreign.example.test" }); assert.equal((await harness({ execution: true }).POST(foreign)).status, 403); assert.equal(foreign.bodyUsed, false);
+    const error = await harness({ execution: true, effectError: new Error("PRIVATE_EXECUTION_SQL_MARKER") }).GET(GET());
+    assert.equal(error.status, 503); assert.deepEqual(await error.json(), { error: "INVESTOR_EXECUTION_UNAVAILABLE" });
+    assert.equal((await harness({ execution: true }).POST(request(body.replace('"acknowledgement":true', '"acknowledgement":true,"owner_id":"foreign"')))).status, 400);
+  }
+});
 
 test("manual metadata requires authentication, mandatory binding and one valid account; no invalid read opens a database", async () => {
   for (const kind of ["anonymous", "missing", "stale", "absent-account", "duplicate-account", "owner-injection", "invalid-account"]) {

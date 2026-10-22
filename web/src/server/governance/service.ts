@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { amount, Decimal, exact } from "../ledger/decimal";
 import { audit, canonical, hash, recordFact, revision, type LedgerCommand } from "../ledger/service";
-import { readJsonAttachment } from "../ledger/attachments";
+import { readAttachment, readJsonAttachment } from "../ledger/attachments";
 import { activationSchema, approvalSchema, capabilityCommandSchema, createPolicySchema, createStrategySchema, executionFactSchema, executionReportSchema, prepareSchema, proposalRefSchema, proposalSchema } from "./schemas";
 import { activation, clock, requireActor, transaction, verifyGateEvidence, versions, type GovernanceActor, type GovernanceOptions } from "./core";
 import { checkRisk, currentPublications, loadProposal, requireValuation, validateAccount, type RiskResult } from "./risk";
@@ -179,7 +179,7 @@ export function recordExecutionReport(db: Database.Database, actor: GovernanceAc
   return transaction(db, actor, "record_execution_report", input, input, options, now => {
     const { proposal, items } = loadProposal(db, input.portfolio_id, input.proposal_id), item = items.find(item => item.id === input.proposal_item_id);
     if (!item) throw new Error("PROPOSAL_ITEM_OUT_OF_SCOPE");
-    readJsonAttachment(db, actor, input.portfolio_id, input.attachment_id, { ...options, accountId: item.account_id });
+    readAttachment(db, actor, input.portfolio_id, input.attachment_id, { ...options, accountId: item.account_id });
     const id = randomUUID();
     const deviations = [...(terminal(db, proposal.id) || proposal.expires_at <= now ? ["REPORTED_AFTER_TERMINAL_OR_EXPIRY"] : []), ...(amount(input.reported_quantity).gt(item.quantity) ? ["REPORTED_QUANTITY_EXCEEDS_PROPOSAL"] : [])];
     if (!db.prepare("SELECT id FROM approval_events WHERE proposal_id=? AND action='approve'").get(proposal.id)) deviations.push("REPORTED_WITHOUT_APPROVAL");
@@ -202,7 +202,7 @@ export function recordExecutionFact(db: Database.Database, actor: GovernanceActo
   return transaction(db, actor, "record_execution_fact", input, input, options, now => {
     const { proposal, items } = loadProposal(db, input.portfolio_id, input.proposal_id), item = items.find(item => item.id === input.proposal_item_id);
     if (!item) throw new Error("PROPOSAL_ITEM_OUT_OF_SCOPE");
-    readJsonAttachment(db, actor, input.portfolio_id, input.attachment_id, { ...options, accountId: item.account_id });
+    readAttachment(db, actor, input.portfolio_id, input.attachment_id, { ...options, accountId: item.account_id });
     const command = input.command as LedgerCommand;
     if (!command?.fact || command.portfolio_id !== input.portfolio_id || command.fact.account_id !== item.account_id || command.fact.listing_id !== item.listing_id || command.fact.currency !== item.currency || command.fact.type !== item.side || command.expected_revision !== input.expected_revision) throw new Error("EXECUTION_FACT_OUT_OF_SCOPE");
     const receipt = recordFact(db, actor, command, now);

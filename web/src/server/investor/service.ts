@@ -14,6 +14,7 @@ import { appendInvestorPortfolioLink, ownedInvestorBook, readInvestorPortfolioLi
 import { getInvestorAccountWorkspace } from "./accounts";
 import { reconcileInvestorAccount } from "./reconciliation";
 import { recordInvestorTradeFact } from "./trade-recording";
+import { recordInvestorExecutionFollowup } from "./execution-followup";
 import { recordInvestorCashFact } from "./cash-recording";
 import { requestInvestorValuation } from "./valuation";
 import type { AttachmentOptions } from "../ledger/attachments";
@@ -192,6 +193,10 @@ export function executeInvestorCommand(db: Database.Database, actor: Actor, raw:
       auditId = writeAudit(db, owner, input.action, ws.id, input, { ledger_event_id: recorded.event_id, ledger_revision: recorded.revision,
         ledger_audit_id: recorded.audit_id, duplicate: recorded.duplicate === true, warnings: recorded.warnings,
         basis: "operator_transcription_not_broker_file", execution_authorized: false }, now);
+    } else if (input.action === "link_recorded_execution_fact" || input.action === "record_linked_execution_report") {
+      const recorded = recordInvestorExecutionFollowup(db, actor, input, now, options);
+      resourceId = recorded.resource_id;
+      auditId = writeAudit(db, owner, input.action, ws.id, input, recorded, now);
     } else if (input.action === "record_linked_cash_fact") {
       const recorded = recordInvestorCashFact(db, actor, input, now);
       resourceId = recorded.event_id;
@@ -321,6 +326,7 @@ export function getInvestorState(db: Database.Database, actor: Actor, now = new 
 }
 
 export function isInvestorClientError(code: string) {
+  if (/^INVESTOR_EXECUTION_(CONTEXT_CONFLICT|CAPACITY_REQUIRES_REVIEW|SELECTION_INVALID|FACT_ALREADY_LINKED|REPORT_DUPLICATE_CONFLICT|UPLOAD_INVALID|UPLOAD_DUPLICATE_CONFLICT)$/.test(code)) return true;
   if (/^INVESTOR_VALUATION_(CONTEXT_CONFLICT|CAPACITY_REQUIRES_REVIEW|RECONCILIATION_REQUIRED|INPUT_INVALID|SOURCE_UNAVAILABLE)$/.test(code)) return true;
   if (/^INVESTOR_CASH_(CONTEXT_CONFLICT|CAPACITY_REQUIRES_REVIEW|ACCOUNT_DISABLED|INPUT_INVALID|SOURCE_SUPERSEDED|SOURCE_DUPLICATE_CONFLICT|CHRONOLOGY_REQUIRES_REVIEW)$/.test(code)) return true;
   if (/^INVESTOR_TRADE_(CONTEXT_CONFLICT|CAPACITY_REQUIRES_REVIEW|ACCOUNT_DISABLED|INPUT_INVALID|SOURCE_SUPERSEDED|SOURCE_DUPLICATE_CONFLICT|CHRONOLOGY_REQUIRES_REVIEW|POSITION_HISTORY_REQUIRED|SETTLEMENT_REVIEW_REQUIRED)$/.test(code)) return true;

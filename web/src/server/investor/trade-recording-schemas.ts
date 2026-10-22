@@ -12,6 +12,19 @@ export function tradeRecordingDate(value: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) && !value.startsWith("0000") && Number.isFinite(Date.parse(value + "T00:00:00Z"))
     && new Date(value + "T00:00:00Z").toISOString().slice(0, 10) === value;
 }
+export function tradeEvidenceNotFuture(effectiveAt: string, zone: string | undefined, checkedAt: string): boolean {
+  const checked = reconciliationInstantMicros(checkedAt);
+  if (checked === null) return false;
+  if (!tradeRecordingDate(effectiveAt)) {
+    const effective = reconciliationInstantMicros(effectiveAt);
+    return effective !== null && effective <= checked;
+  }
+  if (!zone) return effectiveAt <= checkedAt.slice(0, 10);
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(checkedAt));
+    return effectiveAt <= ["year", "month", "day"].map(key => parts.find(part => part.type === key)!.value).join("-");
+  } catch { return false; }
+}
 const decimal = z.string().regex(/^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,8})?$/);
 const positive = decimal.refine(value => /[1-9]/.test(value));
 const trade = z.object({ listing_id: id, currency, quantity: positive, consideration: positive, fee: decimal });
@@ -31,13 +44,14 @@ export const tradeRecordingContextSchema = z.object({ schema_version: z.literal(
   link_version: revision.refine(value => value > 0), account_id: id, account_row_version: revision,
   account_status: z.enum(["active", "disabled", "reconciliation_required"]), checked_at: instant, read_only: z.boolean(), context_hash: hash,
   listings: z.array(listing).max(200), unsettled_trades: z.array(z.object({ event_id: id, direction: z.enum(["buy", "sell"]), currency,
-    effective_at: z.string().min(1).max(40), source_id: z.string().min(1).max(200), source_event_id: z.string().max(200).nullable() }).strict()).max(50),
+    effective_at: z.string().min(1).max(40), source_timezone: z.string().min(1).max(100).optional(),
+    source_id: z.string().min(1).max(200), source_event_id: z.string().max(200).nullable() }).strict()).max(50),
   basis: z.literal("metadata_only_no_fact_prefill"), execution_authorized: z.literal(false),
 }).strict().superRefine((value, context) => {
   if (new Set(value.listings.map(row => row.id)).size !== value.listings.length
     || new Set(value.unsettled_trades.map(row => row.event_id)).size !== value.unsettled_trades.length
-    || value.unsettled_trades.some(row => !tradeRecordingDate(row.effective_at) && reconciliationInstantMicros(row.effective_at) === null
-      || row.effective_at > value.checked_at)) context.addIssue({ code: z.ZodIssueCode.custom, message: "INVESTOR_TRADE_CONTEXT_INVALID" });
+    || value.unsettled_trades.some(row => !tradeEvidenceNotFuture(row.effective_at, row.source_timezone, value.checked_at)))
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "INVESTOR_TRADE_CONTEXT_INVALID" });
 });
 export type TradeRecordingContext = z.infer<typeof tradeRecordingContextSchema>;
 export type TradeRecordingIntent = z.infer<typeof tradeRecordingIntentSchema>;
