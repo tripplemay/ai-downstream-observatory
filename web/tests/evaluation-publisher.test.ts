@@ -10,6 +10,10 @@ import { saveSchedule, setScheduleStatus } from "../src/server/evaluation/servic
 import { assertEvaluationLease, evaluationStamp, prepareMonthlyEvaluation, type EvaluationLease } from "../src/server/evaluation/evaluator";
 import { publishMonthlyEvaluation } from "../src/server/evaluation/publisher";
 import type { EvaluationScheduleDefinition } from "../src/server/evaluation/schemas";
+import { executeInvestorCommand } from "../src/server/investor/service";
+import { getInvestorProposalReviewContext } from "../src/server/investor/proposal-review";
+import { proposalReviewBasis } from "../src/server/investor/proposal-review-schemas";
+import { syntheticProfile } from "./investor-fixture";
 
 const scheduled = "2026-01-05T12:01:00.000000Z", started = "2026-01-05T12:01:01.000000Z";
 const discoverAndClaim = `
@@ -76,6 +80,27 @@ test("actual Python discovery/claim and Node publisher produce one unapproved pr
   const child = spawnSync(process.env.WORKBENCH_TEST_PYTHON ?? process.env.WORKBENCH_PYTHON ?? "python3", ["-c", discoverAndClaim, f.filename, nextDay, nextDay], { cwd: path.resolve(".."), encoding: "utf8", timeout: 15000 });
   assert.equal(child.status, 0, child.stderr); assert.deepEqual(JSON.parse(child.stdout), { cycles: [], lease: null });
   assert.equal(count(f, "evaluation_cycles"), 1); assert.equal(count(f, "proposals"), 1);
+});
+
+test("actual monthly publication is independently readable and explicitly reviewable without converting research or adding facts", t => {
+  const f = fixture(t), result = publishMonthlyEvaluation(f.db, f.lease, f.evaluationOptions), at = "2026-01-05T12:01:02.000Z";
+  assert.equal(result.outcome, "proposed"); assert.ok(result.proposal_id);
+  executeInvestorCommand(f.db, human, { action: "save_profile", profile: syntheticProfile, expected_revision: 0, idempotency_key: "fictional-monthly-profile" }, at);
+  executeInvestorCommand(f.db, human, { action: "link_portfolio", portfolio_id: f.portfolio, expected_ledger_revision: revision(f.db, f.portfolio),
+    expected_revision: 1, idempotency_key: "fictional-monthly-link" }, at);
+  const financial = ["ledger_events", "ledger_heads", "postings", "position_movements", "account_projections", "position_projections", "accounts"];
+  const snapshot = () => financial.map(table => f.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()), before = snapshot();
+  for (const operation of ["risk_check", "approve", "prepare", "cancel_remainder"] as const) {
+    const c = getInvestorProposalReviewContext(f.db, human, result.proposal_id, at, f.options);
+    assert.ok(c.selected!.allowed_operations.includes(operation), operation);
+    executeInvestorCommand(f.db, human, { action: "review_linked_proposal", portfolio_id: c.portfolio_id, proposal_id: c.selected!.id,
+      expected_ledger_revision: c.ledger_revision, expected_link_id: c.link_id, expected_link_version: c.link_version, expected_context_hash: c.context_hash,
+      operation, note: "Synthetic monthly review; no broker order", basis: proposalReviewBasis, acknowledgement: true,
+      expected_revision: c.workspace_revision, idempotency_key: "fictional-monthly-" + operation }, at, f.options);
+    assert.deepEqual(snapshot(), before);
+  }
+  assert.equal(getInvestorProposalReviewContext(f.db, human, null, at, f.options).proposals.length, 0);
+  assert.deepEqual(f.db.prepare("SELECT quantity,amount,status FROM reservations").get(), { quantity: "0", amount: "0", status: "released" });
 });
 
 test("unchanged requires a complete explicit target comparison and risk pass, not just zero orders", t => {

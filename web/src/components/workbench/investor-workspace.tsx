@@ -33,6 +33,10 @@ const marketLabels = { CN: "A 股", HK: "港股", US: "美股" };
 const roleLabels = { growth: "成长", defensive: "防守", diversifier: "分散" };
 const decisionLabels = { accept_idea: "采纳思路", defer: "暂缓", reject: "拒绝" };
 const errorLabels: Record<string, string> = {
+  INVESTOR_PROPOSAL_CONTEXT_CONFLICT: "清单、风控、预占或账本关联已变化。请重新核对，不沿用旧草稿批准。",
+  INVESTOR_PROPOSAL_SELECTION_INVALID: "所选清单不属于当前完整核对范围，请重新读取。",
+  INVESTOR_PROPOSAL_OPERATION_BLOCKED: "当前清单不允许执行该步骤。请重新核对风控和有效期；不会自动批准或下单。",
+  INVESTOR_PROPOSAL_CAPACITY_REQUIRES_REVIEW: "待审记录超出简化入口的完整核对上限，请通过高级入口复核，不截断后视为全部。",
   INVESTOR_MONITOR_FIXED_POLICY_UNSUPPORTED: "此旧版方案未绑定有状态监测规则，请重新研究并保存新版方案；不会套用旧规则。",
   INVESTOR_VERSION_CONFLICT: "内容已更新，请重新读取后核对，再提交新的决定。",
   INVESTOR_OBSERVATION_NOT_CURRENT: "这条观察已失效，请刷新状态并核对新评估；旧记录仍保留，不能继续作为当前决定依据。",
