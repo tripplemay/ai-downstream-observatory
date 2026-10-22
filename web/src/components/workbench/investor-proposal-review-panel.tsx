@@ -88,8 +88,10 @@ export function InvestorProposalReviewPanel({ scope, disabled, onCommand, onDraf
         {selected.reservations.filter(row => row.proposal_item_id === item.id).map(row => <p className="mt-2" key={row.id}>工作台预占：数量 {row.quantity}，金额 {row.amount} {row.currency} · {row.status === "active" ? "有效剩余" : "已释放或已核销"}，不是实际持仓或成交。</p>)}
       </article>)}</div>
       <div className="min-w-0 rounded-lg border p-3 text-sm"><p className="font-medium">本次只读复核：{selected.current_risk.status === "pass" ? "核对时通过" : "受阻"}（没有因此登记新批准或发送订单）</p>
-        <ul className="mt-3 space-y-2">{selected.current_risk.checks.map((check, index) => <li key={index}>{proposalRiskMessage(check.code)}</li>)}</ul>
-        <details className="mt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">原始风控标识与版本</summary><p className="mt-2 break-all">{selected.current_risk.checks.map(check => check.code).join(" / ")}</p><p className="mt-2 break-all">政策 {selected.policy_version_id} · 策略 {selected.strategy_version_id}</p></details>
+        {selected.current_risk.status === "blocked" && <ul className="mt-3 space-y-2">{selected.current_risk.checks.map((check, index) => <li key={index}>{proposalRiskMessage(check.code)}</li>)}</ul>}
+        <details className="mt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">查看风控依据与版本</summary>
+          {selected.current_risk.status === "pass" && <ul className="mt-3 space-y-2">{selected.current_risk.checks.map((check, index) => <li key={index}>{proposalRiskMessage(check.code)}</li>)}</ul>}
+          <p className="mt-2 break-all">{selected.current_risk.checks.map(check => check.code).join(" / ")}</p><p className="mt-2 break-all">政策 {selected.policy_version_id} · 策略 {selected.strategy_version_id}</p></details>
         {selected.recorded_risk && <p className="mt-3">最近记录风控：{selected.recorded_risk.created_at} · {selected.recorded_risk.status === "pass" ? "通过" : "受阻"} · {selected.recorded_risk.matches_current ? "与本次核对输入相同" : "输入已变化，不能沿用"}</p>}
         {selected.approval && <p className="mt-3">原人工批准：{selected.approval.created_at}。批准及预占不是成交。</p>}
         {selected.preparation && <p className="mt-3">最近执行前复核：{selected.preparation.created_at}。该记录不是订单，也不保证现在仍可执行。</p>}

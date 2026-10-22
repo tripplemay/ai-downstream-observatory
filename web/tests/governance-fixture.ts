@@ -18,7 +18,22 @@ import { publishListingReview } from "../src/server/listing-reviews/service";
 
 export const human: GovernanceActor = { id: "SYNTHETIC-HUMAN-ONLY", kind: "human" };
 export const now = "2026-01-05T12:00:00.000Z";
-export function governanceFixture(patch?: (policy: Policy) => void, positionQuantity = "0", cash = "100000", activate = true, currency = "CNY", laterPrice?: string, skipListingReviews: string[] = []) {
+function timeline(start = now) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z$/.test(start) || new Date(start).toISOString() !== start) throw new Error("INVALID_SYNTHETIC_FIXTURE_TIME");
+  const offset = Date.parse(start) - Date.parse(now);
+  const stamp = (value: string) => {
+    if (!offset) return value;
+    const shifted = new Date(Date.parse(value.length === 10 ? value + "T00:00:00.000Z" : value) + offset).toISOString();
+    return value.length === 10 ? shifted.slice(0, 10) : value.endsWith(".000000Z") ? shifted.replace(".000Z", ".000000Z") : shifted;
+  };
+  return { now: start, stamp };
+}
+export function governanceFixture(patch?: (policy: Policy) => void, positionQuantity = "0", cash = "100000", activate = true, currency = "CNY", laterPrice?: string, skipListingReviews: string[] = [], fixtureTime?: string) {
+  const { now, stamp } = timeline(fixtureTime);
+  const observedAt = stamp("2026-01-05T00:00:00.000Z"), publishedAt = stamp("2026-01-05T01:00:00.000Z"), cutoffAt = stamp("2026-01-05T02:00:00.000Z");
+  const dayParts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" })
+    .formatToParts(new Date(observedAt)).map(part => [part.type, part.value]));
+  const priceSession = `${dayParts.year}-${dayParts.month}-${dayParts.day}`;
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "etf-governance-")), filename = path.join(dataDir, "workbench.db");
   migrateWorkbench(filename);
   const db = openWorkbench(filename), portfolio = createPortfolio(db, human, "SYNTHETIC TEST - NOT LIVE AUTHORIZATION", now);
@@ -32,10 +47,10 @@ export function governanceFixture(patch?: (policy: Policy) => void, positionQuan
     addCatalogEntry(db, human, { portfolio_id: portfolio, listing_id: id, expected_catalog_revision: catalogRevision(db, portfolio), idempotency_key: `synthetic-member:${id}` }, options);
   }
   const reviewFacts = { instrument_kind: "ETF", lifecycle_status: "active", quantity_step: "100" as string | null, price_step: "0.01" as string | null,
-    source_effective_date: "2026-01-05" as string | null, fund_identifier: null as string | null, share_class_identifier: null as string | null,
+    source_effective_date: stamp("2026-01-05") as string | null, fund_identifier: null as string | null, share_class_identifier: null as string | null,
     product_structure: { leverage: "unleveraged", direction: "long_only" },
     risk_classification: { index_id: "synthetic-index" as string | null, region: "CN" as string | null, sector: "broad" as string | null } };
-  const reviewListing = (listingId: string, patch: Partial<typeof reviewFacts> = {}, at = "2026-01-05T12:00:00.000000Z", reviewUntil = "2026-02-01T00:00:00.000000Z") => {
+  const reviewListing = (listingId: string, patch: Partial<typeof reviewFacts> = {}, at = stamp("2026-01-05T12:00:00.000000Z"), reviewUntil = stamp("2026-02-01T00:00:00.000000Z")) => {
     const facts = { ...reviewFacts, ...patch }, key = `synthetic-review:${++counter}`;
     const source = storeMarketReferenceSource(db, human, { portfolio_id: portfolio, idempotency_key: key,
       reference: "SYNTHETIC identity review, not an issuer or exchange verification", content_text: JSON.stringify({ synthetic: true, facts }) }, { now: at });
@@ -46,32 +61,32 @@ export function governanceFixture(patch?: (policy: Policy) => void, positionQuan
       reason: "SYNTHETIC TEST ONLY: not live verification or investment permission", acknowledgement: true, idempotency_key: key }, { now: at });
   };
   for (const id of ["l", "l2"]) if (!skipListingReviews.includes(id)) reviewListing(id);
-  const command = (fact: LedgerCommand["fact"], date = "2026-01-01"): LedgerCommand => ({ ...envelope(), source_id: "synthetic-broker", source_event_id: `fact-${counter}`, effective_at: date, time_precision: "date", source_timezone: "Asia/Shanghai", fact });
+  const command = (fact: LedgerCommand["fact"], date = stamp("2026-01-01")): LedgerCommand => ({ ...envelope(), source_id: "synthetic-broker", source_event_id: `fact-${counter}`, effective_at: date, time_precision: "date", source_timezone: "Asia/Shanghai", fact });
   recordFact(db, human, command({ type: "opening_cash", account_id: account, currency, amount: cash }), now);
   if (amount(positionQuantity).gt(0)) recordFact(db, human, command({ type: "opening_position", account_id: account, currency, listing_id: "l", quantity: positionQuantity, cost_amount: exact(amount(positionQuantity).mul(100)) }), now);
   const attach = (raw: unknown) => storeJsonAttachment(db, human, { portfolio_id: portfolio, account_id: account, raw: JSON.stringify(raw) }, options).id;
-  const statement = { schema_version: 1, portfolio_id: portfolio, account_id: account, cutoff_at: "2026-01-04T00:00:00.000Z", coverage: { currencies: [currency], ledger_accounts: [...RECONCILIATION_BALANCES], positions_complete: true, balances_complete: true }, balances: RECONCILIATION_BALANCES.map(ledger_account => ({ currency, ledger_account, balance: ledger_account === "cash_settled" ? cash : "0" })), positions: amount(positionQuantity).gt(0) ? [{ listing_id: "l", currency, quantity: positionQuantity }] : [] };
+  const statement = { schema_version: 1, portfolio_id: portfolio, account_id: account, cutoff_at: stamp("2026-01-04T00:00:00.000Z"), coverage: { currencies: [currency], ledger_accounts: [...RECONCILIATION_BALANCES], positions_complete: true, balances_complete: true }, balances: RECONCILIATION_BALANCES.map(ledger_account => ({ currency, ledger_account, balance: ledger_account === "cash_settled" ? cash : "0" })), positions: amount(positionQuantity).gt(0) ? [{ listing_id: "l", currency, quantity: positionQuantity }] : [] };
   reconcileAccount(db, human, { portfolio_id: portfolio, account_id: account, expected_revision: revision(db, portfolio), attachment_id: attach(statement) }, options);
   const sourceEvidence = attach({ synthetic: true, fixture_purpose: "Permission and execution evidence only; not a live brokerage document" });
-  approveAccountCapability(db, human, { ...envelope(), account_id: account, market: "CN", valid_until: "2026-02-01T00:00:00.000Z", attachment_id: sourceEvidence, rules: { listing_ids: ["l", "l2"], currencies: [currency], buy: true, sell: true, cash_holds_exclude_workbench_reservations: true, cash_holds_exclude_trade_payables: true } }, options);
+  approveAccountCapability(db, human, { ...envelope(), account_id: account, market: "CN", valid_until: stamp("2026-02-01T00:00:00.000Z"), attachment_id: sourceEvidence, rules: { listing_ids: ["l", "l2"], currencies: [currency], buy: true, sell: true, cash_holds_exclude_workbench_reservations: true, cash_holds_exclude_trade_payables: true } }, options);
   const publish = (sourceMode = "manual_verified", price = "100") => {
     const batchId = randomUUID(), manifest = hash({ batchId, sourceMode, price });
     db.prepare("INSERT INTO market_batches(id,source_id,batch_type,scope,status,expected_pages,validation_json,started_at) VALUES(?,'synthetic-fixture','prices','CN','staging',1,?,?)").run(batchId, canonical({ plan: { source_mode: sourceMode } }), now);
     for (const listing of ["l", "l2"]) for (const [metric, value, unit] of [["close", price, currency], ["spread_bps", "1", "bps"], ["premium_bps", "0", "bps"], ["turnover", "10000000", currency], ["volume", "100000", "shares"]]) {
       const id = randomUUID();
-      db.prepare("INSERT INTO market_observations(id,batch_id,source_id,listing_id,series_key,metric,value,unit,observed_at,published_at,ingested_at,time_precision,price_basis,revision_id,raw_hash,parser_version,provenance) VALUES(?,?,'synthetic-fixture',?,?,?,?,?,'2026-01-05T00:00:00.000Z','2026-01-05T01:00:00.000Z','2026-01-05T01:00:00.000Z','second',?,?,?,'fixture','live_observed')")
-        .run(id, batchId, listing, listing, metric, value, unit, metric === "close" ? "unadjusted" : "not_applicable", batchId, "a".repeat(64));
+      db.prepare("INSERT INTO market_observations(id,batch_id,source_id,listing_id,series_key,metric,value,unit,observed_at,published_at,ingested_at,time_precision,price_basis,revision_id,raw_hash,parser_version,provenance) VALUES(?,?,'synthetic-fixture',?,?,?,?,?,?,?,?,'second',?,?,?,'fixture','live_observed')")
+        .run(id, batchId, listing, listing, metric, value, unit, observedAt, publishedAt, publishedAt, metric === "close" ? "unadjusted" : "not_applicable", batchId, "a".repeat(64));
       db.prepare("INSERT INTO market_batch_members(batch_id,observation_id) VALUES(?,?)").run(batchId, id);
     }
     if (laterPrice) for (const listing of ["l", "l2"]) {
       const id = randomUUID();
-      db.prepare("INSERT INTO market_observations(id,batch_id,source_id,listing_id,series_key,metric,value,unit,observed_at,published_at,ingested_at,time_precision,price_basis,revision_id,raw_hash,parser_version,provenance) VALUES(?,?,'synthetic-fixture',?,?,'close',?,?,'2026-01-05T03:00:00.000Z','2026-01-05T03:00:00.000Z','2026-01-05T03:00:00.000Z','second','unadjusted',?,?,'fixture','live_observed')")
-        .run(id, batchId, listing, listing, laterPrice, currency, batchId, "a".repeat(64));
+      db.prepare("INSERT INTO market_observations(id,batch_id,source_id,listing_id,series_key,metric,value,unit,observed_at,published_at,ingested_at,time_precision,price_basis,revision_id,raw_hash,parser_version,provenance) VALUES(?,?,'synthetic-fixture',?,?,'close',?,?,?,?,?,'second','unadjusted',?,?,'fixture','live_observed')")
+        .run(id, batchId, listing, listing, laterPrice, currency, ...Array(3).fill(stamp("2026-01-05T03:00:00.000Z")), batchId, "a".repeat(64));
       db.prepare("INSERT INTO market_batch_members(batch_id,observation_id) VALUES(?,?)").run(batchId, id);
     }
     db.prepare("UPDATE market_batches SET status='validated',manifest_hash=? WHERE id=?").run(manifest, batchId);
     const next = (db.prepare("SELECT COALESCE(MAX(revision),0)+1 AS revision FROM market_publication_events WHERE scope='CN'").get() as { revision: number }).revision;
-    const publication = { scope: "CN", batch_id: batchId, manifest_hash: manifest, revision: next, published_at: "2026-01-05T01:00:00.000Z" };
+    const publication = { scope: "CN", batch_id: batchId, manifest_hash: manifest, revision: next, published_at: publishedAt };
     db.prepare("INSERT INTO market_publication_events(scope,revision,batch_id,manifest_hash,published_at) VALUES('CN',?,?,?,?)").run(next, batchId, manifest, publication.published_at);
     db.prepare("INSERT INTO market_publications(scope,revision,batch_id,manifest_hash,published_at) VALUES('CN',?,?,?,?) ON CONFLICT(scope) DO UPDATE SET revision=excluded.revision,batch_id=excluded.batch_id,manifest_hash=excluded.manifest_hash,published_at=excluded.published_at").run(next, batchId, manifest, publication.published_at);
     return publication;
@@ -82,16 +97,16 @@ export function governanceFixture(patch?: (policy: Policy) => void, positionQuan
   if (currency !== "CNY") {
     const manifest = hash({ fxBatch, currency, fxRate });
     db.prepare("INSERT INTO market_batches(id,source_id,batch_type,scope,status,expected_pages,validation_json,started_at) VALUES(?,'synthetic-fixture','fx','FX','staging',1,?,?)").run(fxBatch, canonical({ plan: { source_mode: "manual_verified", source_evidence: "Synthetic fixture only, not actual data verification" } }), now);
-    db.prepare("INSERT INTO market_observations(id,batch_id,source_id,series_key,metric,value,unit,observed_at,published_at,ingested_at,time_precision,source_timezone,price_basis,revision_id,raw_hash,parser_version,provenance) VALUES(?,?,'synthetic-fixture',?,'fx_cny_per_unit',?,'CNY_per_unit_currency','2026-01-05T00:00:00.000Z','2026-01-05T01:00:00.000Z','2026-01-05T01:00:00.000Z','second','UTC','not_applicable',?,?,'fixture','live_observed')").run(fxId, fxBatch, `FX:${currency}`, fxRate, fxBatch, "a".repeat(64));
+    db.prepare("INSERT INTO market_observations(id,batch_id,source_id,series_key,metric,value,unit,observed_at,published_at,ingested_at,time_precision,source_timezone,price_basis,revision_id,raw_hash,parser_version,provenance) VALUES(?,?,'synthetic-fixture',?,'fx_cny_per_unit',?,'CNY_per_unit_currency',?,?,?,'second','UTC','not_applicable',?,?,'fixture','live_observed')").run(fxId, fxBatch, `FX:${currency}`, fxRate, observedAt, publishedAt, publishedAt, fxBatch, "a".repeat(64));
     db.prepare("INSERT INTO market_batch_members(batch_id,observation_id) VALUES(?,?)").run(fxBatch, fxId);
     db.prepare("UPDATE market_batches SET status='validated',manifest_hash=? WHERE id=?").run(manifest, fxBatch);
     publications.FX = { scope: "FX", batch_id: fxBatch, manifest_hash: manifest, revision: 1, published_at: publication.published_at };
     for (const table of ["market_publication_events", "market_publications"]) db.prepare(`INSERT INTO ${table}(scope,revision,batch_id,manifest_hash,published_at) VALUES('FX',1,?,?,?)`).run(fxBatch, manifest, publication.published_at);
   }
-  const valuationRules = { schema_version: "valuation-rules-v1", approved: true, approval_evidence: "Synthetic fixture only; does not approve user valuation policy", price_scope_by_market: { CN: "CN" }, expected_sessions: { CN: "2026-01-05" }, corporate_actions_complete: { l: true, l2: true }, fx_scope: "FX", max_fx_age_seconds: 86400 };
+  const valuationRules = { schema_version: "valuation-rules-v1", approved: true, approval_evidence: "Synthetic fixture only; does not approve user valuation policy", price_scope_by_market: { CN: "CN" }, expected_sessions: { CN: priceSession }, corporate_actions_complete: { l: true, l2: true }, fx_scope: "FX", max_fx_age_seconds: 86400 };
   const valuationId = randomUUID(), nav = exact(amount(cash).add(amount(positionQuantity).mul(100)).mul(fxRate));
-  const ledger_fact_quality = ledgerFactQualityAt(db, portfolio, "2026-01-05T02:00:00.000Z", now, "restated");
-  db.prepare("INSERT INTO valuation_runs(id,portfolio_id,ledger_revision,market_manifest,method_version,cutoff_at,quality,nav_cny,created_at) VALUES(?,?,?,?,?,'2026-01-05T02:00:00.000Z','complete',?,?)").run(valuationId, portfolio, revision(db, portfolio), canonical({ schema_version: "valuation-input-v3", mode: "restated", rules: valuationRules, rules_hash: hash(valuationRules), publications, ledger_fact_quality }), "decimal-nav-cny-v4:restated", nav, now);
+  const ledger_fact_quality = ledgerFactQualityAt(db, portfolio, cutoffAt, now, "restated");
+  db.prepare("INSERT INTO valuation_runs(id,portfolio_id,ledger_revision,market_manifest,method_version,cutoff_at,quality,nav_cny,created_at) VALUES(?,?,?,?,?,?,'complete',?,?)").run(valuationId, portfolio, revision(db, portfolio), canonical({ schema_version: "valuation-input-v3", mode: "restated", rules: valuationRules, rules_hash: hash(valuationRules), publications, ledger_fact_quality }), "decimal-nav-cny-v4:restated", cutoffAt, nav, now);
   const refs = { ledger_revision: revision(db, portfolio), ...(currency === "CNY" ? {} : { fx_observation_id: fxId }) };
   if (!amount(cash).isZero()) db.prepare("INSERT INTO valuation_items(id,run_id,account_id,item_type,currency,amount,fx_rate,value_cny,quality,evidence_json) VALUES(?,?,?,'cash_settled',?,?,?,?,'complete',?)").run(randomUUID(), valuationId, account, currency, cash, fxRate, exact(amount(cash).mul(fxRate)), canonical(refs));
   if (amount(positionQuantity).gt(0)) {
@@ -100,28 +115,29 @@ export function governanceFixture(patch?: (policy: Policy) => void, positionQuan
   }
   const policy: Policy = { schema_version: 1, mandate_version: "SYNTHETIC-v1", approved_decisions: ["D-01", "D-02", "D-03", "D-04", "D-05", "D-06", "D-07", "D-08"], account_ids: [account], listing_ids: ["l", "l2"], allocation: { core: "0", strategy: "1", defensive: "0" }, limits: { listing_weight: "1", index_weight: "1", market_weight: "1", currency_weight: "1", region_weight: "1", sector_weight: "1", strategy_weight: "1", min_cash_weight: "0", max_order_cny: "1000000" }, execution: { proposal_ttl_seconds: 3600, max_price_age_seconds: 86400, max_valuation_age_seconds: 86400, max_reconciliation_age_seconds: 604800, price_buffer_bps: "0", max_price_deviation_bps: "100", fee_rate_bps: "0", max_fee_bps: "100", minimum_fee_by_currency: { CNY: "0" }, max_spread_bps: "10", max_premium_bps: "100", min_turnover: "1000000", max_participation: "0.1" }, price_scope_by_market: { CN: "CN" }, fx_scope: "FX", benchmark: "SYNTHETIC-CNY-BASELINE", evaluation_window: "Synthetic declared horizon", contribution_rule: "Only confirmed settled funds", emergency_rule: "Stop new advice and require human review", review_after: "2026-02-01T00:00:00.000Z", ai_mode: "not_required" };
   policy.execution.minimum_fee_by_currency = { [currency]: "0" };
+  policy.review_after = stamp(policy.review_after);
   patch?.(policy);
   const policyVersion = createPolicyVersion(db, human, { ...envelope(), policy }, options);
   const strategy: Strategy = { schema_version: 1, strategy_key: "synthetic-manual", algorithm: "manual_target_v1", universe: ["l", "l2"], budget_weight: policy.limits.strategy_weight, evaluation_frequency: "monthly", benchmark: policy.benchmark, economic_rationale: "Synthetic policy-state-machine fixture, not investment evidence", invalidation_conditions: "Any input revision change", admission_thresholds: { min_out_of_sample_observations: 12, min_forward_observations: 6, min_trades: 3, max_drawdown: "0.2", min_net_excess_return: "0.01" } };
   const strategyVersion = createStrategyVersion(db, human, { ...envelope(), strategy }, options);
   const researchId = randomUUID();
   const admissionMetrics = { out_of_sample_observations: 12, forward_observations: 6, trades: 3, max_drawdown: "0.1", net_excess_return: "0.02" };
-  db.prepare("INSERT INTO research_runs(id,portfolio_id,environment,strategy_version_id,policy_version_id,input_manifest,experiment_plan_json,status,result_json,created_at,completed_at) VALUES(?,?,'simulation',?,?,'{}','{}','succeeded',?,'2026-01-01T00:00:00.000Z','2026-01-04T00:00:00.000Z')").run(researchId, portfolio, strategyVersion.id, policyVersion.id, canonical({ admission_grade: "formal_verified", admission_metrics: admissionMetrics }));
+  db.prepare("INSERT INTO research_runs(id,portfolio_id,environment,strategy_version_id,policy_version_id,input_manifest,experiment_plan_json,status,result_json,created_at,completed_at) VALUES(?,?,'simulation',?,?,'{}','{}','succeeded',?,?,?)").run(researchId, portfolio, strategyVersion.id, policyVersion.id, canonical({ admission_grade: "formal_verified", admission_metrics: admissionMetrics }), stamp("2026-01-01T00:00:00.000Z"), stamp("2026-01-04T00:00:00.000Z"));
   // These trusted-job rows are deliberately seeded only into this disposable test DB; no public API can create them.
   const seedVerification = (gate: "G-03" | "G-04", provenance = "authoritative", checkStatus = "pass") => {
     const requestId = randomUUID(), jobId = randomUUID();
     const request = { gate, policy_hash: policyVersion.content_hash, strategy_hash: strategyVersion.content_hash, source_manifest_hash: options.releaseHash };
-    const manifest = { format_version: 1, ...request, portfolio_id: portfolio, suite_version: "SYNTHETIC-TEST-ONLY-v1", tool_version: process.version, environment: "actual", provenance, started_at: "2026-01-04T00:00:00.000Z", finished_at: "2026-01-05T00:00:00.000Z", checks: Array.from({ length: gate === "G-03" ? 32 : 10 }, (_, index) => ({ id: `${gate === "G-03" ? "E" : "S"}-${String(index + 1).padStart(2, "0")}`, status: checkStatus, artifact_hash: "b".repeat(64) })), ...(gate === "G-04" ? { research_run_id: researchId, metrics: admissionMetrics } : {}) };
+    const manifest = { format_version: 1, ...request, portfolio_id: portfolio, suite_version: "SYNTHETIC-TEST-ONLY-v1", tool_version: process.version, environment: "actual", provenance, started_at: stamp("2026-01-04T00:00:00.000Z"), finished_at: stamp("2026-01-05T00:00:00.000Z"), checks: Array.from({ length: gate === "G-03" ? 32 : 10 }, (_, index) => ({ id: `${gate === "G-03" ? "E" : "S"}-${String(index + 1).padStart(2, "0")}`, status: checkStatus, artifact_hash: "b".repeat(64) })), ...(gate === "G-04" ? { research_run_id: researchId, metrics: admissionMetrics } : {}) };
     db.prepare("INSERT INTO command_requests(id,portfolio_id,command_type,idempotency_key,payload_hash,payload_json,actor_id,created_at) VALUES(?,?,'governance_verification',?,?,?,'system:governance-verifier',?)").run(requestId, portfolio, requestId, hash(request), canonical(request), now);
     db.prepare("INSERT INTO job_runs(id,command_request_id,job_type,scope,period,input_version,status,not_before,result_json,created_at,updated_at) VALUES(?,?,'governance_verification',?,?,'synthetic-v1','succeeded',?,?,?,?)").run(jobId, requestId, portfolio, jobId, now, canonical({ manifest_hash: hash(manifest), manifest, source_manifest: sourceManifest }), now, now);
     return registerCompletedVerification(db, jobId, now);
   };
   const verificationIds = { "G-03": seedVerification("G-03"), "G-04": seedVerification("G-04") };
-  const gateDocument = (gate: "G-01" | "G-03" | "G-04") => ({ schema_version: 1, kind: "governance_gate_evidence", portfolio_id: portfolio, gate, policy_hash: policyVersion.content_hash, strategy_hash: strategyVersion.content_hash, source_mode: "manual_verified", reviewed_at: "2026-01-05T00:00:00.000Z", valid_until: "2026-02-01T00:00:00.000Z", checks: (gate === "G-01" ? ["D-01", "D-02", "D-03", "D-05"] : Array.from({ length: gate === "G-03" ? 32 : 10 }, (_, index) => `${gate === "G-03" ? "E" : "S"}-${String(index + 1).padStart(2, "0")}`)).map(id => ({ id, status: "pass", evidence: "SYNTHETIC TEST FIXTURE - NOT A REAL PASS CLAIM" })), ...(gate !== "G-01" ? { verification_ids: [verificationIds[gate]] } : {}), ...(gate === "G-04" ? { research_run_id: researchId, metrics: admissionMetrics } : {}) });
+  const gateDocument = (gate: "G-01" | "G-03" | "G-04") => ({ schema_version: 1, kind: "governance_gate_evidence", portfolio_id: portfolio, gate, policy_hash: policyVersion.content_hash, strategy_hash: strategyVersion.content_hash, source_mode: "manual_verified", reviewed_at: stamp("2026-01-05T00:00:00.000Z"), valid_until: stamp("2026-02-01T00:00:00.000Z"), checks: (gate === "G-01" ? ["D-01", "D-02", "D-03", "D-05"] : Array.from({ length: gate === "G-03" ? 32 : 10 }, (_, index) => `${gate === "G-03" ? "E" : "S"}-${String(index + 1).padStart(2, "0")}`)).map(id => ({ id, status: "pass", evidence: "SYNTHETIC TEST FIXTURE - NOT A REAL PASS CLAIM" })), ...(gate !== "G-01" ? { verification_ids: [verificationIds[gate]] } : {}), ...(gate === "G-04" ? { research_run_id: researchId, metrics: admissionMetrics } : {}) });
   const gates = { "G-01": attach(gateDocument("G-01")), "G-03": attach(gateDocument("G-03")), "G-04": attach(gateDocument("G-04")) };
   const activationCommand = () => ({ ...envelope(), policy_version_id: policyVersion.id, strategy_version_id: strategyVersion.id, valuation_id: valuationId, gate_attachments: gates });
   const activated = activate ? activatePolicy(db, human, activationCommand(), options) : undefined;
-  const proposal = (quantity = "600", side: "buy" | "sell" = "buy", extra: Record<string, unknown> = {}) => createProposal(db, human, { ...envelope(), activation_id: activated!.id, valuation_id: valuationId, expires_at: "2026-01-05T12:30:00.000Z", items: [{ account_id: account, listing_id: "l", side, currency, quantity, limit_price: "100", estimated_fees: "0", ...extra }] }, options);
+  const proposal = (quantity = "600", side: "buy" | "sell" = "buy", extra: Record<string, unknown> = {}) => createProposal(db, human, { ...envelope(), activation_id: activated!.id, valuation_id: valuationId, expires_at: stamp("2026-01-05T12:30:00.000Z"), items: [{ account_id: account, listing_id: "l", side, currency, quantity, limit_price: "100", estimated_fees: "0", ...extra }] }, options);
   const approvalCommand = (proposal: ReturnType<typeof createProposal>) => ({ ...envelope(), proposal_id: proposal.id, risk_run_id: proposal.risk.id, expected_input_hash: proposal.risk.input_hash });
   const approve = (p: ReturnType<typeof createProposal>) => approveProposal(db, human, approvalCommand(p), options);
   return { db, filename, dataDir, account, portfolio, options, envelope, command, attach, sourceEvidence, policy, policyVersion, strategy, strategyVersion, valuationId, gates, gateDocument, seedVerification, activationCommand, activated, proposal, approvalCommand, approve, publish, reviewListing, close: () => { db.close(); rmSync(dataDir, { force: true, recursive: true }); } };

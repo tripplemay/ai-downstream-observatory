@@ -24,10 +24,23 @@ function mount(t: { after: (callback: () => void) => void }) {
     submit: async (twice = false) => { const fn = handler(); fn({ preventDefault() {} }); if (twice) fn({ preventDefault() {} }); await h.flush(); },
   };
 }
-async function select(h: ReturnType<typeof mount>) {
-  await h.flush(); await h.click("核对账户级待审清单"); await h.reply(0, { ...context, selected: null, session_binding: binding });
-  assert.equal(h.field("选择整张").props.value, ""); await h.input("选择整张", "fictional-proposal"); await h.reply(1, { ...context, session_binding: binding });
+async function select(h: ReturnType<typeof mount>, value = context) {
+  await h.flush(); await h.click("核对账户级待审清单"); await h.reply(0, { ...value, selected: null, session_binding: binding });
+  assert.equal(h.field("选择整张").props.value, ""); await h.input("选择整张", "fictional-proposal"); await h.reply(1, { ...value, session_binding: binding });
 }
+
+test("passing check detail stays behind a native closed fold, but blocking reasons remain directly visible", async t => {
+  const h = mount(t); await select(h);
+  const evidence = () => h.nodes().find(row => row.type === "details" && h.words(row).startsWith("查看风控依据与版本"));
+  assert.ok(evidence()); assert.equal(!!evidence()!.props.open, false); assert.match(h.words(evidence()), /确定性风控在本次核对时通过/);
+  assert.match(h.text(), /本次只读复核：核对时通过/); h.close();
+  const blocked = mount(t); await select(blocked, { ...context, selected: { ...context.selected!,
+    current_risk: { ...context.selected!.current_risk, status: "blocked", checks: [{ code: "INSUFFICIENT_AVAILABLE_CASH" }] },
+    recorded_risk: { ...context.selected!.recorded_risk!, matches_current: false }, allowed_operations: ["cancel_remainder"] } });
+  assert.match(blocked.words(blocked.node("ul")), /可用现金不足/);
+  const detail = blocked.nodes().find(row => row.type === "details" && blocked.words(row).startsWith("查看风控依据与版本"));
+  assert.ok(detail); assert.doesNotMatch(blocked.words(detail), /可用现金不足/);
+});
 
 test("proposal review is on-demand, blank by default and submits one explicitly acknowledged narrow step", async t => {
   const h = mount(t); await h.flush(); assert.equal(h.requests.length, 0); await select(h);
