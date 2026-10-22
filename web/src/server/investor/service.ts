@@ -26,7 +26,7 @@ import { readInvestorAcquisition, investorAcquisitionUnavailable } from "./acqui
 
 type Workspace = { id: string; owner_id: string; revision: number };
 type ProfileRow = { id: string; version: number; document_json: string; content_hash: string; created_at: string };
-type ObservationRow = { id: string; outcome: string; candidate_plan_id: string | null; document_json: string; content_hash: string; profile_id: string; profile_version: number; input_version: string; created_at: string };
+export type ObservationRow = { id: string; outcome: string; candidate_plan_id: string | null; document_json: string; content_hash: string; profile_id: string; profile_version: number; input_version: string; created_at: string };
 
 function principal(actor: Actor) {
   if (!actor || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(actor.id)) throw new Error("UNAUTHENTICATED");
@@ -54,7 +54,7 @@ function latestProfile(db: Database.Database, id: string) {
 function checkProfileClock(profile: InvestorProfileVersion | null, now: string) {
   if (profile && (!investorInstant.safeParse(profile.created_at).success || profile.created_at > now)) throw new Error("INVESTOR_INVALID_CLOCK");
 }
-function observationRecord(row: ObservationRow, db?: Database.Database, workspaceId?: string, now?: string): InvestorObservationRecord {
+export function observationRecord(row: ObservationRow, db?: Database.Database, workspaceId?: string, now?: string): InvestorObservationRecord {
   if ((parseStrictJson(row.document_json) as { schema_version?: string }).schema_version === "investor-model-observation-ref-v1") {
     if (!db || !workspaceId || !now) throw new Error("INVESTOR_EVIDENCE_INVALID");
     return readEvidenceObservationRecord(db, workspaceId, row, now);
@@ -234,8 +234,9 @@ export function executeInvestorCommand(db: Database.Database, actor: Actor, raw:
   }).immediate();
 }
 
-export function getInvestorState(db: Database.Database, actor: Actor, now = new Date().toISOString()): InvestorState {
+export function getInvestorState(db: Database.Database, actor: Actor, now = new Date().toISOString(), options: { includeRecentHistory?: boolean } = {}): InvestorState {
   const owner = principal(actor); clock(now);
+  const observationLimit = options.includeRecentHistory === false ? 1 : 50, decisionLimit = options.includeRecentHistory === false ? 0 : 50;
   return db.transaction(() => {
     const ws = workspace(db, owner);
     let readOnly = false;
@@ -249,10 +250,10 @@ export function getInvestorState(db: Database.Database, actor: Actor, now = new 
     const profiles = (db.prepare("SELECT id,version,document_json,content_hash,created_at FROM investor_profiles WHERE workspace_id=? ORDER BY version DESC LIMIT 20").all(ws.id) as ProfileRow[]).map(profileRecord);
     if (!profiles.length) throw new Error("INVESTOR_EVIDENCE_INVALID");
     profiles.forEach(profile => checkProfileClock(profile, now));
-    const rows = db.prepare("SELECT o.*,p.version profile_version FROM investor_observations o JOIN investor_profiles p ON p.id=o.profile_id AND p.workspace_id=o.workspace_id WHERE o.workspace_id=? ORDER BY o.created_at DESC,o.rowid DESC LIMIT 51").all(ws.id) as ObservationRow[];
-    const observations = rows.slice(0, 50).map(row => observationRecord(row, db, ws.id, now));
+    const rows = db.prepare(`SELECT o.*,p.version profile_version FROM investor_observations o JOIN investor_profiles p ON p.id=o.profile_id AND p.workspace_id=o.workspace_id WHERE o.workspace_id=? ORDER BY o.created_at DESC,o.rowid DESC LIMIT ${observationLimit + 1}`).all(ws.id) as ObservationRow[];
+    const observations = rows.slice(0, observationLimit).map(row => observationRecord(row, db, ws.id, now));
     if (observations.some(row => row.document.evaluated_at > now)) throw new Error("INVESTOR_INVALID_CLOCK");
-    const decisions = db.prepare("SELECT id,observation_id,decision,note,created_at FROM investor_decisions WHERE workspace_id=? ORDER BY created_at DESC,rowid DESC LIMIT 51").all(ws.id) as InvestorState["decisions"];
+    const decisions = db.prepare(`SELECT id,observation_id,decision,note,created_at FROM investor_decisions WHERE workspace_id=? ORDER BY created_at DESC,rowid DESC LIMIT ${decisionLimit + 1}`).all(ws.id) as InvestorState["decisions"];
     if (decisions.some(row => !investorInstant.safeParse(row.created_at).success || row.created_at > now)) throw new Error("INVESTOR_INVALID_CLOCK");
     const selection = db.prepare("SELECT plan_id FROM investor_plan_selections WHERE workspace_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1").get(ws.id) as { plan_id: string } | undefined;
     const produced = db.prepare(`SELECT e.plan_id FROM investor_reference_evidence e JOIN investor_reference_plans p ON p.id=e.plan_id AND p.workspace_id=e.workspace_id
@@ -319,7 +320,7 @@ export function getInvestorState(db: Database.Database, actor: Actor, now = new 
     }
     return { ...empty, profile: profiles[0] ?? null, profile_history: profiles, latest: observations[0] ?? null, observations, funding,
       funded_study: fundedStudy, funded_study_unavailable: fundedStudyUnavailable,
-      observations_truncated: rows.length > 50, decisions: decisions.slice(0, 50), decisions_truncated: decisions.length > 50,
+      observations_truncated: rows.length > observationLimit, decisions: decisions.slice(0, decisionLimit), decisions_truncated: decisions.length > decisionLimit,
       plan, research_task: researchTask, model_watch: modelWatch, effective_outcome: effectiveOutcome, effective_gaps: effectiveGaps,
       actual_holdings_status: actualHoldingsStatus };
   })();

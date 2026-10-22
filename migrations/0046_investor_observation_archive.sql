@@ -1,0 +1,4 @@
+CREATE INDEX investor_observation_append_head ON investor_observations(workspace_id);
+CREATE INDEX investor_decision_append_head ON investor_decisions(workspace_id);
+CREATE INDEX investor_decision_observation_history ON investor_decisions(workspace_id,observation_id,created_at);
+CREATE INDEX investor_observation_archive_order ON investor_observations(workspace_id,created_at);

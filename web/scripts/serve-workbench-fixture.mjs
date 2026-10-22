@@ -12,10 +12,11 @@ import { migrateWorkbench } from '../../scripts/migrate-workbench.mjs';
 const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const flags = process.argv.slice(2);
 if (flags.includes('--help')) {
-  process.stdout.write('Usage: node web/scripts/serve-workbench-fixture.mjs [--production] [--with-worker] [--with-verifier] [--with-execution-records]\nSynthetic-only loopback server on port 3147. --production requires web/.next-fixture-production and uses a temporary self-signed HTTPS certificate.\n');
+  process.stdout.write('Usage: node web/scripts/serve-workbench-fixture.mjs [--production] [--with-worker] [--with-verifier] [--with-execution-records | --with-history-records]\nSynthetic-only loopback server on port 3147. --production requires web/.next-fixture-production and uses a temporary self-signed HTTPS certificate.\n');
   process.exit(0);
 }
-if (flags.some(flag => !['--production', '--with-worker', '--with-verifier', '--with-execution-records'].includes(flag))) {
+if (flags.some(flag => !['--production', '--with-worker', '--with-verifier', '--with-execution-records', '--with-history-records'].includes(flag))
+  || flags.includes('--with-execution-records') && flags.includes('--with-history-records')) {
   process.stderr.write('UNKNOWN_FIXTURE_ARGUMENT\n'); process.exit(2);
 }
 const production = flags.includes('--production');
@@ -75,6 +76,13 @@ try {
     if (seed.error || seed.status !== 0) throw new Error('SYNTHETIC_EXECUTION_SEED_FAILED');
     process.stdout.write(seed.stdout);
   }
+  if (flags.includes('--with-history-records')) {
+    const seed = spawnSync(process.execPath, ['node_modules/tsx/dist/cli.mjs', 'scripts/seed-investor-history-fixture.ts', filename], {
+      cwd: web, env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR }, encoding: 'utf8', timeout: 60000,
+    });
+    if (seed.error || seed.status !== 0) throw new Error('SYNTHETIC_HISTORY_SEED_FAILED');
+    process.stdout.write(seed.stdout);
+  }
   let port = 3147;
   if (production) {
     const reservation = net.createServer();
@@ -121,6 +129,8 @@ try {
   process.stdout.write(`Synthetic fixture directory: ${directory}\n`);
   process.stdout.write(flags.includes('--with-execution-records')
     ? 'Fictional execution dataset only; no real credentials, broker facts or investment permission. Stop with Ctrl-C to remove temporary data.\n'
+    : flags.includes('--with-history-records')
+    ? 'Fictional archive records only; no real credentials, broker facts or investment permission. Stop with Ctrl-C to remove temporary data.\n'
     : 'Empty migrated database; no production credentials or user accounts. Stop with Ctrl-C to remove temporary data.\n');
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => stop(signal));
 } catch (error) { console.error(error.message); process.exitCode = 1; stop(); }

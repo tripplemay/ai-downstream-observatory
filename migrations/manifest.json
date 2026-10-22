@@ -226,6 +226,11 @@
       "version": 45,
       "file": "0045_investor_planned_funding_monitor.sql",
       "sha256": "c3eee4dea9ae46aa67382c50d6dd0a789ff359b1166d96895426d8007f481e5b"
+    },
+    {
+      "version": 46,
+      "file": "0046_investor_observation_archive.sql",
+      "sha256": "dda59dbc519d1458bf39cb98041d9bfc547ea23e5cea41098aad5af82a111e5b"
     }
   ]
 }

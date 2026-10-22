@@ -100,7 +100,7 @@ test("inbox mount, refresh and visible polling only GET; one human read mark POS
 test("observation navigation closes the inbox without marking read or changing its publication identity", async t => {
   const f = mount(t); await f.reply(0); await f.show();
   const [link] = f.links();
-  assert.equal(link.props.href, "/workbench/observations#research-observation-fictional-observation");
+  assert.equal(link.props.href, "/workbench/observations?observation=fictional-observation#research-observation-fictional-observation");
   assert.equal(link.props.onClick, undefined, "Modified clicks keep the source dialog; only Next navigation closes it.");
   const navigate = link.props.onNavigate as () => void;
   navigate(); await new Promise<void>(resolve => setImmediate(resolve));

@@ -35,7 +35,7 @@ function mount(t: { after: (fn: () => void) => void }, state = displayState(), v
       "lucide-react": Object.fromEntries(["ArrowRight", "CheckCircle2", "CircleHelp", "Clock3", "Eye", "ShieldCheck"].map(name => [name, name])),
       "@/components/ui/input": { Input: "Input" }, "@/components/session-boundary": { useSessionBoundary: () => null },
       "@/server/investor/schemas": schemas, "@/server/investor/loss-scenarios": losses, "./research-format": research, "./investor-client": client,
-      ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel"]
+      ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel", "history-panel"]
         .map(name => { const component = "Investor" + name.split("-").map(value => value[0].toUpperCase() + value.slice(1)).join("");
           return ["./investor-" + name, { [component]: component }]; })),
       "./investor-acquisition": { acquisitionDeadlines, InvestorAcquisitionPanel: "InvestorAcquisitionPanel" },
@@ -128,8 +128,10 @@ test("failed manual refresh cannot revive expired advice; a newer strictly parse
 });
 test("observation-only navigation remains historical after expiry, and session invalidation still clears every record and subscription", async t => {
   const h = mount(t, displayState(), "observations"); await h.flush(); await h.advance(until);
-  assert.equal(h.headline(), undefined); assert.match(h.words(h.card("每次观察与人工决定")), /需要你做决定/); assert.equal(h.node("InvestorAiPanel"), undefined);
-  await h.invalidate(); assert.doesNotMatch(h.text(), /Synthetic test observation only/); assert.equal(h.requests.length, 0);
+  assert.equal(h.headline(), undefined); assert.equal(h.node("InvestorHistoryPanel")!.props.workspaceId, h.state.workspace_id); assert.equal(h.node("InvestorAiPanel"), undefined);
+  assert.equal(h.node("InvestorHistoryPanel")!.props.disabled, false);
+  assert.equal(h.button("刷新状态"), undefined);
+  await h.invalidate(); assert.equal(h.node("InvestorHistoryPanel"), undefined); assert.doesNotMatch(h.text(), /Synthetic test observation only/); assert.equal(h.requests.length, 0);
   h.close(); assert.equal([...h.windowListeners.values()].every(rows => rows.size === 0), true);
   assert.equal([...h.documentListeners.values()].every(rows => rows.size === 0), true); assert.equal(h.timers.size, 0);
 });
