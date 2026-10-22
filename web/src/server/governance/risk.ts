@@ -12,6 +12,7 @@ import { verifiedPriceCalendarSession } from "../market-price-source";
 import { reviewedListingAt } from "../listing-reviews/service";
 import { readEvaluationListingBoundary, type EvaluationListingBoundary } from "../evaluation/listing-boundary";
 import { referenceInstant } from "../market-references/service";
+import { compareProposalInstants } from "./proposal-time";
 
 export interface ProposalRow { id: string; portfolio_id: string; environment: string; policy_version_id: string; strategy_version_id: string; ledger_revision: number; market_manifest: string; input_hash: string; expires_at: string; created_at: string }
 export interface ItemRow { id: string; proposal_id: string; account_id: string; listing_id: string; side: "buy" | "sell"; currency: string; quantity: string; limit_price: string; estimated_fees: string }
@@ -187,7 +188,7 @@ export function evaluateRisk(db: Database.Database, actor: GovernanceActor, prop
       } catch { throw new Error("LISTING_REVIEW_EVIDENCE_INVALID"); }
       state.listing_review_boundary = reviewBoundary;
     }
-    if (proposal.expires_at <= now) throw new Error("PROPOSAL_EXPIRED");
+    if (compareProposalInstants(proposal.expires_at, now) <= 0) throw new Error("PROPOSAL_EXPIRED");
     if (proposal.ledger_revision !== state.ledger_revision) throw new Error("PROPOSAL_LEDGER_CHANGED");
     const active = activation(db, portfolio, context.activation_id, now), policy = active.policy.value, strategy = active.strategy.value;
     const riskListing = (id: string) => listing(db, id, policy, inputNow, portfolio, reviewBoundary?.knowledge_at ?? inputNow, reviewBoundary?.watermark_sequence);

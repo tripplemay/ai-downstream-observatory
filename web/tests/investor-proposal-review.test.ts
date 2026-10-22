@@ -7,13 +7,16 @@ import { getInvestorProposalReviewContext } from "../src/server/investor/proposa
 import { proposalReviewBasis, type ProposalReviewContext, type ProposalReviewIntent } from "../src/server/investor/proposal-review-schemas";
 import { revision } from "../src/server/ledger/service";
 import { governanceFixture, human, now } from "./governance-fixture";
+import { createProposal } from "../src/server/governance/service";
 import { syntheticProfile } from "./investor-fixture";
 
-function fixture() {
+function fixture(expiresAt?: string) {
   const f = governanceFixture();
   executeInvestorCommand(f.db, human, { action: "save_profile", profile: syntheticProfile, expected_revision: 0, idempotency_key: "fictional-profile" }, now);
   executeInvestorCommand(f.db, human, { action: "link_portfolio", portfolio_id: f.portfolio, expected_ledger_revision: revision(f.db, f.portfolio), expected_revision: 1, idempotency_key: "fictional-link" }, now);
-  return { ...f, proposal: f.proposal() };
+  const proposal = expiresAt ? createProposal(f.db, human, { ...f.envelope(), activation_id: f.activated!.id, valuation_id: f.valuationId, expires_at: expiresAt,
+    items: [{ account_id: f.account, listing_id: "l", side: "buy", currency: "CNY", quantity: "600", limit_price: "100", estimated_fees: "0" }] }, f.options) : f.proposal();
+  return { ...f, proposal };
 }
 type Fixture = ReturnType<typeof fixture>;
 function context(f: Fixture, at = now) { return getInvestorProposalReviewContext(f.db, human, f.proposal.id, at, f.options); }
@@ -76,6 +79,27 @@ test("expired reserved lists remain discoverable for explicit release without re
     const before = rows(f); execute(f, "expire", late); assert.deepEqual(rows(f), before);
     assert.deepEqual(f.db.prepare("SELECT amount,quantity,status FROM reservations").get(), { amount: "0", quantity: "0", status: "expired" });
   } finally { f.close(); }
+});
+test("same-second fractional deadlines stay discoverable and exact-deadline expiry uses the original service", () => {
+  for (const expiry of ["2026-01-05T12:30:00Z", "2026-01-05T12:30:00.000000Z", "2026-01-05T12:30:00.000001Z"]) {
+    const f = fixture(expiry); try {
+      const before = rows(f), at = "2026-01-05T12:30:00.000Z";
+      const list = getInvestorProposalReviewContext(f.db, human, null, at, f.options);
+      assert.equal(list.proposals.length, expiry.endsWith("000001Z") ? 1 : 0);
+      execute(f, "approve");
+      const selected = context(f, at).selected!;
+      assert.equal(selected.current_risk.status, expiry.endsWith("000001Z") ? "pass" : "blocked");
+      if (expiry.endsWith("000001Z")) {
+        assert.ok(selected.allowed_operations.includes("prepare")); assert.ok(!selected.allowed_operations.includes("expire"));
+        execute(f, "prepare", at); assert.throws(() => execute(f, "expire", at), /OPERATION_BLOCKED/);
+      } else {
+        assert.ok(selected.allowed_operations.includes("expire")); assert.ok(!selected.allowed_operations.includes("prepare"));
+        execute(f, "expire", at);
+        assert.deepEqual(f.db.prepare("SELECT amount,quantity,status FROM reservations").get(), { amount: "0", quantity: "0", status: "expired" });
+      }
+      assert.deepEqual(rows(f), before);
+    } finally { f.close(); }
+  }
 });
 test("a partially remaining original grant cannot prepare the old full list even without a ledger revision change", () => {
   const f = fixture(); try {

@@ -53,8 +53,8 @@ export function getInvestorProposalReviewContext(db: Database.Database, actor: A
       EXISTS(SELECT 1 FROM reservations r JOIN proposal_items i ON i.id=r.proposal_item_id WHERE i.proposal_id=p.id AND r.status='active') has_active_reservations
       FROM proposals p WHERE p.portfolio_id=? AND p.environment='actual'
       AND NOT EXISTS(SELECT 1 FROM approval_events a WHERE a.proposal_id=p.id AND a.action IN ('reject','cancel_remainder','expire'))
-      AND (p.expires_at>? OR EXISTS(SELECT 1 FROM reservations r JOIN proposal_items i ON i.id=r.proposal_item_id WHERE i.proposal_id=p.id AND r.status='active'))
-      ORDER BY p.created_at DESC,p.rowid DESC LIMIT 51`).all(book.id, now) as
+      AND (substr(p.expires_at,1,19)>=? OR EXISTS(SELECT 1 FROM reservations r JOIN proposal_items i ON i.id=r.proposal_item_id WHERE i.proposal_id=p.id AND r.status='active'))
+      ORDER BY p.created_at DESC,p.rowid DESC LIMIT 51`).all(book.id, now.slice(0, 19)) as
       { id: string; created_at: string; expires_at: string; has_active_reservations: number }[], 50)
       .filter(row => row.has_active_reservations || at(row.expires_at) > at(now));
     let selected: ProposalReviewContext["selected"] = null, evidence: unknown = null;

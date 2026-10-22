@@ -6,6 +6,7 @@ import { readAttachment, readJsonAttachment } from "../ledger/attachments";
 import { activationSchema, approvalSchema, capabilityCommandSchema, createPolicySchema, createStrategySchema, executionFactSchema, executionReportSchema, prepareSchema, proposalRefSchema, proposalSchema } from "./schemas";
 import { activation, clock, requireActor, transaction, verifyGateEvidence, versions, type GovernanceActor, type GovernanceOptions } from "./core";
 import { checkRisk, currentPublications, loadProposal, requireValuation, validateAccount, type RiskResult } from "./risk";
+import { compareProposalInstants, proposalExpiryWithinTtl } from "./proposal-time";
 
 export type { GovernanceActor, GovernanceOptions } from "./core";
 export { policySchema, strategySchema } from "./schemas";
@@ -86,7 +87,7 @@ export function createProposal(db: Database.Database, actor: GovernanceActor, ra
   const input = proposalSchema.parse(raw);
   return transaction(db, actor, "create_proposal", input, input, options, now => {
     const active = activation(db, input.portfolio_id, input.activation_id, now), policy = active.policy.value;
-    if (input.expires_at <= now || (Date.parse(input.expires_at) - Date.parse(now)) / 1000 > policy.execution.proposal_ttl_seconds) throw new Error("INVALID_PROPOSAL_EXPIRY");
+    if (!proposalExpiryWithinTtl(input.expires_at, now, policy.execution.proposal_ttl_seconds)) throw new Error("INVALID_PROPOSAL_EXPIRY");
     for (const item of input.items) if (!db.prepare("SELECT id FROM accounts WHERE id=? AND portfolio_id=?").get(item.account_id, input.portfolio_id)) throw new Error("ACCOUNT_OUT_OF_SCOPE");
     const publications = currentPublications(db, policy, now), id = randomUUID();
     const context = { activation_id: active.row.id, valuation_id: input.valuation_id, publications, ai_run_id: input.ai_run_id };
@@ -162,7 +163,7 @@ function release(db: Database.Database, actor: GovernanceActor, raw: unknown, op
   return transaction(db, actor, action, input, input, options, now => {
     const { proposal } = loadProposal(db, input.portfolio_id, input.proposal_id);
     if (terminal(db, proposal.id)) throw new Error("PROPOSAL_TERMINAL");
-    if (action === "expire" && proposal.expires_at > now) throw new Error("PROPOSAL_NOT_EXPIRED");
+    if (action === "expire" && compareProposalInstants(proposal.expires_at, now) > 0) throw new Error("PROPOSAL_NOT_EXPIRED");
     const rows = db.prepare("SELECT r.* FROM reservations r JOIN proposal_items i ON i.id=r.proposal_item_id WHERE i.proposal_id=? AND r.status='active'").all(proposal.id) as { id: string; amount: string; quantity: string; row_version: number }[];
     for (const row of rows) db.prepare("UPDATE reservations SET amount='0',quantity='0',status=?,row_version=row_version+1,updated_at=? WHERE id=? AND row_version=?").run(action === "expire" ? "expired" : "released", now, row.id, row.row_version);
     const id = randomUUID();
@@ -181,7 +182,7 @@ export function recordExecutionReport(db: Database.Database, actor: GovernanceAc
     if (!item) throw new Error("PROPOSAL_ITEM_OUT_OF_SCOPE");
     readAttachment(db, actor, input.portfolio_id, input.attachment_id, { ...options, accountId: item.account_id });
     const id = randomUUID();
-    const deviations = [...(terminal(db, proposal.id) || proposal.expires_at <= now ? ["REPORTED_AFTER_TERMINAL_OR_EXPIRY"] : []), ...(amount(input.reported_quantity).gt(item.quantity) ? ["REPORTED_QUANTITY_EXCEEDS_PROPOSAL"] : [])];
+    const deviations = [...(terminal(db, proposal.id) || compareProposalInstants(proposal.expires_at, now) <= 0 ? ["REPORTED_AFTER_TERMINAL_OR_EXPIRY"] : []), ...(amount(input.reported_quantity).gt(item.quantity) ? ["REPORTED_QUANTITY_EXCEEDS_PROPOSAL"] : [])];
     if (!db.prepare("SELECT id FROM approval_events WHERE proposal_id=? AND action='approve'").get(proposal.id)) deviations.push("REPORTED_WITHOUT_APPROVAL");
     const existing = db.prepare("SELECT id,proposal_item_id,status,payload_json,attachment_id FROM execution_reports WHERE account_id=? AND source_id=? AND source_event_id=?").get(item.account_id, input.source_id, input.source_event_id) as { id: string; proposal_item_id: string; status: string; payload_json: string; attachment_id: string } | undefined;
     if (existing) {
@@ -212,7 +213,7 @@ export function recordExecutionFact(db: Database.Database, actor: GovernanceActo
       return { receipt, consumed: false, duplicate: true, deviations: [] as string[] };
     }
     const deviations: string[] = [];
-    if (terminal(db, proposal.id) || proposal.expires_at <= now) deviations.push("FACT_AFTER_TERMINAL_OR_EXPIRY");
+    if (terminal(db, proposal.id) || compareProposalInstants(proposal.expires_at, now) <= 0) deviations.push("FACT_AFTER_TERMINAL_OR_EXPIRY");
     if (proposal.ledger_revision !== input.expected_revision) deviations.push("FACT_AGAINST_STALE_PROPOSAL");
     const quantity = amount(command.fact.quantity), price = command.fact.price ? amount(command.fact.price) : amount(command.fact.consideration).div(quantity);
     if (item.side === "buy" ? price.gt(item.limit_price) : price.lt(item.limit_price)) deviations.push("EXECUTION_PRICE_OUTSIDE_LIMIT");
@@ -246,7 +247,7 @@ export function getGovernanceState(db: Database.Database, actor: GovernanceActor
     strategy_versions: db.prepare("SELECT id,strategy_key,version,content_hash,parameters_json,created_at FROM strategy_versions WHERE portfolio_id=? ORDER BY created_at DESC LIMIT 200").all(portfolioId),
     activations: db.prepare("SELECT id,policy_version_id,strategy_version_id,mode,valid_from,valid_to FROM activations WHERE portfolio_id=? ORDER BY valid_from DESC LIMIT 200").all(portfolioId),
     capabilities: db.prepare("SELECT c.id,c.account_id,c.market,c.valid_from,c.valid_to,c.rules_json,c.evidence_id,c.approved_by,c.recorded_at FROM account_capabilities c JOIN accounts a ON a.id=c.account_id WHERE a.portfolio_id=? ORDER BY c.recorded_at DESC LIMIT 500").all(portfolioId),
-    proposals: proposals.map(row => ({ ...row, status: approvals.find(approval => approval.proposal_id === row.id && ["reject", "expire", "cancel_remainder"].includes(approval.action))?.action ?? (row.expires_at <= now ? "expired" : row.ledger_revision !== ledgerRevision ? "stale" : approvals.some(approval => approval.proposal_id === row.id && approval.action === "approve") ? "approved_requires_preexecution_check" : risks.find(risk => risk.proposal_id === row.id)?.status === "pass" ? "awaiting_human_approval" : "blocked") })),
+    proposals: proposals.map(row => ({ ...row, status: approvals.find(approval => approval.proposal_id === row.id && ["reject", "expire", "cancel_remainder"].includes(approval.action))?.action ?? (compareProposalInstants(row.expires_at, now) <= 0 ? "expired" : row.ledger_revision !== ledgerRevision ? "stale" : approvals.some(approval => approval.proposal_id === row.id && approval.action === "approve") ? "approved_requires_preexecution_check" : risks.find(risk => risk.proposal_id === row.id)?.status === "pass" ? "awaiting_human_approval" : "blocked") })),
     proposal_items: (db.prepare("SELECT i.* FROM proposal_items i JOIN (SELECT id FROM proposals WHERE portfolio_id=? ORDER BY created_at DESC,id LIMIT 200) p ON p.id=i.proposal_id ORDER BY i.id LIMIT 20000").all(portfolioId) as { proposal_id: string }[]).filter(row => proposalIds.has(row.proposal_id)),
     risk_checks: risks.map(({ checks_json, ...row }) => ({ ...row, result: JSON.parse(checks_json) })),
     approvals: approvals.map(({ payload_json, ...row }) => ({ ...row, payload: JSON.parse(payload_json) })),
