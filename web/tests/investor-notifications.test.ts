@@ -8,6 +8,7 @@ import { canonical, hash, audit } from "../src/server/ledger/service";
 import { getInvestorState, executeInvestorCommand } from "../src/server/investor/service";
 import { openWorkbench } from "../src/server/workbench-db";
 import { readInvestorNotifications, readInvestorNotification } from "../src/server/investor/notifications";
+import { readInvestorHistory } from "../src/server/investor/history";
 import { parseInvestorInbox, verifyInvestorNoticeReceipt } from "../src/components/workbench/investor-notifications-client";
 
 type F = ReturnType<typeof investorFixture>;
@@ -76,9 +77,15 @@ test("new funding notices stay historical decisions; withdrawal/expiry can leave
   const f = investorFixture();
   try {
     seed(f, true); const feed = readInvestorNotifications(f.db, actor, now); assert.ok(feed.entries.every(row => row.recorded_outcome === "decision_required"));
+    const initialArchive = readInvestorHistory(f.db, actor, { observation: feed.entries[0].observation_id }, now);
+    assert.equal(initialArchive.entries[0].recorded_outcome, "decision_required");
+    assert.ok(!("model_change" in initialArchive.entries[0]));
     const expired = readInvestorNotifications(f.db, actor, "2027-02-01T00:00:00.000Z");
     assert.deepEqual(expired.entries, feed.entries); assert.ok(expired.entries.every(row => row.is_current_conclusion === false && row.live_advice_eligible === false));
     assert.equal(getInvestorState(f.db, actor, "2027-02-01T00:00:00.000Z").effective_outcome, "insufficient_evidence");
+    const beforeArchive = protectedState(f), archive = readInvestorHistory(f.db, actor, { observation: feed.entries[0].observation_id }, "2027-02-01T00:00:00.000Z");
+    assert.equal(archive.entries[0].recorded_outcome, "decision_required"); assert.equal(archive.entries[0].read_outcome, "insufficient_evidence");
+    assert.equal(archive.entries[0].data_cutoff, null); assert.equal(archive.is_current_conclusion, false); assert.equal(protectedState(f), beforeArchive);
     noFinance(f);
   } finally { f.close(); }
 });

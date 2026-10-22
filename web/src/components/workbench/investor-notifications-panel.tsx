@@ -79,7 +79,7 @@ export function InvestorNotificationsPanel({ workspaceId, binding, disabled, rea
       {current?.entries.map(notice => <article key={notice.id} className="min-w-0 rounded-lg border p-3">
         <div className="flex flex-wrap justify-between gap-2"><h3 className="text-sm font-medium">研究观察已发布 · 记录状态：{labels[notice.recorded_outcome]}</h3><span className="text-xs text-muted-foreground">{notice.read_at ? "已读" : "未读"}</span></div>
         <time className="mt-2 block break-words text-xs text-muted-foreground">{notice.published_at}</time>
-        <div className="mt-3 flex flex-wrap items-center gap-4"><Link className="text-sm underline" href={`/workbench/observations#research-observation-${encodeURIComponent(notice.observation_id)}`} onNavigate={() => setOpen(false)}>查看观察记录</Link>
+        <div className="mt-3 flex flex-wrap items-center gap-4"><Link className="text-sm underline" href={`/workbench/observations?observation=${encodeURIComponent(notice.observation_id)}#research-observation-${encodeURIComponent(notice.observation_id)}`} onNavigate={() => setOpen(false)}>查看观察记录</Link>
           {!notice.read_at && <Button type="button" variant="outline" size="sm" disabled={busy || disabled || readOnly || current.read_only} onClick={() => void load(notice)}>标记已读</Button>}</div>
       </article>)}
       {current?.has_more && <p className="text-xs text-muted-foreground">仅显示最近 20 条通知，未读数量也只针对这 20 条；更早观察保留在观察记录中。</p>}
