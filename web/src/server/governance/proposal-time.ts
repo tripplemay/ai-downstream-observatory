@@ -1,7 +1,8 @@
 type Instant = { seconds: number; fraction: string };
+const utc = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?Z$/;
 
 function instant(value: string): Instant {
-  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?Z$/.exec(value);
+  const match = utc.exec(value);
   if (!match) throw new Error("INVALID_PROPOSAL_EXPIRY");
   const millis = Date.parse(`${match[1]}Z`);
   if (!Number.isFinite(millis) || new Date(millis).toISOString().slice(0, 19) !== match[1]) throw new Error("INVALID_PROPOSAL_EXPIRY");
@@ -16,6 +17,13 @@ function compare(left: Instant, right: Instant): number {
 
 export function compareProposalInstants(left: string, right: string): number {
   return compare(instant(left), instant(right));
+}
+
+export function proposalClockInstant(normalized: string, original?: string): string {
+  if (!original || !utc.test(original) || Date.parse(original) !== Date.parse(normalized)) return normalized;
+  // Preserve an internal worker's precision, not an unrelated caller clock or a new audit timestamp.
+  instant(original);
+  return original;
 }
 
 export function proposalExpiryWithinTtl(expiresAt: string, now: string, ttlSeconds: number): boolean {

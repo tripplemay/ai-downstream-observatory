@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { approveProposal, createProposal, expireProposal, prepareExecution, recordExecutionFact, recordExecutionReport } from "../src/server/governance/service";
 import { checkRisk } from "../src/server/governance/risk";
-import { compareProposalInstants, proposalExpiryWithinTtl } from "../src/server/governance/proposal-time";
+import { compareProposalInstants, proposalClockInstant, proposalExpiryWithinTtl } from "../src/server/governance/proposal-time";
 import { governanceFixture, human, now } from "./governance-fixture";
 
 function input(f: ReturnType<typeof governanceFixture>, expires_at: string) {
@@ -64,6 +64,13 @@ test("TTL uses exact elapsed seconds across a day boundary without millisecond r
     assert.throws(() => proposalExpiryWithinTtl(current, current, ttl), /INVALID_PROPOSAL_EXPIRY/);
 });
 
+test("precision preservation cannot substitute an unrelated clock and retains legacy non-UTC clock normalization", () => {
+  assert.equal(proposalClockInstant(now, "2026-01-05T12:00:00.000001Z"), "2026-01-05T12:00:00.000001Z");
+  assert.equal(proposalClockInstant(now, "2026-01-05T12:00:01.000001Z"), now);
+  assert.equal(proposalClockInstant(now, "2026-01-05T20:00:00+08:00"), now);
+  assert.equal(proposalClockInstant(now), now);
+});
+
 test("deadline approval cannot create a grant and rejection leaves all transactional state untouched", () => {
   const f = governanceFixture(); try {
     const p = createProposal(f.db, human, input(f, "2026-01-05T12:30:00Z"), f.options);
@@ -101,5 +108,31 @@ test("creation rejects an already reached deadline and even fractional excess ov
       assert.throws(() => createProposal(f.db, human, input(f, expiry), f.options), /INVALID_PROPOSAL_EXPIRY/);
     assert.deepEqual(f.db.prepare("SELECT count(*) n FROM proposals").get(), before);
     assert.equal(createProposal(f.db, human, input(f, "2026-01-05T13:00:00.000000Z"), f.options).risk.status, "pass");
+  } finally { f.close(); }
+});
+
+test("an exact microsecond worker clock cannot prepare at the deadline or delay explicit expiry", () => {
+  const f = governanceFixture(); try {
+    const at = "2026-01-05T12:30:00.000001Z", p = createProposal(f.db, human, input(f, at), f.options), approved = f.approve(p);
+    const options = { ...f.options, now: at }, before = f.db.prepare("SELECT * FROM ledger_events ORDER BY rowid").all();
+    assert.throws(() => prepareExecution(f.db, human, { ...f.envelope(), proposal_id: p.id, approval_id: approved.id }, options), /RISK_BLOCKED:PROPOSAL_EXPIRED/);
+    const report = recordExecutionReport(f.db, human, { ...f.envelope(), proposal_id: p.id, proposal_item_id: p.item_ids[0], source_id: "synthetic-broker",
+      source_event_id: "fictional-microsecond-report", status: "submitted", attachment_id: f.sourceEvidence, reported_quantity: "0" }, options);
+    assert.ok(report.deviations.includes("REPORTED_AFTER_TERMINAL_OR_EXPIRY"));
+    expireProposal(f.db, human, { ...f.envelope(), proposal_id: p.id }, options);
+    assert.deepEqual(f.db.prepare("SELECT quantity,amount,status FROM reservations").get(), { quantity: "0", amount: "0", status: "expired" });
+    assert.deepEqual(f.db.prepare("SELECT * FROM ledger_events ORDER BY rowid").all(), before);
+    assert.equal((f.db.prepare("SELECT created_at FROM approval_events WHERE action='expire'").get() as { created_at: string }).created_at, "2026-01-05T12:30:00.000Z");
+  } finally { f.close(); }
+});
+
+test("TTL preserves an internal worker clock fraction without rewriting its original command or audit clock", () => {
+  const f = governanceFixture(); try {
+    const options = { ...f.options, now: "2026-01-05T12:00:00.000001Z" };
+    const p = createProposal(f.db, human, input(f, "2026-01-05T13:00:00.000001Z"), options);
+    assert.equal(p.risk.status, "pass");
+    assert.deepEqual(f.db.prepare("SELECT created_at,expires_at FROM proposals WHERE id=?").get(p.id),
+      { created_at: now, expires_at: "2026-01-05T13:00:00.000001Z" });
+    assert.throws(() => createProposal(f.db, human, input(f, "2026-01-05T13:00:00.000001001Z"), options), /INVALID_PROPOSAL_EXPIRY/);
   } finally { f.close(); }
 });
