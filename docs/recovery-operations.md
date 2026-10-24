@@ -87,3 +87,8 @@ Before approving the recovered instance:
 The tool reports the encrypted artifact SHA-256 and actual snapshot completion time. A replica copy reports `independent_failure_domain_verified=false` until independently evidenced by operations. Recovery optionally reports snapshot age at a supplied incident timestamp; elapsed script time is **not** the full time to restore business service, authenticate users, reconcile tail facts and approve resumption.
 
 Production must separately configure scheduling, alerting, retention, remote transport, key custody, restoration resources and an actual independent-host rehearsal. Measure the latest recoverable verified replica, not just the newest local filename. The accepted 15-minute RPO and 2-hour RTO remain unproven until those end-to-end exercises pass. Synthetic timestamp tests only verify arithmetic and tooling behavior.
+
+For guarded post-release archival and a single steady-state VPS archive, see
+[single-local-backup retention](57-single-local-backup-retention.md). That operator
+tool requires completed off-host copy and restoration receipts; it is not an
+unconditional prune timer or an unattended transport service.
