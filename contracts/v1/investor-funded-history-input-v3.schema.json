@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-funded-history-input-v3.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "funding_plan",
+    "historical_start_date",
+    "dataset",
+    "context"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "investor-funded-history-input-v3"
+    },
+    "funding_plan": {
+      "$ref": "investor-funded-history-input.schema.json#/properties/funding_plan"
+    },
+    "historical_start_date": {
+      "$ref": "investor-funded-history-input.schema.json#/properties/historical_start_date"
+    },
+    "dataset": {
+      "$ref": "investor-funded-history-input.schema.json#/properties/dataset"
+    },
+    "context": {
+      "$ref": "investor-long-horizon-input-v4.schema.json#/$defs/context"
+    }
+  },
+  "additionalProperties": false
+}

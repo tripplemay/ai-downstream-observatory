@@ -1,5 +1,5 @@
 import { parseStrictJson } from "../src/server/strict-json";
-import { verifyFundedHistoryEconomics } from "../src/server/investor/funded-history-economics";
+import { fundedExecutionReview, verifyFundedHistoryEconomics } from "../src/server/investor/funded-history-economics";
 import type { FundedHistoryInput } from "../src/server/investor/funded-history";
 import { fundedComparisonPathSchema } from "../src/server/investor/funded-comparison-schemas";
 import { analysisPathSchema } from "../src/server/investor/funded-analysis-schemas";
@@ -20,7 +20,8 @@ async function main() {
   }
   const verified = verifyFundedHistoryEconomics(raw.input, raw.result);
   const paths = Object.fromEntries(Object.entries(verified.economics).map(([name, value]) => [name,
-    fundedComparisonPathSchema.parse(Object.fromEntries(Object.keys(fundedComparisonPathSchema.shape).map(key => [key, (value as Record<string, unknown>)[key]])))]));
+    fundedComparisonPathSchema.parse({ ...Object.fromEntries(Object.keys(fundedComparisonPathSchema.shape).map(key => [key, (value as Record<string, unknown>)[key]])),
+      ...(fundedExecutionReview(value) ? { execution_review: fundedExecutionReview(value) } : {}) })]));
   process.stdout.write(JSON.stringify({ economics_hash: verified.independently_replayed_economics_hash, paths }) + "\n");
 }
 main().catch(() => { process.stderr.write("FUNDED_COMPARISON_REPLAY_FAILED\n"); process.exitCode = 1; });

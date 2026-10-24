@@ -76,7 +76,7 @@ export function readInvestorTrialRegistry(db: Database.Database, workspaceId: st
         requireEvidence(trial.content_hash && trial.result_at && trial.result_job === job.id && trial.result_token !== null
           && trial.result_token >= trial.fencing_token && trial.result_token <= job.fencing_token && trial.result_at >= trial.created_at);
         const summary = sealed({ document_json: trial.document_json, content_hash: trial.content_hash, created_at: trial.result_at }, now);
-        validateInvestorTrialDocument("summary", summary);
+        validateInvestorTrialDocument("summary", summary, plan.schema_version as string);
         requireEvidence(summary.phase === trial.phase && hash(summary.window) === hash(window));
         phases[trial.phase].completed++;
         summaries.set(trial.phase + ":" + trial.parameters_hash, summary);

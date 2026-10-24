@@ -12,24 +12,58 @@ from .implementation import implementation_hash
 
 
 ENGINE_VERSION = "investor-diversified-reference-v1"
+EVENT_ENGINE_VERSION = "investor-diversified-reference-v2"
 PHASES = ("train", "validation", "holdout")
+REVIEW_KEYS = ("terminal_execution_failure_count", "corporate_action_cancellation_count",
+              "resolved_corporate_action_cancellation_count", "unresolved_order_review_count", "order_review_lineage_hash")
+
+
+def event_review(plan):
+    return plan.get("schema_version") == "research-plan-v5"
+
+
+def research_engine(plan):
+    return EVENT_ENGINE_VERSION if event_review(plan) else ENGINE_VERSION
+
+
+def strategy_schema(plan):
+    return "investor-strategy-result-v2.schema.json" if event_review(plan) else "investor-strategy-result.schema.json"
+
+
+def validate_phase_summary(summary, plan):
+    validate_contract(summary, strategy_schema(plan), "$defs/summary")
+    if event_review(plan):
+        for prefix in ("", "benchmark_"):
+            raw, cancelled, resolved, terminal = (summary[prefix + key] for key in (
+                "execution_failure_count", "corporate_action_cancellation_count",
+                "resolved_corporate_action_cancellation_count", "terminal_execution_failure_count"))
+            if not (resolved <= cancelled <= raw and terminal == raw - resolved):
+                raise WorkbenchError("INVESTOR_RESEARCH_REVIEW_COUNTS_INVALID")
 
 
 def _summary(report):
     result = report["strategy"]
     keys = ("twr", "annualized_unit_return", "max_drawdown", "profit_cny", "fees_cny", "fx_fees_cny", "slippage_cny",
             "execution_failure_count", "sell_turnover_on_mean_observed_nav", "buy_turnover_on_mean_observed_nav")
-    return {"phase": report["phase"], "result_hash": report["result_hash"], "window": result["window"],
+    summary = {"phase": report["phase"], "result_hash": report["result_hash"], "window": result["window"],
             **{key: result[key] for key in keys},
             **{"benchmark_" + key: report["benchmark"][key] for key in ("twr", "annualized_unit_return", "max_drawdown", "execution_failure_count", "profit_cny", "fees_cny", "fx_fees_cny", "slippage_cny")},
             "excess_twr": report["excess_twr"], "assumptions": result["assumptions"]}
+    if report["schema_version"] == "research-result-v4":
+        summary.update(schema_version="investor-phase-summary-v2", **{key: result[key] for key in REVIEW_KEYS},
+                       **{"benchmark_" + key: report["benchmark"][key] for key in REVIEW_KEYS})
+    return summary
 
 
 def _usable(summary):
+    execution_usable = summary["execution_failure_count"] == 0 and summary["benchmark_execution_failure_count"] == 0
+    if summary.get("schema_version") == "investor-phase-summary-v2":
+        execution_usable = all(summary[prefix + key] == 0 for prefix in ("", "benchmark_")
+                               for key in ("terminal_execution_failure_count", "unresolved_order_review_count"))
     return (all(summary[key] is not None for key in ("twr", "annualized_unit_return", "max_drawdown", "benchmark_twr", "benchmark_annualized_unit_return", "benchmark_max_drawdown", "excess_twr"))
             and -ONE <= decimal(summary["max_drawdown"]) <= ZERO
             and -ONE <= decimal(summary["benchmark_max_drawdown"]) <= ZERO
-            and summary["execution_failure_count"] == 0 and summary["benchmark_execution_failure_count"] == 0)
+            and execution_usable)
 
 
 @financial
@@ -50,10 +84,10 @@ def _within_risk(summary, stresses, limit):
 
 @financial
 def _validate_policy(policy, dataset, plan):
-    validate_contract(policy, "investor-strategy-policy.schema.json")
+    validate_contract(policy, "investor-strategy-policy-v2.schema.json" if event_review(plan) else "investor-strategy-policy.schema.json")
     if len(dataset["assets"]) > 20 or len(dataset["observations"]) > 100000 or len(dataset["sessions"]) > 30000:
         raise WorkbenchError("INVESTOR_RESEARCH_INPUT_LIMIT")
-    if plan["schema_version"] not in ("research-plan-v2", "research-plan-v3") or dataset["schema_version"] != "research-dataset-v2":
+    if plan["schema_version"] not in ("research-plan-v2", "research-plan-v3", "research-plan-v4", "research-plan-v5") or dataset["schema_version"] != "research-dataset-v2":
         raise WorkbenchError("INVESTOR_RESEARCH_VERSION_REQUIRED")
     if set(policy["roles"]) != {row["listing_id"] for row in dataset["assets"]}:
         raise WorkbenchError("INVESTOR_RESEARCH_ROLE_SCOPE")
@@ -121,7 +155,8 @@ def research_reference(dataset, plan, policy, profile, *, allow_synthetic=False,
     """
     validate_reference_inputs(dataset, plan, policy, profile, allow_synthetic=allow_synthetic)
     evaluate = evaluate or (lambda parameters, phase: _summary(compare_backtest(dataset, plan, parameters, phase)))
-    basis = {"schema_version": "investor-strategy-result-v1", "engine_version": ENGINE_VERSION,
+    basis = {"schema_version": "investor-strategy-result-v2" if event_review(plan) else "investor-strategy-result-v1",
+             "engine_version": research_engine(plan),
              "implementation_hash": implementation_hash(),
              "profile_hash": content_hash(profile), "dataset_hash": content_hash(dataset), "plan_hash": content_hash(plan),
              "policy_hash": content_hash(policy), "data_mode": dataset["mode"], "selected_parameters": None,
@@ -145,7 +180,7 @@ def research_reference(dataset, plan, policy, profile, *, allow_synthetic=False,
     def finish(status, codes):
         result = {**basis, "status": status, "reason_codes": codes}
         result["result_hash"] = content_hash(result)
-        validate_contract(result, "investor-strategy-result.schema.json")
+        validate_contract(result, strategy_schema(plan))
         return result
 
     if reasons: return finish("insufficient_evidence", reasons)
@@ -153,6 +188,7 @@ def research_reference(dataset, plan, policy, profile, *, allow_synthetic=False,
     eligible = []
     for parameters in sorted(policy["candidates"], key=content_hash):
         summary = evaluate(parameters, "train")
+        validate_phase_summary(summary, plan)
         stresses = _stress(parameters, policy)
         candidate = {"parameters_hash": content_hash(parameters), "weights": deepcopy(parameters["weights"]), "train": summary, "stresses": stresses,
                      "risk_budget_pass": None if budget is None else _within_risk(summary, stresses, budget)}
@@ -174,6 +210,7 @@ def research_reference(dataset, plan, policy, profile, *, allow_synthetic=False,
         freeze(selected)
     for phase in ("validation", "holdout"):
         summary = evaluate(selected, phase)
+        validate_phase_summary(summary, plan)
         basis["phase_evidence"].append(summary)
         if not _within_risk(summary, evidence["stresses"], budget):
             return finish("insufficient_evidence", ["SELECTED_CANDIDATE_FAILED_" + phase.upper()])

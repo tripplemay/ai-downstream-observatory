@@ -224,10 +224,10 @@ def compare_backtest(dataset, plan, parameters, phase, *, progress=None):
         raise WorkbenchError("INVALID_RESEARCH_PHASE")
     if not dataset["corporate_actions_complete"]:
         raise WorkbenchError("CORPORATE_ACTION_COVERAGE_INCOMPLETE")
-    if (plan["schema_version"] in ("research-plan-v2", "research-plan-v3")) != bool(parameters.get("schema_version")):
+    if (plan["schema_version"] in ("research-plan-v2", "research-plan-v3", "research-plan-v4", "research-plan-v5")) != bool(parameters.get("schema_version")):
         raise WorkbenchError("RESEARCH_PLAN_PARAMETER_VERSION_MISMATCH")
     runner = run_portfolio
-    if plan["schema_version"] in ("research-plan-v2", "research-plan-v3"):
+    if plan["schema_version"] in ("research-plan-v2", "research-plan-v3", "research-plan-v4", "research-plan-v5"):
         from .rotation import run_rotation_portfolio
         runner = run_rotation_portfolio
     options = {"progress": progress} if progress is not None else {}
@@ -239,7 +239,7 @@ def compare_backtest(dataset, plan, parameters, phase, *, progress=None):
         progress()
     if strategy["initial_equity_cny"] != baseline["initial_equity_cny"] or strategy["contributions_cny"] != baseline["contributions_cny"]:
         raise WorkbenchError("BENCHMARK_CASHFLOW_MISMATCH")
-    report = {"schema_version": "research-result-v2" if plan["schema_version"] == "research-plan-v3" else "research-result-v1", "dataset_hash": content_hash(dataset), "plan_hash": content_hash(plan),
+    report = {"schema_version": "research-result-v4" if plan["schema_version"] == "research-plan-v5" else "research-result-v3" if plan["schema_version"] == "research-plan-v4" else "research-result-v2" if plan["schema_version"] == "research-plan-v3" else "research-result-v1", "dataset_hash": content_hash(dataset), "plan_hash": content_hash(plan),
               "parameters_hash": content_hash(parameters), "phase": phase, "data_mode": dataset["mode"],
               "strategy": strategy, "benchmark": baseline,
               "excess_twr": canonical(decimal(strategy["twr"]) - decimal(baseline["twr"])) if strategy["twr"] is not None and baseline["twr"] is not None else None,

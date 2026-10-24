@@ -5,7 +5,7 @@ from worker.orchestration.db import canonical_json, content_hash, new_id, transa
 from .data_evidence import _assert, _audit, _audit_binding, _object, _owner, resolve_capture, resolve_review
 from .data_snapshot import build_dataset
 from .runtime import _milliseconds
-from .strategy import ENGINE_VERSION, validate_reference_inputs
+from .strategy import research_engine, validate_reference_inputs
 
 
 QUALIFICATION = "owner_reviewed_reconstructed"
@@ -35,7 +35,8 @@ def enqueue_evidence_request(db, workspace_id, source, now):
     if profile is None:
         return None
     _assert(profile["created_at"] <= now)
-    document = {"schema_version": "investor-research-request-v1", "engine_version": ENGINE_VERSION,
+    source_value = _object(source["document_json"])
+    document = {"schema_version": "investor-research-request-v1", "engine_version": research_engine(source_value["plan"]),
         "profile_hash": profile["content_hash"], "input_hash": source["content_hash"]}
     digest = content_hash(document)
     previous = db.execute("SELECT id,evidence_input_id FROM investor_research_requests WHERE workspace_id=? AND profile_id=? AND input_version=?",

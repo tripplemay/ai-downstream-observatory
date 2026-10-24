@@ -2,7 +2,7 @@ import { Decimal } from "../ledger/decimal";
 import { hash } from "../ledger/service";
 import { runContinuousEconomics, type ContinuousPlan } from "./continuous-economics";
 import { economicDate, economicInstant, economicText, requireEconomic, type ContinuousDataset } from "./continuous-market";
-import { fundedPathReleases, verifiedFundedHistoryReplay } from "./funded-history-economics";
+import { fundedExecutionReview, fundedPathReleases, verifiedFundedHistoryReplay } from "./funded-history-economics";
 import type { FundedHistoryInput } from "./funded-history";
 import { fundedAnalysisDataSchema, fundedAnalysisSeriesSchema, type FundedAnalysisSeries } from "./funded-analysis-schemas";
 import { observedMonthlyRisk } from "./funded-analysis-statistics";
@@ -53,6 +53,7 @@ export function analyzeFundedTrace(trace: Trace, zone: string): FundedAnalysisSe
   if (active) consider(active, all.at(-1)!.at, true);
   const observed = [...daily.values()], { monthly, rolling } = observedMonthlyRisk(observed, !unavailable);
   const summary = { principal_cny: all.at(-1)!.principal_cny, ending_locked_cash_cny: all.at(-1)!.locked_cash_cny,
+    ...(fundedExecutionReview(trace) ? { execution_review: fundedExecutionReview(trace) } : {}),
     ...Object.fromEntries(["ending_nav_cny", "profit_cny", "fees_cny", "fx_fees_cny", "slippage_cny", "cash_rounding_cny", "twr", "annualized_unit_return",
       "max_drawdown", "recovered_at", "ending_cash_ratio", "execution_failure_count", "xirr"].map(key => [key, trace[key as keyof Trace]])) };
   requireEconomic(unavailable ? trace.max_drawdown === null : trace.max_drawdown !== null && new Decimal(trace.max_drawdown).eq(worst), "FUNDED_ANALYSIS_RISK_INVALID");

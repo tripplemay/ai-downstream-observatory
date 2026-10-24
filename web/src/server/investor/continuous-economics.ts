@@ -2,6 +2,7 @@ import { Decimal } from "../ledger/decimal";
 import { ContinuousMarket, economicDate, economicFact, economicInstant, economicLocal, economicMidnight, economicStamp, economicText, requireEconomic,
   type ContinuousDataset, type Settlement } from "./continuous-market";
 import { continuousPerformance } from "./continuous-performance";
+import { OrderReviews, type ReviewLinks } from "./order-reviews";
 
 type ObjectValue = Record<string, unknown>;
 export type ContinuousParameters = { schema_version: string; weights: Record<string, string>; roles: Record<string, string>; rebalance: string;
@@ -11,8 +12,8 @@ export type ContinuousPlan = { schema_version: string; window: { start: string; 
   parameters: ContinuousParameters; initial_capital_cny: string; contributions: { at: string; amount_cny: string }[]; decision_times: string[];
   execution: { model: string; settlement_model: string; sale_proceeds: string; max_fx_age_seconds: number; slippage_bps: string;
     minimum_fee_cny: string; commission_bps: string; fx_bps: string; cash_quantum: string;
-    buy_price_buffer_bps?: string; buy_fx_buffer_bps?: string }; tax_coverage: string };
-type Order = { id: string; listing: string; side: "buy" | "sell"; quantity: Decimal; budget: Decimal; cashFloor: Decimal; lockedAtDecision: Decimal;
+    buy_price_buffer_bps?: string; buy_fx_buffer_bps?: string; order_action_policy?: string }; tax_coverage: string };
+type Order = ReviewLinks & { id: string; listing: string; side: "buy" | "sell"; quantity: Decimal; budget: Decimal; cashFloor: Decimal; lockedAtDecision: Decimal;
   decision: bigint; expiry: bigint; execute?: bigint; dependencies: string[]; state: string;
   priceCap?: Decimal; fxCap?: Decimal; worstTotal?: Decimal };
 type StockLot = { order: string; listing: string; quantity: Decimal; at: bigint; evidence: Settlement };
@@ -57,10 +58,14 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
   requireEconomic(options.holdingBaseline === undefined || typeof options.holdingBaseline === "boolean");
   const holdingBaseline = options.holdingBaseline === true;
   const research = options.researchPhase !== undefined;
-  const bounded = research || plan.schema_version === "investor-long-horizon-plan-v3";
+  const reviewable = research && plan.schema_version === "bounded-research-window-v3" || plan.schema_version === "investor-long-horizon-plan-v4";
+  const actionAware = reviewable || research && plan.schema_version === "bounded-research-window-v2";
+  const bounded = research || ["investor-long-horizon-plan-v3", "investor-long-horizon-plan-v4"].includes(plan.schema_version);
   requireEconomic(!research || ["train", "validation", "holdout"].includes(options.researchPhase!) && !holdingBaseline
-    && releases.size === 0 && plan.schema_version === "bounded-research-window-v1");
+    && releases.size === 0 && ["bounded-research-window-v1", "bounded-research-window-v2", "bounded-research-window-v3"].includes(plan.schema_version));
   const p = plan.parameters, ex = plan.execution, zone = plan.evaluation_timezone;
+  requireEconomic(reviewable ? ex.order_action_policy === "defer_known_else_cancel_batch_and_reassess"
+    : actionAware ? ex.order_action_policy === "defer_known_scheduled_action_before_commit" : ex.order_action_policy === undefined);
   requireEconomic(p.schema_version === "research-fixed-rebalance-parameters-v2" && ex.model === (bounded ? "next_session_close_bounded_fixed_quantity" : "next_session_close_fixed_quantity")
     && ex.settlement_model === "explicit_market_calendar" && ex.sale_proceeds === "convert_to_cny_at_fill_then_settle");
   requireEconomic(["commission_bps", "minimum_fee_cny", "slippage_bps", "fx_bps"].every(key => economicFact(ex[key as "commission_bps"]).gte(0))
@@ -79,6 +84,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
   const dividends = new Map<string, Decimal>(), payments = new Map<bigint, { currency: string; amount: Decimal; id: string }[]>();
   const pending: Order[] = [], stocks: StockLot[] = [], sales: Sale[] = [], orders = new Map<string, Order>(), slots = new Map<string, string>();
   const events: ObjectValue[] = [], curve: ObjectValue[] = [], flows: { at: bigint; amount: Decimal; before: Decimal }[] = [];
+  const reviews = reviewable ? new OrderReviews(orders, events, p.weights) : null;
   const contributions = new Map<bigint, Decimal>();
   for (const flow of plan.contributions) {
     const at = economicInstant(flow.at), amount = new Decimal(flow.amount_cny);
@@ -88,6 +94,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
   const initial = new Decimal(plan.initial_capital_cny).plus(contributions.get(start) ?? zero()); contributions.delete(start);
   requireEconomic(initial.gt(0)); cash.set("CNY", initial);
   let units = initial, locked = research ? zero() : initial, principal = initial, fundingPending = false, lastProposal: bigint | null = null;
+  const lifecycle = { deferred: null as { first_deferred_at: string; last_deferred_at: string } | null };
   let fees = zero(), fxFees = zero(), slipFees = zero(), rounding = zero(), buys = zero(), sells = zero();
   const decisions = new Set(plan.decision_times.map(economicInstant).filter(at => start <= at && at <= end));
   const actions = new Map<bigint, ContinuousDataset["actions"]>();
@@ -143,6 +150,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
     order.state = state; remove(pending, order);
     if (reason) events.push({ type: state === "expired" ? "order_expired" : "execution_skipped", at: economicStamp(at), order_id: order.id,
       listing_id: order.listing, side: order.side, quantity: economicText(order.quantity), reason, ...extra });
+    if (reason && ["skipped", "expired"].includes(state) && !("cancellation_review_id" in extra)) reviews?.failed(order, at);
   };
   const nextClose = (listing: string, after: bigint, expiry: bigint) => {
     const at = market.nextClose(listing, after, expiry); return at !== null && at < expiry ? at : null;
@@ -176,6 +184,12 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
         budget_cny: economicText(order.budget), reason: "DEPENDENT_SALE_CASH_SETTLED" });
     }
   };
+  const resolveDeferred = (at: bigint, outcome: string) => {
+    if (lifecycle.deferred) {
+      events.push({ type: "policy_review_resumed", at: economicStamp(at), ...lifecycle.deferred, outcome });
+      lifecycle.deferred = null;
+    }
+  };
   const evaluate = (at: bigint) => {
     const local = economicLocal(at, zone), period = p.rebalance === "first_decision_each_year" ? String(local.year) : `${local.year}-H${local.month <= 6 ? 1 : 2}`;
     const nextMonth = local.month === 12 ? `${local.year + 1}-01-01` : `${local.year}-${String(local.month + 1).padStart(2, "0")}-01`;
@@ -196,9 +210,12 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
         deltas.push({ listing_id: listing, target_cny: economicText(target), current_cny: economicText(current), difference_cny: economicText(difference),
           within_tolerance: difference.abs().lte(tolerance), price_mark: priceMark }); quotes.set(listing, [price, rate, priceId, fxId, priceMark]);
       }
+      reviews?.requireFresh(quotes, at);
     } catch (error) { events.push({ ...base, outcome: "blocked", deltas: [], reason_codes: [failure(error)] }); return; }
     Object.assign(base, { deltas, nav_cny: economicText(value), tolerance_cny: economicText(tolerance),
       ...(!research ? { deployment_base_cny: economicText(deploy), locked_cash_cny: economicText(locked) } : {}) });
+    const reviewing = reviews?.active ?? null, reviewScope = reviewing ? new Set(reviewing.listing_ids) : null;
+    if (reviewScope) base.reassessment_scope = [...reviewScope].sort();
     requireEconomic(deploy.gt(0), "INVALID_FIXED_POLICY_CLASS_SCOPE");
     const roles = new Map<string, { target: Decimal; current: Decimal }>();
     for (const [listing, weight] of weights) {
@@ -208,24 +225,35 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
     const classes = [...roles].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([role, row]) => ({ role, target_weight: economicText(row.target),
       current_weight: economicText(row.current), difference_weight: economicText(row.current.minus(row.target)), threshold_breached: row.current.minus(row.target).abs().gte(p.class_drift_threshold) }));
     const bootstrap = ![...positions.values()].some(value => !value.isZero()), due = !slots.has(period), breach = classes.some(row => row.threshold_breached);
-    const triggers = [...(bootstrap ? ["INITIAL_DEPLOYMENT"] : []), ...(fundingPending ? ["NEW_CASH_REPAIR"] : []), ...(!holdingBaseline && due ? ["CALENDAR_REVIEW"] : []), ...(!holdingBaseline && breach ? ["CLASS_WEIGHT_BREACH"] : [])];
+    const triggers = [...(bootstrap ? ["INITIAL_DEPLOYMENT"] : []), ...(fundingPending ? ["NEW_CASH_REPAIR"] : []),
+      ...(reviewing ? ["CORPORATE_ACTION_ORDER_REVIEW"] : []), ...(!holdingBaseline && due ? ["CALENDAR_REVIEW"] : []), ...(!holdingBaseline && breach ? ["CLASS_WEIGHT_BREACH"] : [])];
     Object.assign(base, { class_drift: classes, trigger_codes: triggers, last_proposed_at: lastProposal === null ? null : economicStamp(lastProposal) });
     const days = lastProposal === null ? Infinity : (Date.parse(economicDate(at, zone)) - Date.parse(economicDate(lastProposal, zone))) / 86400000;
-    if (!triggers.length || !bootstrap && !fundingPending && days < p.minimum_days_between_rebalances) {
+    if (!triggers.length || !bootstrap && !fundingPending && !reviewing && days < p.minimum_days_between_rebalances) {
+      if (actionAware && !triggers.length) resolveDeferred(at, "no_longer_triggered");
       events.push({ ...base, type: "policy_monitor", reason_codes: [triggers.length ? "REBALANCE_COOLDOWN" : "LOW_FREQUENCY_RULE_NOT_TRIGGERED"] }); return;
     }
-    const allowSales = !holdingBaseline && !fundingPending; base.allocation_method = allowSales ? "rebalance_to_targets" : "new_cash_repair_without_sales";
-    slots.set(period, economicStamp(at)); fundingPending = false;
-    if (deltas.every(row => row.within_tolerance)) { events.push({ ...base, outcome: "unchanged", reason_codes: ["TARGETS_WITHIN_TOLERANCE"] }); return; }
+    const allowSales = reviewing ? reviewing.allow_sales : !holdingBaseline && !fundingPending; base.allocation_method = allowSales ? "rebalance_to_targets" : "new_cash_repair_without_sales";
+    if (!actionAware) { slots.set(period, economicStamp(at)); fundingPending = false; }
+    const actionable = deltas.filter(row => !reviewScope || reviewScope.has(row.listing_id));
+    const targetsSatisfied = actionable.every(row => row.within_tolerance);
+    if (targetsSatisfied || reviewing && !allowSales && actionable.every(row => row.within_tolerance || new Decimal(row.difference_cny).lt(0))) {
+      if (actionAware) {
+        if (!reviewing) { slots.set(period, economicStamp(at)); fundingPending = false; }
+        resolveDeferred(at, "targets_within_tolerance"); reviews?.complete(at, true, !targetsSatisfied);
+      }
+      events.push({ ...base, outcome: "unchanged", reason_codes: ["TARGETS_WITHIN_TOLERANCE"] }); return;
+    }
     const issues: string[] = [], planned: Order[] = [], saleIds: string[] = [], needs = new Map<string, Decimal>(); let projectedSales = zero();
     const foreign = sum([...cash].filter(([currency, amount]) => currency !== "CNY" && !amount.isZero()).map(([currency, amount]) => amount.times(fx(currency, at))));
     const floor = locked.plus(Decimal.max(0, deploy.times(new Decimal(1).minus(weightSum)).minus(foreign)));
     const makeOrder = (listing: string, side: "buy" | "sell", quantity: Decimal, budget = zero(), dependencies: string[] = [], bounds?: [Decimal, Decimal, Decimal]) => {
       const order: Order = { id: `order:${String(orders.size + 1).padStart(6, "0")}`, listing, side, quantity, budget, cashFloor: floor,
         lockedAtDecision: locked, decision: at, expiry, dependencies, state: "planned",
+        ...(reviewable ? { allowSales } : {}),
         ...(bounds ? { priceCap: bounds[0], fxCap: bounds[1], worstTotal: bounds[2] } : {}) }; orders.set(order.id, order); planned.push(order); return order;
     };
-    for (const row of deltas) {
+    for (const row of actionable) {
       if (row.within_tolerance) continue;
       const listing = row.listing_id, difference = new Decimal(row.difference_cny);
       if (difference.gt(0)) { needs.set(listing, difference); continue; } if (!allowSales) continue;
@@ -268,6 +296,36 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
       } else if (saleIds.length) { const order = makeOrder(listing, "buy", step.times(low.toString()), allocation, [...saleIds], bounds); order.state = "waiting_for_sales"; }
       else issues.push("NO_SETTLED_OR_DEPENDENT_CASH:" + listing);
     }
+    if (actionAware) {
+      if (reviewing && (issues.length || !planned.length)) {
+        for (const order of planned) orders.delete(order.id);
+        events.push({ ...base, outcome: "blocked", reason_codes: [...new Set([...issues, "ORDER_REVIEW_REPLACEMENT_INCOMPLETE"])].sort() });
+        return;
+      }
+      const deferred: ObjectValue[] = [];
+      for (const order of planned) {
+        if (order.state !== "scheduled") continue;
+        const relevant = data.actions.filter(action => action.listing_id === order.listing).sort((a, b) => {
+          const left = economicInstant(a.at), right = economicInstant(b.at);
+          return left < right ? -1 : left > right ? 1 : a.type !== b.type ? a.type === "split" ? -1 : 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+        });
+        for (const action of relevant) {
+          const known = economicInstant(action.published_at) <= at && (data.mode !== "actual_replay" || economicInstant(action.ingested_at!) <= at);
+          const actionAt = economicInstant(action.at);
+          if (known && at < actionAt && actionAt <= order.execute!) deferred.push({ listing_id: order.listing, side: order.side,
+            planned_close_at: economicStamp(order.execute!), action_id: action.id, action_at: action.at });
+        }
+      }
+      if (deferred.length) {
+        for (const order of planned) orders.delete(order.id);
+        lifecycle.deferred = { first_deferred_at: lifecycle.deferred?.first_deferred_at ?? economicStamp(at), last_deferred_at: economicStamp(at) };
+        events.push({ ...base, outcome: "deferred", reason_codes: [...new Set([...issues, "KNOWN_ACTION_BEFORE_SCHEDULED_CLOSE"])].sort(), deferred_actions: deferred });
+        return;
+      }
+      if (!reviewing) { slots.set(period, economicStamp(at)); fundingPending = false; }
+      if (planned.length && !issues.length) resolveDeferred(at, "new_orders_proposed");
+      if (reviewing) reviews!.publish(planned, at);
+    }
     for (const order of planned) {
       pending.push(order); if (order.execute !== undefined) clock.add(order.execute);
       const [, , priceId, fxId, priceMark] = quotes.get(order.listing)!;
@@ -275,6 +333,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
         quantity: economicText(order.quantity), budget_cny: order.side === "buy" ? economicText(order.budget) : null,
         execute_at: order.execute === undefined ? null : economicStamp(order.execute), expires_at: economicStamp(expiry), funding: order.state,
         dependency_order_ids: order.dependencies, decision_price_observation_id: priceId, decision_fx_observation_id: fxId, decision_price_mark: priceMark,
+        ...(order.originReviewId ? { origin_review_id: order.originReviewId, replaces_order_ids: order.replacesOrderIds } : {}),
         ...(bounded && order.side === "buy" ? { buy_price_cap: economicText(order.priceCap!), buy_fx_cap: economicText(order.fxCap!), worst_total_cash_cny: economicText(order.worstTotal!) } : {}) });
     }
     events.push({ ...base, outcome: planned.length ? "proposed" : "blocked", reason_codes: [...new Set(issues)].sort(), order_ids: planned.map(order => order.id), partial: issues.length > 0 });
@@ -284,8 +343,9 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
   while (clock.length) {
     const at = clock.pop();
     for (const order of [...pending]) if (at >= order.expiry) finish(order, "expired", at, "FIXED_POLICY_ORDER_EXPIRED");
+    reviews?.onActions(actions.get(at) ?? [], pending, at, finish);
     for (const action of [...(actions.get(at) ?? [])].sort((a, b) => a.type !== b.type ? a.type === "split" ? -1 : 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) {
-      if (bounded) for (const order of [...pending]) if (order.listing === action.listing_id)
+      if (bounded && !reviewable) for (const order of [...pending]) if (order.listing === action.listing_id)
         finish(order, "skipped", at, "CORPORATE_ACTION_INVALIDATES_FROZEN_ORDER", { action_id: action.id });
       const quantity = positions.get(action.listing_id) ?? zero(), currency = market.assets.get(action.listing_id)!.currency;
       if (action.type === "split") {
@@ -350,7 +410,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
         fx_fee_cny: economicText(actual.fxFee), cash_rounding_cny: economicText(actual.rounding), total_cash_cny: economicText(actual.amount),
         price_observation_id: priceId, fx_observation_id: market.fx(asset.currency, at)[1], settled_at: economicStamp(settled), settlement_evidence: evidence });
     }
-    settle(at); activate(at); if (decisions.has(at)) evaluate(at);
+    settle(at); activate(at); reviews?.complete(at); if (decisions.has(at)) evaluate(at);
     const carry: ObjectValue[] = [], total = nav(at, false, carry);
     requireEconomic(locked.gte(0) && cny().minus(locked).minus(reserved()).gte(0), "INVESTOR_LONG_HORIZON_CASH_RESERVATION_INVALID");
     curve.push({ at: economicStamp(at), nav_cny: economicText(total), unit_nav: economicText(total.div(units)),
@@ -364,7 +424,10 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
   const missing = [...weights].filter(([listing, weight]) => weight.gt(0) && !bought.has(listing)).map(([listing]) => listing).sort();
   if (missing.length) events.push({ type: "policy_deployment_failed", at: economicStamp(end), missing_listings: missing,
     reason: bought.size ? "INITIAL_DEPLOYMENT_INCOMPLETE" : "INITIAL_DEPLOYMENT_NOT_EXECUTED" });
-  return { engine_version: research ? "fixed-policy-bounded-rebalance-v3" : bounded ? holdingBaseline ? "continuous-bounded-hold-new-cash-v1" : "continuous-bounded-fixed-policy-funding-v1" : holdingBaseline ? "continuous-hold-new-cash-v1" : "continuous-fixed-policy-funding-v1", phase: options.researchPhase ?? "continuous", window: plan.window,
+  else if (actionAware && lifecycle.deferred) events.push({ type: "policy_deployment_failed", at: economicStamp(end),
+    ...lifecycle.deferred, reason: "DEFERRED_POLICY_REVIEW_UNRESOLVED" });
+  const rawFailures = events.filter(row => ["execution_skipped", "order_expired", "policy_deployment_failed"].includes(row.type as string)).length;
+  return { engine_version: reviewable ? research ? "fixed-policy-event-review-rebalance-v5" : holdingBaseline ? "continuous-event-review-hold-v1" : "continuous-event-review-funding-v1" : actionAware ? "fixed-policy-action-aware-bounded-rebalance-v4" : research ? "fixed-policy-bounded-rebalance-v3" : bounded ? holdingBaseline ? "continuous-bounded-hold-new-cash-v1" : "continuous-bounded-fixed-policy-funding-v1" : holdingBaseline ? "continuous-hold-new-cash-v1" : "continuous-fixed-policy-funding-v1", phase: options.researchPhase ?? "continuous", window: plan.window,
     initial_equity_cny: economicText(initial), contributions_cny: economicText(sum(contributions.values())), ending_nav_cny: economicText(closing),
     profit_cny: economicText(closing.minus(initial).minus(sum(contributions.values()))),
     ...continuousPerformance(start, end, initial, closing, flows, curve as { at: string; nav_cny: string; unit_nav: string }[], zone),
@@ -377,8 +440,9 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
     ending_cash: Object.fromEntries(Object.entries(ordered(cash)).map(([key, value]) => [key, economicText(value)])),
     ending_receivables: { sale_cny: economicText(sum(sales.map(row => row.amount))), dividends: Object.fromEntries(Object.entries(ordered(dividends)).map(([key, value]) => [key, economicText(value)])) },
     ending_unsettled_positions: stocks.map(row => ({ order_id: row.order, listing_id: row.listing, quantity: economicText(row.quantity), settled_at: economicStamp(row.at) })),
-    execution_failure_count: events.filter(row => ["execution_skipped", "order_expired", "policy_deployment_failed"].includes(row.type as string)).length,
-    policy_evaluation_counts: Object.fromEntries(["proposed", "unchanged", "blocked"].map(outcome => [outcome, events.filter(row => row.type === "evaluation" && row.outcome === outcome).length])),
+    execution_failure_count: rawFailures,
+    ...(reviews ? reviews.result(rawFailures) : {}),
+    policy_evaluation_counts: Object.fromEntries((actionAware ? ["proposed", "unchanged", "blocked", "deferred"] : ["proposed", "unchanged", "blocked"]).map(outcome => [outcome, events.filter(row => row.type === "evaluation" && row.outcome === outcome).length])),
     policy_rules: { ...Object.fromEntries(["rebalance", "roles", "class_drift_threshold", "minimum_days_between_rebalances", "contribution_mode", "order_expiry"].map(key => [key, p[key as keyof ContinuousParameters]])),
       ...(holdingBaseline ? { rebalance: "disabled_hold_new_cash" } : {}) },
     policy_monitor_count: events.filter(row => row.type === "policy_monitor").length, curve, events,
@@ -386,6 +450,9 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
       "explicit_market_calendar_settlement", "sale_proceeds_converted_to_cny_at_fill_unavailable_until_settlement", "fixed_decision_quantity_and_budget",
       "theoretical_ex_action_carry_between_raw_closes_not_an_observed_or_live_price",
       ...(bounded ? ["buy_raw_close_and_fx_caps_frozen_at_decision", "buy_quantity_sized_at_both_caps_with_upward_cent_debit", "allocation_cent_dust_stays_cash", "corporate_action_cancels_frozen_orders_without_resizing"] : []),
+      ...(actionAware ? ["known_scheduled_action_defers_entire_tentative_batch_without_consuming_policy_slot"] : []),
+      ...(actionAware ? ["deferred_review_requires_later_valid_review_or_fails_phase"] : []),
+      ...(reviewable ? ["raw_action_cancellations_preserved_and_only_resolved_lineage_closes_terminal_gaps", "post_action_raw_close_and_declared_future_decision_required_for_replacement"] : []),
       holdingBaseline ? "no_calendar_or_class_drift_rebalancing" : "half_year_or_year_calendar_review_plus_absolute_class_drift",
       "cooldown_uses_evaluation_local_calendar_days", holdingBaseline ? "new_cny_cash_repairs_without_sales" : "new_cny_cash_repairs_without_sales_before_rebalancing", "orders_expire_at_next_month_boundary",
       "unsettled_assets_block_new_orders", "no_margin", "no_cash_interest", "foreign_dividends_retained_in_original_currency", "turnover_uses_arithmetic_mean_observed_nav",

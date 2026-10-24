@@ -27,6 +27,8 @@ RETROSPECTIVE_INPUT_CONTRACT = "investor-long-horizon-input-v2.schema.json"
 RETROSPECTIVE_OUTPUT_CONTRACT = "investor-long-horizon-result-v2.schema.json"
 BOUNDED_INPUT_CONTRACT = "investor-long-horizon-input-v3.schema.json"
 BOUNDED_OUTPUT_CONTRACT = "investor-long-horizon-result-v3.schema.json"
+EVENT_INPUT_CONTRACT = "investor-long-horizon-input-v4.schema.json"
+EVENT_OUTPUT_CONTRACT = "investor-long-horizon-result-v4.schema.json"
 
 
 def _validate_decisions(dataset, decisions):
@@ -48,9 +50,10 @@ def _validate_decisions(dataset, decisions):
 @financial
 def validate_input(document, *, allow_synthetic=False):
     version = document.get("schema_version") if isinstance(document, dict) else None
-    bounded = version == "investor-long-horizon-input-v3"
+    event_review = version == "investor-long-horizon-input-v4"
+    bounded = event_review or version == "investor-long-horizon-input-v3"
     retrospective = bounded or version == "investor-long-horizon-input-v2"
-    validate_contract(document, BOUNDED_INPUT_CONTRACT if bounded else RETROSPECTIVE_INPUT_CONTRACT if retrospective else INPUT_CONTRACT)
+    validate_contract(document, EVENT_INPUT_CONTRACT if event_review else BOUNDED_INPUT_CONTRACT if bounded else RETROSPECTIVE_INPUT_CONTRACT if retrospective else INPUT_CONTRACT)
     data, plan = document["dataset"], document["plan"]
     validate_time_precision(document)
     registration_fields = ("parameters_recorded_at", "comparison_declared_at", "information_cutoff_at") if retrospective else ("parameters_frozen_at",)
@@ -197,6 +200,9 @@ def _summarize(run, schedule, zone):
                 "return_method", "annualized_unit_return", "xirr", "max_drawdown", "recovered_at", "fees_cny",
                 "fx_fees_cny", "slippage_cny", "cash_rounding_cny", "execution_failure_count", "ending_cash_ratio", "assumptions")},
             "engine_trace_hash": content_hash(run), "principal_cny": closing["principal_cny"],
+            **({key: run[key] for key in ("terminal_execution_failure_count", "corporate_action_cancellation_count",
+                "resolved_corporate_action_cancellation_count", "unresolved_order_review_count", "order_review_lineage_hash")}
+               if run["engine_version"] == "continuous-event-review-funding-v1" else {}),
             "ending_locked_cash_cny": closing["locked_cash_cny"], "ending_positions": run["positions"],
             "event_counts": {key: counts[key] for key in ("external_contribution", "funding_release", "simulated_buy", "simulated_sell",
                 "execution_skipped", "order_expired", "policy_deployment_failed")},
@@ -213,15 +219,17 @@ def compare_funding_paths(document, *, allow_synthetic=False, progress=None):
         schedule, releases = funding_schedule(plan, zone, staged=name == "staged")
         run = run_continuous_portfolio(data, plan, releases, progress=progress)
         runs[name] = _summarize(run, schedule, zone)
-    bounded = document["schema_version"] == "investor-long-horizon-input-v3"
+    event_review = document["schema_version"] == "investor-long-horizon-input-v4"
+    bounded = event_review or document["schema_version"] == "investor-long-horizon-input-v3"
     retrospective = bounded or document["schema_version"] == "investor-long-horizon-input-v2"
-    result = {"schema_version": "investor-long-horizon-result-v3" if bounded else "investor-long-horizon-result-v2" if retrospective else "investor-long-horizon-result-v1", "input_hash": content_hash(document),
+    result = {"schema_version": "investor-long-horizon-result-v4" if event_review else "investor-long-horizon-result-v3" if bounded else "investor-long-horizon-result-v2" if retrospective else "investor-long-horizon-result-v1", "input_hash": content_hash(document),
               "dataset_hash": content_hash(data), "plan_hash": content_hash(plan),
               "implementation_hash": content_hash({"investor": implementation_hash(),
                   "timezone_hashes": implementation_manifest(plan["evaluation_timezone"])["timezone_hashes"]}),
               "parameters_hash": content_hash(plan["parameters"]), "window": dict(plan["window"]),
               "evaluation_timezone": plan["evaluation_timezone"], "data_mode": data["mode"],
-              "status": "execution_gaps" if any(run["execution_failure_count"] for run in runs.values()) else "computed",
+              "status": "execution_gaps" if any((run["terminal_execution_failure_count"] or run["unresolved_order_review_count"])
+                  if event_review else run["execution_failure_count"] for run in runs.values()) else "computed",
               "qualification": "retrospective_exploratory_funding_comparison_only" if retrospective else "counterfactual_funding_path_comparison_only", "source_independently_verified": False,
               "parameters_independently_preregistered": False, "actual_holdings_linked": False,
               "execution_authorized": False, "live_advice_eligible": False, "runs": runs,
@@ -238,7 +246,7 @@ def compare_funding_paths(document, *, allow_synthetic=False, progress=None):
         result.update({field: plan[field] for field in ("parameters_recorded_at", "comparison_declared_at", "information_cutoff_at")})
         result["limits"].append("retrospective_declared_times_are_not_independent_preregistration_or_unused_holdout_evidence")
     result["result_hash"] = content_hash(result)
-    validate_contract(result, BOUNDED_OUTPUT_CONTRACT if bounded else RETROSPECTIVE_OUTPUT_CONTRACT if retrospective else OUTPUT_CONTRACT)
+    validate_contract(result, EVENT_OUTPUT_CONTRACT if event_review else BOUNDED_OUTPUT_CONTRACT if bounded else RETROSPECTIVE_OUTPUT_CONTRACT if retrospective else OUTPUT_CONTRACT)
     if len(canonical_json(result).encode("utf-8")) > MAX_OUTPUT_BYTES:
         raise WorkbenchError("INVESTOR_KERNEL_OUTPUT_TOO_LARGE")
     return result
@@ -250,9 +258,10 @@ def main(argv=None):
     versions = parser.add_mutually_exclusive_group()
     versions.add_argument("--retrospective", action="store_true", help="Explicit v2 retrospective exploration; never backdate registration")
     versions.add_argument("--bounded-retrospective", action="store_true", help="Explicit v3 bounded execution; caller supplies both buffers")
+    versions.add_argument("--event-review-retrospective", action="store_true", help="Explicit v4 causal order review; not a live execution model")
     args = parser.parse_args(argv)
     try:
-        contract = BOUNDED_INPUT_CONTRACT if args.bounded_retrospective else RETROSPECTIVE_INPUT_CONTRACT if args.retrospective else INPUT_CONTRACT
+        contract = EVENT_INPUT_CONTRACT if args.event_review_retrospective else BOUNDED_INPUT_CONTRACT if args.bounded_retrospective else RETROSPECTIVE_INPUT_CONTRACT if args.retrospective else INPUT_CONTRACT
         document = parse_request(sys.stdin.buffer.read(MAX_INPUT_BYTES + 1), contract)
         result = compare_funding_paths(document, allow_synthetic=args.allow_synthetic)
         print(canonical_json(result))

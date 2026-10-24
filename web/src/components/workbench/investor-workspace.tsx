@@ -23,6 +23,7 @@ import { InvestorAiPanel } from "./investor-ai-panel";
 import { InvestorNotificationsPanel } from "./investor-notifications-panel";
 import { acquisitionDeadlines, InvestorAcquisitionPanel } from "./investor-acquisition";
 import { useInvestorDisplayClock } from "./investor-display-clock";
+import type { ResearchExecutionReview } from "@/server/investor/research-execution";
 
 export type InvestorView = "overview" | "plan" | "observations" | "accounts";
 const panel = "min-w-0 rounded-2xl border bg-card p-5 shadow-sm md:p-6";
@@ -32,6 +33,13 @@ const labels = { observe: "继续观察", decision_required: "需要你做决定
 const marketLabels = { CN: "A 股", HK: "港股", US: "美股" };
 const roleLabels = { growth: "成长", defensive: "防守", diversifier: "分散" };
 const decisionLabels = { accept_idea: "采纳思路", defer: "暂缓", reject: "拒绝" };
+function ExecutionReviewDetails({ review }: { review: ResearchExecutionReview }) {
+  return <div className="text-xs text-muted-foreground">{(["strategy", "benchmark"] as const).map(side => <p key={side}>
+    {side === "strategy" ? "候选" : "基准"}：最终执行缺口 {review[side].terminal_failure_count} 项；
+    公司行动撤单 {review[side].cancellations} 项，其中已解决 {review[side].resolved_cancellations} 项；
+    待解决复核 {review[side].unresolved_reviews} 项。
+  </p>)}</div>;
+}
 const errorLabels: Record<string, string> = {
   INVESTOR_PROPOSAL_CONTEXT_CONFLICT: "清单、风控、预占或账本关联已变化。请重新核对，不沿用旧草稿批准。",
   INVESTOR_PROPOSAL_SELECTION_INVALID: "所选清单不属于当前完整核对范围，请重新读取。",
@@ -124,7 +132,8 @@ function ResearchTask({ task: storedTask, nowMs }: { task: InvestorResearchTask;
       {!!task.study.phase_checks?.length && <section aria-label="已完成阶段的执行检查" className="rounded-lg border p-3 text-sm">
         <h3 className="font-semibold">冻结候选的阶段执行检查</h3>
         <ul className="mt-2 space-y-2">{task.study.phase_checks.map(row => <li key={row.phase}>
-          {phaseLabels[row.phase]}：候选执行缺口 {row.execution_failure_count} 项，基准执行缺口 {row.benchmark_execution_failure_count} 项。
+          {phaseLabels[row.phase]}：候选{row.execution_review ? "原始撤单 / 跳过 / 到期" : "执行缺口"} {row.execution_failure_count} 项，基准{row.execution_review ? "原始撤单 / 跳过 / 到期" : "执行缺口"} {row.benchmark_execution_failure_count} 项。
+          {row.execution_review && <ExecutionReviewDetails review={row.execution_review} />}
         </li>)}</ul>
         <p className="mt-2 text-xs text-muted-foreground">缺口包含模拟订单跳过、到期或部署失败，不是实际交易或亏损金额。汇总不能断言具体成交失败原因；没有缺口也不等于风险检查通过。</p>
         {task.registry?.phases.holdout.registered === 0 && <p className="mt-2 text-xs text-muted-foreground">保留期尚未启动，不能显示为通过。</p>}
@@ -132,8 +141,9 @@ function ResearchTask({ task: storedTask, nowMs }: { task: InvestorResearchTask;
       {task.study.candidates.some(candidate => candidate.train_checks) && <section aria-label="训练候选执行检查" className="rounded-lg border p-3 text-sm">
         <h3 className="font-semibold">训练候选与基准的执行证据</h3>
         <ul className="mt-2 space-y-2">{task.study.candidates.map((candidate, index) => candidate.train_checks && <li key={candidate.parameters_hash}>
-          候选 {index + 1}：候选模拟执行缺口 {candidate.train_checks.execution_failure_count} 项，基准模拟执行缺口 {candidate.train_checks.benchmark_execution_failure_count} 项；
+          候选 {index + 1}：候选{candidate.train_checks.execution_review ? "原始撤单 / 跳过 / 到期" : "模拟执行缺口"} {candidate.train_checks.execution_failure_count} 项，基准{candidate.train_checks.execution_review ? "原始撤单 / 跳过 / 到期" : "模拟执行缺口"} {candidate.train_checks.benchmark_execution_failure_count} 项；
           {candidate.train_checks.metrics_complete ? "训练指标已计算。" : "训练指标仍有缺失。"}
+          {candidate.train_checks.execution_review && <ExecutionReviewDetails review={candidate.train_checks.execution_review} />}
         </li>)}</ul>
         <p className="mt-2 text-xs text-muted-foreground">这是已登记训练结果的只读汇总，不是实际交易失败。订单跳过、到期或部署失败都可能构成缺口，汇总不推断具体原因；提高风险预算不会修复执行缺口。</p>
       </section>}

@@ -9,19 +9,21 @@ import { verifyInvestorKernelResult } from "./kernel-contracts";
 import { readInvestorTrialRegistry } from "./trial-evidence";
 import { latestInvestorResearchInput, readInvestorResearchSource } from "./source-inputs";
 import { fixedPolicyDecisionRule } from "./fixed-policy";
+import { investorResearchEngines, researchEngineForPlan, phaseExecutionReview, executionChecksUsable } from "./research-execution";
 
 export const investorResearchEngine = "investor-diversified-reference-v1";
 const requestSchema = z.object({ schema_version: z.literal("investor-research-request-v1"),
-  engine_version: z.literal(investorResearchEngine), profile_hash: investorHash, input_hash: investorHash.nullable() }).strict();
+  engine_version: z.enum(investorResearchEngines), profile_hash: investorHash, input_hash: investorHash.nullable() }).strict();
 export const investorResearchRunSchema = z.object({ schema_version: z.literal("investor-research-run-v1"), status: z.enum(["blocked", "calculated"]),
-  request_id: investorId, profile_id: investorId, input_version: investorHash, engine_version: z.literal(investorResearchEngine),
+  request_id: investorId, profile_id: investorId, input_version: investorHash, engine_version: z.enum(investorResearchEngines),
   implementation_hash: investorHash, reason_codes: z.array(z.string().regex(/^[A-Z][A-Z0-9_]{0,79}$/)).min(1).max(40),
   result: z.record(z.string(), z.unknown()).nullable(), registry: researchRegistrySchema.nullable().optional(), created_at: investorInstant }).strict();
 export function enqueueInvestorResearch(db: Database.Database, workspaceId: string, profile: InvestorProfileVersion, now: string) {
   const input = latestInvestorResearchInput(db, workspaceId, now);
   const inputId = input?.source_kind === "synthetic" ? input.id : null;
   const evidenceId = input?.source_kind === "evidence" ? input.id : null;
-  const document = requestSchema.parse({ schema_version: "investor-research-request-v1", engine_version: investorResearchEngine,
+  const source = input ? readInvestorResearchSource(db, workspaceId, { input_id: inputId, evidence_input_id: evidenceId }, now) : null;
+  const document = requestSchema.parse({ schema_version: "investor-research-request-v1", engine_version: researchEngineForPlan(source?.payload?.plan ?? source?.document?.plan),
     profile_hash: profile.content_hash, input_hash: input?.content_hash ?? null });
   const inputVersion = hash(document);
   const existing = db.prepare("SELECT id,document_json,input_id,evidence_input_id FROM investor_research_requests WHERE workspace_id=? AND profile_id=? AND input_version=?")
@@ -53,7 +55,8 @@ export function readInvestorResearchTask(db: Database.Database, workspaceId: str
     || !investorInstant.safeParse(row.created_at).success || row.created_at > now) throw new Error("INVESTOR_EVIDENCE_INVALID");
   const input = latestInvestorResearchInput(db, workspaceId, now);
   const source = readInvestorResearchSource(db, workspaceId, row, now);
-  if ((source?.row.content_hash ?? null) !== document.input_hash || source && source.row.created_at > row.created_at) throw new Error("INVESTOR_EVIDENCE_INVALID");
+  if ((source?.row.content_hash ?? null) !== document.input_hash || source && source.row.created_at > row.created_at
+    || document.engine_version !== researchEngineForPlan(source?.payload?.plan ?? source?.document?.plan)) throw new Error("INVESTOR_EVIDENCE_INVALID");
   const inputCurrent = (row.evidence_input_id ?? row.input_id) === (input?.id ?? null) && document.input_hash === (input?.content_hash ?? null);
   let study: z.infer<typeof researchTaskSchema>["study"] = null;
   let registry: z.infer<typeof researchTaskSchema>["registry"] = null;
@@ -61,7 +64,7 @@ export function readInvestorResearchTask(db: Database.Database, workspaceId: str
   if (row.run_json !== null) {
     const run = investorResearchRunSchema.parse(parseStrictJson(row.run_json));
     if (hash(run) !== row.run_hash || run.request_id !== row.id || run.profile_id !== profile.id || run.input_version !== row.input_version
-      || run.status !== row.run_status || run.created_at !== row.run_at || run.created_at < row.created_at || run.created_at > now
+      || run.engine_version !== document.engine_version || run.status !== row.run_status || run.created_at !== row.run_at || run.created_at < row.created_at || run.created_at > now
       || row.job_status !== "succeeded" || !row.observation_id || (run.status === "blocked") !== (run.result === null)) throw new Error("INVESTOR_EVIDENCE_INVALID");
     reasonCodes = run.reason_codes;
     if (!source?.unavailable_reason) registry = readInvestorTrialRegistry(db, workspaceId, row, profile.content_hash, now, run, source);
@@ -76,7 +79,7 @@ export function readInvestorResearchTask(db: Database.Database, workspaceId: str
         qualification: source.row.source_qualification as "synthetic_test_only" | "owner_reviewed_reconstructed",
         phase_checks: (result.phase_evidence as { phase: "train" | "validation" | "holdout"; execution_failure_count: number; benchmark_execution_failure_count: number }[])
           .map(summary => ({ phase: summary.phase, execution_failure_count: summary.execution_failure_count,
-            benchmark_execution_failure_count: summary.benchmark_execution_failure_count })),
+            benchmark_execution_failure_count: summary.benchmark_execution_failure_count, ...phaseExecutionReview(summary) })),
         ...(source.document && source.catalog ? { source_context: {
           range_start: (source.document.snapshot as Record<string, string>).range_start,
           range_end: (source.document.snapshot as Record<string, string>).range_end,
@@ -92,9 +95,9 @@ export function readInvestorResearchTask(db: Database.Database, workspaceId: str
             return { parameters_hash: candidate.parameters_hash, weights: candidate.weights,
             ...(fixedPolicyDecisionRule(frozenCandidates.get(candidate.parameters_hash)!, true) ? { decision_rule: fixedPolicyDecisionRule(frozenCandidates.get(candidate.parameters_hash)!, true) } : {}),
             train_net_twr: candidate.train.twr, train_drawdown: candidate.train.max_drawdown, benchmark_net_twr: candidate.train.benchmark_twr,
-            usable: metricsComplete && candidate.train.execution_failure_count === 0 && candidate.train.benchmark_execution_failure_count === 0,
+            usable: metricsComplete && executionChecksUsable({ ...candidate.train, ...phaseExecutionReview(candidate.train) }),
             train_checks: { metrics_complete: metricsComplete, execution_failure_count: candidate.train.execution_failure_count,
-              benchmark_execution_failure_count: candidate.train.benchmark_execution_failure_count },
+              benchmark_execution_failure_count: candidate.train.benchmark_execution_failure_count, ...phaseExecutionReview(candidate.train) },
             stresses: candidate.stresses.map(stress => ({ id: stress.id, label: stress.label, portfolio_return: stress.portfolio_return })) };
           }) };
     }

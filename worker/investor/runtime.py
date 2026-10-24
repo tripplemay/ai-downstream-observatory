@@ -7,7 +7,7 @@ from worker.market.contracts import validate_contract
 from worker.orchestration.db import WorkbenchError, canonical_json, content_hash, instant, new_id, transaction
 from worker.orchestration.jobs import JobCommit, enqueue_job
 from .implementation import implementation_hash
-from .strategy import ENGINE_VERSION, research_reference
+from .strategy import ENGINE_VERSION, EVENT_ENGINE_VERSION, research_engine, research_reference
 from .trials import TrialRecorder
 
 
@@ -86,7 +86,7 @@ def _binding(connection, job, now, *, header_only=False):
         raise WorkbenchError("INVESTOR_RESEARCH_BINDING_INVALID")
     document = _json(request["document_json"])
     if (not isinstance(document, dict) or set(document) != {"schema_version", "engine_version", "profile_hash", "input_hash"}
-            or document["schema_version"] != "investor-research-request-v1" or document["engine_version"] != ENGINE_VERSION
+            or document["schema_version"] != "investor-research-request-v1" or document["engine_version"] not in (ENGINE_VERSION, EVENT_ENGINE_VERSION)
             or content_hash(document) != request["input_version"]):
         raise WorkbenchError("INVESTOR_RESEARCH_BINDING_INVALID")
     profile = connection.execute("SELECT * FROM investor_profiles WHERE id=? AND workspace_id=?", (request["profile_id"], job["scope"])).fetchone()
@@ -121,6 +121,9 @@ def _binding(connection, job, now, *, header_only=False):
                 or payload["dataset"].get("mode") != "synthetic" or content_hash(payload) != source["content_hash"]
                 or document["input_hash"] != source["content_hash"]):
             raise WorkbenchError("INVESTOR_RESEARCH_BINDING_INVALID")
+    source_plan = payload["plan"] if payload is not None else admitted["document"]["plan"] if evidence_id is not None else {}
+    if document["engine_version"] != research_engine(source_plan):
+        raise WorkbenchError("INVESTOR_RESEARCH_BINDING_INVALID")
     current_profile = connection.execute("SELECT id FROM investor_profiles WHERE workspace_id=? ORDER BY version DESC LIMIT 1", (job["scope"],)).fetchone()
     latest_input = _latest_input(connection, job["scope"])
     current = current_profile["id"] == profile["id"] and (latest_input["id"] if latest_input else None) == (evidence_id or request["input_id"])
@@ -203,7 +206,7 @@ def prepare_research_job(connection, job, lease, *, clock=None, allow_synthetic=
             observation = _observation(request, profile, preferences, codes, now, reference_source is not None)
             run = {"schema_version": "investor-research-run-v1", "status": "calculated" if result else "blocked",
                    "request_id": request["id"], "profile_id": profile["id"], "input_version": request["input_version"],
-                   "engine_version": ENGINE_VERSION, "implementation_hash": implementation, "reason_codes": codes,
+                   "engine_version": _json(request["document_json"])["engine_version"], "implementation_hash": implementation, "reason_codes": codes,
                    "result": result, "registry": registry, "created_at": now}
             run_json = canonical_json(run)
             if len(run_json.encode()) > 1048576: raise WorkbenchError("INVESTOR_RESEARCH_RESULT_LIMIT")

@@ -31,6 +31,7 @@ export function mountInvestorDisplay<P>(t: { after: (fn: () => void) => void }, 
   const document = { ...listeners(documentListeners), visibilityState: "visible" }, window = { ...listeners(windowListeners), confirm: () => false,
     dispatchEvent(event: { type: string }) { for (const fn of windowListeners.get(event.type) ?? []) fn(); return true; } };
   const requests: { url: string; method: string; options: RequestInit; resolve: (value: Response) => void; reject: (error: Error) => void }[] = [];
+  const requestWaiters = new Set<(error?: Error) => void>();
   const schedule = () => { if (!scheduled && mounted) { scheduled = true; queueMicrotask(() => { scheduled = false; if (mounted) render(); }); } };
   const react = { Fragment: "Fragment", useState(initial: unknown) { const index = cursor++; if (!(index in hooks)) hooks[index] = typeof initial === "function" ? initial() : initial;
     return [hooks[index], (value: unknown) => { const next = typeof value === "function" ? value(hooks[index]) : value;
@@ -59,7 +60,10 @@ export function mountInvestorDisplay<P>(t: { after: (fn: () => void) => void }, 
     Date: class extends Date { static now() { return wall; } }, performance: { now: () => elapsed },
     setTimeout: (fn: () => void, delay: number) => arm(fn, delay), clearTimeout: (id: number) => timers.delete(id),
     setInterval: (fn: () => void, delay: number) => arm(fn, delay, delay), clearInterval: (id: number) => timers.delete(id),
-    fetch: (url: string, options: RequestInit) => new Promise<Response>((resolve, reject) => requests.push({ url, options, method: options.method ?? "GET", resolve, reject })),
+    fetch: (url: string, options: RequestInit) => new Promise<Response>((resolve, reject) => {
+      requests.push({ url, options, method: options.method ?? "GET", resolve, reject });
+      for (const notify of [...requestWaiters]) notify();
+    }),
   };
   function load(url: URL) {
     const module = { exports: {} as Record<string, (value: P) => Tree> };
@@ -71,7 +75,10 @@ export function mountInvestorDisplay<P>(t: { after: (fn: () => void) => void }, 
   const component = load(source)[name]; assert.equal(typeof component, "function");
   function render() { cursor = 0; pending = []; tree = component(props); for (const effect of pending) effect(); }
   render(); const first = tree!;
-  const close = () => { mounted = false; for (const effect of effects) effect?.cleanup?.(); timers.clear(); };
+  const close = () => {
+    mounted = false; for (const effect of effects) effect?.cleanup?.(); timers.clear();
+    for (const notify of [...requestWaiters]) notify(new Error("Display fixture closed before expected request"));
+  };
   t.after(close);
   const flush = () => new Promise<void>(resolve => setImmediate(resolve));
   const expand = (initial: Tree) => {
@@ -86,7 +93,24 @@ export function mountInvestorDisplay<P>(t: { after: (fn: () => void) => void }, 
   const nodes = () => { const found: Tree[] = []; visit(tree, found); return found; };
   const node = (type: string) => nodes().find(item => item.type === type);
   const button = (label: string) => nodes().find(item => item.type === "Button" && words(item) === label);
+  // File I/O and native WebCrypto are not bounded by a number of microtask turns.
+  const waitRequests = async (count: number) => {
+    if (requests.length >= count) { assert.equal(requests.length, count); return; }
+    await new Promise<void>((resolve, reject) => {
+      const notify = (error?: Error) => {
+        if (!error && requests.length < count) return;
+        clearTimeout(timeout); requestWaiters.delete(notify);
+        if (error) reject(error);
+        else {
+          try { assert.equal(requests.length, count); resolve(); } catch (failure) { reject(failure); }
+        }
+      };
+      const timeout = setTimeout(() => notify(new Error(`Expected ${count} requests; observed ${requests.length}`)), 2000);
+      requestWaiters.add(notify);
+    });
+  };
   return { requests, document, timers, windowListeners, documentListeners, first: () => words(first), text: () => words(tree), words, nodes, node, button, flush, close,
+    waitRequests,
     click: async (label: string) => { const target = button(label); assert.ok(target, label); assert.equal(!!target.props.disabled, false, label);
       (target.props.onClick as () => void)(); await flush(); },
     change: async (changes: Partial<P>) => { props = { ...props, ...changes }; render(); await flush(); },

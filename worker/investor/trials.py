@@ -9,7 +9,7 @@ from worker.market.contracts import validate_contract
 from worker.orchestration.db import WorkbenchError, canonical_json, content_hash, instant, new_id, transaction
 from worker.orchestration.jobs import assert_lease, heartbeat
 from worker.research.backtest import compare_backtest
-from .strategy import _summary, _stress, _within_risk, validate_reference_inputs
+from .strategy import _summary, _stress, _within_risk, validate_phase_summary, validate_reference_inputs
 
 
 def _sealed(row, field="document_json"):
@@ -102,7 +102,7 @@ class TrialRecorder:
 
     def _summary(self, row, parameters, phase):
         value = _sealed(row)
-        validate_contract(value, "investor-strategy-result.schema.json", "$defs/summary")
+        validate_phase_summary(value, self.payload["plan"])
         if (value["phase"] != phase or value["window"] != self.manifest["windows"][phase] or parameters not in self.manifest["candidate_hashes"]
                 or not instant(self.manifest["created_at"]) <= instant(row["created_at"]) <= instant(self.clock())):
             raise WorkbenchError("INVESTOR_TRIAL_RESULT_BINDING_INVALID")
@@ -131,7 +131,7 @@ class TrialRecorder:
                 return self._summary(previous, digest, phase)
         # Intent commits BEFORE reading the phase; crashes cannot erase exposure.
         result = _summary(compare_backtest(self.payload["dataset"], self.payload["plan"], parameters, phase, progress=self.pulse))
-        validate_contract(result, "investor-strategy-result.schema.json", "$defs/summary")
+        validate_phase_summary(result, self.payload["plan"])
         self.pulse(force=True)
         with transaction(self.db):
             assert_lease(self.db, self.lease, now=self.clock())
