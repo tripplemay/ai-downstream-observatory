@@ -31,7 +31,7 @@ export function executeGovernanceCommand(db: Database.Database, actor: Governanc
   const input = governanceCommandSchema.parse(raw);
   if (input.operation === "record_execution_fact") {
     const command = executionFactSchema.parse(input.command);
-    const nested = z.record(z.unknown()).parse(command.command);
+    const nested = z.record(z.string(), z.unknown()).parse(command.command);
     for (const key of ["portfolio_id", "expected_revision"] as const) {
       if (key in nested && nested[key] !== command[key]) throw new Error("EXECUTION_FACT_OUT_OF_SCOPE");
     }

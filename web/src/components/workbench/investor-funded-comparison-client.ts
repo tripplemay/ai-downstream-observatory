@@ -2,7 +2,7 @@ import { fundedComparisonSchema, type FundedComparison } from "@/server/investor
 import { investorHash } from "@/server/investor/schemas";
 import type { InvestorState } from "@/server/investor/types";
 
-const responseSchema = fundedComparisonSchema.innerType().extend({ session_binding: investorHash }).strict();
+const responseSchema = fundedComparisonSchema.safeExtend({ session_binding: investorHash }).strict();
 export function fundedComparisonIdentity(state: InvestorState, binding: string) {
   return JSON.stringify([binding, state.workspace_id, state.revision, state.profile?.id, state.funding.plan?.id, state.funded_study?.id,
     state.funded_study?.input_version, state.funded_study?.status, state.funded_study_unavailable]);

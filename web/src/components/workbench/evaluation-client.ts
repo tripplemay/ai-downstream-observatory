@@ -83,7 +83,7 @@ export async function sealEvaluationAttempt(attempt: EvaluationPending): Promise
 }
 
 export function assertEvaluationReceipt(value: unknown, attempt: EvaluationPending): void {
-  const row = z.record(z.unknown()).safeParse(value); if (!row.success) throw new Error("EVALUATION_RECEIPT_INVALID");
+  const row = z.record(z.string(), z.unknown()).safeParse(value); if (!row.success) throw new Error("EVALUATION_RECEIPT_INVALID");
   const v = row.data, invalid = () => { throw new Error("EVALUATION_RECEIPT_INVALID"); };
   if (attempt.action === "retry_evaluation") {
     const original = JSON.parse(attempt.body) as { command: { cycle_id: string } };

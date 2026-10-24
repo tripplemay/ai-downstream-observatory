@@ -24,8 +24,8 @@ const requestSchema = z.object({ schema_version: z.literal("investor-monitor-req
 const runSchema = z.object({ schema_version: z.literal("investor-monitor-run-v1"), request_id: investorId, model_id: investorId,
   input_version: investorHash, implementation_hash: investorHash, status: z.enum(["blocked", "synthetic_preview"]),
   reason_codes: z.array(z.string().regex(/^[A-Z][A-Z0-9_]{0,79}$/)).min(1).max(40), result: z.object({
-    checkpoint: z.record(z.unknown()).nullable(), monitor_request: z.object({ action: z.literal("monitor"), document: z.record(z.unknown()), now: z.string() }).strict(),
-    assessment: z.record(z.unknown()) }).strict().nullable(), next_check_at: investorInstant.nullable(), created_at: investorInstant }).strict();
+    checkpoint: z.record(z.string(), z.unknown()).nullable(), monitor_request: z.object({ action: z.literal("monitor"), document: z.record(z.string(), z.unknown()), now: z.string() }).strict(),
+    assessment: z.record(z.string(), z.unknown()) }).strict().nullable(), next_check_at: investorInstant.nullable(), created_at: investorInstant }).strict();
 
 function invalid(): never { throw new Error("INVESTOR_EVIDENCE_INVALID"); }
 function checkClock(now: string, ...times: string[]) {

@@ -4,7 +4,7 @@ import type { FundedComparison } from "@/server/investor/funded-comparison-schem
 import { investorHash } from "@/server/investor/schemas";
 import { observedMonthlyRisk } from "@/server/investor/funded-analysis-statistics";
 
-const responseSchema = fundedAnalysisSchema.innerType().extend({ session_binding: investorHash }).strict();
+const responseSchema = fundedAnalysisSchema.safeExtend({ session_binding: investorHash }).strict();
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value !== null && typeof value === "object") return `{${Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(",")}}`;

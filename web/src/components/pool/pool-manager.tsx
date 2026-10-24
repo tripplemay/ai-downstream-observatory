@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { addPoolItem, deletePoolItem, updatePoolItem } from "@/lib/actions";
-import { poolItemSchema, type PoolItemInput } from "@/lib/schemas";
+import { poolItemSchema, type PoolItemFormInput, type PoolItemInput } from "@/lib/schemas";
 import type { PoolItem } from "@/lib/queries";
 
 export function PoolManager({ items, themeId }: { items: PoolItem[]; themeId: string }) {
@@ -126,7 +126,7 @@ function PoolDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const [pending, startTransition] = React.useTransition();
-  const form = useForm<PoolItemInput>({
+  const form = useForm<PoolItemFormInput, unknown, PoolItemInput>({
     resolver: zodResolver(poolItemSchema),
     values: item
       ? {

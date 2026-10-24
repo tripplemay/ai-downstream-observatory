@@ -1,7 +1,7 @@
 import { investorAccountsSchema, type InvestorAccountWorkspace } from "@/server/investor/account-schemas";
 import { investorHash } from "@/server/investor/schemas";
 
-const responseSchema = investorAccountsSchema.innerType().extend({ session_binding: investorHash }).strict();
+const responseSchema = investorAccountsSchema.safeExtend({ session_binding: investorHash }).strict();
 export function parseInvestorAccounts(value: unknown, expected: { binding: string; workspace: string | null; revision: number }): InvestorAccountWorkspace {
   const result = responseSchema.safeParse(value);
   if (!result.success || result.data.session_binding !== expected.binding || result.data.workspace_id !== expected.workspace

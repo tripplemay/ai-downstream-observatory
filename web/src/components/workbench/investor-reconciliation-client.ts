@@ -4,7 +4,7 @@ import { reconciliationContextSchema, reconciliationIntentSchema, reconciliation
   type ReconciliationContext, type ReconciliationIntent } from "@/server/investor/reconciliation-schemas";
 
 export const STATEMENT_ZONES = ["Asia/Shanghai", "Asia/Hong_Kong", "America/New_York", "UTC"] as const;
-const responseSchema = reconciliationContextSchema.innerType().extend({ session_binding: investorHash }).strict();
+const responseSchema = reconciliationContextSchema.safeExtend({ session_binding: investorHash }).strict();
 export type ReconciliationScope = { binding: string; workspace: string | null; revision: number; portfolio: string; ledgerRevision: number;
   linkId: string; linkVersion: number; accountId: string; accountRowVersion: number };
 export function parseInvestorReconciliation(value: unknown, expected: ReconciliationScope): ReconciliationContext {

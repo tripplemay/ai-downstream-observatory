@@ -4,7 +4,7 @@ import { executionEvidenceReceiptSchema, executionFollowupBasis, executionFollow
 import type { ReconciliationScope } from "./investor-reconciliation-client";
 
 const binding = z.string().regex(/^[a-f0-9]{64}$/);
-const response = executionFollowupContextSchema.innerType().extend({ session_binding: binding }).strict();
+const response = executionFollowupContextSchema.safeExtend({ session_binding: binding }).strict();
 export function parseExecutionFollowup(value: unknown, expected: ReconciliationScope) {
   const parsed = response.parse(value), { session_binding, ...body } = parsed, context = executionFollowupContextSchema.parse(body);
   if (session_binding !== expected.binding || context.workspace_id !== expected.workspace || context.workspace_revision !== expected.revision

@@ -2,7 +2,7 @@ import { investorHoldingsSchema, holdingsInstantMicros, type InvestorHoldings } 
 import { investorHash } from "@/server/investor/schemas";
 import type { InvestorPlan } from "@/server/investor/types";
 
-const response = investorHoldingsSchema.innerType().extend({ session_binding: investorHash }).strict();
+const response = investorHoldingsSchema.safeExtend({ session_binding: investorHash }).strict();
 export function parseInvestorHoldings(raw: unknown, expected: { binding: string; workspace: string | null; revision: number; portfolio: string | null;
   linkId: string | null; linkVersion: number | null; ledgerRevision: number | null; accountIds: string[]; plan: InvestorPlan | null }): InvestorHoldings {
   const parsed = response.safeParse(raw);
