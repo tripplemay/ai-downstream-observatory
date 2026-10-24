@@ -21,7 +21,8 @@ def render_reference_plan(profile_id, request_id, run_id, input_version, source,
         raise WorkbenchError("INVESTOR_REFERENCE_EVIDENCE_INVALID")
     rule = decision_rule(parameters, supported)
     execution = source["payload"]["plan"]["execution"]
-    bounded = source["payload"]["plan"]["schema_version"] == "research-plan-v3"
+    action_aware = source["payload"]["plan"]["schema_version"] == "research-plan-v4"
+    bounded = source["payload"]["plan"]["schema_version"] in ("research-plan-v3", "research-plan-v4")
     candidate = next((row for row in result["candidates"] if row["parameters_hash"] == content_hash(parameters)), None)
     if candidate is None or not candidate["risk_budget_pass"]:
         raise WorkbenchError("INVESTOR_REFERENCE_EVIDENCE_INVALID")
@@ -37,7 +38,7 @@ def render_reference_plan(profile_id, request_id, run_id, input_version, source,
     cutoff = _milliseconds(max(row["observed_at"] for row in source["payload"]["dataset"]["observations"]
         if row["metric"] == "close" and row["series_key"] in parameters["weights"]))
     value = {"schema_version": version, "profile_id": profile_id,
-        "strategy_version": result["engine_version"] + ("+bounded-close-v1" if bounded else "") + (SUFFIX if rule else ""),
+        "strategy_version": result["engine_version"] + ("+bounded-close-v1" if bounded else "") + ("+action-aware-close-v1" if action_aware else "") + (SUFFIX if rule else ""),
         "strategy_evidence": "训练期冻结候选后完成验证与保留期计算；仅为探索性历史研究，保留期独立性未验证。" + (rule or ""),
         "input_version": input_version,
         "data_cutoff": cutoff,
@@ -45,7 +46,8 @@ def render_reference_plan(profile_id, request_id, run_id, input_version, source,
         "estimated_cost": "历史比较按冻结费用、滑点与换汇假设；不代表你的券商收费或实际税务成本。" + (
             "买入数量按冻结价格缓冲 " + canonical(decimal(execution["buy_price_buffer_bps"]) / 100)
             + "%、外币汇率缓冲 " + canonical(decimal(execution["buy_fx_buffer_bps"]) / 100)
-            + "% 及费用预留；超界跳过，不临时缩量。" if bounded else ""),
+            + "% 及费用预留；超界跳过，不临时缩量。" if bounded else "") + (
+            "已知公司行动落在决策与预定成交之间时，整批暂不建单，等下一预定评估重新计算；等待仍承担现金机会成本，未知行动仍可取消已建订单。" if action_aware else ""),
         "risk_scenarios": [row["label"] + "：假设组合变化 " + percent(row["portfolio_return"]) + "；不是发生概率或未来损失上限。" for row in candidate["stresses"]],
         "benchmark_summary": "同 ETF 范围、时点与成本口径；训练期基准扣费后 TWR " + percent(candidate["train"]["benchmark_twr"]) + "。各阶段重新起算，不是连续个人收益。",
         "counterarguments": ["历史目录与可用时点为重建假设，不能排除幸存者偏差或工具外样本曝光。", "较高历史收益不证明未来优势；复杂策略必须与简单基准比较。"],

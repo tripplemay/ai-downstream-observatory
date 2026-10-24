@@ -20,6 +20,7 @@ const gapLabels: Record<string, string> = { FUNDED_STUDY_REVIEWED_SOURCE_REQUIRE
   FUNDED_STUDY_FIXED_POLICY_V2_REQUIRED: "来源尚未包含完整的低频策略候选，不套用旧规则。",
   FUNDED_STUDY_DUPLICATE_CANDIDATES: "冻结候选有重复，需重新核对研究登记。",
   FUNDED_STUDY_INPUT_UNSUPPORTED: "冻结来源或资金路径未通过连续计算的输入检查。",
+  FUNDED_STUDY_ACTION_AWARE_EXECUTION_NOT_SUPPORTED: "本次研究的公司行动等待规则尚未接入年度资金路径；不能降级套用旧计算版本。",
   FUNDED_STUDY_ECONOMIC_REPLAY_REQUIRED: "尚未完成独立经济重放，暂不展示财富路径、收益或排名。",
   FUNDED_STUDY_CANDIDATE_FAILED: "至少一项候选未完成计算，不能只留下成功或高收益候选。",
   FUNDED_STUDY_BINDING_CHANGED: "请按当前偏好、投入计划和有效来源重新登记比较。",

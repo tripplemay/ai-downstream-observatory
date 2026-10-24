@@ -39,9 +39,10 @@ def run_continuous_portfolio(dataset, plan, releases, *, progress=None, holding_
 
 def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=None, holding_baseline=False):
     continuous = releases is not None
-    bounded = plan["schema_version"] in ("research-plan-v3", "investor-long-horizon-plan-v3")
+    action_aware = plan["schema_version"] == "research-plan-v4"
+    bounded = plan["schema_version"] in ("research-plan-v3", "research-plan-v4", "investor-long-horizon-plan-v3")
     execution = plan["execution"]
-    expected_plans = ("investor-long-horizon-plan-v1", "investor-long-horizon-plan-v2", "investor-long-horizon-plan-v3") if continuous else ("research-plan-v2", "research-plan-v3")
+    expected_plans = ("investor-long-horizon-plan-v1", "investor-long-horizon-plan-v2", "investor-long-horizon-plan-v3") if continuous else ("research-plan-v2", "research-plan-v3", "research-plan-v4")
     if (dataset["schema_version"] != "research-dataset-v2" or plan["schema_version"] not in expected_plans
             or execution["model"] != ("next_session_close_bounded_fixed_quantity" if bounded else "next_session_close_fixed_quantity")
             or execution["settlement_model"] != "explicit_market_calendar"
@@ -89,6 +90,7 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
     pending, unsettled, sale_receivables, dividend_payments = [], [], [], {}
     orders, slots, events, curve, valued_flows = {}, {}, [], [], []
     funding_pending, last_proposed_at = False, None
+    deferred_review = None
     costs = fx_costs = slippage_costs = cash_rounding = buys = sells = ZERO
     flow_map = {}
     for flow in plan["contributions"]:
@@ -238,8 +240,14 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                            "execute_at": stamp(at_close), "budget_cny": canonical(order["budget"]),
                            "reason": "DEPENDENT_SALE_CASH_SETTLED"})
 
+    def resolve_deferred(at, outcome):
+        nonlocal deferred_review
+        if deferred_review is not None:
+            events.append({"type": "policy_review_resumed", "at": stamp(at), **deferred_review, "outcome": outcome})
+            deferred_review = None
+
     def evaluate(at):
-        nonlocal funding_pending, last_proposed_at
+        nonlocal funding_pending, last_proposed_at, deferred_review
         period = policy_period(at, zone, parameters["rebalance"]) if low_frequency else at.astimezone(zone).strftime("%Y-%m")
         if not low_frequency and period in slots:
             events.append({"type": "monthly_monitor", "at": stamp(at), "period": period,
@@ -302,15 +310,22 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                 triggers += (["CALENDAR_REVIEW"] if calendar_due else []) + (["CLASS_WEIGHT_BREACH"] if breached else [])
             base.update(class_drift=classes, trigger_codes=triggers, last_proposed_at=stamp(last_proposed_at) if last_proposed_at else None)
             if not triggers or not (bootstrap or funding_pending) and not cooldown_elapsed(at, last_proposed_at, zone, parameters["minimum_days_between_rebalances"]):
+                if action_aware and not triggers:
+                    resolve_deferred(at, "no_longer_triggered")
                 events.append({**base, "type": "policy_monitor", "reason_codes": ["REBALANCE_COOLDOWN" if triggers else "LOW_FREQUENCY_RULE_NOT_TRIGGERED"]})
                 return
             # Cash is already included in NAV. Repair first without selling;
             # this is not a second hypothetical contribution added to targets.
             allow_sales = not holding_baseline and not funding_pending
             base["allocation_method"] = "rebalance_to_targets" if allow_sales else "new_cash_repair_without_sales"
-            slots[period] = stamp(at)
-            funding_pending = False
+            if not action_aware:
+                slots[period] = stamp(at)
+                funding_pending = False
         if all(row["within_tolerance"] for row in deltas):
+            if action_aware:
+                slots[period] = stamp(at)
+                funding_pending = False
+                resolve_deferred(at, "targets_within_tolerance")
             events.append({**base, "outcome": "unchanged", "reason_codes": ["TARGETS_WITHIN_TOLERANCE"]})
             return
         issues, planned, projected_sales = [], [], ZERO
@@ -405,6 +420,31 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                 order["state"] = "waiting_for_sales"
             else:
                 issues.append("NO_SETTLED_OR_DEPENDENT_CASH:" + listing)
+        if action_aware:
+            deferred = []
+            for order in planned:
+                if order["state"] != "scheduled":
+                    continue
+                for action in action_windows.get(order["listing_id"], ([], []))[1]:
+                    known = instant(action["published_at"]) <= at and (dataset["mode"] != "actual_replay"
+                        or instant(action["ingested_at"]) <= at)
+                    if known and at < instant(action["at"]) <= order["execute_at"]:
+                        deferred.append({"listing_id": order["listing_id"], "side": order["side"],
+                            "planned_close_at": stamp(order["execute_at"]), "action_id": action["id"],
+                            "action_at": action["at"]})
+            if deferred:
+                # These are tentative calculations, not published orders or reservations.
+                for order in planned:
+                    del orders[order["id"]]
+                deferred_review = {"first_deferred_at": deferred_review["first_deferred_at"] if deferred_review else stamp(at),
+                                   "last_deferred_at": stamp(at)}
+                events.append({**base, "outcome": "deferred", "reason_codes": sorted(set(issues + [
+                    "KNOWN_ACTION_BEFORE_SCHEDULED_CLOSE"])), "deferred_actions": deferred})
+                return
+            slots[period] = stamp(at)
+            funding_pending = False
+            if planned and not issues:
+                resolve_deferred(at, "new_orders_proposed")
         for order in planned:
             pending.append(order)
             if order["state"] == "scheduled":
@@ -583,7 +623,10 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
         if missing:
             events.append({"type": "policy_deployment_failed", "at": stamp(end), "missing_listings": missing,
                            "reason": "INITIAL_DEPLOYMENT_INCOMPLETE" if bought else "INITIAL_DEPLOYMENT_NOT_EXECUTED"})
-    engine = ("continuous-bounded-hold-new-cash-v1" if holding_baseline else "continuous-bounded-fixed-policy-funding-v1") if continuous and bounded else "fixed-policy-bounded-rebalance-v3" if bounded else "continuous-hold-new-cash-v1" if holding_baseline else "continuous-fixed-policy-funding-v1" if continuous else "fixed-policy-rebalance-v2" if low_frequency else ENGINE_VERSION
+        elif action_aware and deferred_review is not None:
+            events.append({"type": "policy_deployment_failed", "at": stamp(end), **deferred_review,
+                           "reason": "DEFERRED_POLICY_REVIEW_UNRESOLVED"})
+    engine = "fixed-policy-action-aware-bounded-rebalance-v4" if action_aware else ("continuous-bounded-hold-new-cash-v1" if holding_baseline else "continuous-bounded-fixed-policy-funding-v1") if continuous and bounded else "fixed-policy-bounded-rebalance-v3" if bounded else "continuous-hold-new-cash-v1" if holding_baseline else "continuous-fixed-policy-funding-v1" if continuous else "fixed-policy-rebalance-v2" if low_frequency else ENGINE_VERSION
     return {"engine_version": engine, "phase": phase, "window": window,
             "initial_equity_cny": canonical(initial), "contributions_cny": canonical(sum(flow_map.values(), ZERO)),
             "ending_nav_cny": canonical(closing), "profit_cny": canonical(cashflow_profit(closing, initial, flow_map.values())),
@@ -608,7 +651,7 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
             "execution_failure_count": sum(row["type"] in ("execution_skipped", "order_expired", "policy_deployment_failed") for row in events),
             **{("policy_evaluation_counts" if low_frequency else "monthly_evaluation_counts"):
                 {outcome: sum(row["type"] == "evaluation" and row["outcome"] == outcome for row in events)
-                 for outcome in ("proposed", "unchanged", "blocked")}},
+                 for outcome in (("proposed", "unchanged", "blocked", "deferred") if action_aware else ("proposed", "unchanged", "blocked"))}},
             **({"policy_rules": {**{key: parameters[key] for key in ("rebalance", "roles", "class_drift_threshold", "minimum_days_between_rebalances", "contribution_mode", "order_expiry")},
                                 **({"rebalance": "disabled_hold_new_cash"} if holding_baseline else {})},
                 "policy_monitor_count": sum(row["type"] == "policy_monitor" for row in events)} if low_frequency else {}),
@@ -619,6 +662,8 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                             "theoretical_ex_action_carry_between_raw_closes_not_an_observed_or_live_price",
                             *(["buy_raw_close_and_fx_caps_frozen_at_decision", "buy_quantity_sized_at_both_caps_with_upward_cent_debit",
                                "allocation_cent_dust_stays_cash", "corporate_action_cancels_frozen_orders_without_resizing"] if bounded else []),
+                            *(["known_scheduled_action_defers_entire_tentative_batch_without_consuming_policy_slot"] if action_aware else []),
+                            *(["deferred_review_requires_later_valid_review_or_fails_phase"] if action_aware else []),
                             *( ["no_calendar_or_class_drift_rebalancing" if holding_baseline else "half_year_or_year_calendar_review_plus_absolute_class_drift", "cooldown_uses_evaluation_local_calendar_days",
                                 "new_cny_cash_repairs_without_sales" if holding_baseline else "new_cny_cash_repairs_without_sales_before_rebalancing", "orders_expire_at_next_month_boundary", "unsettled_assets_block_new_orders"]
                                if low_frequency else ["monthly_first_decision_only", "unsettled_assets_block_new_monthly_orders"]), "no_margin", "no_cash_interest",

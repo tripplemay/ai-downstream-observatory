@@ -20,7 +20,7 @@ EXPIRY = "2027-01-01T00:00:00.000Z"
 START, END = "2025-01-01", "2025-06-10"
 
 
-def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, funded_year=False, funded_calendar=False, external_ai=False, initial_monitor_calendar=False, bounded_execution_v3=False, browser_cent_tolerance=False):
+def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, funded_year=False, funded_calendar=False, external_ai=False, initial_monitor_calendar=False, bounded_execution_v3=False, browser_cent_tolerance=False, action_aware_execution_v4=False):
     if initial_monitor_calendar and (funded_year or funded_calendar): raise WorkbenchError("SYNTHETIC_INITIAL_CALENDAR_CONFLICT")
     data, plan, policy = fixed_policy_input() if fixed_policy_v2 else research_input()
     if browser_cent_tolerance:
@@ -28,11 +28,16 @@ def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, 
             raise WorkbenchError("SYNTHETIC_BROWSER_TOLERANCE_SCOPE")
         for parameters in [*plan["parameter_candidates"], plan["benchmark"], *policy["candidates"]]:
             parameters["tolerance"]["absolute_cny"] = "0.01"
-    if bounded_execution_v3:
+    if bounded_execution_v3 and action_aware_execution_v4:
+        raise WorkbenchError("SYNTHETIC_EXECUTION_VERSION_CONFLICT")
+    if bounded_execution_v3 or action_aware_execution_v4:
         if not fixed_policy_v2:
             raise WorkbenchError("SYNTHETIC_BOUNDED_EXECUTION_SCOPE")
         from tests.research.bounded_fixtures import bounded_plan
         plan = bounded_plan(plan)
+        if action_aware_execution_v4:
+            plan["schema_version"] = "research-plan-v4"
+            plan["execution"]["order_action_policy"] = "defer_known_scheduled_action_before_commit"
     start_date, end_date = START, END
     if funded_calendar or funded_year:
         plan["evaluation_timezone"] = "Asia/Shanghai"
@@ -78,8 +83,11 @@ def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, 
             "product_type": "ETF", "leveraged": False, "inverse": False, "role": "growth" if index == 0 else "defensive", "fee_rate": "0.001",
             "fee_as_of": "2024-01-01" if funded_year else "2025-01-01", "economic_exposure": "Fictional exposure", "historical_universe_basis": "retrospectively_selected_not_survivorship_free"}, identity)
         listings.append(listing)
+        action_events = [{"id": "fictional:known-initial-dividend", "listing_id": identity, "type": "dividend",
+            "at": "2025-01-06T00:00:00Z", "published_at": "2024-12-01T00:00:00Z", "source_evidence": "Invented distribution",
+            "gross_per_unit": "0.1", "tax_per_unit": "0", "pay_at": "2025-01-08T00:00:00Z"}] if action_aware_execution_v4 and index == 0 else []
         actions.append(reviewed("actions", {"listing_id": identity, "range_start": start_date, "range_end": authority_end,
-            "coverage": "reviewed_complete", "tax_assumption": "Explicit fictional zero tax, not account tax", "events": []}, "actions-" + identity)["id"])
+            "coverage": "reviewed_complete", "tax_assumption": "Explicit fictional zero tax, not account tax", "events": action_events}, "actions-" + identity)["id"])
         start, last = instant(start_date + "T00:00:00Z").date(), instant(end_date + "T00:00:00Z").date()
         while start <= last:
             end = min(start + timedelta(days=30), last)
@@ -109,6 +117,7 @@ def main():
     parser.add_argument("--now", default=NOW)
     parser.add_argument("--fixed-policy-v2", action="store_true")
     parser.add_argument("--bounded-execution-v3", action="store_true", help="Explicit synthetic v3 plan; no production parameters")
+    parser.add_argument("--action-aware-execution-v4", action="store_true", help="Invented v4 known-action deferral; never real evidence")
     parser.add_argument("--browser-cent-tolerance", action="store_true", help="Explicit fixture-only cent tolerance frozen before study")
     parser.add_argument("--funded-year", action="store_true")
     parser.add_argument("--funded-calendar", action="store_true")
@@ -124,7 +133,7 @@ def main():
         if len(rows) != 1 or db.execute("SELECT count(*) FROM portfolios").fetchone()[0]:
             raise WorkbenchError("SYNTHETIC_EMPTY_FINANCIAL_DATABASE_REQUIRED")
         create(db, rows[0]["id"], rows[0]["owner_id"], now=args.now, fixed_policy_v2=args.fixed_policy_v2, funded_year=args.funded_year,
-            funded_calendar=args.funded_calendar, external_ai=args.external_ai, initial_monitor_calendar=args.initial_monitor_calendar, bounded_execution_v3=args.bounded_execution_v3, browser_cent_tolerance=args.browser_cent_tolerance)
+            funded_calendar=args.funded_calendar, external_ai=args.external_ai, initial_monitor_calendar=args.initial_monitor_calendar, bounded_execution_v3=args.bounded_execution_v3, browser_cent_tolerance=args.browser_cent_tolerance, action_aware_execution_v4=args.action_aware_execution_v4)
         print(canonical_json({"status": "fictional_stub_evidence_fixture_complete", "real_provider_called": False}))
     finally:
         db.close()

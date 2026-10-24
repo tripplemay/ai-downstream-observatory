@@ -16,6 +16,7 @@ export function prepareFundedStudyInputs(funding: InvestorFundingPlan, source: F
   if ((dataset.assets as Obj[]).some(row => !profile.markets.includes(row.market as "CN" | "HK" | "US"))) return gap("FUNDED_STUDY_UNIVERSE_OUTSIDE_ALLOWED_MARKETS");
   if (profile.horizon_years < (policy.minimum_horizon_years as number)) return gap("FUNDED_STUDY_HORIZON_OUTSIDE_STRATEGY_SCOPE");
   if (profile.research_direction === "rotation") return gap("FUNDED_STUDY_ENHANCEMENT_EVIDENCE_REQUIRED");
+  if (plan.schema_version === "research-plan-v4") return gap("FUNDED_STUDY_ACTION_AWARE_EXECUTION_NOT_SUPPORTED");
   if (plan.evaluation_timezone !== funding.evaluation_timezone) return gap("FUNDED_STUDY_TIMEZONE_CONFLICT");
   const candidates = policy.candidates as Obj[];
   if (!candidates.length || candidates.length > 8 || candidates.some(row => row.schema_version !== "research-fixed-rebalance-parameters-v2"))

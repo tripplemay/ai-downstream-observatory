@@ -53,7 +53,7 @@ def _validate_policy(policy, dataset, plan):
     validate_contract(policy, "investor-strategy-policy.schema.json")
     if len(dataset["assets"]) > 20 or len(dataset["observations"]) > 100000 or len(dataset["sessions"]) > 30000:
         raise WorkbenchError("INVESTOR_RESEARCH_INPUT_LIMIT")
-    if plan["schema_version"] not in ("research-plan-v2", "research-plan-v3") or dataset["schema_version"] != "research-dataset-v2":
+    if plan["schema_version"] not in ("research-plan-v2", "research-plan-v3", "research-plan-v4") or dataset["schema_version"] != "research-dataset-v2":
         raise WorkbenchError("INVESTOR_RESEARCH_VERSION_REQUIRED")
     if set(policy["roles"]) != {row["listing_id"] for row in dataset["assets"]}:
         raise WorkbenchError("INVESTOR_RESEARCH_ROLE_SCOPE")

@@ -21,6 +21,8 @@ def prepare_funded_study_inputs(funding, source, declared, profile):
         return gap("FUNDED_STUDY_HORIZON_OUTSIDE_STRATEGY_SCOPE")
     if profile["research_direction"] == "rotation":
         return gap("FUNDED_STUDY_ENHANCEMENT_EVIDENCE_REQUIRED")
+    if plan.get("schema_version") == "research-plan-v4":
+        return gap("FUNDED_STUDY_ACTION_AWARE_EXECUTION_NOT_SUPPORTED")
     if plan["evaluation_timezone"] != funding["evaluation_timezone"]:
         return gap("FUNDED_STUDY_TIMEZONE_CONFLICT")
     candidates = policy["candidates"]
