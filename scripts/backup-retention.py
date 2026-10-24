@@ -176,8 +176,12 @@ def execute_retention(root, receipts, expected_hash, journal, mounts=container_m
         require(journal.parent == root / "backup-retention-evidence", "RETENTION_JOURNAL_SCOPE_INVALID")
         private_directory(journal.parent, os.geteuid())
         with open(journal, "x", opener=lambda path, flags: os.open(path, flags | os.O_NOFOLLOW, 0o600)) as log:
+            fd = os.open(journal.parent, os.O_RDONLY)
+            try: os.fsync(fd)
+            finally: os.close(fd)
             def record(value):
-                log.write(json.dumps(value, sort_keys=True) + "\n"); log.flush(); os.fsync(log.fileno())
+                stamped = {**value, "recorded_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+                log.write(json.dumps(stamped, sort_keys=True) + "\n"); log.flush(); os.fsync(log.fileno())
             record({"event": "approved_plan", "plan": plan, "operator_receipts": receipts})
             by_name = {row["name"]: row for row in plan["archives"]}
             directory = root / "backups-workbench"

@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import stat
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -73,6 +74,16 @@ class BackupRetentionTests(unittest.TestCase):
 
     def test_unarchived_new_file_blocks_all_deletions(self):
         self.assert_blocked(lambda: (self.root / 'backups-workbench/new-unclassified.tmp').write_bytes(b'new'))
+
+    def test_journal_directory_is_durable_before_deletion(self):
+        plan = self.plan(); calls = []; original = os.fsync
+        def observed(fd):
+            calls.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+            return original(fd)
+        with patch.object(os, 'fsync', observed):
+            retention.execute_retention(self.root, self.receipts, plan['plan_hash'], self.journal, mounts=lambda: [])
+        self.assertTrue(calls[0])
+        self.assertTrue(all('recorded_at' in json.loads(line) for line in self.journal.read_text().splitlines()))
 
     def test_changed_bytes_and_same_size_forged_archive_fail_closed(self):
         path = self.root / 'backups-workbench' / self.files[0]['name']
