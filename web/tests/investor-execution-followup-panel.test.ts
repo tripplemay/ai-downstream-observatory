@@ -24,7 +24,6 @@ function mount(t: { after: (callback: () => void) => void }) {
     acknowledge: async (checked: boolean) => { const box = h.nodes().find(row => row.type === "input" && row.props.type === "checkbox"); assert.ok(box);
       (box.props.onChange as (event: unknown) => void)({ target: { checked } }); await h.flush(); },
     submit: async (twice = false) => { const send = handler(); send({ preventDefault() {} }); if (twice) send({ preventDefault() {} }); await h.flush(); },
-    waitRequests: async (count: number) => { for (let i = 0; i < 100 && h.requests.length < count; i++) await h.flush(); assert.equal(h.requests.length, count); },
   };
 }
 async function begin(h: ReturnType<typeof mount>, mode = "关联已入账成交") {
@@ -70,6 +69,32 @@ test("lost evidence response retains the original file/key/scope; explicit retry
     { id: "fictional-upload", content_hash: prepared.content_hash, byte_size: file.size, media_type: "text/csv", created_at: context.checked_at }], session_binding: binding });
   assert.equal(h.field("独立原件").props.value, "fictional-upload"); await h.acknowledge(true); await h.submit(); assert.equal(h.commands.length, 1);
   assert.equal((h.commands[0] as { expected_context_hash: string }).expected_context_hash, "f".repeat(64));
+});
+
+test("upload waits for actual asynchronous bytes and digest before its first request, not a fixed number of loop turns", async t => {
+  const h = mount(t); await begin(h); await select(h);
+  const file = new File(["fictional,delayed\r\n"], "delayed.csv");
+  const bytes = await file.arrayBuffer();
+  let release!: (value: ArrayBuffer) => void;
+  const reading = new Promise<ArrayBuffer>(resolve => { release = resolve; });
+  Object.defineProperty(file, "arrayBuffer", { value: () => reading });
+  await h.chooseFile(file); await h.click("仅存证此原件，不导入事实");
+  for (let i = 0; i < 120; i++) await h.flush();
+  assert.equal(h.requests.length, 1); assert.equal(h.commands.length, 0);
+  const sent = h.waitRequests(2); release(bytes); await sent;
+  assert.equal(h.requests[1].method, "POST");
+  const body = h.requests[1].options.body as FormData;
+  assert.deepEqual(Buffer.from(await (body.get("file") as File).arrayBuffer()), Buffer.from(bytes));
+  await h.fail(1); assert.match(h.text(), /原件上传尚未完成核对/);
+  assert.equal(h.commands.length, 0); assert.equal(h.locks.at(-1), true);
+});
+
+test("request waiters fail explicitly when their fixture closes without authorizing an upload", async t => {
+  const h = mount(t);
+  const waiting = h.waitRequests(1);
+  h.close();
+  await assert.rejects(waiting, /fixture closed/);
+  assert.equal(h.requests.length, 0); assert.equal(h.commands.length, 0);
 });
 
 test("late GET/401, stale submit and upload callbacks cannot cross scope or logout boundaries", async t => {
