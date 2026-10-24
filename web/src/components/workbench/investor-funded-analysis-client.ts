@@ -1,6 +1,6 @@
 import { Decimal } from "@/server/ledger/decimal";
 import { fundedAnalysisSchema, type FundedPathAnalysis } from "@/server/investor/funded-analysis-schemas";
-import type { FundedComparison } from "@/server/investor/funded-comparison-schemas";
+import { fundedPathExecutionUsable, type FundedComparison } from "@/server/investor/funded-comparison-schemas";
 import { investorHash } from "@/server/investor/schemas";
 import { observedMonthlyRisk } from "@/server/investor/funded-analysis-statistics";
 
@@ -74,6 +74,6 @@ export async function parseFundedAnalysis(raw: unknown, comparison: FundedCompar
     demand(new Decimal(data.candidate.summary[key]).minus(data.baseline.summary[key]).eq(data.comparison[field]));
   const a = data.candidate.summary.twr, b = data.baseline.summary.twr;
   demand(a === null || b === null ? data.comparison.twr_difference === null : data.comparison.twr_difference !== null && new Decimal(a).minus(b).eq(data.comparison.twr_difference));
-  demand(value.economics_independently_replayed === (data.candidate.summary.execution_failure_count === 0 && data.baseline.summary.execution_failure_count === 0));
+  demand(value.economics_independently_replayed === (fundedPathExecutionUsable(data.candidate.summary) && fundedPathExecutionUsable(data.baseline.summary)));
   return value;
 }

@@ -5,13 +5,27 @@ const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const decimal = z.string().max(1000).regex(/^-?\d+(?:\.\d+)?$/);
 const at = z.string().max(30).refine(value => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(value) && Number.isFinite(Date.parse(value)));
 const code = z.string().regex(/^[A-Z][A-Z0-9_]{0,79}$/);
+export const executionReviewSummarySchema = z.object({ schema_version: z.literal("execution-review-summary-v1"),
+  terminal_failure_count: z.number().int().nonnegative(), cancellations: z.number().int().nonnegative(),
+  resolved_cancellations: z.number().int().nonnegative(), unresolved_reviews: z.number().int().nonnegative(), lineage_hash: digest,
+}).strict().refine(value => value.resolved_cancellations <= value.cancellations);
+type ExecutionSummary = { execution_failure_count: number; execution_review?: z.infer<typeof executionReviewSummarySchema> };
+export function fundedPathExecutionUsable(summary: ExecutionSummary) {
+  return summary.execution_review
+    ? summary.execution_review.terminal_failure_count === 0 && summary.execution_review.unresolved_reviews === 0
+      && summary.execution_review.cancellations <= summary.execution_failure_count
+      && summary.execution_review.terminal_failure_count === summary.execution_failure_count - summary.execution_review.resolved_cancellations
+    : summary.execution_failure_count === 0;
+}
 export const fundedComparisonPathSchema = z.object({ principal_cny: decimal, ending_nav_cny: decimal, profit_cny: decimal,
   ending_locked_cash_cny: decimal, fees_cny: decimal, fx_fees_cny: decimal, slippage_cny: decimal, cash_rounding_cny: decimal,
   twr: decimal.nullable(), annualized_unit_return: decimal.nullable(), max_drawdown: decimal.nullable(), recovered_at: at.nullable(),
   ending_cash_ratio: decimal.nullable(), execution_failure_count: z.number().int().nonnegative(),
+  execution_review: executionReviewSummarySchema.optional(),
   xirr: z.object({ status: z.enum(["ok", "ambiguous", "same_day_flows", "missing_signs"]), rate: decimal.nullable(),
     roots: z.array(decimal).max(1), duration_days: z.number().int().nonnegative() }).strict(),
-}).strict();
+}).strict().refine(value => !value.execution_review || value.execution_review.cancellations <= value.execution_failure_count
+  && value.execution_review.terminal_failure_count === value.execution_failure_count - value.execution_review.resolved_cancellations);
 export const fundedComparisonCandidateSchema = z.object({ parameters_hash: digest, result_hash: digest.nullable(),
   allocation: z.array(z.object({ asset_id: id, symbol: z.string().min(1).max(40), market: z.enum(["CN", "HK", "US"]),
     currency: z.enum(["CNY", "HKD", "USD"]), role: z.enum(["growth", "defensive", "diversifier"]), weight: decimal }).strict()).min(1).max(1000),

@@ -17,6 +17,7 @@ import researchCommand from "../../../contracts/v1/research-command.schema.json"
 import researchPlan from "../../../contracts/v1/research-plan.schema.json";
 import researchBoundedPlan from "../../../contracts/v1/research-plan-v3.schema.json";
 import researchActionAwarePlan from "../../../contracts/v1/research-plan-v4.schema.json";
+import researchEventReviewPlan from "../../../contracts/v1/research-plan-v5.schema.json";
 import researchPlanInput from "../../../contracts/v1/research-plan-input.schema.json";
 import researchDataset from "../../../contracts/v1/research-dataset.schema.json";
 import researchParameters from "../../../contracts/v1/research-parameters.schema.json";
@@ -67,6 +68,7 @@ ajv.addSchema(researchFixedPolicy);
 ajv.addSchema(researchPlan);
 ajv.addSchema(researchBoundedPlan);
 ajv.addSchema(researchActionAwarePlan);
+ajv.addSchema(researchEventReviewPlan);
 ajv.addSchema(researchPlanInput);
 ajv.addSchema(researchDataset);
 const checkResearch = ajv.compile(researchCommand);

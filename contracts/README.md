@@ -61,6 +61,18 @@ funding intent is a conflict, not an added budget. Assessment neither books nor
 consumes funds, and cannot extend quote, model or source validity. Fictional core
 tests do not qualify real data or a release; see [integration boundaries](../docs/29-planned-funding-core-monitor.md).
 
+## Causal research execution
+
+Research execution/admission versions are explicit pairs: plan v5 requires
+`investor-strategy-policy-v2` and returns `investor-strategy-result-v2` with
+`investor-phase-summary-v2`. Old plans still require policy/result v1 and
+zero raw failures. New summaries retain raw failures and independently replay
+both strategy and benchmark terminal gaps, cancellation resolution counts and
+exact review lineage hashes. Annual history input/result v3 uses continuous
+input/result v4; it must not strip the phase v5 execution policy into an older
+contract. These are research-only contracts, not trade authorization.
+See [the causal lifecycle](../docs/59-event-order-reassessment.md).
+
 ## Dividend and corporate-action quality
 
 `ledger-fact` preserves legacy dividend facts with omitted tax, but omission is unknown tax, never confirmed zero. New direct dividends require confirmed explicit tax at the command boundary. Actual net receipts, gross/tax breakdown, cumulative tax assessments and actual additional withholding are different facts: assessments and breakdown do not create cash. Migration 0012 adds the signed `dividend_tax_payable` liability without rewriting prior postings. See [the locked accounting rules](../docs/dividends-and-corporate-actions.md).

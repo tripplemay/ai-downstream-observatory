@@ -3,6 +3,7 @@
   "$id": "https://etf-workbench.invalid/contracts/v1/investor-funded-history-request.schema.json",
   "oneOf": [
     {"$ref": "investor-funded-history-input.schema.json"},
-    {"$ref": "investor-funded-history-input-v2.schema.json"}
+    {"$ref": "investor-funded-history-input-v2.schema.json"},
+    {"$ref": "investor-funded-history-input-v3.schema.json"}
   ]
 }

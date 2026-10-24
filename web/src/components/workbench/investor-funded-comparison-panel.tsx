@@ -34,7 +34,10 @@ export function FundedComparisonResults({ value, binding }: { value: FundedCompa
               ["时间加权收益 TWR", percent(p.twr)], ["单位净值年化", percent(p.annualized_unit_return)],
               ["资金加权年化 XIRR", p.xirr.status === "ok" ? percent(p.xirr.rate) : "无法可靠计算"],
               ["单位净值最大回撤", percent(p.max_drawdown)], ["期末现金比例", percent(p.ending_cash_ratio)],
-              ["模拟执行缺口", String(p.execution_failure_count)]].map(([label, text]) => <React.Fragment key={label}><dt className="text-muted-foreground">{label}</dt><dd className="break-words text-right tabular-nums">{text}</dd></React.Fragment>)}
+              [p.execution_review ? "原始撤单 / 跳过 / 到期" : "模拟执行缺口", String(p.execution_failure_count)],
+              ...(p.execution_review ? [["未解决执行缺口", String(p.execution_review.terminal_failure_count)],
+                ["公司行动撤单 / 已闭合", `${p.execution_review.cancellations} / ${p.execution_review.resolved_cancellations}`],
+                ["未完成复核", String(p.execution_review.unresolved_reviews)]] : [])].map(([label, text]) => <React.Fragment key={label}><dt className="text-muted-foreground">{label}</dt><dd className="break-words text-right tabular-nums">{text}</dd></React.Fragment>)}
           </dl><p className="mt-3 text-xs text-muted-foreground">费用 {money(p.fees_cny)} · 换汇成本 {money(p.fx_fees_cny)} · 滑点 {money(p.slippage_cny)} CNY；税务覆盖依赖来源假设，未承诺全税费或持续盈利。</p>
           <p className="mt-2 text-xs text-muted-foreground">最深回撤后的恢复：{p.recovered_at ?? "窗口内未确认恢复，或无可确认回撤"}。新本金不被当作投资收益。</p>
         </section>;

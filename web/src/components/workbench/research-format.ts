@@ -1,5 +1,6 @@
 import type { InvestorModelWatch, InvestorResearchTask } from "@/server/investor/schemas";
 import type { InvestorPlan, InvestorState } from "@/server/investor/types";
+import { executionChecksUsable } from "@/server/investor/research-execution";
 
 function formatFixed(value: string | null, scale: number): string {
   if (value === null) return "未能计算";
@@ -36,8 +37,7 @@ export function researchTaskStatus(task: InvestorResearchTask) {
   if (task.status === "calculated" && task.study?.status === "insufficient_evidence"
     && task.reason_codes.includes("NO_CANDIDATE_WITHIN_CONFIRMED_RISK_BUDGET")
     && task.study.candidates.length > 0 && task.study.candidates.every(candidate => !candidate.usable)) {
-    const gaps = task.study.candidates.some(candidate => candidate.train_checks
-      && (candidate.train_checks.execution_failure_count > 0 || candidate.train_checks.benchmark_execution_failure_count > 0));
+    const gaps = task.study.candidates.some(candidate => candidate.train_checks && !executionChecksUsable(candidate.train_checks));
     return { title: gaps ? "训练模拟执行有缺口，未生成参考组合" : "训练或基准证据不完整，未生成参考组合",
       detail: "候选尚未具备完整的训练与基准证据，不能据此判定你的风险预算过低；这也不是行情数据尚未接入。",
       action: "先核对下方训练检查与缺口原因，不通过提高风险或反复重跑来绕过。旧记录保留，不自动启动验证、保留期或监测。" };

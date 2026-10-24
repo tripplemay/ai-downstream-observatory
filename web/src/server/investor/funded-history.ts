@@ -5,7 +5,7 @@ import { validateFundedHistoryDocument } from "./kernel-contracts";
 
 type ObjectValue = Record<string, unknown>;
 export type FundedHistoryInput = {
-  schema_version: "investor-funded-history-input-v1" | "investor-funded-history-input-v2"; funding_plan: InvestorFundingPlan; historical_start_date: string;
+  schema_version: "investor-funded-history-input-v1" | "investor-funded-history-input-v2" | "investor-funded-history-input-v3"; funding_plan: InvestorFundingPlan; historical_start_date: string;
   dataset: ObjectValue; context: { parameters_recorded_at: string; comparison_declared_at: string; information_cutoff_at: string;
     parameters: ObjectValue; decision_times: string[]; execution: ObjectValue; tax_coverage: string };
 };
@@ -67,6 +67,7 @@ export function fundingHistoryProjection(raw: FundedHistoryInput) {
 export function prepareFundedHistory(raw: FundedHistoryInput) {
   const projection = fundingHistoryProjection(raw), context = raw.context;
   const bounded = raw.schema_version === "investor-funded-history-input-v2";
+  const eventReview = raw.schema_version === "investor-funded-history-input-v3";
   requireTrue(new Decimal(context.execution.cash_quantum as string).eq("0.01"));
   const cutoff = micros(context.information_cutoff_at), start = micros(projection.window.start), end = micros(projection.window.end);
   requireTrue(micros(context.parameters_recorded_at) <= micros(context.comparison_declared_at)
@@ -96,8 +97,8 @@ export function prepareFundedHistory(raw: FundedHistoryInput) {
     while (slot < intervals.length && intervals[slot][1] <= at) slot++;
     requireTrue(slot === intervals.length || at < intervals[slot][0]);
   }
-  const input = { schema_version: bounded ? "investor-long-horizon-input-v3" : "investor-long-horizon-input-v2", dataset: raw.dataset,
-    plan: { schema_version: bounded ? "investor-long-horizon-plan-v3" : "investor-long-horizon-plan-v2", study_basis: "retrospective_exploratory", ...context,
+  const input = { schema_version: eventReview ? "investor-long-horizon-input-v4" : bounded ? "investor-long-horizon-input-v3" : "investor-long-horizon-input-v2", dataset: raw.dataset,
+    plan: { schema_version: eventReview ? "investor-long-horizon-plan-v4" : bounded ? "investor-long-horizon-plan-v3" : "investor-long-horizon-plan-v2", study_basis: "retrospective_exploratory", ...context,
       window: projection.window, evaluation_timezone: projection.evaluation_timezone, initial_capital_cny: projection.lots[0].amount_cny,
       contributions: projection.lots.slice(1).map(lot => ({ at: lot.arrival_at, amount_cny: lot.amount_cny })),
       funding_policy: { method: "equal_tranches_on_frozen_local_day_offsets", initial_offsets_days: [0, 30, 60], contribution_offsets_days: [0, 30, 60] } } };
@@ -109,7 +110,7 @@ export function prepareFundedHistory(raw: FundedHistoryInput) {
 export function verifyFundedHistoryBinding(raw: FundedHistoryInput, result: ObjectValue) {
   validateFundedHistoryDocument("result", result);
   const { projection, input } = prepareFundedHistory(raw);
-  requireTrue(result.schema_version === (raw.schema_version === "investor-funded-history-input-v2"
+  requireTrue(result.schema_version === (raw.schema_version === "investor-funded-history-input-v3" ? "investor-funded-history-result-v3" : raw.schema_version === "investor-funded-history-input-v2"
     ? "investor-funded-history-result-v2" : "investor-funded-history-result-v1"));
   const sealed = (object: ObjectValue) => { const { result_hash, ...body } = object; requireTrue(hash(body) === result_hash); };
   sealed(result);

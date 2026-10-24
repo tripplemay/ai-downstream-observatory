@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-strategy-policy-input.schema.json",
+  "oneOf": [
+    {"$ref": "investor-strategy-policy.schema.json"},
+    {"$ref": "investor-strategy-policy-v2.schema.json"}
+  ]
+}

@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 import { hash, type Actor } from "../ledger/service";
 import { fundedComparisonSnapshot } from "./funded-comparison";
-import { fundedComparisonDenials } from "./funded-comparison-schemas";
+import { fundedComparisonDenials, fundedPathExecutionUsable } from "./funded-comparison-schemas";
 import { fundedAnalysisSchema, type FundedPathAnalysis } from "./funded-analysis-schemas";
 import { assertFundedComparisonBuild, replayStoredFundedAnalysis, withFundedComparisonCapacity } from "./funded-comparison-process";
 
@@ -27,7 +27,7 @@ export async function getFundedPathAnalysis(db: Database.Database, actor: Actor,
       return fundedAnalysisSchema.parse({ ...finalScope, ...fundedComparisonDenials, schema_version: "investor-funded-path-analysis-v1", ...selector,
         status: "outdated", reason_codes: ["FUNDED_STUDY_BINDING_CHANGED"], analysis: null });
     }
-    const complete = entry.candidate.status !== "failed" && analysis.candidate.summary.execution_failure_count === 0 && analysis.baseline.summary.execution_failure_count === 0;
+    const complete = entry.candidate.status !== "failed" && fundedPathExecutionUsable(analysis.candidate.summary) && fundedPathExecutionUsable(analysis.baseline.summary);
     return fundedAnalysisSchema.parse({ ...base, checked_at: checked, status: complete ? "verified_retrospective" : "verified_with_execution_gaps",
       economics_independently_replayed: complete, reason_codes: complete ? [] : ["FUNDED_STUDY_EXECUTION_GAPS"], analysis });
   });
