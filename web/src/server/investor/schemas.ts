@@ -130,7 +130,7 @@ export const observationSchema = z.object({
   && (value.next_review_at === null || value.next_review_at > value.evaluated_at));
 export type InvestorObservation = z.infer<typeof observationSchema>;
 
-export const fixedPolicyBindingSchema = z.object({ parameters: z.record(z.unknown()), evaluation_timezone: z.string().min(1).max(100) }).strict();
+export const fixedPolicyBindingSchema = z.object({ parameters: z.record(z.string(), z.unknown()), evaluation_timezone: z.string().min(1).max(100) }).strict();
 const referencePlanV1Schema = z.object({
   schema_version: z.literal("investor-reference-plan-v1"),
   profile_id: investorId, strategy_version: z.string().min(1).max(160),

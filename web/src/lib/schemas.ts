@@ -9,6 +9,7 @@ export const signalUpdateSchema = z.object({
   note: z.string().max(1000).default(""),
 });
 export type SignalUpdateInput = z.infer<typeof signalUpdateSchema>;
+export type SignalUpdateFormInput = z.input<typeof signalUpdateSchema>;
 
 export const observationSchema = z.object({
   themeId: z.string().min(1),
@@ -17,6 +18,7 @@ export const observationSchema = z.object({
   note: z.string().max(1000).default(""),
 });
 export type ObservationInput = z.infer<typeof observationSchema>;
+export type ObservationFormInput = z.input<typeof observationSchema>;
 
 export const thesisSchema = z.object({
   themeId: z.string().min(1),
@@ -35,6 +37,7 @@ export const poolItemSchema = z.object({
   note: z.string().max(500).default(""),
 });
 export type PoolItemInput = z.infer<typeof poolItemSchema>;
+export type PoolItemFormInput = z.input<typeof poolItemSchema>;
 
 export const strategyParamsSchema = z.object({
   themeId: z.string().min(1),

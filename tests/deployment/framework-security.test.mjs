@@ -16,6 +16,12 @@ function knownNextFix(version) {
   return parts !== null && (parts[0] === 15 && atLeast(version, '15.5.28')
     || parts[0] === 16 && atLeast(version, '16.4.1') || parts[0] > 16);
 }
+function knownUriFix(version) {
+  const parts = tuple(version);
+  return parts !== null && (parts[0] === 2 && atLeast(version, '2.4.8')
+    || parts[0] === 3 && atLeast(version, '3.1.9')
+    || parts[0] === 4 && atLeast(version, '4.2.3') || parts[0] > 4);
+}
 
 test('framework pin and lock exclude the known affected Next ranges without a broad version upgrade', () => {
   for (const version of ['15.5.27', '15.4.99', '16.0.0', '16.4.0', '^15.5.28', '15.5.28-canary.0']) assert.equal(knownNextFix(version), false, version);
@@ -37,6 +43,21 @@ test('image runtime override and native packages retain the vendor workaround fl
   assert.equal(lock.packages['node_modules/sharp'].version, manifest.overrides.sharp);
   for (const [name, entry] of Object.entries(lock.packages)) if (/^node_modules\/@img\/sharp-(?!libvips)/.test(name))
     assert.ok(atLeast(entry.version, '0.35.5'), name);
+});
+
+test('validation runtime and URI parser exclude the known resource and normalization advisories', () => {
+  assert.ok(atLeast(manifest.dependencies.zod, '4.6.6'));
+  assert.equal(lock.packages[''].dependencies.zod, manifest.dependencies.zod);
+  assert.equal(lock.packages['node_modules/zod'].version, manifest.dependencies.zod);
+  assert.equal(manifest.dependencies['@hookform/resolvers'], '5.2.2');
+  assert.equal(lock.packages['node_modules/@hookform/resolvers'].version, '5.2.2');
+  for (const version of ['2.4.7', '3.1.8', '4.0.0', '4.2.2', '^3.1.9']) assert.equal(knownUriFix(version), false, version);
+  for (const version of ['2.4.8', '3.1.9', '4.2.3']) assert.equal(knownUriFix(version), true, version);
+  assert.ok(knownUriFix(manifest.overrides['fast-uri']));
+  for (const [name, entry] of Object.entries(lock.packages)) {
+    if (/(?:^|\/)node_modules\/zod$/.test(name)) assert.ok(atLeast(entry.version, '4.6.6'), name);
+    if (/(?:^|\/)node_modules\/fast-uri$/.test(name)) assert.ok(knownUriFix(entry.version), name);
+  }
 });
 
 test('release verification still runs the high-severity audit without ignoring its failure', () => {

@@ -2,7 +2,7 @@ import { aiExplanationStatusSchema, type AiExplanationStatus } from "@/server/in
 import { investorHash } from "@/server/investor/schemas";
 
 export function parseInvestorAiExplanation(raw: unknown, binding: string, observationId: string | null, now = Date.now()): AiExplanationStatus {
-  const result = aiExplanationStatusSchema.innerType().extend({ session_binding: investorHash }).strict().safeParse(raw);
+  const result = aiExplanationStatusSchema.safeExtend({ session_binding: investorHash }).strict().safeParse(raw);
   if (!result.success || result.data.session_binding !== binding) throw new Error("INVESTOR_AI_RESPONSE_INVALID");
   const { session_binding: _, ...value } = result.data;
   aiExplanationStatusSchema.parse(value);

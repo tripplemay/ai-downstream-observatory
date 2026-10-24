@@ -2,7 +2,7 @@ import { z } from "zod";
 import { proposalReviewBasis, proposalReviewContextSchema, proposalReviewIntentSchema, type ProposalReviewContext, type ProposalReviewIntent } from "@/server/investor/proposal-review-schemas";
 import type { ValuationScope } from "./investor-valuation-client";
 
-const response = proposalReviewContextSchema.innerType().extend({ session_binding: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+const response = proposalReviewContextSchema.safeExtend({ session_binding: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 export function parseProposalReview(value: unknown, expected: ValuationScope, proposalId: string | null) {
   const { session_binding, ...body } = response.parse(value), context = proposalReviewContextSchema.parse(body);
   if (session_binding !== expected.binding || context.workspace_id !== expected.workspace || context.workspace_revision !== expected.revision

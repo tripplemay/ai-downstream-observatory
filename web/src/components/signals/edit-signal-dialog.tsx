@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { updateSignal } from "@/lib/actions";
-import { signalUpdateSchema, type SignalUpdateInput } from "@/lib/schemas";
+import { signalUpdateSchema, type SignalUpdateFormInput, type SignalUpdateInput } from "@/lib/schemas";
 import { validStatuses } from "@/lib/seed";
 import type { Signal } from "@/lib/queries";
 
@@ -40,7 +40,7 @@ export function EditSignalDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const [pending, startTransition] = React.useTransition();
-  const form = useForm<SignalUpdateInput>({
+  const form = useForm<SignalUpdateFormInput, unknown, SignalUpdateInput>({
     resolver: zodResolver(signalUpdateSchema),
     values: signal
       ? {

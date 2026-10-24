@@ -11,11 +11,11 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { addObservation } from "@/lib/actions";
-import { observationSchema, type ObservationInput } from "@/lib/schemas";
+import { observationSchema, type ObservationFormInput, type ObservationInput } from "@/lib/schemas";
 
 export function ObservationForm({ today, themeId }: { today: string; themeId: string }) {
   const [pending, startTransition] = React.useTransition();
-  const form = useForm<ObservationInput>({
+  const form = useForm<ObservationFormInput, unknown, ObservationInput>({
     resolver: zodResolver(observationSchema),
     defaultValues: { themeId, date: today, light: "red", note: "" },
   });

@@ -16,7 +16,7 @@ const requestSchema = z.object({ schema_version: z.literal("investor-research-re
 export const investorResearchRunSchema = z.object({ schema_version: z.literal("investor-research-run-v1"), status: z.enum(["blocked", "calculated"]),
   request_id: investorId, profile_id: investorId, input_version: investorHash, engine_version: z.literal(investorResearchEngine),
   implementation_hash: investorHash, reason_codes: z.array(z.string().regex(/^[A-Z][A-Z0-9_]{0,79}$/)).min(1).max(40),
-  result: z.record(z.unknown()).nullable(), registry: researchRegistrySchema.nullable().optional(), created_at: investorInstant }).strict();
+  result: z.record(z.string(), z.unknown()).nullable(), registry: researchRegistrySchema.nullable().optional(), created_at: investorInstant }).strict();
 export function enqueueInvestorResearch(db: Database.Database, workspaceId: string, profile: InvestorProfileVersion, now: string) {
   const input = latestInvestorResearchInput(db, workspaceId, now);
   const inputId = input?.source_kind === "synthetic" ? input.id : null;

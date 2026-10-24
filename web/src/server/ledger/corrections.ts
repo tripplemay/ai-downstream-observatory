@@ -25,7 +25,7 @@ export interface CorrectionReceipt {
   affected_account_ids: string[]; warnings: string[]; duplicate?: boolean;
 }
 const id = z.string().min(1).max(200);
-const economic = z.object({ fact: z.record(z.unknown()), effective_at: z.string(), time_precision: z.enum(["date", "second"]), source_timezone: z.string() }).strict();
+const economic = z.object({ fact: z.record(z.string(), z.unknown()), effective_at: z.string(), time_precision: z.enum(["date", "second"]), source_timezone: z.string() }).strict();
 const anchors = { before_event_id: id.optional(), after_event_id: id.optional() };
 const correctionSchema = z.object({
   portfolio_id: id, expected_revision: z.number().int().nonnegative(), idempotency_key: id,

@@ -4,7 +4,7 @@ import { tradeRecordingContextSchema, tradeRecordingIntentSchema, TRADE_RECORDIN
   type TradeRecordingContext, type TradeRecordingIntent } from "@/server/investor/trade-recording-schemas";
 import type { ReconciliationScope } from "./investor-reconciliation-client";
 
-const responseSchema = tradeRecordingContextSchema.innerType().extend({ session_binding: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+const responseSchema = tradeRecordingContextSchema.safeExtend({ session_binding: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 export function parseTradeRecordingContext(value: unknown, expected: ReconciliationScope): TradeRecordingContext {
   const parsed = responseSchema.safeParse(value);
   if (!parsed.success) throw new Error("INVESTOR_TRADE_RESPONSE_INVALID");
