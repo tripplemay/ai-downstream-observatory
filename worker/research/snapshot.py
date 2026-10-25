@@ -134,7 +134,7 @@ def validate_parameters(parameters, dataset):
 
 
 def validate_plan(plan, dataset):
-    bounded = isinstance(plan, dict) and plan.get("schema_version") in ("research-plan-v3", "research-plan-v4", "research-plan-v5")
+    bounded = isinstance(plan, dict) and plan.get("schema_version") in ("research-plan-v3", "research-plan-v4", "research-plan-v5", "research-plan-v6")
     validate_contract(plan, plan["schema_version"] + ".schema.json" if bounded else "research-plan.schema.json")
     version = plan["schema_version"].removeprefix("research-plan-")
     if dataset["schema_version"] != "research-dataset-" + ("v2" if bounded else version):
@@ -177,7 +177,7 @@ def validate_plan(plan, dataset):
     for name in ("commission_bps", "minimum_fee_cny", "slippage_bps", "fx_bps"):
         if fact_decimal(plan["execution"][name]) < 0:
             raise WorkbenchError("NEGATIVE_EXECUTION_COST")
-    if version in ("v2", "v3", "v4", "v5") and fact_decimal(plan["execution"]["slippage_bps"]) >= 10000:
+    if version in ("v2", "v3", "v4", "v5", "v6") and fact_decimal(plan["execution"]["slippage_bps"]) >= 10000:
         raise WorkbenchError("INVALID_RESEARCH_SELL_SLIPPAGE")
     if bounded and any(not 0 <= fact_decimal(plan["execution"][name]) <= 10000
                        for name in ("buy_price_buffer_bps", "buy_fx_buffer_bps", "commission_bps", "fx_bps")):

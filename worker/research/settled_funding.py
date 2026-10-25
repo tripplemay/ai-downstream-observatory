@@ -1,7 +1,8 @@
 """Unpublished buy preparation from an already settled, current research book.
 
 This arithmetic boundary is not source, intent-lineage, strategy or account
-admission. No existing research-plan version or default runtime invokes it yet.
+admission. Only the explicit v6 direct kernel invokes v2; ordinary admission
+and the default investor runtime still reject that unintegrated plan version.
 """
 from datetime import timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, localcontext
@@ -22,8 +23,8 @@ def _object(value, fields):
     return value
 
 
-def _ids(value, maximum):
-    _require(type(value) is list and 0 < len(value) <= maximum)
+def _ids(value, maximum, *, empty=False):
+    _require(type(value) is list and (0 if empty else 1) <= len(value) <= maximum)
     _require(all(type(item) is str and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}', item) for item in value))
     _require(len(set(value)) == len(value))
     return value
@@ -57,11 +58,12 @@ def prepare_settled_cash_buys(value):
 
 def _prepare(value):
     _object(value, 'schema_version intent decision_at decision_times cash book needs execution')
-    _require(value['schema_version'] == 'settled-cash-buy-preparation-v1')
+    _require(value['schema_version'] in ('settled-cash-buy-preparation-v1', 'settled-cash-buy-preparation-v2'))
+    reviewed_leaves = value['schema_version'] == 'settled-cash-buy-preparation-v2'
     intent = _object(value['intent'], 'id declared_at deadline policy_hash sale_order_ids buy_listing_ids')
     _ids([intent['id']], 1)
     _require(type(intent['policy_hash']) is str and re.fullmatch(r'[a-f0-9]{64}', intent['policy_hash']))
-    sales, scope = _ids(intent['sale_order_ids'], 100), _ids(intent['buy_listing_ids'], 20)
+    sales, scope = _ids(intent['sale_order_ids'], 100, empty=reviewed_leaves), _ids(intent['buy_listing_ids'], 20)
     declared, deadline, at = _time(intent['declared_at']), _time(intent['deadline']), _time(value['decision_at'])
     _require(declared < deadline)
     _require(type(value['decision_times']) is list and 0 < len(value['decision_times']) <= 30000)
@@ -69,7 +71,7 @@ def _prepare(value):
     _require(decisions == sorted(set(decisions)))
     _require(at in decisions and at > declared, 'SETTLED_FUNDING_DECISION_NOT_DECLARED')
     _require(at < deadline, 'SETTLED_FUNDING_INTENT_EXPIRED')
-    _require(type(value['book']) is list and 0 < len(value['book']) <= 10000)
+    _require(type(value['book']) is list and (0 if reviewed_leaves else 1) <= len(value['book']) <= 10000)
     book = {}
     for row in value['book']:
         _object(row, 'id listing_id side cash_intent_id state settled_at')
@@ -87,8 +89,8 @@ def _prepare(value):
     _require(all(book[key]['state'] == 'settled' and book[key]['settled_at'] is not None for key in sales),
              'SETTLED_FUNDING_SALES_UNSETTLED')
     _require(all(_time(book[key]['settled_at']) > declared for key in sales), 'SETTLED_FUNDING_SALES_UNSETTLED')
-    settled = max(_time(book[key]['settled_at']) for key in sales)
-    _require(settled > declared and settled < at, 'SETTLED_FUNDING_SALES_UNSETTLED')
+    settled = max((_time(book[key]['settled_at']) for key in sales), default=None)
+    _require(settled is None or declared < settled < at, 'SETTLED_FUNDING_SALES_UNSETTLED')
     cash = _object(value['cash'], 'as_of settled_cny reserved_cny floor_cny')
     _require(_time(cash['as_of']) == at, 'SETTLED_FUNDING_CASH_SNAPSHOT_STALE')
     available = max(decimal('0'), _number(cash['settled_cny']) - _number(cash['reserved_cny']) - _number(cash['floor_cny']))
@@ -112,7 +114,7 @@ def _prepare(value):
         new_ids.append(row['order_id'])
         _require(row['currency'] in ('CNY', 'HKD', 'USD'))
         observed, known = _time(row['observed_at']), _time(row['available_at'])
-        _require(row['mark_kind'] == 'observed_close' and settled <= observed <= known <= at,
+        _require(row['mark_kind'] == 'observed_close' and (settled or declared) <= observed <= known <= at,
                  'SETTLED_FUNDING_POST_SETTLEMENT_CLOSE_REQUIRED')
         if row['currency'] == 'CNY':
             _require(row['fx_observed_at'] is None and row['fx_available_at'] is None)
@@ -157,9 +159,9 @@ def _prepare(value):
             'decision_price_observation_id': row['price_observation_id'], 'decision_fx_observation_id': row['fx_observation_id']})
     total_budget = sum((decimal(order['budget_cny']) for order in orders), decimal('0'))
     _require(total_budget <= available)
-    return {'schema_version': 'settled-cash-buy-preparation-result-v1', 'input_hash': content_hash(value),
+    return {'schema_version': 'settled-cash-buy-preparation-result-v2' if reviewed_leaves else 'settled-cash-buy-preparation-result-v1', 'input_hash': content_hash(value),
         'intent_id': intent['id'], 'policy_hash': intent['policy_hash'], 'decision_at': stamp(at),
-        'latest_sale_settlement_at': stamp(settled), 'cash_snapshot_hash': content_hash(cash),
+        'latest_sale_settlement_at': stamp(settled) if settled else None, 'cash_snapshot_hash': content_hash(cash),
         'available_cash_cny': canonical(available), 'total_budget_cny': canonical(total_budget),
         'total_worst_cash_cny': canonical(sum((decimal(order['worst_total_cash_cny']) for order in orders), decimal('0'))),
         'unreserved_cash_cny': canonical(available - total_budget), 'orders': orders,

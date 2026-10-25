@@ -16,6 +16,7 @@ export class OrderReviews<T extends ReviewOrder> {
   private activeId: string | null = null;
   constructor(private orders: Map<string, T>, private events: Obj[], private weights: Record<string, string>) {}
   get active() { return this.activeId === null ? null : this.rows.get(this.activeId)!; }
+  getRow(id: string) { return this.rows.get(id); }
 
   onActions(actions: ContinuousDataset["actions"], pending: T[], at: bigint,
     finish: (order: T, state: string, at: bigint, reason?: string, extra?: Obj) => void) {
@@ -76,14 +77,15 @@ export class OrderReviews<T extends ReviewOrder> {
     this.events.push({ type: "order_review_failed", at: economicStamp(at), review_id: row.id, order_id: order.id });
   }
 
-  complete(at: bigint, withinTolerance = false, noSalesRepairSatisfied = false) {
+  complete(at: bigint, withinTolerance = false, noSalesRepairSatisfied = false, saleScopeNoLongerNeeded = false) {
     const row = this.active; if (!row || row.status === "failed") return;
     requireEconomic(!noSalesRepairSatisfied || withinTolerance && !row.allow_sales, "ORDER_REVIEW_COMPLETION_INVALID");
+    requireEconomic(!saleScopeNoLongerNeeded || withinTolerance && row.allow_sales && !noSalesRepairSatisfied, "ORDER_REVIEW_COMPLETION_INVALID");
     if (withinTolerance) requireEconomic(row.status === "pending_evaluation", "ORDER_REVIEW_COMPLETION_INVALID");
     else if (row.status !== "awaiting_replacement" || !row.current_replacement_order_ids.length
       || row.current_replacement_order_ids.some(id => !["filled", "settled"].includes(this.orders.get(id)!.state))) return;
     row.status = "resolved"; row.completed_at = economicStamp(at);
-    row.completion_reason = noSalesRepairSatisfied ? "no_sales_repair_no_longer_needed" : withinTolerance ? "targets_within_tolerance" : "replacement_orders_filled";
+    row.completion_reason = saleScopeNoLongerNeeded ? "sale_scope_no_longer_needed" : noSalesRepairSatisfied ? "no_sales_repair_no_longer_needed" : withinTolerance ? "targets_within_tolerance" : "replacement_orders_filled";
     this.events.push({ type: "order_review_resolved", at: economicStamp(at), review_id: row.id, reason: row.completion_reason });
     this.activeId = null;
   }

@@ -1,0 +1,36 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://etf-workbench.invalid/contracts/v1/research-plan-v6.schema.json",
+  "type":"object","additionalProperties":false,
+  "required":["schema_version","hypothesis","falsification","windows","initial_capital_cny","contributions","decision_times","parameter_candidates","trial_budgets","benchmark","execution","evaluation_timezone","tax_coverage","evidence_requirements"],
+  "properties":{
+    "schema_version":{"const":"research-plan-v6"},
+    "hypothesis":{"$ref":"research-plan-v3.schema.json#/properties/hypothesis"},
+    "falsification":{"$ref":"research-plan-v3.schema.json#/properties/falsification"},
+    "windows":{"$ref":"research-plan-v3.schema.json#/properties/windows"},
+    "initial_capital_cny":{"$ref":"research-plan-v3.schema.json#/properties/initial_capital_cny"},
+    "contributions":{"$ref":"research-plan-v3.schema.json#/properties/contributions"},
+    "decision_times":{"$ref":"research-plan-v3.schema.json#/properties/decision_times"},
+    "parameter_candidates":{"$ref":"research-plan-v3.schema.json#/properties/parameter_candidates"},
+    "trial_budgets":{"$ref":"research-plan-v3.schema.json#/properties/trial_budgets"},
+    "benchmark":{"$ref":"research-plan-v3.schema.json#/properties/benchmark"},
+    "evaluation_timezone":{"$ref":"research-plan-v3.schema.json#/properties/evaluation_timezone"},
+    "tax_coverage":{"$ref":"research-plan-v3.schema.json#/properties/tax_coverage"},
+    "evidence_requirements":{"$ref":"research-plan-v3.schema.json#/properties/evidence_requirements"},
+    "execution":{
+      "type":"object","additionalProperties":false,
+      "required":["model","commission_bps","minimum_fee_cny","slippage_bps","fx_bps","cash_quantum","max_fx_age_seconds","settlement_model","sale_proceeds","dividend_policy","buy_price_buffer_bps","buy_fx_buffer_bps","order_action_policy","buy_funding_policy"],
+      "properties":{
+        "model":{"$ref":"research-plan-v3.schema.json#/properties/execution/properties/model"},
+        "commission_bps":{"$ref":"common.schema.json#/$defs/decimal"},"minimum_fee_cny":{"$ref":"common.schema.json#/$defs/decimal"},
+        "slippage_bps":{"$ref":"common.schema.json#/$defs/decimal"},"fx_bps":{"$ref":"common.schema.json#/$defs/decimal"},
+        "cash_quantum":{"const":"0.01"},"max_fx_age_seconds":{"$ref":"research-plan-v3.schema.json#/properties/execution/properties/max_fx_age_seconds"},
+        "settlement_model":{"const":"explicit_market_calendar"},"sale_proceeds":{"const":"convert_to_cny_at_fill_then_settle"},
+        "dividend_policy":{"const":"cash_in_original_currency"},
+        "buy_price_buffer_bps":{"$ref":"common.schema.json#/$defs/decimal"},"buy_fx_buffer_bps":{"$ref":"common.schema.json#/$defs/decimal"},
+        "order_action_policy":{"const":"defer_known_else_cancel_batch_and_reassess"},
+        "buy_funding_policy":{"const":"declare_sales_then_freeze_buy_from_settled_cash"}
+      }
+    }
+  }
+}

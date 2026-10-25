@@ -1,8 +1,13 @@
-import { Decimal } from "../ledger/decimal";
+import { Decimal as LedgerDecimal } from "../ledger/decimal";
+import { hash } from "../ledger/service";
 import { ContinuousMarket, economicDate, economicFact, economicInstant, economicLocal, economicMidnight, economicStamp, economicText, requireEconomic,
   type ContinuousDataset, type Settlement } from "./continuous-market";
 import { continuousPerformance } from "./continuous-performance";
 import { OrderReviews, type ReviewLinks } from "./order-reviews";
+import { CashIntents, type CashIntentLinks } from "./cash-intents";
+import { prepareSettledCashBuys } from "./settled-funding";
+
+type Decimal = LedgerDecimal;
 
 type ObjectValue = Record<string, unknown>;
 export type ContinuousParameters = { schema_version: string; weights: Record<string, string>; roles: Record<string, string>; rebalance: string;
@@ -12,15 +17,14 @@ export type ContinuousPlan = { schema_version: string; window: { start: string; 
   parameters: ContinuousParameters; initial_capital_cny: string; contributions: { at: string; amount_cny: string }[]; decision_times: string[];
   execution: { model: string; settlement_model: string; sale_proceeds: string; max_fx_age_seconds: number; slippage_bps: string;
     minimum_fee_cny: string; commission_bps: string; fx_bps: string; cash_quantum: string;
-    buy_price_buffer_bps?: string; buy_fx_buffer_bps?: string; order_action_policy?: string }; tax_coverage: string };
-type Order = ReviewLinks & { id: string; listing: string; side: "buy" | "sell"; quantity: Decimal; budget: Decimal; cashFloor: Decimal; lockedAtDecision: Decimal;
+    buy_price_buffer_bps?: string; buy_fx_buffer_bps?: string; order_action_policy?: string; buy_funding_policy?: string }; tax_coverage: string };
+type Order = ReviewLinks & CashIntentLinks & { id: string; listing: string; side: "buy" | "sell"; quantity: Decimal; budget: Decimal; cashFloor: Decimal; lockedAtDecision: Decimal;
   decision: bigint; expiry: bigint; execute?: bigint; dependencies: string[]; state: string;
   priceCap?: Decimal; fxCap?: Decimal; worstTotal?: Decimal };
 type StockLot = { order: string; listing: string; quantity: Decimal; at: bigint; evidence: Settlement };
 type Sale = { order: string; amount: Decimal; at: bigint; evidence: Settlement };
 type Delta = { listing_id: string; target_cny: string; current_cny: string; difference_cny: string; within_tolerance: boolean; price_mark: ObjectValue };
-const zero = () => new Decimal(0);
-const sum = (values: Iterable<Decimal>) => [...values].reduce((a, b) => a.plus(b), zero());
+type Quote = [Decimal, Decimal, string, string | null, ObjectValue];
 const ordered = <T>(map: Map<string, T>) => Object.fromEntries([...map].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
 const minTime = (a: bigint, b: bigint) => a < b ? a : b;
 const failure = (error: unknown) => { if (!(error instanceof Error)) throw error; return error.message; };
@@ -58,12 +62,16 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
   requireEconomic(options.holdingBaseline === undefined || typeof options.holdingBaseline === "boolean");
   const holdingBaseline = options.holdingBaseline === true;
   const research = options.researchPhase !== undefined;
-  const reviewable = research && plan.schema_version === "bounded-research-window-v3" || plan.schema_version === "investor-long-horizon-plan-v4";
+  const settledFunding = research && plan.schema_version === "bounded-research-window-v4";
+  const Decimal = LedgerDecimal.clone({ precision: settledFunding ? 256 : 60 });
+  const zero = () => new Decimal(0), sum = (values: Iterable<Decimal>) => [...values].reduce((a, b) => a.plus(b), zero());
+  const reviewable = settledFunding || research && plan.schema_version === "bounded-research-window-v3" || plan.schema_version === "investor-long-horizon-plan-v4";
   const actionAware = reviewable || research && plan.schema_version === "bounded-research-window-v2";
   const bounded = research || ["investor-long-horizon-plan-v3", "investor-long-horizon-plan-v4"].includes(plan.schema_version);
   requireEconomic(!research || ["train", "validation", "holdout"].includes(options.researchPhase!) && !holdingBaseline
-    && releases.size === 0 && ["bounded-research-window-v1", "bounded-research-window-v2", "bounded-research-window-v3"].includes(plan.schema_version));
+    && releases.size === 0 && ["bounded-research-window-v1", "bounded-research-window-v2", "bounded-research-window-v3", "bounded-research-window-v4"].includes(plan.schema_version));
   const p = plan.parameters, ex = plan.execution, zone = plan.evaluation_timezone;
+  requireEconomic(settledFunding ? ex.buy_funding_policy === "declare_sales_then_freeze_buy_from_settled_cash" : ex.buy_funding_policy === undefined);
   requireEconomic(reviewable ? ex.order_action_policy === "defer_known_else_cancel_batch_and_reassess"
     : actionAware ? ex.order_action_policy === "defer_known_scheduled_action_before_commit" : ex.order_action_policy === undefined);
   requireEconomic(p.schema_version === "research-fixed-rebalance-parameters-v2" && ex.model === (bounded ? "next_session_close_bounded_fixed_quantity" : "next_session_close_fixed_quantity")
@@ -85,6 +93,8 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
   const pending: Order[] = [], stocks: StockLot[] = [], sales: Sale[] = [], orders = new Map<string, Order>(), slots = new Map<string, string>();
   const events: ObjectValue[] = [], curve: ObjectValue[] = [], flows: { at: bigint; amount: Decimal; before: Decimal }[] = [];
   const reviews = reviewable ? new OrderReviews(orders, events, p.weights) : null;
+  const intents = settledFunding ? new CashIntents(orders, events, reviews!, hash({ parameters: p, execution: ex,
+    decision_times: plan.decision_times, window: plan.window })) : null;
   const contributions = new Map<bigint, Decimal>();
   for (const flow of plan.contributions) {
     const at = economicInstant(flow.at), amount = new Decimal(flow.amount_cny);
@@ -109,9 +119,12 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
     }
   }
   const cny = () => cash.get("CNY")!;
-  const fx = (currency: string, at: bigint) => market.fx(currency, at)[0];
+  const quoteFx = (currency: string, at: bigint): [Decimal, string | null] => {
+    const [rate, id] = market.fx(currency, at); return [new Decimal(rate.toFixed()), id];
+  };
+  const fx = (currency: string, at: bigint) => quoteFx(currency, at)[0];
   const mark = (listing: string, at: bigint, decision = false): [Decimal, string, ObjectValue] => {
-    const [raw, id] = market.price(listing, at, decision), observed = economicInstant(market.observations.get(id)!.observed_at);
+    const [source, id] = market.price(listing, at, decision), raw = new Decimal(source.toFixed()), observed = economicInstant(market.observations.get(id)!.observed_at);
     let price = raw; const applied: string[] = [];
     for (const action of data.actions.filter(row => row.listing_id === listing && observed < economicInstant(row.at) && economicInstant(row.at) <= at)
       .sort((a, b) => economicInstant(a.at) < economicInstant(b.at) ? -1 : economicInstant(a.at) > economicInstant(b.at) ? 1
@@ -134,6 +147,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
     return value;
   };
   const cost = (side: string, quantity: Decimal, price: Decimal, currency: string, at: bigint, spotOverride?: Decimal) => {
+    price = new Decimal(price.toFixed());
     const spot = spotOverride ?? fx(currency, at), slip = new Decimal(ex.slippage_bps).div(10000), fillPrice = price.times(side === "buy" ? slip.plus(1) : new Decimal(1).minus(slip));
     requireEconomic(fillPrice.gt(0), "NONPOSITIVE_ORDER_COST");
     const principal = quantity.times(fillPrice).times(spot), fee = Decimal.max(ex.minimum_fee_cny, principal.times(ex.commission_bps).div(10000));
@@ -162,6 +176,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
     }
     for (const sale of [...sales]) if (sale.at <= at) {
       remove(sales, sale); cash.set("CNY", cny().plus(sale.amount)); orders.get(sale.order)!.state = "settled";
+      if (settledFunding) orders.get(sale.order)!.settledAt = economicStamp(sale.at);
       events.push({ type: "sale_cash_settlement", at: economicStamp(at), order_id: sale.order, amount_cny: economicText(sale.amount), settlement_evidence: sale.evidence });
     }
   };
@@ -190,6 +205,19 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
       lifecycle.deferred = null;
     }
   };
+  const publishOrders = (planned: Order[], at: bigint, expiry: bigint, quotes: Map<string, Quote>) => {
+    for (const order of planned) {
+      pending.push(order); if (order.execute !== undefined) clock.add(order.execute);
+      const [, , priceId, fxId, priceMark] = quotes.get(order.listing)!;
+      events.push({ type: "research_order", at: economicStamp(at), order_id: order.id, side: order.side, listing_id: order.listing,
+        quantity: economicText(order.quantity), budget_cny: order.side === "buy" ? economicText(order.budget) : null,
+        execute_at: order.execute === undefined ? null : economicStamp(order.execute), expires_at: economicStamp(settledFunding ? order.expiry : expiry), funding: order.state,
+        dependency_order_ids: order.dependencies, decision_price_observation_id: priceId, decision_fx_observation_id: fxId, decision_price_mark: priceMark,
+        ...(order.cashIntentId ? { cash_intent_id: order.cashIntentId } : {}),
+        ...(order.originReviewId ? { origin_review_id: order.originReviewId, replaces_order_ids: order.replacesOrderIds } : {}),
+        ...(bounded && order.side === "buy" ? { buy_price_cap: economicText(order.priceCap!), buy_fx_cap: economicText(order.fxCap!), worst_total_cash_cny: economicText(order.worstTotal!) } : {}) });
+    }
+  };
   const evaluate = (at: bigint) => {
     const local = economicLocal(at, zone), period = p.rebalance === "first_decision_each_year" ? String(local.year) : `${local.year}-H${local.month <= 6 ? 1 : 2}`;
     const nextMonth = local.month === 12 ? `${local.year + 1}-01-01` : `${local.year}-${String(local.month + 1).padStart(2, "0")}-01`;
@@ -199,13 +227,13 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
       events.push({ ...base, outcome: "blocked", targets: {}, signals: [], deltas: [], reason_codes: ["ACTIVE_ORDERS_OR_UNSETTLED_ASSETS"] }); return;
     }
     base.targets = Object.fromEntries(Object.entries(p.weights).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)); base.signals = [];
-    let value: Decimal, deploy: Decimal, tolerance: Decimal; const deltas: Delta[] = [], quotes = new Map<string, [Decimal, Decimal, string, string | null, ObjectValue]>();
+    let value: Decimal, deploy: Decimal, tolerance: Decimal; const deltas: Delta[] = [], quotes = new Map<string, Quote>();
     try {
       value = nav(at, true); deploy = value.minus(locked); requireEconomic(value.gt(0), "INVALID_ROTATION_TARGETS_OR_NAV");
       tolerance = Decimal.max(p.tolerance.absolute_cny, deploy.times(p.tolerance.weight));
       for (const listing of [...new Set([...weights.keys(), ...[...positions].filter(([, quantity]) => !quantity.isZero()).map(([key]) => key)])].sort()) {
         const weight = weights.get(listing) ?? zero(), quantity = positions.get(listing) ?? zero(); if (weight.isZero() && quantity.isZero()) continue;
-        const [price, priceId, priceMark] = mark(listing, at, true), [rate, fxId] = market.fx(market.assets.get(listing)!.currency, at);
+        const [price, priceId, priceMark] = mark(listing, at, true), [rate, fxId] = quoteFx(market.assets.get(listing)!.currency, at);
         const target = deploy.times(weight), current = quantity.times(price).times(rate), difference = target.minus(current);
         deltas.push({ listing_id: listing, target_cny: economicText(target), current_cny: economicText(current), difference_cny: economicText(difference),
           within_tolerance: difference.abs().lte(tolerance), price_mark: priceMark }); quotes.set(listing, [price, rate, priceId, fxId, priceMark]);
@@ -214,16 +242,74 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
     } catch (error) { events.push({ ...base, outcome: "blocked", deltas: [], reason_codes: [failure(error)] }); return; }
     Object.assign(base, { deltas, nav_cny: economicText(value), tolerance_cny: economicText(tolerance),
       ...(!research ? { deployment_base_cny: economicText(deploy), locked_cash_cny: economicText(locked) } : {}) });
+    const cashIntent = intents?.active ?? null;
+    if (cashIntent && ["failed", "expired"].includes(cashIntent.state)) {
+      events.push({ ...base, outcome: "blocked", reason_codes: ["CASH_INTENT_TERMINAL_FAILURE"] }); return;
+    }
+    if (cashIntent?.state === "waiting_decision" && !reviews!.active) {
+      const declaration = cashIntent.declaration, scope = deltas.filter(row => declaration.buy_listing_ids.includes(row.listing_id));
+      const needsNow = scope.filter(row => !row.within_tolerance && new Decimal(row.difference_cny).gt(0));
+      events.push({ type: "cash_intent_reassessment", at: economicStamp(at), intent_id: declaration.id,
+        nav_cny: economicText(value), deltas: scope, current_sale_order_ids: [...cashIntent.current_sale_order_ids] });
+      if (!needsNow.length) {
+        intents!.resolve(at, "original_buy_scope_no_longer_needed");
+        events.push({ ...base, outcome: "unchanged", reason_codes: ["CASH_INTENT_BUY_SCOPE_NO_LONGER_NEEDED"] }); return;
+      }
+      const foreign = sum([...cash].filter(([currency, amount]) => currency !== "CNY" && !amount.isZero()).map(([currency, amount]) => amount.times(fx(currency, at))));
+      const floor = locked.plus(Decimal.max(0, deploy.times(new Decimal(1).minus(weightSum)).minus(foreign))).times(100).ceil().div(100);
+      const needsDocument: ObjectValue[] = [], executable = new Map<string, bigint>();
+      let preparation: ReturnType<typeof prepareSettledCashBuys>;
+      try {
+        for (const [index, row] of needsNow.entries()) {
+          const listing = row.listing_id, [price, rate, priceId, fxId, evidence] = quotes.get(listing)!;
+          const quote = market.observations.get(priceId)!, asset = market.assets.get(listing)!, fxRow = fxId ? market.observations.get(fxId) : null;
+          const close = nextClose(listing, at, economicInstant(declaration.deadline));
+          requireEconomic(close !== null, "NO_EXECUTABLE_CLOSE:" + listing); executable.set(listing, close);
+          needsDocument.push({ listing_id: listing, order_id: `order:${String(orders.size + index + 1).padStart(6, "0")}`,
+            need_cny: economicText(new Decimal(row.difference_cny).times(100).floor().div(100)),
+            quantity_step: asset.quantity_step, currency: asset.currency, close: economicText(price), fx_cny_per_unit: economicText(rate),
+            observed_at: quote.observed_at, available_at: economicStamp(market.available(quote)), mark_kind: evidence.mark_kind,
+            fx_observed_at: fxRow?.observed_at ?? null, fx_available_at: fxRow ? economicStamp(market.available(fxRow)) : null,
+            price_observation_id: priceId, fx_observation_id: fxId ?? "fx:CNY:constant" });
+        }
+        const currentSales = cashIntent.current_sale_order_ids;
+        const document = { schema_version: "settled-cash-buy-preparation-v2",
+          intent: { ...declaration, sale_order_ids: [...currentSales], buy_listing_ids: needsNow.map(row => row.listing_id) },
+          decision_at: economicStamp(at), decision_times: plan.decision_times,
+          cash: { as_of: economicStamp(at), settled_cny: economicText(cny()), reserved_cny: economicText(reserved()), floor_cny: economicText(floor) },
+          book: currentSales.map(id => { const order = orders.get(id)!; return { id, listing_id: order.listing, side: "sell",
+            cash_intent_id: declaration.id, state: order.state, settled_at: order.settledAt ?? null }; }),
+          needs: needsDocument, execution: Object.fromEntries(["commission_bps", "minimum_fee_cny", "fx_bps", "slippage_bps",
+            "buy_price_buffer_bps", "buy_fx_buffer_bps", "cash_quantum", "max_fx_age_seconds"].map(key => [key, ex[key as keyof typeof ex]])) };
+        preparation = prepareSettledCashBuys(document);
+        for (const [listing, close] of executable) requireEconomic(!data.actions.some(action => action.listing_id === listing
+          && economicInstant(action.published_at) <= at && (data.mode !== "actual_replay" || economicInstant(action.ingested_at!) <= at)
+          && at < economicInstant(action.at) && economicInstant(action.at) <= close), "KNOWN_ACTION_BEFORE_SCHEDULED_CLOSE");
+      } catch (error) { events.push({ ...base, outcome: "blocked", reason_codes: [failure(error)], cash_intent_id: declaration.id }); return; }
+      const planned: Order[] = preparation.orders.map(prepared => {
+        const order: Order = { id: prepared.order_id, listing: prepared.listing_id, side: "buy", quantity: new Decimal(prepared.quantity),
+          budget: new Decimal(prepared.budget_cny), cashFloor: floor, lockedAtDecision: locked, decision: at,
+          expiry: economicInstant(declaration.deadline), dependencies: [...cashIntent.current_sale_order_ids], state: "scheduled",
+          execute: executable.get(prepared.listing_id)!, allowSales: false, priceCap: new Decimal(prepared.buy_price_cap),
+          fxCap: new Decimal(prepared.buy_fx_cap), worstTotal: new Decimal(prepared.worst_total_cash_cny) };
+        orders.set(order.id, order); return order;
+      });
+      intents!.publish(planned, preparation, at); publishOrders(planned, at, economicInstant(declaration.deadline), quotes);
+      events.push({ ...base, outcome: "proposed", reason_codes: ["SETTLED_CASH_BUY_BATCH_FROZEN"], order_ids: planned.map(order => order.id), partial: false }); return;
+    }
     const reviewing = reviews?.active ?? null, reviewScope = reviewing ? new Set(reviewing.listing_ids) : null;
     if (reviewScope) base.reassessment_scope = [...reviewScope].sort();
     requireEconomic(deploy.gt(0), "INVALID_FIXED_POLICY_CLASS_SCOPE");
-    const roles = new Map<string, { target: Decimal; current: Decimal }>();
-    for (const [listing, weight] of weights) {
-      const role = p.roles[listing], row = roles.get(role) ?? { target: zero(), current: zero() };
-      row.target = row.target.plus(weight); row.current = row.current.plus(new Decimal(deltas.find(row => row.listing_id === listing)?.current_cny ?? "0").div(deploy)); roles.set(role, row);
-    }
-    const classes = [...roles].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([role, row]) => ({ role, target_weight: economicText(row.target),
-      current_weight: economicText(row.current), difference_weight: economicText(row.current.minus(row.target)), threshold_breached: row.current.minus(row.target).abs().gte(p.class_drift_threshold) }));
+    const classes = (() => {
+      const Decimal = LedgerDecimal, zero = () => new Decimal(0);
+      const roles = new Map<string, { target: Decimal; current: Decimal }>();
+      for (const [listing, weight] of weights) {
+        const role = p.roles[listing], row = roles.get(role) ?? { target: zero(), current: zero() };
+        row.target = row.target.plus(weight); row.current = row.current.plus(new Decimal(deltas.find(row => row.listing_id === listing)?.current_cny ?? "0").div(deploy)); roles.set(role, row);
+      }
+      return [...roles].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([role, row]) => ({ role, target_weight: economicText(row.target),
+        current_weight: economicText(row.current), difference_weight: economicText(row.current.minus(row.target)), threshold_breached: row.current.minus(row.target).abs().gte(p.class_drift_threshold) }));
+    })();
     const bootstrap = ![...positions.values()].some(value => !value.isZero()), due = !slots.has(period), breach = classes.some(row => row.threshold_breached);
     const triggers = [...(bootstrap ? ["INITIAL_DEPLOYMENT"] : []), ...(fundingPending ? ["NEW_CASH_REPAIR"] : []),
       ...(reviewing ? ["CORPORATE_ACTION_ORDER_REVIEW"] : []), ...(!holdingBaseline && due ? ["CALENDAR_REVIEW"] : []), ...(!holdingBaseline && breach ? ["CLASS_WEIGHT_BREACH"] : [])];
@@ -237,19 +323,21 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
     if (!actionAware) { slots.set(period, economicStamp(at)); fundingPending = false; }
     const actionable = deltas.filter(row => !reviewScope || reviewScope.has(row.listing_id));
     const targetsSatisfied = actionable.every(row => row.within_tolerance);
-    if (targetsSatisfied || reviewing && !allowSales && actionable.every(row => row.within_tolerance || new Decimal(row.difference_cny).lt(0))) {
+    const saleReviewSatisfied = cashIntent && ["waiting_sales", "waiting_decision"].includes(cashIntent.state) && reviewing
+      && actionable.every(row => row.within_tolerance || new Decimal(row.difference_cny).gt(0));
+    if (targetsSatisfied || saleReviewSatisfied || reviewing && !allowSales && actionable.every(row => row.within_tolerance || new Decimal(row.difference_cny).lt(0))) {
       if (actionAware) {
         if (!reviewing) { slots.set(period, economicStamp(at)); fundingPending = false; }
-        resolveDeferred(at, "targets_within_tolerance"); reviews?.complete(at, true, !targetsSatisfied);
+        resolveDeferred(at, "targets_within_tolerance"); reviews?.complete(at, true, !targetsSatisfied && !saleReviewSatisfied, !!saleReviewSatisfied && !targetsSatisfied);
       }
-      events.push({ ...base, outcome: "unchanged", reason_codes: ["TARGETS_WITHIN_TOLERANCE"] }); return;
+      events.push({ ...base, outcome: "unchanged", reason_codes: [saleReviewSatisfied && !targetsSatisfied ? "SELL_SCOPE_NO_LONGER_NEEDED" : "TARGETS_WITHIN_TOLERANCE"] }); return;
     }
     const issues: string[] = [], planned: Order[] = [], saleIds: string[] = [], needs = new Map<string, Decimal>(); let projectedSales = zero();
     const foreign = sum([...cash].filter(([currency, amount]) => currency !== "CNY" && !amount.isZero()).map(([currency, amount]) => amount.times(fx(currency, at))));
     const floor = locked.plus(Decimal.max(0, deploy.times(new Decimal(1).minus(weightSum)).minus(foreign)));
     const makeOrder = (listing: string, side: "buy" | "sell", quantity: Decimal, budget = zero(), dependencies: string[] = [], bounds?: [Decimal, Decimal, Decimal]) => {
       const order: Order = { id: `order:${String(orders.size + 1).padStart(6, "0")}`, listing, side, quantity, budget, cashFloor: floor,
-        lockedAtDecision: locked, decision: at, expiry, dependencies, state: "planned",
+        lockedAtDecision: locked, decision: at, expiry: cashIntent ? minTime(expiry, economicInstant(cashIntent.declaration.deadline)) : expiry, dependencies, state: "planned",
         ...(reviewable ? { allowSales } : {}),
         ...(bounds ? { priceCap: bounds[0], fxCap: bounds[1], worstTotal: bounds[2] } : {}) }; orders.set(order.id, order); planned.push(order); return order;
     };
@@ -270,7 +358,8 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
       } catch (error) { issues.push(failure(error)); }
     }
     const available = Decimal.max(0, cny().minus(floor)).plus(projectedSales), totalNeed = sum(needs.values()), deployment = Decimal.min(available, totalNeed);
-    for (const [listing, need] of [...needs].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
+    const deferredBuys = settledFunding && (saleIds.length > 0 || cashIntent && ["waiting_sales", "waiting_decision"].includes(cashIntent.state));
+    for (const [listing, need] of deferredBuys ? [] : [...needs].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
       let allocation = totalNeed.isZero() ? zero() : deployment.times(need).div(totalNeed);
       if (bounded) allocation = allocation.times(100).floor().div(100);
       const [price, rate] = quotes.get(listing)!;
@@ -297,7 +386,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
       else issues.push("NO_SETTLED_OR_DEPENDENT_CASH:" + listing);
     }
     if (actionAware) {
-      if (reviewing && (issues.length || !planned.length)) {
+      if ((reviewing || settledFunding) && (issues.length || !planned.length)) {
         for (const order of planned) orders.delete(order.id);
         events.push({ ...base, outcome: "blocked", reason_codes: [...new Set([...issues, "ORDER_REVIEW_REPLACEMENT_INCOMPLETE"])].sort() });
         return;
@@ -324,18 +413,10 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
       }
       if (!reviewing) { slots.set(period, economicStamp(at)); fundingPending = false; }
       if (planned.length && !issues.length) resolveDeferred(at, "new_orders_proposed");
-      if (reviewing) reviews!.publish(planned, at);
+      if (reviewing) { reviews!.publish(planned, at); if (intents?.active) intents.bindReplacements(planned, at); }
+      if (settledFunding && saleIds.length && needs.size && !intents!.active) intents!.declare(saleIds, [...needs.keys()], at, expiry);
     }
-    for (const order of planned) {
-      pending.push(order); if (order.execute !== undefined) clock.add(order.execute);
-      const [, , priceId, fxId, priceMark] = quotes.get(order.listing)!;
-      events.push({ type: "research_order", at: economicStamp(at), order_id: order.id, side: order.side, listing_id: order.listing,
-        quantity: economicText(order.quantity), budget_cny: order.side === "buy" ? economicText(order.budget) : null,
-        execute_at: order.execute === undefined ? null : economicStamp(order.execute), expires_at: economicStamp(expiry), funding: order.state,
-        dependency_order_ids: order.dependencies, decision_price_observation_id: priceId, decision_fx_observation_id: fxId, decision_price_mark: priceMark,
-        ...(order.originReviewId ? { origin_review_id: order.originReviewId, replaces_order_ids: order.replacesOrderIds } : {}),
-        ...(bounded && order.side === "buy" ? { buy_price_cap: economicText(order.priceCap!), buy_fx_cap: economicText(order.fxCap!), worst_total_cash_cny: economicText(order.worstTotal!) } : {}) });
-    }
+    publishOrders(planned, at, expiry, quotes);
     events.push({ ...base, outcome: planned.length ? "proposed" : "blocked", reason_codes: [...new Set(issues)].sort(), order_ids: planned.map(order => order.id), partial: issues.length > 0 });
     if (planned.length) lastProposal = at;
   };
@@ -410,7 +491,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
         fx_fee_cny: economicText(actual.fxFee), cash_rounding_cny: economicText(actual.rounding), total_cash_cny: economicText(actual.amount),
         price_observation_id: priceId, fx_observation_id: market.fx(asset.currency, at)[1], settled_at: economicStamp(settled), settlement_evidence: evidence });
     }
-    settle(at); activate(at); reviews?.complete(at); if (decisions.has(at)) evaluate(at);
+    settle(at); activate(at); reviews?.complete(at); intents?.refresh(at); if (decisions.has(at)) evaluate(at);
     const carry: ObjectValue[] = [], total = nav(at, false, carry);
     requireEconomic(locked.gte(0) && cny().minus(locked).minus(reserved()).gte(0), "INVESTOR_LONG_HORIZON_CASH_RESERVATION_INVALID");
     curve.push({ at: economicStamp(at), nav_cny: economicText(total), unit_nav: economicText(total.div(units)),
@@ -427,9 +508,9 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
   else if (actionAware && lifecycle.deferred) events.push({ type: "policy_deployment_failed", at: economicStamp(end),
     ...lifecycle.deferred, reason: "DEFERRED_POLICY_REVIEW_UNRESOLVED" });
   const rawFailures = events.filter(row => ["execution_skipped", "order_expired", "policy_deployment_failed"].includes(row.type as string)).length;
-  return { engine_version: reviewable ? research ? "fixed-policy-event-review-rebalance-v5" : holdingBaseline ? "continuous-event-review-hold-v1" : "continuous-event-review-funding-v1" : actionAware ? "fixed-policy-action-aware-bounded-rebalance-v4" : research ? "fixed-policy-bounded-rebalance-v3" : bounded ? holdingBaseline ? "continuous-bounded-hold-new-cash-v1" : "continuous-bounded-fixed-policy-funding-v1" : holdingBaseline ? "continuous-hold-new-cash-v1" : "continuous-fixed-policy-funding-v1", phase: options.researchPhase ?? "continuous", window: plan.window,
+  return { engine_version: settledFunding ? "fixed-policy-settled-intent-rebalance-v6" : reviewable ? research ? "fixed-policy-event-review-rebalance-v5" : holdingBaseline ? "continuous-event-review-hold-v1" : "continuous-event-review-funding-v1" : actionAware ? "fixed-policy-action-aware-bounded-rebalance-v4" : research ? "fixed-policy-bounded-rebalance-v3" : bounded ? holdingBaseline ? "continuous-bounded-hold-new-cash-v1" : "continuous-bounded-fixed-policy-funding-v1" : holdingBaseline ? "continuous-hold-new-cash-v1" : "continuous-fixed-policy-funding-v1", phase: options.researchPhase ?? "continuous", window: plan.window,
     initial_equity_cny: economicText(initial), contributions_cny: economicText(sum(contributions.values())), ending_nav_cny: economicText(closing),
-    profit_cny: economicText(closing.minus(initial).minus(sum(contributions.values()))),
+    profit_cny: economicText(new LedgerDecimal(closing.toFixed()).minus(initial).minus(sum(contributions.values()))),
     ...continuousPerformance(start, end, initial, closing, flows, curve as { at: string; nav_cny: string; unit_nav: string }[], zone),
     fees_cny: economicText(fees), fx_fees_cny: economicText(fxFees), slippage_cny: economicText(slipFees), cash_rounding_cny: economicText(rounding),
     buy_turnover_on_mean_observed_nav: meanNav.gt(0) ? economicText(buys.div(meanNav)) : null,
@@ -442,6 +523,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
     ending_unsettled_positions: stocks.map(row => ({ order_id: row.order, listing_id: row.listing, quantity: economicText(row.quantity), settled_at: economicStamp(row.at) })),
     execution_failure_count: rawFailures,
     ...(reviews ? reviews.result(rawFailures) : {}),
+    ...(intents ? intents.result() : {}),
     policy_evaluation_counts: Object.fromEntries((actionAware ? ["proposed", "unchanged", "blocked", "deferred"] : ["proposed", "unchanged", "blocked"]).map(outcome => [outcome, events.filter(row => row.type === "evaluation" && row.outcome === outcome).length])),
     policy_rules: { ...Object.fromEntries(["rebalance", "roles", "class_drift_threshold", "minimum_days_between_rebalances", "contribution_mode", "order_expiry"].map(key => [key, p[key as keyof ContinuousParameters]])),
       ...(holdingBaseline ? { rebalance: "disabled_hold_new_cash" } : {}) },
@@ -453,6 +535,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
       ...(actionAware ? ["known_scheduled_action_defers_entire_tentative_batch_without_consuming_policy_slot"] : []),
       ...(actionAware ? ["deferred_review_requires_later_valid_review_or_fails_phase"] : []),
       ...(reviewable ? ["raw_action_cancellations_preserved_and_only_resolved_lineage_closes_terminal_gaps", "post_action_raw_close_and_declared_future_decision_required_for_replacement"] : []),
+      ...(settledFunding ? ["sell_only_publication_then_declared_decision_with_settled_cash", "cash_floor_upward_cent_and_remaining_buy_need_downward_cent", "failed_frozen_buy_never_resized_or_retried"] : []),
       holdingBaseline ? "no_calendar_or_class_drift_rebalancing" : "half_year_or_year_calendar_review_plus_absolute_class_drift",
       "cooldown_uses_evaluation_local_calendar_days", holdingBaseline ? "new_cny_cash_repairs_without_sales" : "new_cny_cash_repairs_without_sales_before_rebalancing", "orders_expire_at_next_month_boundary",
       "unsettled_assets_block_new_orders", "no_margin", "no_cash_interest", "foreign_dividends_retained_in_original_currency", "turnover_uses_arithmetic_mean_observed_nav",

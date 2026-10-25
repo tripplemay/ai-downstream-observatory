@@ -27,6 +27,7 @@ def implementation_manifest(evaluation_timezone="UTC"):
     files = [ROOT / "worker/research/backtest.py", ROOT / "worker/research/snapshot.py",
              ROOT / "worker/research/rotation.py", ROOT / "worker/research/rotation_signals.py", ROOT / "worker/research/fixed_policy.py",
              ROOT / "worker/research/order_reviews.py",
+             ROOT / "worker/research/cash_intents.py", ROOT / "worker/research/settled_funding.py",
              ROOT / "worker/research/registry.py", ROOT / "worker/orchestration/db.py",
              ROOT / "worker/market/contracts.py", ROOT / "requirements-workbench.txt",
              *sorted((ROOT / "worker/accounting").glob("*.py")),
@@ -69,6 +70,8 @@ def _experiment(connection, experiment_id):
 
 def register_experiment(connection, experiment_id, portfolio_id, plan, dataset, actor_id, now=None):
     _actor(actor_id)
+    if isinstance(plan, dict) and plan.get('schema_version') == 'research-plan-v6':
+        raise WorkbenchError('SETTLED_CASH_PROTOCOL_NOT_ADMITTED')
     validate_dataset(dataset)
     validate_plan(plan, dataset)
     if dataset["mode"] != "synthetic":

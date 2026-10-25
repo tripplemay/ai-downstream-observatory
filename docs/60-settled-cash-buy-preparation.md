@@ -1,8 +1,9 @@
 # Sell, settle, then freeze a new buy: preparation boundary
 
-Status: preparation component and integration specification, NOT a new admitted
-research engine or a production cash-funding fix. No existing research-plan
-version invokes this component. Old contracts, recorded trials and failures keep
+Status: preparation component and integration specification, NOT an admitted
+investor workflow or a production cash-funding fix. The direct kernel integration
+in [document61](61-settled-cash-intent-lifecycle.md) now invokes preparation v2;
+ordinary source/strategy admission still rejects that new plan. Recorded trials and failures keep
 their original meaning. Full v2 P0/P1/P2 delivery remains required.
 
 ## Reproduced boundary, not permission to erase failures
@@ -114,8 +115,9 @@ This is not the ordinary producer or a complete simulation/production acceptance
    budgets and prior exposure; do not rerun a failed study or claim independent
    unseen history. A reference still requires the user's manual save/choice.
 
-Current plan schemas deliberately reject a `research-plan-v6` tag or an injected
-funding flag. This document does not enable either by itself. No new provider,
+Old plan schemas deliberately reject an injected funding flag. The new explicit
+v6 direct-kernel schema does not change the ordinary investor contract, which
+still rejects v6. This document does not enable ordinary admission. No new provider,
 AI-sharing, account or trading authority is introduced.
 
 ## Current-user explanation, separate from economic semantics
