@@ -4,7 +4,7 @@ This arithmetic boundary is not source, intent-lineage, strategy or account
 admission. No existing research-plan version or default runtime invokes it yet.
 """
 from datetime import timedelta
-from decimal import ROUND_CEILING, ROUND_FLOOR
+from decimal import ROUND_CEILING, ROUND_FLOOR, localcontext
 import re
 
 from worker.accounting import canonical, decimal
@@ -49,6 +49,13 @@ def _time(value):
 
 @financial
 def prepare_settled_cash_buys(value):
+    with localcontext() as arithmetic:
+        # Preserve products across the full fact range until the final cent ceiling.
+        arithmetic.prec = 256
+        return _prepare(value)
+
+
+def _prepare(value):
     _object(value, 'schema_version intent decision_at decision_times cash book needs execution')
     _require(value['schema_version'] == 'settled-cash-buy-preparation-v1')
     intent = _object(value['intent'], 'id declared_at deadline policy_hash sale_order_ids buy_listing_ids')

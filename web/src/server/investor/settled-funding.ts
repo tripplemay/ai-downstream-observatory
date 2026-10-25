@@ -1,8 +1,10 @@
-import { Decimal, amount } from "../ledger/decimal";
+import { Decimal as LedgerDecimal, amount } from "../ledger/decimal";
 import { hash } from "../ledger/service";
 import { economicInstant, economicStamp, economicText } from "./continuous-market";
 
 type Obj = Record<string, unknown>;
+// Keep full fact-range products exact until the final cent ceiling; no global change.
+const Decimal = LedgerDecimal.clone({ precision: 256 });
 function requireValue(value: unknown, code = "SETTLED_FUNDING_INPUT_INVALID"): asserts value {
   if (!value) throw new Error(code);
 }
@@ -21,7 +23,7 @@ function ids(value: unknown, maximum: number): string[] {
 function number(value: unknown, positive = false) {
   try {
     requireValue(typeof value === "string" && value.length <= 100 && value.trim() === value);
-    const parsed = amount(value); requireValue(positive ? parsed.gt(0) : parsed.gte(0));
+    const parsed = new Decimal(amount(value).toFixed()); requireValue(positive ? parsed.gt(0) : parsed.gte(0));
     return parsed;
   } catch { throw new Error("SETTLED_FUNDING_INPUT_INVALID"); }
 }
@@ -78,7 +80,7 @@ export function prepareSettledCashBuys(raw: unknown) {
   const minimum = number(execution.minimum_fee_cny), age = execution.max_fx_age_seconds;
   requireValue(execution.cash_quantum === "0.01" && typeof age === "number" && Number.isInteger(age) && age > 0 && age <= 31536000);
   requireValue(Array.isArray(value.needs) && value.needs.length === scope.length);
-  const needs = new Map<string, { row: Obj; need: Decimal; step: Decimal; close: Decimal; fx: Decimal }>();
+  const needs = new Map<string, { row: Obj; need: LedgerDecimal; step: LedgerDecimal; close: LedgerDecimal; fx: LedgerDecimal }>();
   const newIds = new Set<string>();
   for (const item of value.needs) {
     const row = object(item, "listing_id order_id need_cny quantity_step currency close fx_cny_per_unit observed_at available_at fx_observed_at fx_available_at mark_kind price_observation_id fx_observation_id");

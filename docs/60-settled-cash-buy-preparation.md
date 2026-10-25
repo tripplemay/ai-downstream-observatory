@@ -56,9 +56,16 @@ change cash, register a trial or grant source/strategy/account approval.
   preparation receipt, NOT proof that supplied book/source facts are authentic.
 
 The finite arithmetic boundary uses38 significant input digits/18 fraction
-digits,60-digit shared decimal arithmetic, at most20 buy targets/100 current sale
+digits,256-digit component-local decimal arithmetic, at most20 buy targets/100 current sale
 dependencies/10000 book rows/30000 declared instants, and a sizing search bound
 of10^30 lot units. Range overflow blocks; it does not change a user's policy.
+The shared60-digit accounting context is unchanged. Full-range price/FX products
+can otherwise lose a positive sub-cent remainder before the upward-cent debit.
+Within the declared limits, quantity/price/FX/slippage/fee products and sums have
+fewer than240 significant digits. The finite pro-rata/sizing divisors are bounded too;
+256 digits preserve the integer-cent/lot boundary even for a repeating quotient.
+Independent rational tests retain this extreme-range rejection and the next
+affordable budget, rather than weakening the input or cash comparison.
 
 Tests include independent integer-rational cost/ceiling/maximal-lot checks,
 cross-language complete receipts, exact FX age/microsecond boundaries, no

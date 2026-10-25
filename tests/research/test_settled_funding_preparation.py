@@ -1,5 +1,5 @@
 from copy import deepcopy
-from decimal import Decimal
+from decimal import Decimal, getcontext
 from fractions import Fraction
 import unittest
 
@@ -33,7 +33,7 @@ class SettledFundingPreparationTests(unittest.TestCase):
 
     def test_all_vectors_remain_pure_with_exact_cent_budgets_and_both_price_and_fx_caps(self):
         values = preparation_vectors()
-        self.assertEqual(len(values), 34)
+        self.assertEqual(len(values), 36)
         for vector in values:
             value, expected = vector['input'], vector['result']; before = deepcopy(value)
             if 'blocked' in expected:
@@ -45,7 +45,7 @@ class SettledFundingPreparationTests(unittest.TestCase):
                 self.assertLessEqual(Decimal(result['total_budget_cny']), Decimal(result['available_cash_cny']))
                 for order in result['orders']:
                     self.assertLessEqual(Decimal(order['worst_total_cash_cny']), Decimal(order['budget_cny']))
-                    self.assertEqual(Decimal(order['budget_cny']) % Decimal('.01'), 0)
+                    self.assertEqual((Fraction(order['budget_cny']) * 100).denominator, 1)
             self.assertEqual(value, before)
 
     def test_independent_integer_rationals_prove_cost_ceilings_and_maximal_lot_sizing(self):
@@ -76,6 +76,26 @@ class SettledFundingPreparationTests(unittest.TestCase):
                             self.assertGreater(exact_cost(quantity + Fraction(lot)), budget)
                         checked += 1
         self.assertEqual(checked, 108)
+
+    def test_fact_range_dust_is_not_rounded_away_before_upward_cent_debit(self):
+        original_precision = getcontext().prec
+        value = preparation_input(str(10**37 + 11))
+        need = value['needs'][0]
+        need.update(currency='USD', close='10000000000000000000.000000000000000001',
+            fx_cny_per_unit='1000000000000000000.000000000000000001',
+            need_cny=value['cash']['settled_cny'], fx_observed_at='2025-02-08T06:00:00Z',
+            fx_available_at='2025-02-08T06:01:00Z')
+        value['execution'].update(buy_price_buffer_bps='0', buy_fx_buffer_bps='0')
+        exact = Fraction(need['close']) * Fraction(need['fx_cny_per_unit'])
+        self.assertGreater(exact, Fraction(value['cash']['settled_cny']))
+        with self.assertRaisesRegex(WorkbenchError, 'SETTLED_FUNDING_BELOW_MINIMUM_ORDER'):
+            prepare_settled_cash_buys(value)
+        self.assertEqual(getcontext().prec, original_precision)
+        value['cash']['settled_cny'] = need['need_cny'] = str(10**37 + 12)
+        order = prepare_settled_cash_buys(value)['orders'][0]
+        self.assertEqual(order['quantity'], '1')
+        self.assertEqual(Fraction(order['worst_total_cash_cny']), Fraction(-(-(exact * 100).numerator // (exact * 100).denominator), 100))
+        self.assertEqual(getcontext().prec, original_precision)
 
     def test_current_research_versions_cannot_select_this_unintegrated_preparation(self):
         from tests.research.settled_funding_fixtures import sale_funded_case

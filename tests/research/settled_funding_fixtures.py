@@ -49,7 +49,7 @@ def preparation_vectors():
                  'late_quote', 'stale_cash', 'no_cash', 'below_lot', 'extra_projected_sales', 'stale_fx',
                  'exact_fx_age', 'micro_stale_fx', 'scope_subset', 'future_settlement', 'multiple_sales',
                  'missing_second_settlement', 'rounding_remainder', 'sizing_range', 'duplicate_buy_id',
-                 'old_frozen_quantity', 'integer_json_seconds', 'overprecise_time'):
+                 'old_frozen_quantity', 'integer_json_seconds', 'overprecise_time', 'large_cent_short', 'large_cent_room'):
         value = preparation_input('287' if mode == 'larger_sale' else '297.4')
         need = value['needs'][0]
         if mode == 'reserved_cash': value['cash'].update(reserved_cny='100', floor_cny='20')
@@ -97,6 +97,13 @@ def preparation_vectors():
         if mode == 'old_frozen_quantity': need['quantity'] = '29'
         if mode == 'integer_json_seconds': value['execution']['max_fx_age_seconds'] = 86400.0
         if mode == 'overprecise_time': need['available_at'] = '2025-02-08T07:01:00.0000001Z'
+        if mode in ('large_cent_short', 'large_cent_room'):
+            value['cash']['settled_cny'] = str(10**37 + (11 if mode == 'large_cent_short' else 12))
+            need.update(currency='USD', close='10000000000000000000.000000000000000001',
+                fx_cny_per_unit='1000000000000000000.000000000000000001',
+                need_cny=value['cash']['settled_cny'], fx_observed_at='2025-02-08T06:00:00Z',
+                fx_available_at='2025-02-08T06:01:00Z')
+            value['execution'].update(buy_price_buffer_bps='0', buy_fx_buffer_bps='0')
         try:
             result = {'prepared': prepare_settled_cash_buys(value)}
         except WorkbenchError as error:
