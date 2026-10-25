@@ -20,9 +20,15 @@ EXPIRY = "2027-01-01T00:00:00.000Z"
 START, END = "2025-01-01", "2025-06-10"
 
 
-def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, funded_year=False, funded_calendar=False, external_ai=False, initial_monitor_calendar=False, bounded_execution_v3=False, browser_cent_tolerance=False, action_aware_execution_v4=False, event_review_execution_v5=False):
+def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, funded_year=False, funded_calendar=False, external_ai=False, initial_monitor_calendar=False, bounded_execution_v3=False, browser_cent_tolerance=False, action_aware_execution_v4=False, event_review_execution_v5=False, train_execution_gap=False):
     if initial_monitor_calendar and (funded_year or funded_calendar): raise WorkbenchError("SYNTHETIC_INITIAL_CALENDAR_CONFLICT")
     data, plan, policy = fixed_policy_input() if fixed_policy_v2 else research_input()
+    if train_execution_gap:
+        if not fixed_policy_v2 or not event_review_execution_v5 or funded_year or funded_calendar:
+            raise WorkbenchError('SYNTHETIC_TRAIN_GAP_SCOPE')
+        for row in data['observations']:
+            if row['listing_id'] == 'CN:ALPHA' and row['observed_at'].startswith('2025-01-07'):
+                row['value'] = '20'
     if browser_cent_tolerance:
         if not bounded_execution_v3 or not fixed_policy_v2:
             raise WorkbenchError("SYNTHETIC_BROWSER_TOLERANCE_SCOPE")
@@ -124,6 +130,7 @@ def main():
     parser.add_argument("--bounded-execution-v3", action="store_true", help="Explicit synthetic v3 plan; no production parameters")
     parser.add_argument("--action-aware-execution-v4", action="store_true", help="Invented v4 known-action deferral; never real evidence")
     parser.add_argument("--event-review-execution-v5", action="store_true", help="Invented v5 late-action review and explicit admission policy")
+    parser.add_argument("--train-execution-gap", action="store_true", help="Invented v5 replacement bound failure frozen before research")
     parser.add_argument("--browser-cent-tolerance", action="store_true", help="Explicit fixture-only cent tolerance frozen before study")
     parser.add_argument("--funded-year", action="store_true")
     parser.add_argument("--funded-calendar", action="store_true")
@@ -139,7 +146,7 @@ def main():
         if len(rows) != 1 or db.execute("SELECT count(*) FROM portfolios").fetchone()[0]:
             raise WorkbenchError("SYNTHETIC_EMPTY_FINANCIAL_DATABASE_REQUIRED")
         create(db, rows[0]["id"], rows[0]["owner_id"], now=args.now, fixed_policy_v2=args.fixed_policy_v2, funded_year=args.funded_year,
-            funded_calendar=args.funded_calendar, external_ai=args.external_ai, initial_monitor_calendar=args.initial_monitor_calendar, bounded_execution_v3=args.bounded_execution_v3, browser_cent_tolerance=args.browser_cent_tolerance, action_aware_execution_v4=args.action_aware_execution_v4, event_review_execution_v5=args.event_review_execution_v5)
+            funded_calendar=args.funded_calendar, external_ai=args.external_ai, initial_monitor_calendar=args.initial_monitor_calendar, bounded_execution_v3=args.bounded_execution_v3, browser_cent_tolerance=args.browser_cent_tolerance, action_aware_execution_v4=args.action_aware_execution_v4, event_review_execution_v5=args.event_review_execution_v5, train_execution_gap=args.train_execution_gap)
         print(canonical_json({"status": "fictional_stub_evidence_fixture_complete", "real_provider_called": False}))
     finally:
         db.close()

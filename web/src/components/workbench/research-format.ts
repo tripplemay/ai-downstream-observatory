@@ -70,6 +70,28 @@ export function currentModelWatchDisplay(watch: InvestorModelWatch, nowMs: numbe
     && watch.next_check_at !== null && Date.parse(watch.next_check_at) <= nowMs) return { ...watch, status: "overdue", model_nav_cny: null };
   return watch;
 }
+function currentResearchBlocker(state: InvestorState, task: InvestorResearchTask | null, now: number) {
+  const profile = state.profile, observation = state.latest?.document, study = task?.study;
+  if (!profile?.document.loss_tolerance || state.effective_outcome !== "insufficient_evidence" || state.plan || state.model_watch?.enabled
+    || task?.status !== "calculated" || !task.completed_at || Date.parse(task.completed_at) > now
+    || task.profile_id !== profile.id || task.profile_version !== profile.version
+    || observation?.outcome !== "insufficient_evidence" || observation.profile_id !== profile.id
+    || observation.profile_version !== profile.version || observation.input_version !== task.input_version
+    || study?.qualification !== "owner_reviewed_reconstructed" || study.status !== "insufficient_evidence"
+    || !study.source_context || Date.parse(study.source_context.valid_until) <= now
+    || !task.reason_codes.includes("RECONSTRUCTED_RESEARCH_ONLY")
+    || state.effective_gaps.some(gap => gap.code.startsWith("REFERENCE_SOURCE_") || gap.code === "REFERENCE_PLAN_SOURCE_CHANGED"
+      || gap.code === "RISK_BUDGET_UNCONFIRMED")
+    || !state.effective_gaps.some(gap => gap.code === "RECONSTRUCTED_RESEARCH_ONLY")) return null;
+  const phase = task.reason_codes.includes("SELECTED_CANDIDATE_FAILED_VALIDATION") ? "validation"
+    : task.reason_codes.includes("SELECTED_CANDIDATE_FAILED_HOLDOUT") ? "holdout" : null;
+  const phaseFailed = phase && !!task.registry?.freeze_hash && task.registry.phases[phase].completed === 1
+    && study.phase_checks?.some(check => check.phase === phase);
+  const trainIncomplete = task.reason_codes.includes("NO_CANDIDATE_WITHIN_CONFIRMED_RISK_BUDGET")
+    && study.candidates.length > 0 && study.candidates.every(candidate => !candidate.usable)
+    && task.registry?.phases.train.completed === study.candidates.length;
+  return (phase ? phaseFailed : trainIncomplete) ? researchTaskStatus(task) : null;
+}
 export function currentInvestorDisplay(state: InvestorState, nowMs: number) {
   const now = Math.max(nowMs, Date.parse(state.checked_at));
   const plan = currentPlanDisplay(state.plan, now);
@@ -88,9 +110,11 @@ export function currentInvestorDisplay(state: InvestorState, nowMs: number) {
   if (modelWatch?.enabled && ["expired", "overdue"].includes(modelWatch.status) && modelWatch.status !== state.model_watch?.status)
     gap("MONITOR_NOT_CURRENT", "观察结论已到期", "本页已知监测期限已到，旧估值和规则结论不能继续使用。请刷新核对后台是否已有合格的新评估。");
   const codes = new Set(localGaps.map(value => value.code));
-  const gaps = [...localGaps, ...state.effective_gaps.filter(value => !codes.has(value.code))];
+  const researchBlocker = localGaps.length ? null : currentResearchBlocker(state, researchTask, now);
+  const gaps = [...localGaps, ...state.effective_gaps.filter(value => !codes.has(value.code)).map(value =>
+    value.code === "RECONSTRUCTED_RESEARCH_ONLY" && researchBlocker ? { ...value, ...researchBlocker } : value)];
   // This display-only projection can invalidate, never promote or rewrite server history.
-  return { plan, researchTask, modelWatch, gaps, stale: localGaps.length > 0,
+  return { plan, researchTask, modelWatch, gaps, researchBlocker, stale: localGaps.length > 0,
     outcome: localGaps.length ? "insufficient_evidence" as const : state.effective_outcome };
 }
 export function investorPollInterval(state: InvestorState | null): number | null {

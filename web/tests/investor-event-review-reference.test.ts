@@ -7,6 +7,7 @@ import { verifyInvestorKernelResult } from "../src/server/investor/kernel-contra
 import { investorActor as actor, investorFixture, saveSyntheticProfile, syntheticProfile } from "./investor-fixture";
 import { executeInvestorCommand, getInvestorState } from "../src/server/investor/service";
 import { parseInvestorState } from "../src/components/workbench/investor-client";
+import { currentInvestorDisplay } from "../src/components/workbench/research-format";
 
 function python(script: string) {
   const child = spawnSync(process.env.WORKBENCH_TEST_PYTHON ?? "python3", ["-c", script], {
@@ -70,6 +71,36 @@ test("ordinary admission, core, read model, save, monitor and human review prese
     state = getInvestorState(f.db, actor, later); assert.equal(state.model_watch?.status, "research_decision");
     executeInvestorCommand(f.db, actor, { action: "review", observation_id: state.latest!.id, decision: "defer", note: "Fictional review only", expected_revision: state.revision, idempotency_key: "synthetic-v5-review" }, later);
     assert.equal(getInvestorState(f.db, actor, later).decisions[0]?.decision, "defer");
+    for (const table of ["portfolios", "accounts", "ledger_events", "postings", "position_movements", "approval_events", "activations", "reservations", "execution_reports"])
+      assert.equal((f.db.prepare(`SELECT count(*) n FROM ${table}`).get() as { n: number }).n, 0, table);
+  } finally { f.close(); }
+});
+
+test("an ordinary failed v5 study explains its current blocker without risk changes, history rewrites or later phases", () => {
+  const f = investorFixture();
+  try {
+    saveSyntheticProfile(f, actor, { ...syntheticProfile, loss_tolerance: "0.30" });
+    const profileHash = getInvestorState(f.db, actor, "2026-01-02T12:00:03.000Z").profile!.content_hash;
+    const helper = (module: string, args: string[]) => {
+      const child = spawnSync(process.env.WORKBENCH_TEST_PYTHON ?? "python3", ["-m", module, "--db", f.filename, ...args], {
+        cwd: path.resolve(".."), encoding: "utf8", timeout: 60000, maxBuffer: 65536,
+      });
+      assert.equal(child.status, 0, child.stderr);
+    };
+    helper("tests.investor.evidence_fixture", ["--fixed-policy-v2", "--event-review-execution-v5", "--train-execution-gap"]);
+    helper("tests.investor.queue_fixture", ["--mode", "core"]);
+    const now = "2026-01-02T12:00:04.000Z", binding = "a".repeat(64), state = getInvestorState(f.db, actor, now);
+    parseInvestorState({ ...state, session_binding: binding }, binding);
+    assert.equal(state.profile!.content_hash, profileHash); assert.equal(state.profile!.document.loss_tolerance, "0.30");
+    assert.equal(state.research_task?.study?.status, "insufficient_evidence");
+    assert.equal(state.research_task!.registry!.phases.validation.registered, 0);
+    assert.equal(state.research_task!.registry!.phases.holdout.registered, 0);
+    assert.equal(state.plan, null); assert.equal(state.model_watch, null);
+    const original = JSON.stringify(state), view = currentInvestorDisplay(state, Date.parse(now));
+    assert.match(view.researchBlocker!.title, /训练模拟执行有缺口/);
+    assert.match(view.gaps.find(gap => gap.code === "RECONSTRUCTED_RESEARCH_ONLY")!.action, /不通过提高风险或反复重跑/);
+    assert.match(state.latest!.document.gaps[0].action, /确认风险后/);
+    assert.equal(JSON.stringify(state), original);
     for (const table of ["portfolios", "accounts", "ledger_events", "postings", "position_movements", "approval_events", "activations", "reservations", "execution_reports"])
       assert.equal((f.db.prepare(`SELECT count(*) n FROM ${table}`).get() as { n: number }).n, 0, table);
   } finally { f.close(); }

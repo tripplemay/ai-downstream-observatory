@@ -7,6 +7,7 @@ import * as losses from "../src/server/investor/loss-scenarios";
 import { acquisitionDeadlines } from "../src/components/workbench/investor-acquisition";
 import { mountInvestorDisplay } from "./investor-display-fixture";
 import { displayBinding as binding, displayBefore, displayUntil, displayFuture, displayState } from "./investor-display-state-fixture";
+import { blockedResearchDisplayState } from "./investor-research-blocker-fixture";
 
 const before = Date.parse(displayBefore), until = Date.parse(displayUntil);
 function validationHoldState() {
@@ -96,6 +97,25 @@ test("all rejected train candidates show simulated execution counts without prom
     await h.advance(until);
     assert.doesNotMatch(h.words(h.card("后台研究进度")), /训练候选与基准的执行证据/);
     assert.equal(h.requests.length, 0); h.close();
+  }
+});
+test("the bound confirmed-risk blocker is actionable before the fold without rewriting original evidence or issuing a command", async t => {
+  for (const view of ["overview", "plan"]) {
+    const state = blockedResearchDisplayState(), original = JSON.stringify(state);
+    const h = mount(t, state, view); await h.flush();
+    assert.match(h.words(h.card("还缺哪些证据")), /训练模拟执行有缺口/);
+    assert.doesNotMatch(h.words(h.card("还缺哪些证据")), /确认风险后完成/);
+    assert.match(h.words(h.card("下一次复核")), /不通过提高风险或反复重跑/);
+    assert.doesNotMatch(h.words(h.card("下一次复核")), /风险与流动性约束明确后复核/);
+    assert.ok(h.nodes().some(node => node.type === "Link" && node.props.href === "/workbench/plan#research-execution-checks"));
+    assert.equal(h.button("重新检查研究条件"), undefined);
+    assert.equal(h.card("后台研究进度")!.props.id, "research-execution-checks");
+    assert.match(h.text(), /Fictional historical generic research explanation/);
+    assert.equal(JSON.stringify(state), original); assert.equal(h.requests.length, 0);
+    await h.advance(until);
+    assert.equal(h.nodes().some(node => node.type === "Link" && node.props.href === "/workbench/plan#research-execution-checks"), false);
+    assert.match(h.words(h.card("下一次复核")), /已知期限已到/);
+    assert.equal(JSON.stringify(state), original); assert.equal(h.requests.length, 0); h.close();
   }
 });
 
