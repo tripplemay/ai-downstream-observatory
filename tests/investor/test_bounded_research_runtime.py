@@ -94,6 +94,26 @@ class BoundedResearchRuntimeTests(unittest.TestCase):
         self.assertEqual(result['registry']['phases']['holdout']['registered'], 0)
         self.assert_no_finance()
 
+    def test_declared_v5_train_gap_uses_normal_sources_core_and_durable_failures_without_later_phases(self):
+        self.save(profile('0.30'))
+        fixture.create(self.db, 'w', 'synthetic-investor', fixed_policy_v2=True,
+            event_review_execution_v5=True, train_execution_gap=True)
+        run = self.calculate()
+        self.assertEqual(run['result']['status'], 'insufficient_evidence')
+        self.assertEqual(run['registry']['phases'], {'train': {'registered': 3, 'completed': 3},
+            'validation': {'registered': 0, 'completed': 0}, 'holdout': {'registered': 0, 'completed': 0}})
+        self.assertTrue(all(row['train']['terminal_execution_failure_count'] > 0 for row in run['result']['candidates']))
+        self.assertEqual(self.db.execute('SELECT count(*) FROM investor_reference_plans').fetchone()[0], 0)
+        self.assertEqual(self.db.execute('SELECT count(*) FROM investor_models').fetchone()[0], 0)
+        self.assertEqual(self.db.execute('SELECT count(*) FROM investor_trial_intents').fetchone()[0], 3)
+        self.assert_no_finance()
+
+    def test_fixture_gap_cannot_be_selected_outside_its_declared_source_mode(self):
+        self.save()
+        with self.assertRaisesRegex(WorkbenchError, 'SYNTHETIC_TRAIN_GAP_SCOPE'):
+            fixture.create(self.db, 'w', 'synthetic-investor', fixed_policy_v2=True, train_execution_gap=True)
+        self.assertEqual(self.db.execute('SELECT count(*) FROM investor_data_sources').fetchone()[0], 0)
+
 
 if __name__ == '__main__':
     unittest.main()
