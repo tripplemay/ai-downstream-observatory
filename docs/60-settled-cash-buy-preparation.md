@@ -1,9 +1,9 @@
 # Sell, settle, then freeze a new buy: preparation boundary
 
-Status: preparation component and integration specification, NOT an admitted
-investor workflow or a production cash-funding fix. The direct kernel integration
-in [document61](61-settled-cash-intent-lifecycle.md) now invokes preparation v2;
-ordinary source/strategy admission still rejects that new plan. Recorded trials and failures keep
+Status: preparation component and integration specification, NOT a qualified
+real investment workflow or a production cash-funding fix. The explicit v6
+ordinary and annual integration in [document61](61-settled-cash-intent-lifecycle.md)
+invokes preparation v2. Recorded trials and failures keep
 their original meaning. Full v2 P0/P1/P2 delivery remains required.
 
 ## Reproduced boundary, not permission to erase failures
@@ -72,9 +72,13 @@ Tests include independent integer-rational cost/ceiling/maximal-lot checks,
 cross-language complete receipts, exact FX age/microsecond boundaries, no
 double-credit, scope/ID reuse, old/future/carry prices, expired intents, existing
 failed buys, partial minimum-lot rejection and unchanged inputs on failure.
-This is not the ordinary producer or a complete simulation/production acceptance.
+The component alone is not the ordinary producer or complete production acceptance.
 
-## Required whole-flow integration before any new real protocol
+## Whole-flow requirements before any new real protocol
+
+Document61 records the implemented versioned kernel, ordinary and annual
+integration against these requirements. Current native UI, exact-source CI,
+broader interleavings and real/production qualification remain separate gates.
 
 1. Add an explicit new plan/execution version. When sales are necessary, publish
    only those sell orders and an immutable, uncommitted buy intent. Do not create
@@ -115,9 +119,9 @@ This is not the ordinary producer or a complete simulation/production acceptance
    budgets and prior exposure; do not rerun a failed study or claim independent
    unseen history. A reference still requires the user's manual save/choice.
 
-Old plan schemas deliberately reject an injected funding flag. The new explicit
-v6 direct-kernel schema does not change the ordinary investor contract, which
-still rejects v6. This document does not enable ordinary admission. No new provider,
+Old plan schemas deliberately reject an injected funding flag. The explicit v6
+ordinary contract requires the same new policy/result and intent admission
+checks; the annual path must preserve it rather than downgrade. No new provider,
 AI-sharing, account or trading authority is introduced.
 
 ## Current-user explanation, separate from economic semantics

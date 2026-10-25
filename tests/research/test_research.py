@@ -197,6 +197,21 @@ class BacktestTests(unittest.TestCase):
 
 
 class RegistryTests(unittest.TestCase):
+    def test_explicit_v6_report_and_intent_lineage_are_registered_without_opening_holdout_or_financial_facts(self):
+        from tests.research.cash_intent_fixtures import cash_intent_case
+        data, config, params = cash_intent_case()
+        register_experiment(self.db, 'fictional:settled', 'p', config, data, 'human', now=NOW)
+        with self.assertRaises(WorkbenchError):
+            register_trial(self.db, 'fictional:settled', 'holdout', params, 'premature', 'human', now=NOW)
+        trial = register_trial(self.db, 'fictional:settled', 'train', params, 'declared', 'human', now=NOW)
+        result = run_trial(self.db, trial['id'], now=NOW)
+        value = json.loads(result['result_json'])
+        self.assertEqual(value['schema_version'], 'research-result-v5')
+        self.assertEqual(value['strategy']['failed_cash_intent_count'], 0)
+        self.assertTrue(value['strategy']['cash_intents'])
+        self.assertEqual(self.db.execute('SELECT count(*) FROM ledger_events').fetchone()[0], 0)
+        self.assertEqual(self.db.execute('SELECT count(*) FROM activations').fetchone()[0], 0)
+
     def setUp(self):
         self.db, self.path = database(self)
         seed_account(self.db)

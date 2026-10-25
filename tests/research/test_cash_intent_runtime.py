@@ -6,7 +6,6 @@ from worker.market.contracts import validate_contract
 from worker.orchestration.db import WorkbenchError
 from worker.research.rotation import run_rotation_portfolio
 from worker.research.snapshot import validate_dataset, validate_plan
-from worker.research.registry import register_experiment
 
 
 def run_case(price='19.8', mutate=None):
@@ -21,12 +20,14 @@ def run_case(price='19.8', mutate=None):
 
 
 class CashIntentRuntimeTests(unittest.TestCase):
-    def test_kernel_version_is_not_accidentally_admitted_by_the_existing_ordinary_contract(self):
+    def test_new_version_requires_its_funding_rule_and_cannot_be_relabelled_as_an_old_plan(self):
         data, plan, parameters = cash_intent_case()
         validate_plan(plan, data)
-        with self.assertRaises(WorkbenchError): validate_contract(plan, 'research-plan-input.schema.json')
-        with self.assertRaisesRegex(WorkbenchError, 'SETTLED_CASH_PROTOCOL_NOT_ADMITTED'):
-            register_experiment(None, 'fictional-unadmitted', None, plan, data, 'fictional-actor')
+        validate_contract(plan, 'research-plan-input.schema.json')
+        missing = deepcopy(plan); del missing['execution']['buy_funding_policy']
+        with self.assertRaises(WorkbenchError): validate_plan(missing, data)
+        older = deepcopy(plan); older['schema_version'] = 'research-plan-v5'
+        with self.assertRaises(WorkbenchError): validate_plan(older, data)
 
     def test_partial_buy_in_another_market_is_preserved_when_only_the_remaining_leg_is_cancelled(self):
         data, plan, parameters = partial_buy_case()

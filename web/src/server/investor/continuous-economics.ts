@@ -14,6 +14,7 @@ export type ContinuousParameters = { schema_version: string; weights: Record<str
   tolerance: { absolute_cny: string; weight: string }; class_drift_threshold: string; minimum_days_between_rebalances: number;
   contribution_mode: string; order_expiry: string };
 export type ContinuousPlan = { schema_version: string; window: { start: string; end: string }; evaluation_timezone: string;
+  funding_policy?: unknown;
   parameters: ContinuousParameters; initial_capital_cny: string; contributions: { at: string; amount_cny: string }[]; decision_times: string[];
   execution: { model: string; settlement_model: string; sale_proceeds: string; max_fx_age_seconds: number; slippage_bps: string;
     minimum_fee_cny: string; commission_bps: string; fx_bps: string; cash_quantum: string;
@@ -62,12 +63,13 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
   requireEconomic(options.holdingBaseline === undefined || typeof options.holdingBaseline === "boolean");
   const holdingBaseline = options.holdingBaseline === true;
   const research = options.researchPhase !== undefined;
-  const settledFunding = research && plan.schema_version === "bounded-research-window-v4";
+  const settledFunding = research && plan.schema_version === "bounded-research-window-v4" || plan.schema_version === "investor-long-horizon-plan-v5";
   const Decimal = LedgerDecimal.clone({ precision: settledFunding ? 256 : 60 });
   const zero = () => new Decimal(0), sum = (values: Iterable<Decimal>) => [...values].reduce((a, b) => a.plus(b), zero());
+  const reportedRatio = (n: Decimal, d: Decimal) => d.gt(0) ? economicText(new LedgerDecimal(n.toFixed()).div(d)) : null;
   const reviewable = settledFunding || research && plan.schema_version === "bounded-research-window-v3" || plan.schema_version === "investor-long-horizon-plan-v4";
   const actionAware = reviewable || research && plan.schema_version === "bounded-research-window-v2";
-  const bounded = research || ["investor-long-horizon-plan-v3", "investor-long-horizon-plan-v4"].includes(plan.schema_version);
+  const bounded = settledFunding || research || ["investor-long-horizon-plan-v3", "investor-long-horizon-plan-v4"].includes(plan.schema_version);
   requireEconomic(!research || ["train", "validation", "holdout"].includes(options.researchPhase!) && !holdingBaseline
     && releases.size === 0 && ["bounded-research-window-v1", "bounded-research-window-v2", "bounded-research-window-v3", "bounded-research-window-v4"].includes(plan.schema_version));
   const p = plan.parameters, ex = plan.execution, zone = plan.evaluation_timezone;
@@ -94,7 +96,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
   const events: ObjectValue[] = [], curve: ObjectValue[] = [], flows: { at: bigint; amount: Decimal; before: Decimal }[] = [];
   const reviews = reviewable ? new OrderReviews(orders, events, p.weights) : null;
   const intents = settledFunding ? new CashIntents(orders, events, reviews!, hash({ parameters: p, execution: ex,
-    decision_times: plan.decision_times, window: plan.window })) : null;
+    decision_times: plan.decision_times, window: plan.window, ...(!research ? { funding_policy: plan.funding_policy } : {}) })) : null;
   const contributions = new Map<bigint, Decimal>();
   for (const flow of plan.contributions) {
     const at = economicInstant(flow.at), amount = new Decimal(flow.amount_cny);
@@ -494,7 +496,7 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
     settle(at); activate(at); reviews?.complete(at); intents?.refresh(at); if (decisions.has(at)) evaluate(at);
     const carry: ObjectValue[] = [], total = nav(at, false, carry);
     requireEconomic(locked.gte(0) && cny().minus(locked).minus(reserved()).gte(0), "INVESTOR_LONG_HORIZON_CASH_RESERVATION_INVALID");
-    curve.push({ at: economicStamp(at), nav_cny: economicText(total), unit_nav: economicText(total.div(units)),
+    curve.push({ at: economicStamp(at), nav_cny: economicText(total), unit_nav: reportedRatio(total, units)!,
       cash_cny: economicText(sum([...cash].filter(([, amount]) => !amount.isZero()).map(([currency, amount]) => amount.times(fx(currency, at))))),
       derived_carry_marks: carry.sort((a, b) => (a.listing_id as string) < (b.listing_id as string) ? -1 : 1), ...(!research ? { principal_cny: economicText(principal),
       profit_cny: economicText(total.minus(principal)), locked_cash_cny: economicText(locked), released_capital_cny: economicText(principal.minus(locked)),
@@ -508,15 +510,15 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
   else if (actionAware && lifecycle.deferred) events.push({ type: "policy_deployment_failed", at: economicStamp(end),
     ...lifecycle.deferred, reason: "DEFERRED_POLICY_REVIEW_UNRESOLVED" });
   const rawFailures = events.filter(row => ["execution_skipped", "order_expired", "policy_deployment_failed"].includes(row.type as string)).length;
-  return { engine_version: settledFunding ? "fixed-policy-settled-intent-rebalance-v6" : reviewable ? research ? "fixed-policy-event-review-rebalance-v5" : holdingBaseline ? "continuous-event-review-hold-v1" : "continuous-event-review-funding-v1" : actionAware ? "fixed-policy-action-aware-bounded-rebalance-v4" : research ? "fixed-policy-bounded-rebalance-v3" : bounded ? holdingBaseline ? "continuous-bounded-hold-new-cash-v1" : "continuous-bounded-fixed-policy-funding-v1" : holdingBaseline ? "continuous-hold-new-cash-v1" : "continuous-fixed-policy-funding-v1", phase: options.researchPhase ?? "continuous", window: plan.window,
+  return { engine_version: settledFunding ? research ? "fixed-policy-settled-intent-rebalance-v6" : holdingBaseline ? "continuous-settled-intent-hold-v1" : "continuous-settled-intent-funding-v1" : reviewable ? research ? "fixed-policy-event-review-rebalance-v5" : holdingBaseline ? "continuous-event-review-hold-v1" : "continuous-event-review-funding-v1" : actionAware ? "fixed-policy-action-aware-bounded-rebalance-v4" : research ? "fixed-policy-bounded-rebalance-v3" : bounded ? holdingBaseline ? "continuous-bounded-hold-new-cash-v1" : "continuous-bounded-fixed-policy-funding-v1" : holdingBaseline ? "continuous-hold-new-cash-v1" : "continuous-fixed-policy-funding-v1", phase: options.researchPhase ?? "continuous", window: plan.window,
     initial_equity_cny: economicText(initial), contributions_cny: economicText(sum(contributions.values())), ending_nav_cny: economicText(closing),
     profit_cny: economicText(new LedgerDecimal(closing.toFixed()).minus(initial).minus(sum(contributions.values()))),
     ...continuousPerformance(start, end, initial, closing, flows, curve as { at: string; nav_cny: string; unit_nav: string }[], zone),
     fees_cny: economicText(fees), fx_fees_cny: economicText(fxFees), slippage_cny: economicText(slipFees), cash_rounding_cny: economicText(rounding),
-    buy_turnover_on_mean_observed_nav: meanNav.gt(0) ? economicText(buys.div(meanNav)) : null,
-    sell_turnover_on_mean_observed_nav: meanNav.gt(0) ? economicText(sells.div(meanNav)) : null,
-    total_turnover_on_mean_observed_nav: meanNav.gt(0) ? economicText(buys.plus(sells).div(meanNav)) : null,
-    ending_cash_ratio: closing.gt(0) ? economicText(new Decimal(curve.at(-1)!.cash_cny as string).div(closing)) : null,
+    buy_turnover_on_mean_observed_nav: reportedRatio(buys, meanNav),
+    sell_turnover_on_mean_observed_nav: reportedRatio(sells, meanNav),
+    total_turnover_on_mean_observed_nav: reportedRatio(buys.plus(sells), meanNav),
+    ending_cash_ratio: reportedRatio(new Decimal(curve.at(-1)!.cash_cny as string), closing),
     positions: Object.fromEntries(Object.entries(ordered(positions)).map(([key, value]) => [key, economicText(value)])),
     ending_cash: Object.fromEntries(Object.entries(ordered(cash)).map(([key, value]) => [key, economicText(value)])),
     ending_receivables: { sale_cny: economicText(sum(sales.map(row => row.amount))), dividends: Object.fromEntries(Object.entries(ordered(dividends)).map(([key, value]) => [key, economicText(value)])) },

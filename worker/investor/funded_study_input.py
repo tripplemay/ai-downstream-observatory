@@ -33,7 +33,7 @@ def prepare_funded_study_inputs(funding, source, declared, profile):
         return gap("FUNDED_STUDY_DUPLICATE_CANDIDATES")
 
     def make(anchor, parameters, decisions):
-        return {"schema_version": "investor-funded-history-input-v3" if plan["schema_version"] == "research-plan-v5" else "investor-funded-history-input-v2" if plan["schema_version"] == "research-plan-v3" else "investor-funded-history-input-v1", "funding_plan": funding,
+        return {"schema_version": 'investor-funded-history-input-v4' if plan['schema_version'] == 'research-plan-v6' else "investor-funded-history-input-v3" if plan["schema_version"] == "research-plan-v5" else "investor-funded-history-input-v2" if plan["schema_version"] == "research-plan-v3" else "investor-funded-history-input-v1", "funding_plan": funding,
             "historical_start_date": anchor, "dataset": dataset, "context": {
                 "parameters_recorded_at": source["created_at"], "comparison_declared_at": declared, "information_cutoff_at": declared,
                 "parameters": parameters, "decision_times": decisions, "execution": plan["execution"], "tax_coverage": plan["tax_coverage"]}}

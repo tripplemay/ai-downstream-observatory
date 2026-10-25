@@ -46,6 +46,7 @@ def implementation_manifest(evaluation_timezone="UTC"):
             "bounded_fixed_policy_engine_version": "fixed-policy-bounded-rebalance-v3",
             "action_aware_fixed_policy_engine_version": "fixed-policy-action-aware-bounded-rebalance-v4",
             "event_review_engine_version": "fixed-policy-event-review-rebalance-v5",
+            "settled_cash_intent_engine_version": "fixed-policy-settled-intent-rebalance-v6",
             "python_version": sys.version.split()[0], "timezone_hashes": timezone_hashes,
             "source_hashes": {str(path.relative_to(ROOT)): sha256(path.read_bytes()).hexdigest() for path in files}}
 
@@ -70,8 +71,6 @@ def _experiment(connection, experiment_id):
 
 def register_experiment(connection, experiment_id, portfolio_id, plan, dataset, actor_id, now=None):
     _actor(actor_id)
-    if isinstance(plan, dict) and plan.get('schema_version') == 'research-plan-v6':
-        raise WorkbenchError('SETTLED_CASH_PROTOCOL_NOT_ADMITTED')
     validate_dataset(dataset)
     validate_plan(plan, dataset)
     if dataset["mode"] != "synthetic":

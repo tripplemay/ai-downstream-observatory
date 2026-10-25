@@ -21,18 +21,82 @@ function helper(f: ReturnType<typeof investorFixture>, module: string, args: str
   return JSON.parse(execFileSync(process.env.WORKBENCH_TEST_PYTHON ?? "python3", ["-m", module, "--db", f.filename, ...args],
     { cwd: path.resolve(".."), encoding: "utf8", timeout: 120000, maxBuffer: 65536, stdio: ["ignore", "pipe", "pipe"] }));
 }
-function setup(f: ReturnType<typeof investorFixture>, failure = false, bounded = false, eventReview = false) {
+function setup(f: ReturnType<typeof investorFixture>, failure = false, bounded = false, eventReview = false, settled = false, orphan = false) {
   saveSyntheticProfile(f);
   executeInvestorCommand(f.db, actor, { action: "save_funding_plan", expected_revision: 1, idempotency_key: "fictional-funding",
     funding_plan: { schema_version: "investor-funding-plan-v1", start_date: "2026-01-01", horizon_years: 1, evaluation_timezone: "Asia/Shanghai",
       initial_capital_cny: "1200", annual_contribution_cny: "300", first_annual_date: "2026-12-31", entry_method: "three_tranches_60_days",
       actual_arrivals_confirmed: false, execution_authorized: false, live_advice_eligible: false } }, registered);
-  helper(f, "tests.investor.evidence_fixture", ["--fixed-policy-v2", "--funded-year", ...(bounded ? ["--bounded-execution-v3"] : []), ...(eventReview ? ["--event-review-execution-v5"] : [])]);
+  helper(f, "tests.investor.evidence_fixture", ["--fixed-policy-v2", "--funded-year", ...(bounded ? ["--bounded-execution-v3"] : []), ...(eventReview ? ["--event-review-execution-v5"] : []), ...(settled ? ["--settled-intent-execution-v6"] : []), ...(orphan ? ["--funded-settled-orphan"] : [])]);
   executeInvestorCommand(f.db, actor, { action: "compare_funding", expected_revision: getInvestorState(f.db, actor, registered).revision, idempotency_key: "fictional-study" }, registered);
-  helper(f, "tests.investor.funded_study_fixture", [...(failure ? ["--fail-first-candidate"] : []), ...(bounded || eventReview ? ["--default-core"] : [])]);
+  helper(f, "tests.investor.funded_study_fixture", [...(failure ? ["--fail-first-candidate"] : []), ...(bounded || eventReview || settled ? ["--default-core"] : [])]);
 }
 function count(f: ReturnType<typeof investorFixture>, table: string) { return (f.db.prepare(`SELECT count(*) n FROM ${table}`).get() as { n: number }).n; }
 function changes(f: ReturnType<typeof investorFixture>) { return (f.db.prepare("SELECT total_changes() n").get() as { n: number }).n; }
+
+test("v6 source keeps cash intents through normal annual producer, durable payloads, cold replay, strict clients and holding analysis", async () => {
+  const f = investorFixture();
+  try {
+    setup(f, false, false, false, true);
+    const rows = f.db.prepare("SELECT payload FROM investor_funded_result_payloads").all() as { payload: Buffer }[];
+    assert.equal(rows.length, 3);
+    for (const row of rows) {
+      const result = JSON.parse(row.payload.toString("utf8"));
+      assert.equal(result.schema_version, "investor-funded-history-result-v4");
+      assert.equal(result.comparison.schema_version, "investor-long-horizon-result-v5");
+      assert.equal(result.comparison.runs.immediate.engine_version, "continuous-settled-intent-funding-v1");
+    }
+    const before = changes(f), state = getInvestorState(f.db, actor, done), report = await getFundedComparison(f.db, actor, { clock: () => done });
+    assert.equal(report.status, "verified_retrospective");
+    assert.deepEqual(parseFundedComparison({ ...report, session_binding: binding }, state, binding, Date.parse(done)), report);
+    for (const candidate of report.candidates) for (const p of Object.values(candidate.paths!)) {
+      assert.equal(p.execution_review?.schema_version, "execution-review-summary-v2");
+      assert.equal(p.cash_intent_review?.pending_intents, 0); assert.equal(p.cash_intent_review?.failed_intents, 0);
+    }
+    const selector = { parameters_hash: report.candidates[0].parameters_hash, path: "staged" as const };
+    const analysis = await getFundedPathAnalysis(f.db, actor, selector, { clock: () => done });
+    assert.equal(analysis.status, "verified_retrospective");
+    assert.equal(analysis.analysis?.baseline.summary.cash_intent_review?.failed_intents, 0);
+    assert.deepEqual(await parseFundedAnalysis({ ...analysis, session_binding: binding }, report, binding, selector.parameters_hash, selector.path, Date.parse(done)), analysis);
+    const hidden = structuredClone(report); delete hidden.candidates[0].paths!.immediate.cash_intent_review;
+    assert.throws(() => parseFundedComparison({ ...hidden, session_binding: binding }, state, binding, Date.parse(done)), /RESPONSE_INVALID/);
+    const gaps = structuredClone(report); gaps.candidates[0].paths!.immediate.cash_intent_review!.failed_intents++;
+    assert.throws(() => parseFundedComparison({ ...gaps, session_binding: binding }, state, binding, Date.parse(done)), /RESPONSE_INVALID/);
+    const unfinishedBaseline = structuredClone(analysis); unfinishedBaseline.analysis!.baseline.summary.cash_intent_review!.pending_intents++;
+    await assert.rejects(parseFundedAnalysis({ ...unfinishedBaseline, session_binding: binding }, report, binding, selector.parameters_hash, selector.path, Date.parse(done)), /RESPONSE_INVALID/);
+    const markup = renderToStaticMarkup(createElement(FundedComparisonResults, { value: report }));
+    assert.match(markup, /失败交收后买入意图/); assert.match(markup, /不是真实委托/);
+    assert.equal(changes(f), before);
+    for (const table of ["portfolios", "accounts", "ledger_events", "postings", "position_movements", "approval_events", "activations", "reservations", "execution_reports"])
+      assert.equal(count(f, table), 0, table);
+  } finally { f.close(); }
+});
+
+test("annual orphan stays visible and incomplete through default core and service read models despite zero order errors", async () => {
+  const f = investorFixture();
+  try {
+    setup(f, false, false, false, true, true);
+    assert.equal(count(f, "investor_funded_result_payloads"), 3);
+    const before = changes(f), state = getInvestorState(f.db, actor, done), report = await getFundedComparison(f.db, actor, { clock: () => done });
+    assert.equal(report.status, "partial"); assert.equal(report.economics_independently_replayed, false);
+    assert.equal(report.candidates.length, 3);
+    assert.deepEqual(parseFundedComparison({ ...report, session_binding: binding }, state, binding, Date.parse(done)), report);
+    for (const candidate of report.candidates) {
+      assert.equal(candidate.status, "verified_with_execution_gaps");
+      assert.equal(candidate.paths?.immediate.execution_failure_count, 0);
+      assert.equal(candidate.paths?.immediate.cash_intent_review?.failed_intents, 1);
+    }
+    const selector = { parameters_hash: report.candidates[0].parameters_hash, path: "immediate" as const };
+    const analysis = await getFundedPathAnalysis(f.db, actor, selector, { clock: () => done });
+    assert.equal(analysis.status, "verified_with_execution_gaps"); assert.equal(analysis.economics_independently_replayed, false);
+    assert.deepEqual(await parseFundedAnalysis({ ...analysis, session_binding: binding }, report, binding, selector.parameters_hash, selector.path, Date.parse(done)), analysis);
+    assert.equal(analysis.analysis?.baseline.summary.cash_intent_review?.failed_intents, 0);
+    assert.match(renderToStaticMarkup(createElement(FundedComparisonResults, { value: report })), /失败交收后买入意图/);
+    assert.equal(changes(f), before);
+    for (const table of ["portfolios", "accounts", "ledger_events", "postings", "position_movements", "approval_events", "activations", "reservations", "execution_reports"])
+      assert.equal(count(f, table), 0, table);
+  } finally { f.close(); }
+});
 
 test("v5 admitted source keeps event-review policy through durable funding study, cold replay and path analysis", async () => {
   const f = investorFixture();

@@ -25,7 +25,7 @@ export function prepareFundedStudyInputs(funding: InvestorFundingPlan, source: F
   if (new Set(sorted.map(row => row.digest)).size !== sorted.length) return gap("FUNDED_STUDY_DUPLICATE_CANDIDATES");
   let historical_start_date: string | null = null, window: { start: string; end: string } | null = null;
   const make = (anchor: string, parameters: Obj, decision_times: string[]): FundedHistoryInput => ({
-    schema_version: plan.schema_version === "research-plan-v5" ? "investor-funded-history-input-v3" : plan.schema_version === "research-plan-v3" ? "investor-funded-history-input-v2" : "investor-funded-history-input-v1", funding_plan: funding, historical_start_date: anchor, dataset,
+    schema_version: plan.schema_version === "research-plan-v6" ? "investor-funded-history-input-v4" : plan.schema_version === "research-plan-v5" ? "investor-funded-history-input-v3" : plan.schema_version === "research-plan-v3" ? "investor-funded-history-input-v2" : "investor-funded-history-input-v1", funding_plan: funding, historical_start_date: anchor, dataset,
     context: { parameters_recorded_at: source.created_at, comparison_declared_at: declared, information_cutoff_at: declared,
       parameters, decision_times, execution: plan.execution as Obj, tax_coverage: plan.tax_coverage as string } });
   for (let year = Math.max(1970, Number(source.range_start.slice(0, 4))); year <= Math.min(2199, Number(source.range_end.slice(0, 4))); year++) {

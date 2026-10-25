@@ -73,6 +73,15 @@ input/result v4; it must not strip the phase v5 execution policy into an older
 contract. These are research-only contracts, not trade authorization.
 See [the causal lifecycle](../docs/59-event-order-reassessment.md).
 
+Plan v6 instead requires `investor-strategy-policy-v3` and returns strategy
+result/phase summary v3. Both strategy and benchmark require zero failed/pending
+cash intents as well as the existing action-review gates. Funded input/result
+v4 maps to continuous input/plan/result v5, preserving the exact execution and
+release policy. Independent read models use `execution-review-summary-v2` plus
+a required cash-intent summary; zero raw order errors cannot hide an unfinished
+intent. Old versions keep their old numeric and failure semantics.
+See [the settled-cash lifecycle](../docs/61-settled-cash-intent-lifecycle.md).
+
 ## Dividend and corporate-action quality
 
 `ledger-fact` preserves legacy dividend facts with omitted tax, but omission is unknown tax, never confirmed zero. New direct dividends require confirmed explicit tax at the command boundary. Actual net receipts, gross/tax breakdown, cumulative tax assessments and actual additional withholding are different facts: assessments and breakdown do not create cash. Migration 0012 adds the signed `dividend_tax_payable` liability without rewriting prior postings. See [the locked accounting rules](../docs/dividends-and-corporate-actions.md).

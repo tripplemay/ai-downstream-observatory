@@ -2,8 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://etf-workbench.invalid/contracts/v1/investor-funded-history-request.schema.json",
   "oneOf": [
-    {"$ref": "investor-funded-history-input.schema.json"},
-    {"$ref": "investor-funded-history-input-v2.schema.json"},
-    {"$ref": "investor-funded-history-input-v3.schema.json"}
+    {
+      "$ref": "investor-funded-history-input.schema.json"
+    },
+    {
+      "$ref": "investor-funded-history-input-v2.schema.json"
+    },
+    {
+      "$ref": "investor-funded-history-input-v3.schema.json"
+    },
+    {
+      "$ref": "investor-funded-history-input-v4.schema.json"
+    }
   ]
 }

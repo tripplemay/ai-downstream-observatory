@@ -6,7 +6,7 @@ import { cashRecordingIntentSchema } from "./cash-recording-schemas";
 import { valuationIntentSchema } from "./valuation-schemas";
 import { executionReportIntentSchema, linkExecutionIntentSchema } from "./execution-followup-schemas";
 import { proposalReviewIntentSchema } from "./proposal-review-schemas";
-import { investorResearchEngines, researchExecutionReviewSchema, reviewCountsMatch, executionChecksUsable } from "./research-execution";
+import { investorResearchEngines, researchExecutionReviewSchema, researchCashIntentReviewSchema, reviewCountsMatch, executionChecksUsable } from "./research-execution";
 
 export const investorId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/);
 export const investorHash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -59,6 +59,7 @@ export const researchTaskSchema = z.object({
     phase_checks: z.array(z.object({ phase: z.enum(["train", "validation", "holdout"]),
       execution_failure_count: revision, benchmark_execution_failure_count: revision,
       execution_review: researchExecutionReviewSchema.optional(),
+      cash_intent_review: researchCashIntentReviewSchema.optional(),
     }).strict().refine(reviewCountsMatch)).max(3).refine(value => value.every((row, index) => row.phase === ["train", "validation", "holdout"][index])).optional(),
     source_context: z.object({ range_start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), range_end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
       valid_until: investorInstant, basis: z.literal("owner_reviewed_historical_reconstruction"),
@@ -72,7 +73,8 @@ export const researchTaskSchema = z.object({
       train_net_twr: researchDecimal.nullable(), train_drawdown: researchDecline.nullable(), benchmark_net_twr: researchDecimal.nullable(),
       usable: z.boolean(), stresses: z.array(z.object({ id: investorId, label: z.string().min(1).max(300), portfolio_return: researchDecimal }).strict()).max(10),
       train_checks: z.object({ metrics_complete: z.boolean(), execution_failure_count: revision,
-        benchmark_execution_failure_count: revision, execution_review: researchExecutionReviewSchema.optional() }).strict().refine(reviewCountsMatch).optional(),
+        benchmark_execution_failure_count: revision, execution_review: researchExecutionReviewSchema.optional(),
+        cash_intent_review: researchCashIntentReviewSchema.optional() }).strict().refine(reviewCountsMatch).optional(),
     }).strict().refine(value => !value.train_checks || value.usable === (value.train_checks.metrics_complete && executionChecksUsable(value.train_checks))))
       .max(8).refine(value => new Set(value.map(row => row.parameters_hash)).size === value.length),
   }).strict().refine(value => (value.qualification === "owner_reviewed_reconstructed") === (value.source_context !== undefined)).nullable(), live_advice_eligible: z.literal(false),
@@ -81,11 +83,16 @@ export const researchTaskSchema = z.object({
   && (value.status !== "blocked" || value.study === null && value.completed_at !== null && value.reason_codes.length > 0)
   && (value.study === null || value.status === "calculated" || value.status === "outdated")
   && (!value.study?.phase_checks || value.study.phase_checks.every(row => value.registry !== null && value.registry.phases[row.phase].completed > 0))
-  && (value.study === null || (value.engine_version === "investor-diversified-reference-v2"
+  && (value.study === null || (value.engine_version !== "investor-diversified-reference-v1"
     ? value.study.phase_checks !== undefined && value.study.phase_checks.every(row => row.execution_review !== undefined)
       && value.study.candidates.every(row => row.train_checks?.execution_review !== undefined)
     : (value.study.phase_checks ?? []).every(row => row.execution_review === undefined)
       && value.study.candidates.every(row => row.train_checks?.execution_review === undefined)))
+  && (value.study === null || (value.engine_version === "investor-diversified-reference-v3"
+    ? value.study.phase_checks !== undefined && value.study.phase_checks.every(row => row.cash_intent_review !== undefined)
+      && value.study.candidates.every(row => row.train_checks?.cash_intent_review !== undefined)
+    : (value.study.phase_checks ?? []).every(row => row.cash_intent_review === undefined)
+      && value.study.candidates.every(row => row.train_checks?.cash_intent_review === undefined)))
   && (value.study?.status !== "reference_ready" || !value.study.phase_checks || value.study.phase_checks.length === 3
     && value.study.phase_checks.every(executionChecksUsable)));
 export type InvestorResearchTask = z.infer<typeof researchTaskSchema>;

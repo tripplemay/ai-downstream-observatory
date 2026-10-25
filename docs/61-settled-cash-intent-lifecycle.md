@@ -1,7 +1,7 @@
 # Sell, settle, decide, then publish: research kernel v6
 
-Status: direct research-kernel integration, NOT ordinary investor admission or
-production deployment. Full v2 P0/P1/P2 remains the objective. This increment
+Status: ordinary research and annual-funding software integration, NOT a
+qualified real study or production deployment. Full v2 P0/P1/P2 remains the objective. This increment
 does not reopen an old trial, change personal constraints, enable a real protocol
 or grant account/trading permission.
 
@@ -10,10 +10,11 @@ or grant account/trading permission.
 `research-plan-v6` explicitly requires
 `buy_funding_policy=declare_sales_then_freeze_buy_from_settled_cash`. Old plan
 versions reject that field and keep their original semantics. The ordinary
-`research-plan-input` contract still rejects v6 until all downstream contracts,
-admission and continuous funding are integrated; no fallback to v5 is allowed.
-Persistent experiment registration also rejects v6 before touching a connection;
-the direct-kernel contract cannot consume trial budget or expose a holdout.
+`research-plan-input` contract explicitly accepts v6 only with policy v3; no
+fallback to v5 is allowed. Ordinary source admission, default core and persistent
+experiment/trial registration retain the same phase budgets, immutable freeze,
+source binding and exposure rules. Accepting this version is not permission to
+reopen an old experiment, retry a failed real study or expose an old holdout.
 
 The actual rotation kernel, rather than a separate simplified simulator, now:
 
@@ -57,10 +58,38 @@ that cannot support the complete lot/fee batch stays blocked; it is not silently
 removed or called a completed rebalance. This is a new versioned rule, not a
 change to old results, risk budgets, costs or price/FX bounds.
 
-The v6 execution arithmetic uses a local256-digit context; shared ledger and
-reported performance rules remain unchanged. Web performance replay copies
+The v6 execution arithmetic uses a local256-digit context. Public curve unit
+NAV, turnover and cash ratios are explicitly rounded in the shared60-digit
+reporting context, within the unchanged output schema bounds. Old versions and
+shared ledger precision remain unchanged. Web performance replay copies
 amounts into the shared context and explicitly performs the annualization's
 end/start division, matching Python rather than loosening comparison tolerances.
+
+## Ordinary admission and continuous funding
+
+The explicit ordinary chain is plan v6 / policy v3 / strategy result v3 / phase
+summary v3. Candidate AND benchmark must have zero failed and pending cash
+intents, in addition to the existing terminal execution and unresolved action
+review checks. Training failure cannot freeze a candidate or open later phases.
+The strict read model requires both reviews for engine v3; omitting cash state
+or relabelling a new result as an older engine is rejected. Reference rendering,
+manual save, monitor, funding assumptions and human deferral use the existing
+services, not a parallel synthetic-only shortcut. The research page displays
+failed/pending intents separately from raw order errors.
+
+The ordinary annual producer maps source plan v6 to funded input/result v4 and
+continuous input/plan/result v5. It preserves the execution object, capital
+timeline and policy hash, including the declared release policy. Both candidate
+and holding baseline use the new execution protocol; the baseline changes only
+the rebalance rule. No unreleased principal funds an order and no annual deposit
+restarts units or treats principal as profit.
+
+Independent Web replay checks the complete published annual economics and exact
+cash/action lineage. The fixed cold-process publisher and path analysis retain
+`cash_intent_review`; `execution-review-summary-v2` requires that cash summary.
+Pending or failed intents prevent a complete comparison/analysis even when raw
+order errors are zero. Failed candidates remain visible, not survivor-filtered.
+Comparisons remain retrospective, not a strategy recommendation or trade grant.
 
 ## Independent verification
 
@@ -74,8 +103,10 @@ end/start division, matching Python rather than loosening comparison tolerances.
   complete outputs for ten fictional vectors, including every event, cash/stock
   settlement, quantity, curve, intent, review and hash. No metric is copied from
   a claimed result to make replay pass.
-- Research discovery211/211, investor/registry/strategy/funding54/54 and related
-  Web26/26 passed; type checking and five fixed background bundles also passed.
+- The preceding direct-kernel baseline passed research211/211,
+  investor/registry/strategy/funding54/54 and related Web26/26; it is historical
+  evidence, not the current integrated source's full CI. Type checking and five
+  fixed background bundles also passed for that baseline.
   The Web set includes
   the old continuous economics, ten-year and three-market cases, v5 lineage,
   normal v5 admission/core/read/save/watch, preparation and the new v6 vectors.
@@ -89,21 +120,29 @@ Reproduce with `python -m unittest tests.research.test_cash_intent_runtime` and
 Cross-language tests need the repository Python dependencies; all inputs are
 fictional. They do not call a provider, AI gateway, broker or production service.
 
-## Required before ordinary use or any new real study
+Integrated checks additionally use
+`python -m unittest tests.investor.test_settled_strategy tests.investor.test_settled_research_runtime tests.investor.test_settled_funding`
+and the Web tests `investor-settled-strategy.test.ts`,
+`investor-settled-reference.test.ts`, `investor-settled-intent-funding.test.ts`
+and `investor-funded-comparison.test.ts`. Rebuild the fixed background publishers
+with `npm run pretest` before the cold-process comparison tests. Set
+`WORKBENCH_TEST_PYTHON` to the interpreter with the workbench dependencies.
+
+New focused fixtures cover the ordinary source/core/registry/reference/save/watch
+path, zero-order-error train orphans and same-version annual source/core/payload/
+cold-replay/client/holding-analysis paths. Annual vectors include settled sales,
+phase-ending orphans, actions, foreign costs, three markets and ten-year capital
+continuity. These are software fixtures, not provider or financial evidence.
+The original36 preparation vectors remain in their separate test file.
+
+## Required before any new real study or production acceptance
 
 Do not advertise this kernel as the finished investment workflow. Still required:
 
-- Versioned full report and phase summaries, immutable trial registration and
-  selector policy. Candidate AND benchmark must have zero failed/pending intents
-  in every admitted phase, in addition to existing execution/review gates.
-- Source admission, kernel request binding, default core, strict Web/client
-  parsing, reference/save/watch/history and expiration with the same new fields.
-- The same explicit execution semantics for annual continuous funding and its
-  holding baseline, versioned inputs/results and normal funded-history producer.
-  Do not remove the funding rule or restart annual capital to run an old path.
 - Broader interleavings: repeated sale actions, multiple partly settled sale
-  dependencies, three markets under v6, locked-capital releases, extreme-range
-  performance and whole-window orphan/fee/minimum-lot cases.
+  dependencies, locked-capital releases during settlement, extreme-range
+  full-kernel performance and whole-window fee/minimum-lot cases. Individual
+  synthetic vectors do not establish exhaustive interleaving correctness.
 - Exact-source full CI, current ordinary UI and protected production acceptance,
   then a separately frozen real protocol preserving all prior exposure/results.
   No automatic reference adoption, financial write or trade follows a pass.

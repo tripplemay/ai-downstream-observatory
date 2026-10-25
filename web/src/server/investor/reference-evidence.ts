@@ -28,9 +28,10 @@ function render(profileId: string, requestId: string, runId: string, inputVersio
   const supported = version === "investor-reference-plan-v2";
   requireEvidence(!supported || parameters.schema_version === "research-fixed-rebalance-parameters-v2");
   const rule = fixedPolicyDecisionRule(parameters, supported);
-  const eventReview = (source.payload.plan as JsonObject).schema_version === "research-plan-v5";
-  const actionAware = ["research-plan-v4", "research-plan-v5"].includes((source.payload.plan as JsonObject).schema_version as string);
-  const bounded = ["research-plan-v3", "research-plan-v4", "research-plan-v5"].includes((source.payload.plan as JsonObject).schema_version as string);
+  const settled = (source.payload.plan as JsonObject).schema_version === "research-plan-v6";
+  const eventReview = ["research-plan-v5", "research-plan-v6"].includes((source.payload.plan as JsonObject).schema_version as string);
+  const actionAware = ["research-plan-v4", "research-plan-v5", "research-plan-v6"].includes((source.payload.plan as JsonObject).schema_version as string);
+  const bounded = ["research-plan-v3", "research-plan-v4", "research-plan-v5", "research-plan-v6"].includes((source.payload.plan as JsonObject).schema_version as string);
   const execution = (source.payload.plan as JsonObject).execution as JsonObject;
   const candidate = (result.candidates as { parameters_hash: string; risk_budget_pass: boolean;
     train: { benchmark_twr: string }; stresses: { label: string; portfolio_return: string }[] }[]).find(row => row.parameters_hash === hash(parameters));
@@ -44,7 +45,7 @@ function render(profileId: string, requestId: string, runId: string, inputVersio
   requireEvidence(cutoff === cutoffMs || cutoff === cutoffMs.replace("Z", "000Z"));
   return referencePlanSchema.parse({ schema_version: version, profile_id: profileId,
     ...(supported ? { fixed_policy: { parameters, evaluation_timezone: (source.payload.plan as JsonObject).evaluation_timezone } } : {}),
-    strategy_version: result.engine_version + (bounded ? "+bounded-close-v1" : "") + (actionAware ? "+action-aware-close-v1" : "") + (eventReview ? "+event-review-v1" : "") + (rule ? fixedPolicySuffix : ""),
+    strategy_version: result.engine_version + (bounded ? "+bounded-close-v1" : "") + (actionAware ? "+action-aware-close-v1" : "") + (eventReview ? "+event-review-v1" : "") + (settled ? "+settled-cash-v1" : "") + (rule ? fixedPolicySuffix : ""),
     strategy_evidence: "训练期冻结候选后完成验证与保留期计算；仅为探索性历史研究，保留期独立性未验证。" + (rule ?? ""), input_version: inputVersion,
     data_cutoff: cutoffMs,
     created_at: created, valid_until: source.row.valid_until, data_mode: "reconstructed",
@@ -57,7 +58,8 @@ function render(profileId: string, requestId: string, runId: string, inputVersio
         + "%、外币汇率缓冲 " + new Decimal(execution.buy_fx_buffer_bps as string).div(100).toFixed()
         + "% 及费用预留；超界跳过，不临时缩量。" : "") + (actionAware
         ? "已知公司行动落在决策与预定成交之间时，整批暂不建单，等下一预定评估重新计算；等待仍承担现金机会成本，未知行动仍可取消已建订单。" : "") + (eventReview
-        ? "新行动取消尚未成交的整批订单后，仅在预定时点以新价格重新评估并保留替代链；原始取消仍展示，未解决复核或其他执行失败阻止准入。" : ""),
+        ? "新行动取消尚未成交的整批订单后，仅在预定时点以新价格重新评估并保留替代链；原始取消仍展示，未解决复核或其他执行失败阻止准入。" : "") + (settled
+        ? "卖出时只登记尚未冻结的买入意图；完整交收后，在预定决策点按当时现金和目标冻结新买单。未完成或失败意图阻止准入，不重复计入预计卖款。" : ""),
     risk_scenarios: candidate.stresses.map(row => row.label + "：假设组合变化 " + percent(row.portfolio_return) + "；不是发生概率或未来损失上限。"),
     benchmark_summary: "同 ETF 范围、时点与成本口径；训练期基准扣费后 TWR " + percent(candidate.train.benchmark_twr) + "。各阶段重新起算，不是连续个人收益。",
     counterarguments: ["历史目录与可用时点为重建假设，不能排除幸存者偏差或工具外样本曝光。", "较高历史收益不证明未来优势；复杂策略必须与简单基准比较。"],

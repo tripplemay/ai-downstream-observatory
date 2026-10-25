@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-strategy-policy-v3.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "version",
+    "minimum_horizon_years",
+    "minimum_phase_days",
+    "maximum_single_weight",
+    "roles",
+    "candidates",
+    "stress_scenarios",
+    "selection",
+    "enhancement",
+    "execution_admission"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "investor-strategy-policy-v3"
+    },
+    "version": {
+      "$ref": "common.schema.json#/$defs/id"
+    },
+    "minimum_horizon_years": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50
+    },
+    "minimum_phase_days": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "maximum_single_weight": {
+      "$ref": "common.schema.json#/$defs/decimal"
+    },
+    "roles": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 20,
+      "propertyNames": {
+        "$ref": "common.schema.json#/$defs/id"
+      },
+      "additionalProperties": {
+        "enum": [
+          "growth",
+          "defensive",
+          "diversifier"
+        ]
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "$ref": "research-fixed-policy-parameters.schema.json"
+      }
+    },
+    "stress_scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "role_returns"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "common.schema.json#/$defs/id"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "role_returns": {
+            "type": "object",
+            "required": [
+              "growth",
+              "defensive",
+              "diversifier"
+            ],
+            "properties": {
+              "growth": {
+                "$ref": "common.schema.json#/$defs/decimal"
+              },
+              "defensive": {
+                "$ref": "common.schema.json#/$defs/decimal"
+              },
+              "diversifier": {
+                "$ref": "common.schema.json#/$defs/decimal"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "selection": {
+      "const": "train_net_annual_return_then_drawdown_then_turnover_then_hash"
+    },
+    "enhancement": {
+      "const": "disabled_pending_evidence"
+    },
+    "execution_admission": {
+      "const": "settled_cash_intents_and_reviews_zero_terminal_gaps"
+    }
+  },
+  "additionalProperties": false
+}
