@@ -28,10 +28,11 @@ invalidate the current display without rewriting historical observations.
 - The primary action is a read-only anchor to the reference or monitoring card.
   Manual research checking remains available in a separate disclosure; opening
   it does not submit or rerun anything.
-- A current historical reference precedes the already-confirmed risk panel on
-  the plan page. Risk questions are expanded when confirmation is missing or
-  the current reference is no longer available. Stable keyed elements retain
-  the same risk component when ordering and expiry change.
+- With confirmed risk, the reference card precedes the risk panel on the plan
+  page. Missing confirmation puts risk first. Expiry expands the risk questions
+  and removes current reference claims, but does not reorder the form. Stable
+  keyed elements and parents preserve local draft state; source deadlines must
+  not move a focused form through the DOM.
 - Saving still calls the original authenticated, version-fenced, idempotent
   `save_plan` service. It records a research selection/model, not actual holdings,
   cash, execution approval or a broker order.
@@ -54,8 +55,9 @@ verification, increase request timeouts or establish the cause of a proxy error.
    and read-only recovery do not gain ready semantics or new write capability.
 3. Opening disclosures and anchor navigation issue no business command. Existing
    session, pending-request, CAS, idempotency and stale-response rules remain.
-4. Confirmed risk is initially folded, unconfirmed risk is visible, and the
-   actual form state is retained across a deadline-driven reorder.
+4. A current reference initially folds confirmed risk; unconfirmed risk is
+   visible. Expiry must retain the actual draft, DOM node and keyboard focus,
+   expand risk and invalidate current claims without reordering the form.
 5. Desktop and narrow mobile layouts, keyboard navigation and actual Next
    route requests are checked against the built candidate, not a previous build.
 

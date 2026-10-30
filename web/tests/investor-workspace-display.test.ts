@@ -267,7 +267,7 @@ test("qualified historical reference leads the plan page while confirmed risk re
     assert.equal(h.requests.length, 0); assert.equal(JSON.stringify(state), original); h.close();
   }
 });
-test("missing risk and expired evidence keep risk visible, remove the ready headline and never submit implicitly", async t => {
+test("missing risk leads, while evidence expiry expands risk without moving the confirmed-risk form or submitting", async t => {
   const state = historicalDisplayState(); state.profile!.document.loss_tolerance = null;
   const h = mount(t, state, "plan"); await h.flush();
   assert.equal(h.nodes().find(node => node.props["data-testid"] === "plan-risk-details")!.props.open, true);
@@ -278,7 +278,10 @@ test("missing risk and expired evidence keep risk visible, remove the ready head
   h.close();
   const ready = mount(t, historicalDisplayState(), "plan"); await ready.flush(); await ready.advance(until);
   assert.equal(ready.headline(), "证据不足"); assert.equal(ready.card("历史研究参考组合"), undefined);
-  assert.equal(ready.nodes().find(node => node.props["data-testid"] === "plan-risk-details")!.props.open, true);
+  const expiredNodes = ready.nodes(), expiredFold = expiredNodes.find(node => node.props["data-testid"] === "plan-risk-details")!;
+  const expiredReference = expiredNodes.find(node => node.type === "section" && node.props.id === "research-reference-plan")!;
+  assert.ok(expiredReference); assert.ok(expiredFold); assert.equal(expiredFold.props.open, true);
+  assert.ok(expiredNodes.indexOf(expiredReference) < expiredNodes.indexOf(expiredFold));
   assert.equal(ready.requests.length, 0);
 });
 test("main navigation is compact and never speculatively fetches other expensive research routes", async t => {

@@ -374,8 +374,9 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
   const title = view === "plan" ? "组合方案" : view === "observations" ? "观察记录" : view === "accounts" ? "账户资料" : "ETF 投资工作台";
   const riskPanel = data && <InvestorRiskPanel state={data} binding={initialSessionBinding} disabled={locked || editing} onCommand={command} />;
   const referenceCard = <ReferencePlanCard key="reference" plan={plan} task={display?.researchTask ?? null} disabled={locked} onSave={() => plan && command({ action: "save_plan", plan_id: plan.id })} />;
+  const riskConfirmed = !!profile && profile.document.loss_tolerance !== null;
   const referenceFirst = plan?.quality === "current" && plan.document.data_mode === "reconstructed"
-    && !!profile && profile.document.loss_tolerance !== null && !display?.stale;
+    && riskConfirmed && !display?.stale;
   const planRiskDetails = <details key="risk" data-testid="plan-risk-details" open={referenceFirst ? undefined : true} className="min-w-0 rounded-2xl border bg-card shadow-sm">
     <summary className="cursor-pointer rounded-2xl p-5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring md:p-6"><span className="font-semibold">风险预算与损失情景</span><span className="mt-2 block text-sm text-muted-foreground">{profile?.document.loss_tolerance ? "已记录研究风险范围；可核对或修改，不代表亏损上限或交易授权。" : "风险范围尚未确认；先比较损失情景，不默认选择风险或权重。"}</span></summary>
     <div className="p-3 pt-0 md:p-5 md:pt-0">{riskPanel}</div>
@@ -412,7 +413,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
         </section>
         {currentOutcome === "decision_required" && latest && <Card title="变化卡 · 决定由你作出"><p className="text-sm">仅记录你的审阅意见，不批准交易、不预占资金，也不代表成交。</p>{latest.document.model_change && <ModelChange change={latest.document.model_change} plan={plan?.document ?? null} />}{plan && <div className="mt-3 space-y-2 text-sm"><ResearchCost value={plan.document.estimated_cost} />{plan.document.counterarguments.map((s, i) => <p key={i}>反对理由：{s}</p>)}</div>}<label className="mt-4 flex flex-col gap-2 text-sm">审阅备注（可选）<textarea ref={note} maxLength={2000} className="min-h-20 rounded-lg border bg-background p-3" /></label><div className="mt-4 flex flex-wrap gap-3">{(["accept_idea", "defer", "reject"] as const).map(decision => <Button key={decision} variant={decision === "accept_idea" ? "default" : "outline"} disabled={locked} onClick={() => command({ action: "review", observation_id: latest.id, decision, note: note.current?.value ?? "" })}>{decisionLabels[decision]}</Button>)}</div></Card>}
         {view !== "overview" && policyReview}
-        {view === "overview" ? <>{evidenceGaps}{referenceCard}</> : referenceFirst ? [referenceCard, planRiskDetails] : [planRiskDetails, referenceCard]}
+        {view === "overview" ? <>{evidenceGaps}{referenceCard}</> : riskConfirmed ? [referenceCard, planRiskDetails] : [planRiskDetails, referenceCard]}
         {view === "overview" ? <details data-testid="overview-research-details" className="min-w-0 rounded-2xl border bg-card shadow-sm">
           <summary className="cursor-pointer rounded-2xl p-5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring md:p-6">
             <span className="font-semibold">风险、投入与研究详情</span>
