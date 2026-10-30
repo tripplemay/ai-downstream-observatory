@@ -87,6 +87,11 @@ def download_vanguard_distributions(*, fund_id, has_distribution_yield, timeout_
         if 300 <= response.status < 400:
             raise _error("REDIRECT_FORBIDDEN")
         if response.status != 200:
+            category = {403: "HTTP_FORBIDDEN", 404: "HTTP_NOT_FOUND", 429: "HTTP_RATE_LIMITED"}.get(response.status)
+            if category is not None:
+                raise _error(category)
+            if 500 <= response.status < 600:
+                raise _error("HTTP_UNAVAILABLE")
             raise _error("HTTP_STATUS_REJECTED")
         headers = response.headers
         for name in ("Content-Type", "Content-Length", "Content-Encoding", "Transfer-Encoding"):

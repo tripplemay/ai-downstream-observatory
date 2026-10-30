@@ -23,6 +23,12 @@ from worker.orchestration.db import WorkbenchError, instant, stamp
 VERSION = "vanguard-distribution-capture-v1"
 MAX_OUTPUT = 2 * MAX_BYTES
 _HEADERS = {"content-type", "content-length", "date", "last-modified", "etag"}
+_CHILD_ERRORS = {name: index for index, name in enumerate(("CONNECTION_TARGET_FORBIDDEN", "NONPUBLIC_ADDRESS_FORBIDDEN",
+    "TIMEOUT_INVALID", "DOWNLOAD_TIMEOUT", "DOWNLOAD_FAILED", "REDIRECT_FORBIDDEN", "HTTP_STATUS_REJECTED",
+    "HTTP_FORBIDDEN", "HTTP_NOT_FOUND", "HTTP_RATE_LIMITED", "HTTP_UNAVAILABLE", "AMBIGUOUS_HTTP_HEADERS",
+    "HTTP_CONTENT_TYPE_REJECTED", "HTTP_CONTENT_ENCODING_REJECTED", "HTTP_CONTENT_LENGTH_REJECTED",
+    "HTTP_TRANSFER_ENCODING_REJECTED", "DOWNLOAD_TOO_LARGE", "DOWNLOAD_INCOMPLETE", "CLOCK_INVALID"), start=2)}
+_EXIT_ERRORS = {code: name for name, code in _CHILD_ERRORS.items()}
 
 
 def _error(code):
@@ -97,7 +103,8 @@ def collect_vanguard_distribution_draft(*, fund_id, has_distribution_yield, star
             encoded = run_memory_process([sys.executable, "-I", str(Path(__file__).resolve()), "--download-child"],
                 cwd=directory, environment={"HOME": directory, "TZ": "UTC", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
                     "PYTHONUTF8": "1", "PYTHONDONTWRITEBYTECODE": "1"}, error=_error, timeout=timeout_seconds,
-                input_bytes=json.dumps(request).encode(), max_input=1024, max_output=MAX_OUTPUT)
+                input_bytes=json.dumps(request).encode(), max_input=1024, max_output=MAX_OUTPUT,
+                exit_error_codes=_EXIT_ERRORS)
         after = stamp(datetime.now(timezone.utc))
         raw, receipt = _receipt(encoded, request, before, after)
         draft = parse_vanguard_distributions(raw, fund_id=fund_id, has_distribution_yield=has_distribution_yield,
@@ -118,9 +125,17 @@ def _download_child():
     sys.stdout.write(json.dumps(result, sort_keys=True, separators=(",", ":")))
 
 
-if __name__ == "__main__":
+def _child_main():
     try:
         _check(sys.argv[1:] == ["--download-child"])
         _download_child()
+    except WorkbenchError as error:
+        text = str(error)
+        name = text.removeprefix("VANGUARD_ISSUER_") if text.startswith("VANGUARD_ISSUER_") else ""
+        sys.exit(_CHILD_ERRORS.get(name, 1))
     except BaseException:
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    _child_main()

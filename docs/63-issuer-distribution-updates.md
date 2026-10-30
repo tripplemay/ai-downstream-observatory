@@ -43,6 +43,8 @@ the child accepts only a closed request. The parent independently checks returne
 request identity, fixed URL, clock interval, headers, bytes, base64 framing and
 SHA-256 before replaying the body parser. A timeout/error is terminal for that
 call, not an automatic resend. Temporary transport state is removed on failure.
+Closed child exit categories preserve routing, forbidden/rate-limit and other
+transport failures without exporting raw exception text or response bodies.
 
 The result is an in-memory raw body, receipt and draft. No workspace database,
 source review, queue, schedule, actual finance or AI gateway is modified. The

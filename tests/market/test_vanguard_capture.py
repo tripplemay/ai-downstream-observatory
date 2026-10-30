@@ -131,12 +131,31 @@ class VanguardCaptureTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkbenchError, "CALL_TIMEOUT"): self.collect(runner=runner, timeout_seconds=1)
         self.assertLess(time.monotonic() - started, 5)
 
+    def test_actual_child_preserves_only_closed_error_categories_without_network(self):
+        for category in ("NONPUBLIC_ADDRESS_FORBIDDEN", "HTTP_RATE_LIMITED", "HTTP_FORBIDDEN", "HTTP_UNAVAILABLE"):
+            program = (f"import sys;sys.path.insert(0,{str(ROOT)!r});from worker.market.providers import vanguard_capture as m;"
+                f"m.download_vanguard_distributions=lambda **kwargs:(_ for _ in ()).throw(m.WorkbenchError('VANGUARD_ISSUER_{category}'));"
+                "sys.argv=[m.__file__,'--download-child'];m._child_main()")
+            def runner(argv, **kwargs):
+                return run_memory_process([sys.executable, "-I", "-c", program], **kwargs)
+            with self.subTest(category=category), self.assertRaisesRegex(WorkbenchError, "^VANGUARD_CAPTURE_" + category + "$"):
+                self.collect(runner=runner)
+
     def test_child_protocol_rejects_extra_url_clock_or_credentials_before_transport(self):
         for extra in ("url", "clock", "credentials"):
             value = {"fund_id": "9998", "has_distribution_yield": False, "timeout_seconds": 1, extra: "not-allowed"}
             with self.subTest(extra=extra), patch.object(capture.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(value).encode()))), patch.object(capture, "download_vanguard_distributions") as download:
                 with self.assertRaises(WorkbenchError): capture._download_child()
                 download.assert_not_called()
+
+    def test_child_does_not_reclassify_unrelated_errors_or_emit_their_text(self):
+        for message in ("HTTP_FORBIDDEN", "sensitive-native-marker"):
+            with self.subTest(message=message), patch.object(capture.sys, "argv", [capture.__file__, "--download-child"]), \
+                    patch.object(capture, "_download_child", side_effect=WorkbenchError(message)), \
+                    patch.object(capture.sys, "stdout", io.StringIO()) as output, patch.object(capture.sys, "stderr", io.StringIO()) as error:
+                with self.assertRaises(SystemExit) as result: capture._child_main()
+                self.assertEqual(result.exception.code, 1)
+                self.assertEqual(output.getvalue(), ""); self.assertEqual(error.getvalue(), "")
 
 
 if __name__ == "__main__":

@@ -67,6 +67,12 @@ class VanguardTransportTests(unittest.TestCase):
                 self.assertEqual(constructor.call_count, 1); self.assertEqual(connection.request.call_count, 1)
                 connection.close.assert_called_once()
 
+    def test_status_categories_are_explicit_without_exposing_error_bodies(self):
+        for status, code in ((403, "HTTP_FORBIDDEN"), (404, "HTTP_NOT_FOUND"), (429, "HTTP_RATE_LIMITED"),
+            (500, "HTTP_UNAVAILABLE"), (503, "HTTP_UNAVAILABLE"), (418, "HTTP_STATUS_REJECTED")):
+            with self.subTest(status=status), self.assertRaisesRegex(WorkbenchError, "^VANGUARD_ISSUER_" + code + "$"):
+                self.request(FakeResponse(raw=b"untrusted-error-body", status=status))
+
     def test_mime_encoding_header_ambiguity_and_transfer_framing_fail_closed(self):
         cases = [[], [("Content-Type", "text/html")], [("Content-Type", "application/json; charset=utf-16")],
             [("Content-Type", "application/json"), ("Content-Type", "application/json")],
