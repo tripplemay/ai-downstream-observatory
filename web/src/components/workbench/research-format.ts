@@ -1,6 +1,7 @@
 import type { InvestorModelWatch, InvestorResearchTask } from "@/server/investor/schemas";
 import type { InvestorPlan, InvestorState } from "@/server/investor/types";
 import { executionChecksUsable } from "@/server/investor/research-execution";
+export { splitResearchCostMethodology } from "@/server/investor/reference-cost-methodology";
 
 function formatFixed(value: string | null, scale: number): string {
   if (value === null) return "未能计算";

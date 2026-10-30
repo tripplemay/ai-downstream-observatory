@@ -14,7 +14,7 @@ import type { InvestorModelChange, InvestorModelWatch, InvestorResearchTask, Ref
 import type { InvestorPlan, InvestorState } from "@/server/investor/types";
 import { parseInvestorState, verifyInvestorReceipt } from "./investor-client";
 import { illustrateLossScenarios } from "@/server/investor/loss-scenarios";
-import { canResumeInvestorWatch, currentInvestorDisplay, currentModelWatchDisplay, currentResearchDisplay, investorPollInterval, formatResearchMoney, formatResearchMoneyDelta, formatResearchPercent, researchTaskStatus } from "./research-format";
+import { canResumeInvestorWatch, currentInvestorDisplay, currentModelWatchDisplay, currentResearchDisplay, investorPollInterval, formatResearchMoney, formatResearchMoneyDelta, formatResearchPercent, researchTaskStatus, splitResearchCostMethodology } from "./research-format";
 import { InvestorAccountWorkspace } from "./investor-account-workspace";
 import { InvestorFundingPanel } from "./investor-funding-panel";
 import { InvestorFundedComparisonPanel } from "./investor-funded-comparison-panel";
@@ -99,6 +99,15 @@ const errorLabels: Record<string, string> = {
 function Card({ title, children, id }: { title: string; children: ReactNode; id?: string }) {
   return <section id={id} tabIndex={id ? -1 : undefined} className={id ? `${panel} scroll-mt-24` : panel}><h2 className="mb-4 text-lg font-semibold">{title}</h2>{children}</section>;
 }
+function ResearchCost({ value }: { value: string }) {
+  const { summary, methodology } = splitResearchCostMethodology(value);
+  return <div className="mt-3 space-y-2 break-words text-sm"><p>成本：{summary}</p>
+    {methodology && <details data-testid="research-cost-methodology" className="text-muted-foreground">
+      <summary className="cursor-pointer rounded-lg py-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">执行方法与交收规则</summary>
+      <p className="mt-2">{methodology}</p>
+    </details>}
+  </div>;
+}
 function ReferencePlanCard({ plan, task, disabled, onSave }: { plan: InvestorPlan | null; task: InvestorResearchTask | null; disabled: boolean; onSave: () => void }) {
   const empty = task ? researchTaskStatus(task) : null;
   return <Card title={plan?.document.data_mode === "reconstructed" ? "历史研究参考组合" : plan?.quality === "current" ? "当前参考组合" : "研究组合与历史参考"}>
@@ -110,7 +119,7 @@ function ReferencePlanCard({ plan, task, disabled, onSave }: { plan: InvestorPla
         <div className="flex justify-between gap-3"><div className="min-w-0"><h3 className="break-words font-medium">{target.name}</h3><p className="mt-1 text-xs text-muted-foreground">{target.symbol} · {marketLabels[target.market]} · {target.currency}</p></div><span className="shrink-0 font-mono font-semibold">{formatResearchPercent(target.weight)}</span></div>
         <p className="mt-2 text-sm">{target.role}</p><p className="mt-2 text-xs text-muted-foreground">{target.overlap_summary}</p>
       </article>)}</div>
-      <p className="mt-4 text-sm">{plan.document.estimated_cost}</p>
+      <ResearchCost value={plan.document.estimated_cost} />
       {plan.document.risk_scenarios.map((item, index) => <p className="mt-2 break-words text-sm text-muted-foreground" key={index}>{item}</p>)}
       <p className="mt-3 break-words text-sm">基准：{plan.document.benchmark_summary}</p>
       <Button className="mt-4" disabled={disabled || plan.quality !== "current" || plan.saved_for_observation} onClick={onSave}>{plan.saved_for_observation ? "已保存为观察方案" : "保存为观察中的研究方案"}</Button>
@@ -391,7 +400,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
           </div>
           <div className="mt-5 flex flex-wrap gap-x-6 gap-y-2 border-t pt-4 text-xs text-muted-foreground"><span>研究参考 · 非实际持仓</span><span>{latest?.document.data_cutoff ? `数据截止：${latest.document.data_cutoff}` : data.research_task?.study?.source_context ? `历史研究截止：${data.research_task.study.source_context.range_end}（非当前行情）` : "数据截止：尚无合格数据"}</span><span>约束版本：{profile.version}</span><span>币种：人民币为研究预算口径</span></div>
         </section>
-        {currentOutcome === "decision_required" && latest && <Card title="变化卡 · 决定由你作出"><p className="text-sm">仅记录你的审阅意见，不批准交易、不预占资金，也不代表成交。</p>{latest.document.model_change && <ModelChange change={latest.document.model_change} plan={plan?.document ?? null} />}{plan && <div className="mt-3 space-y-2 text-sm"><p>成本：{plan.document.estimated_cost}</p>{plan.document.counterarguments.map((s, i) => <p key={i}>反对理由：{s}</p>)}</div>}<label className="mt-4 flex flex-col gap-2 text-sm">审阅备注（可选）<textarea ref={note} maxLength={2000} className="min-h-20 rounded-lg border bg-background p-3" /></label><div className="mt-4 flex flex-wrap gap-3">{(["accept_idea", "defer", "reject"] as const).map(decision => <Button key={decision} variant={decision === "accept_idea" ? "default" : "outline"} disabled={locked} onClick={() => command({ action: "review", observation_id: latest.id, decision, note: note.current?.value ?? "" })}>{decisionLabels[decision]}</Button>)}</div></Card>}
+        {currentOutcome === "decision_required" && latest && <Card title="变化卡 · 决定由你作出"><p className="text-sm">仅记录你的审阅意见，不批准交易、不预占资金，也不代表成交。</p>{latest.document.model_change && <ModelChange change={latest.document.model_change} plan={plan?.document ?? null} />}{plan && <div className="mt-3 space-y-2 text-sm"><ResearchCost value={plan.document.estimated_cost} />{plan.document.counterarguments.map((s, i) => <p key={i}>反对理由：{s}</p>)}</div>}<label className="mt-4 flex flex-col gap-2 text-sm">审阅备注（可选）<textarea ref={note} maxLength={2000} className="min-h-20 rounded-lg border bg-background p-3" /></label><div className="mt-4 flex flex-wrap gap-3">{(["accept_idea", "defer", "reject"] as const).map(decision => <Button key={decision} variant={decision === "accept_idea" ? "default" : "outline"} disabled={locked} onClick={() => command({ action: "review", observation_id: latest.id, decision, note: note.current?.value ?? "" })}>{decisionLabels[decision]}</Button>)}</div></Card>}
         {view !== "overview" && policyReview}
         {view === "overview" ? evidenceGaps : riskPanel}
         <ReferencePlanCard plan={plan} task={display?.researchTask ?? null} disabled={locked} onSave={() => plan && command({ action: "save_plan", plan_id: plan.id })} />

@@ -7,9 +7,10 @@ import { openWorkbench } from "../src/server/workbench-db";
 import { getInvestorState } from "../src/server/investor/service";
 import { observationSchema, referencePlanSchema } from "../src/server/investor/schemas";
 import { computedBrowserObservation } from "./investor-model-fixture";
+import { actionCostMethodology, reviewCostMethodology, settlementCostMethodology } from "../src/server/investor/reference-cost-methodology";
 
 const [filename, mode] = process.argv.slice(2);
-if (!filename || !["decision", "expired", "summary", "computed-observe", "computed-decision", "computed-stale"].includes(mode)) throw new Error("SYNTHETIC_BROWSER_MODE_REQUIRED");
+if (!filename || !["decision", "expired", "summary", "computed-observe", "computed-decision", "computed-methodology-decision", "computed-stale"].includes(mode)) throw new Error("SYNTHETIC_BROWSER_MODE_REQUIRED");
 const target = realpathSync(filename), temporary = realpathSync(os.tmpdir());
 if (path.dirname(path.dirname(target)) !== temporary || !/^etf-browser-fixture-[A-Za-z0-9]+$/.test(path.basename(path.dirname(target)))
     || path.basename(target) !== "workbench.db") throw new Error("ONLY_TEMPORARY_BROWSER_FIXTURE_ALLOWED");
@@ -20,7 +21,7 @@ try {
   if (mode !== "summary") {
     if (!state.profile) throw new Error("SYNTHETIC_UI_PROFILE_REQUIRED");
     const created = mode === "expired" ? new Date(Date.now() - 60000).toISOString() : now;
-    const computed = mode.startsWith("computed-") ? computedBrowserObservation(state.profile, now, mode) : null;
+    const computed = mode.startsWith("computed-") ? computedBrowserObservation(state.profile, now, mode === "computed-methodology-decision" ? "computed-decision" : mode) : null;
     const plan = referencePlanSchema.parse({ schema_version: "investor-reference-plan-v1", profile_id: state.profile.id,
       strategy_version: "SYNTHETIC-BROWSER-CONTRACT-ONLY", strategy_evidence: "Synthetic fixture; not a real-data producer or investment evidence.",
       input_version: computed?.observation.input_version ?? hash({ synthetic_browser_fixture: true }), data_cutoff: computed?.observation.data_cutoff ?? created, created_at: created,
@@ -29,7 +30,7 @@ try {
         market: listing_id.slice(0, 2), currency: listing_id.startsWith("CN") ? "CNY" : listing_id.startsWith("HK") ? "HKD" : "USD",
         role: "Synthetic model fixture only", overlap_summary: "Not real issuer evidence" })) : [{ listing_id: "synthetic-a", symbol: "SYNTHETIC.A", name: "合成测试 ETF，不是真实方案", market: "CN", currency: "CNY", weight: "1",
         role: "Only tests the UI contract", overlap_summary: "Not a real holdings comparison" }],
-      estimated_cost: "Synthetic cost fixture only", risk_scenarios: ["Synthetic scenario; not validated research"],
+      estimated_cost: mode === "computed-methodology-decision" ? "合成测试费用假设 12.37 CNY；价格缓冲 2%；汇率缓冲 1%；不是实际收费。" + actionCostMethodology + reviewCostMethodology + settlementCostMethodology : "Synthetic cost fixture only", risk_scenarios: ["Synthetic scenario; not validated research"],
       benchmark_summary: "Synthetic baseline", counterarguments: ["Not investment evidence"], uncertainties: ["All fixture data is synthetic"], live_advice_eligible: false });
     const planId = randomUUID(), observationId = randomUUID();
     const observation = computed?.observation ?? observationSchema.parse({ schema_version: "investor-observation-v1", outcome: "decision_required",

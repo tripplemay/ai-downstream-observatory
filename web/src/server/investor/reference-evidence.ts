@@ -9,6 +9,7 @@ import { readInvestorTrialRegistry } from "./trial-evidence";
 import { validateInvestorReferenceDocument, verifyInvestorKernelResult } from "./kernel-contracts";
 import { fixedPolicyDecisionRule, fixedPolicySuffix } from "./fixed-policy";
 import { researchEngineForPlan } from "./research-execution";
+import { actionCostMethodology, reviewCostMethodology, settlementCostMethodology } from "./reference-cost-methodology";
 
 type JsonObject = Record<string, unknown>;
 type SealedRow = { id: string; profile_id: string; document_json: string; content_hash: string; created_at: string };
@@ -57,9 +58,7 @@ function render(profileId: string, requestId: string, runId: string, inputVersio
       ? "买入数量按冻结价格缓冲 " + new Decimal(execution.buy_price_buffer_bps as string).div(100).toFixed()
         + "%、外币汇率缓冲 " + new Decimal(execution.buy_fx_buffer_bps as string).div(100).toFixed()
         + "% 及费用预留；超界跳过，不临时缩量。" : "") + (actionAware
-        ? "已知公司行动落在决策与预定成交之间时，整批暂不建单，等下一预定评估重新计算；等待仍承担现金机会成本，未知行动仍可取消已建订单。" : "") + (eventReview
-        ? "新行动取消尚未成交的整批订单后，仅在预定时点以新价格重新评估并保留替代链；原始取消仍展示，未解决复核或其他执行失败阻止准入。" : "") + (settled
-        ? "卖出时只登记尚未冻结的买入意图；完整交收后，在预定决策点按当时现金和目标冻结新买单。未完成或失败意图阻止准入，不重复计入预计卖款。" : ""),
+        ? actionCostMethodology : "") + (eventReview ? reviewCostMethodology : "") + (settled ? settlementCostMethodology : ""),
     risk_scenarios: candidate.stresses.map(row => row.label + "：假设组合变化 " + percent(row.portfolio_return) + "；不是发生概率或未来损失上限。"),
     benchmark_summary: "同 ETF 范围、时点与成本口径；训练期基准扣费后 TWR " + percent(candidate.train.benchmark_twr) + "。各阶段重新起算，不是连续个人收益。",
     counterarguments: ["历史目录与可用时点为重建假设，不能排除幸存者偏差或工具外样本曝光。", "较高历史收益不证明未来优势；复杂策略必须与简单基准比较。"],

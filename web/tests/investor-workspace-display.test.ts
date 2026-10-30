@@ -8,6 +8,7 @@ import { acquisitionDeadlines } from "../src/components/workbench/investor-acqui
 import { mountInvestorDisplay } from "./investor-display-fixture";
 import { displayBinding as binding, displayBefore, displayUntil, displayFuture, displayState } from "./investor-display-state-fixture";
 import { blockedResearchDisplayState } from "./investor-research-blocker-fixture";
+import { actionCostMethodology, reviewCostMethodology, settlementCostMethodology } from "../src/server/investor/reference-cost-methodology";
 
 const before = Date.parse(displayBefore), until = Date.parse(displayUntil);
 function validationHoldState() {
@@ -47,6 +48,36 @@ function mount(t: { after: (fn: () => void) => void }, state = displayState(), v
     headline: () => h.nodes().filter(node => node.type === "h2").map(node => h.words(node)).find(text => ["继续观察", "需要你做决定", "证据不足"].includes(text)),
   };
 }
+
+test("reference and change cards fold only execution method, retaining cost, risk, counterevidence and dates without commands", async t => {
+  const summary = "Fictional costs 12.37 CNY; price buffer 2%; FX buffer 1%.",
+    methodology = actionCostMethodology + reviewCostMethodology + settlementCostMethodology;
+  for (const view of ["overview", "plan"]) {
+    const state = displayState(); state.plan!.document.estimated_cost = summary + methodology;
+    const original = JSON.stringify(state), h = mount(t, state, view); await h.flush();
+    const folds = h.nodes().filter(node => node.props["data-testid"] === "research-cost-methodology");
+    assert.equal(folds.length, 2);
+    for (const fold of folds) { assert.equal(!!fold.props.open, false); assert.match(h.words(fold), /执行方法与交收规则/); assert.ok(h.words(fold).endsWith(methodology)); }
+    for (const title of ["当前参考组合", "变化卡 · 决定由你作出"]) {
+      const card = h.card(title)!;
+      const withoutMethod = folds.reduce((text, fold) => text.replace(h.words(fold), ""), h.words(card));
+      assert.ok(withoutMethod.includes(summary)); assert.ok(!withoutMethod.includes(settlementCostMethodology));
+      if (title === "当前参考组合") {
+        for (const risk of state.plan!.document.risk_scenarios) assert.ok(withoutMethod.includes(risk));
+        assert.ok(withoutMethod.includes(state.plan!.document.data_cutoff)); assert.ok(withoutMethod.includes(state.plan!.document.valid_until));
+      } else for (const counterargument of state.plan!.document.counterarguments) assert.ok(withoutMethod.includes(counterargument));
+    }
+    assert.ok(h.button("暂缓")); assert.equal(h.requests.length, 0); assert.equal(JSON.stringify(state), original); h.close();
+  }
+});
+
+test("unrecognized and legacy cost explanations remain fully visible instead of being truncated", async t => {
+  const state = displayState(); state.plan!.document.estimated_cost = "Fictional estimated cost 12.37 CNY. Full unknown method and tax 3 CNY.";
+  const h = mount(t, state); await h.flush();
+  assert.equal(h.nodes().some(node => node.props["data-testid"] === "research-cost-methodology"), false);
+  for (const title of ["当前参考组合", "变化卡 · 决定由你作出"]) assert.ok(h.words(h.card(title)).includes(state.plan!.document.estimated_cost));
+  assert.equal(h.requests.length, 0);
+});
 
 test("actual workspace invalidates the current headline, card, actions and AI at review expiry while reads are locked; history stays visible", async t => {
   const h = mount(t); await h.flush(); assert.equal(h.headline(), "需要你做决定"); assert.ok(h.button("采纳思路"));
