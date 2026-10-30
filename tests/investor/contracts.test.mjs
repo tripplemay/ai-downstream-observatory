@@ -152,6 +152,18 @@ test('owner-reviewed evidence facts are closed contracts, not provider licence c
   assert.equal(validate({ ...value, facts: { ...value.facts, account_region: 'unknown' } }), false);
 });
 
+test('current FX series requires an explicit closed owner-reviewed append-only declaration', () => {
+  const validate = ajv.getSchema('https://etf-workbench.invalid/contracts/v1/investor-data-facts.schema.json');
+  const facts = { currency: 'USD', unit: 'CNY_per_unit_currency', rows: [
+    { observed_at: '2026-01-02T10:00:00Z', assumed_available_at: '2026-01-02T10:01:00Z', value: '7.1' } ] };
+  assert.equal(validate({ kind: 'fx', facts }), true, JSON.stringify(validate.errors));
+  const series = { authority_id: 'fictional-reference-series', revision_policy: 'append_only_no_restatements' };
+  assert.equal(validate({ kind: 'fx', facts: { ...facts, monitor_series: series } }), true, JSON.stringify(validate.errors));
+  for (const monitor_series of [{ ...series, revision_policy: 'pick_newest' }, { authority_id: series.authority_id },
+    { ...series, provider_certified: true }, { ...series, authority_id: '' }, null])
+    assert.equal(validate({ kind: 'fx', facts: { ...facts, monitor_series } }), false);
+});
+
 test('snapshot manifest cannot grant external AI, live eligibility or point-in-time archive status', () => {
   const validate = ajv.getSchema('https://etf-workbench.invalid/contracts/v1/investor-data-snapshot.schema.json');
   const value = { schema_version: 'investor-data-snapshot-v1', workspace_id: 'fixture', created_at: '2026-01-02T12:00:03.000Z',

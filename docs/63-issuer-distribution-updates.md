@@ -73,6 +73,9 @@ historical review, new research trial or holdout replay is introduced.
 3. Publish reviewed current-source snapshots without replacing frozen research
    inputs. Bind FX selection to a coherent current authority, not arbitrary
    newest-review selection or currency-only ambiguity.
+   The bounded first-input selection increment is documented in
+   [current FX review selection](64-current-fx-source-selection.md); it is not
+   yet a scheduled source producer or continuous-feed authority registry.
 4. Wire scheduled updates, independent validation and actual monitor admission;
    handle corrections, expiry and restatement without resetting model history.
 5. Validate real source-to-homepage normal/funding/stale flows, consent-limited
