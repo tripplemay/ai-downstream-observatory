@@ -121,7 +121,8 @@ def monitor_payload_unavailable(db, row, kind, now):
         and run["created_at"] == row["created_at"] and run["valid_until"] == row["valid_until"] and run["status"] == row["status"])
     request = db.execute("SELECT * FROM investor_evidence_monitor_requests WHERE id=? AND workspace_id=? AND model_id=?", (row["request_id"], workspace, model["id"])).fetchone()
     _assert(request is not None and request["created_at"] <= row["created_at"])
-    bound = _object(request["document_json"]); validate_contract(bound, "investor-evidence-monitor.schema.json", fragment="$defs/request")
+    from .evidence_monitor_runtime import _validate_request
+    bound = _object(request["document_json"]); _validate_request(bound)
     input_row, _, reason = _monitor_reason(db, workspace, definition, request["input_id"], request["created_at"], now)
     _assert(content_hash(bound) == request["input_version"] == run["input_version"]
         and bound["model_hash"] == model["content_hash"] and bound["profile_hash"] == definition["profile_hash"]

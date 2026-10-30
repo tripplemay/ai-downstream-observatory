@@ -135,6 +135,25 @@ phase-ending orphans, actions, foreign costs, three markets and ten-year capital
 continuity. These are software fixtures, not provider or financial evidence.
 The original36 preparation vectors remain in their separate test file.
 
+Further interleaving checks preserve repeated sale-action roots/generations,
+one filled sale while its sibling is replaced, complete settlement waiting and
+a receivable that remains unavailable beyond the window. A below-minimum-lot
+buy scope expires even with zero raw errors; nonzero costs remain unchanged.
+Annual partial release during settlement keeps the unreleased principal in the
+cash floor and binds the exact available-cash snapshot. Full independent Web
+execution matches these fictional traces, not just their summary counters.
+
+Current-clock native checks also exercised a generated reference, explicit save,
+annual comparison and both curve paths, human deferral, decision/observe results
+and revoked-source blocking. They used fictional receipts, not real quotes,
+continuous provider uptime or investment qualification. The journey exposed a
+real maintenance bug: source retirement validated a planned-monitor request
+against the old request contract. Retirement now reuses the runtime's strict
+version dispatcher, preserving the funding binding/hash rather than stripping
+them. Active or malformed requests still cannot authorize retirement; source
+withdrawal can retire affected derivatives and let normal core publish a gap.
+No financial fact, original observation/decision or backup is removed by this fix.
+
 ## Required before any new real study or production acceptance
 
 Do not advertise this kernel as the finished investment workflow. Still required:

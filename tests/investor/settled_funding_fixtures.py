@@ -17,6 +17,14 @@ def settled_input(years=1):
     return value
 
 
+def release_during_settlement_case():
+    value = settled_input()
+    value['funding_plan']['first_annual_date'] = '2026-04-17'
+    for row in value['dataset']['observations']:
+        if row['listing_id'] == 'CN:ALPHA' and row['observed_at'] >= '2015-04-15': row['value'] = '20'
+    return value
+
+
 def documents():
     sales = settled_input()
     for row in sales['dataset']['observations']:
