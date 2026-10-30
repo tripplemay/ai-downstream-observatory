@@ -294,3 +294,30 @@ test("main navigation is compact and never speculatively fetches other expensive
   }
   assert.equal(h.requests.length, 0);
 });
+test("background refresh is single-flight and does not lock risk editing; explicit refresh still locks", async t => {
+  const state = historicalDisplayState(true), h = mount(t, state, "plan"); await h.flush();
+  await h.advance(before + 5000); assert.equal(h.requests.length, 1); assert.equal(h.requests[0].method, "GET");
+  assert.equal(h.node("InvestorRiskPanel")!.props.disabled, false);
+  await h.click("刷新状态"); await h.advance(before + 10000);
+  assert.equal(h.requests.length, 1); assert.equal(h.node("InvestorRiskPanel")!.props.disabled, false);
+  await h.reply(0, { ...state, session_binding: binding });
+  await h.click("刷新状态"); assert.equal(h.requests.length, 2);
+  assert.equal(h.node("InvestorRiskPanel")!.props.disabled, true);
+  await h.reply(1, { ...state, session_binding: binding });
+  assert.equal(h.node("InvestorRiskPanel")!.props.disabled, false);
+  assert.equal(h.requests.every(row => row.method === "GET"), true);
+});
+test("an older background response or error cannot replace state or unlock a pending human mutation", async t => {
+  for (const failed of [false, true]) {
+    const state = historicalDisplayState(true), h = mount(t, state, "plan"); await h.flush(); await h.advance(before + 5000);
+    await h.click("暂停观察任务"); assert.equal(h.requests.length, 2); assert.equal(h.requests[1].method, "POST");
+    assert.equal(h.node("InvestorRiskPanel")!.props.disabled, true);
+    if (failed) await h.fail(0);
+    else await h.reply(0, { ...state, revision: state.revision + 100, session_binding: binding });
+    assert.equal((h.node("InvestorRiskPanel")!.props.state as typeof state).revision, state.revision);
+    assert.equal(h.node("InvestorRiskPanel")!.props.disabled, true);
+    assert.doesNotMatch(h.text(), /操作未完成，请重新核对研究记录/);
+    await h.reply(1, { error: "INVESTOR_REVISION_CONFLICT" }, 409);
+    assert.equal(h.node("InvestorRiskPanel")!.props.disabled, false); assert.equal(h.requests.length, 2); h.close();
+  }
+});

@@ -271,7 +271,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
   const [data, setData] = useState<InvestorState | null>(initial), [editing, setEditing] = useState(initial.profile === null);
   const [busy, setBusy] = useState(true), [hydrated, setHydrated] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const [pending, setPending] = useState<{ body: string; binding: string; workspace: string | null } | null>(null);
-  const alive = useRef(true), invalidated = useRef(false), generation = useRef(0);
+  const alive = useRef(true), invalidated = useRef(false), generation = useRef(0), refreshInFlight = useRef(false);
   const accountScope = useRef(false), [accountScopeLocked, setAccountScopeLocked] = useState(false);
   const lockAccountScope = useCallback((value: boolean) => { accountScope.current = value; setAccountScopeLocked(value); }, []);
   const note = useRef<HTMLTextAreaElement>(null);
@@ -313,10 +313,13 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
     setData(state); return true;
   }
   async function refresh(clearError = true) {
-    if (busy || !sessionVerified || invalidated.current || accountScope.current) return;
-    const sequence = ++generation.current; setBusy(true); if (clearError) setError("");
-    try { await load(sequence); } catch (e) { if (alive.current) setError(e instanceof Error ? e.message : "INVESTOR_UNAVAILABLE"); }
-    finally { if (alive.current && sequence === generation.current) setBusy(false); }
+    if (busy || refreshInFlight.current || !sessionVerified || invalidated.current || accountScope.current) return;
+    const sequence = ++generation.current; refreshInFlight.current = true;
+    // Background reads must not disable a focused form; writes keep their lock.
+    if (clearError) { setBusy(true); setError(""); }
+    try { await load(sequence); }
+    catch (e) { if (alive.current && !invalidated.current && sequence === generation.current) setError(e instanceof Error ? e.message : "INVESTOR_UNAVAILABLE"); }
+    finally { refreshInFlight.current = false; if (clearError && alive.current && sequence === generation.current) setBusy(false); }
   }
   useEffect(() => {
     if (view === "observations" || busy || pending || editing || accountScopeLocked || !sessionVerified || invalidated.current) return;

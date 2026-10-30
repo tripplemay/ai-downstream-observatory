@@ -47,6 +47,12 @@ Explicit navigation still runs the normal independent evidence checks. This
 removes unnecessary background reads; it does not certify latency, remove
 verification, increase request timeouts or establish the cause of a proxy error.
 
+Background status reads are single-flight and do not use the mutation/form lock.
+They retain session, generation and account-scope checks. A human command may
+supersede an older background response; neither its result nor its error may
+replace the new scope or unlock a pending write. Explicit refresh still locks
+the view. Polling must not repeatedly disable a focused input and erase focus.
+
 ## Required verification
 
 1. Generated and selected references are distinguishable while the current
@@ -60,6 +66,9 @@ verification, increase request timeouts or establish the cause of a proxy error.
    expand risk and invalidate current claims without reordering the form.
 5. Desktop and narrow mobile layouts, keyboard navigation and actual Next
    route requests are checked against the built candidate, not a previous build.
+6. Observe focus events through actual background reads and the expiry boundary.
+   Retaining a DOM node alone is insufficient: temporarily disabling the node
+   also loses focus. Check single-flight reads and mutation races separately.
 
 Unit/component tests only prove their stated software scopes. Current real
 monitoring, authorized AI explanations, account-level acceptance, full Linux load,
