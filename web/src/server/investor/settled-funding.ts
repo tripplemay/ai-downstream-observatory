@@ -14,8 +14,8 @@ function object(value: unknown, fields: string): Obj {
   requireValue(Object.keys(result).length === expected.length && expected.every(key => Object.hasOwn(result, key)));
   return result;
 }
-function ids(value: unknown, maximum: number): string[] {
-  requireValue(Array.isArray(value) && value.length > 0 && value.length <= maximum
+function ids(value: unknown, maximum: number, empty = false): string[] {
+  requireValue(Array.isArray(value) && value.length >= (empty ? 0 : 1) && value.length <= maximum
     && value.every(item => typeof item === "string" && item.trim() === item && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(item))
     && new Set(value).size === value.length);
   return value as string[];
@@ -37,11 +37,12 @@ function time(value: unknown) {
 /** Independent arithmetic boundary, not source/lineage/strategy admission or an order publisher. */
 export function prepareSettledCashBuys(raw: unknown) {
   const value = object(raw, "schema_version intent decision_at decision_times cash book needs execution");
-  requireValue(value.schema_version === "settled-cash-buy-preparation-v1");
+  requireValue(["settled-cash-buy-preparation-v1", "settled-cash-buy-preparation-v2"].includes(value.schema_version as string));
+  const reviewedLeaves = value.schema_version === "settled-cash-buy-preparation-v2";
   const intent = object(value.intent, "id declared_at deadline policy_hash sale_order_ids buy_listing_ids");
   const intentId = ids([intent.id], 1)[0];
   requireValue(typeof intent.policy_hash === "string" && intent.policy_hash.length === 64 && /^[a-f0-9]{64}$/.test(intent.policy_hash));
-  const sales = ids(intent.sale_order_ids, 100), scope = ids(intent.buy_listing_ids, 20);
+  const sales = ids(intent.sale_order_ids, 100, reviewedLeaves), scope = ids(intent.buy_listing_ids, 20);
   const declared = time(intent.declared_at), deadline = time(intent.deadline), at = time(value.decision_at);
   requireValue(declared < deadline);
   requireValue(Array.isArray(value.decision_times) && value.decision_times.length > 0 && value.decision_times.length <= 30000);
@@ -49,7 +50,7 @@ export function prepareSettledCashBuys(raw: unknown) {
   requireValue(decisions.every((item, index) => index === 0 || decisions[index - 1] < item));
   requireValue(decisions.includes(at) && at > declared, "SETTLED_FUNDING_DECISION_NOT_DECLARED");
   requireValue(at < deadline, "SETTLED_FUNDING_INTENT_EXPIRED");
-  requireValue(Array.isArray(value.book) && value.book.length > 0 && value.book.length <= 10000);
+  requireValue(Array.isArray(value.book) && value.book.length >= (reviewedLeaves ? 0 : 1) && value.book.length <= 10000);
   const book = new Map<string, Obj>();
   for (const item of value.book) {
     const row = object(item, "id listing_id side cash_intent_id state settled_at");
@@ -67,8 +68,8 @@ export function prepareSettledCashBuys(raw: unknown) {
   requireValue(sales.every(id => book.get(id)!.state === "settled" && book.get(id)!.settled_at !== null), "SETTLED_FUNDING_SALES_UNSETTLED");
   const settlements = sales.map(id => time(book.get(id)!.settled_at));
   requireValue(settlements.every(item => item > declared), "SETTLED_FUNDING_SALES_UNSETTLED");
-  const settled = settlements.reduce((maximum, item) => item > maximum ? item : maximum);
-  requireValue(settled < at, "SETTLED_FUNDING_SALES_UNSETTLED");
+  const settled = settlements.length ? settlements.reduce((maximum, item) => item > maximum ? item : maximum) : null;
+  requireValue(settled === null || settled < at, "SETTLED_FUNDING_SALES_UNSETTLED");
   const cash = object(value.cash, "as_of settled_cny reserved_cny floor_cny");
   requireValue(time(cash.as_of) === at, "SETTLED_FUNDING_CASH_SNAPSHOT_STALE");
   const available = Decimal.max(0, number(cash.settled_cny).minus(number(cash.reserved_cny)).minus(number(cash.floor_cny)));
@@ -90,7 +91,7 @@ export function prepareSettledCashBuys(raw: unknown) {
     requireValue(!book.has(id) && !newIds.has(id), "SETTLED_FUNDING_ORDER_ID_REUSED"); newIds.add(id);
     requireValue(["CNY", "HKD", "USD"].includes(row.currency as string));
     const observed = time(row.observed_at), known = time(row.available_at);
-    requireValue(row.mark_kind === "observed_close" && settled <= observed && observed <= known && known <= at,
+    requireValue(row.mark_kind === "observed_close" && (settled ?? declared) <= observed && observed <= known && known <= at,
       "SETTLED_FUNDING_POST_SETTLEMENT_CLOSE_REQUIRED");
     if (row.currency === "CNY") requireValue(row.fx_observed_at === null && row.fx_available_at === null);
     else {
@@ -130,8 +131,8 @@ export function prepareSettledCashBuys(raw: unknown) {
   }
   const totalBudget = orders.reduce((total, order) => total.plus(order.budget_cny), new Decimal(0));
   requireValue(totalBudget.lte(available));
-  return { schema_version: "settled-cash-buy-preparation-result-v1" as const, input_hash: hash(value),
-    intent_id: intentId, policy_hash: intent.policy_hash, decision_at: economicStamp(at), latest_sale_settlement_at: economicStamp(settled),
+  return { schema_version: reviewedLeaves ? "settled-cash-buy-preparation-result-v2" as const : "settled-cash-buy-preparation-result-v1" as const, input_hash: hash(value),
+    intent_id: intentId, policy_hash: intent.policy_hash, decision_at: economicStamp(at), latest_sale_settlement_at: settled === null ? null : economicStamp(settled),
     cash_snapshot_hash: hash(cash), available_cash_cny: economicText(available), total_budget_cny: economicText(totalBudget),
     total_worst_cash_cny: economicText(orders.reduce((total, order) => total.plus(order.worst_total_cash_cny), new Decimal(0))),
     unreserved_cash_cny: economicText(available.minus(totalBudget)), orders, published: false as const, live_advice_eligible: false as const };

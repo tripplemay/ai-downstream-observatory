@@ -49,6 +49,8 @@ function contributionXirr(flows: { date: string; amount: Decimal }[]) {
 }
 
 export function continuousPerformance(start: bigint, end: bigint, initial: Decimal, closing: Decimal, flows: Flow[], curve: Point[], zone: string) {
+  initial = new Decimal(initial.toFixed()); closing = new Decimal(closing.toFixed());
+  flows = flows.map(flow => ({ ...flow, amount: new Decimal(flow.amount.toFixed()), before: new Decimal(flow.before.toFixed()) }));
   let factor = new Decimal(1), previous = initial, valid = initial.gt(0);
   for (const flow of flows) {
     requireEconomic(start < flow.at && flow.at <= end && flow.amount.gt(0));
@@ -67,7 +69,7 @@ export function continuousPerformance(start: bigint, end: bigint, initial: Decim
     if (decline.lt(worst)) { worst = decline; worstPeak = peak; recovered = null; }
   }
   const days = day(economicDate(end, zone)) - day(economicDate(start, zone));
-  const annual = days > 0 ? new Decimal(curve.at(-1)!.unit_nav).pow(new Decimal(365).div(days)).minus(1) : null;
+  const annual = days > 0 ? new Decimal(curve.at(-1)!.unit_nav).div(1).pow(new Decimal(365).div(days)).minus(1) : null;
   const xirr = contributionXirr([{ date: economicDate(start, zone), amount: initial.negated() },
     ...flows.map(flow => ({ date: economicDate(flow.at, zone), amount: flow.amount.negated() })),
     { date: economicDate(end, zone), amount: closing }]);

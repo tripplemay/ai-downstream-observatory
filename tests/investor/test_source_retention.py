@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from tests.investor import test_data_evidence as data, test_evidence_monitor_runtime as monitor, test_monitor_data as monitor_data, test_runtime as queue
+from tests.investor import test_planned_funding_runtime as planned
 from worker.investor.data_evidence import purge_price_payload, review_source
 from worker.investor.evidence_monitor_runtime import purge_monitor_payload
 from worker.investor.monitor_admission import admit_monitor_data
@@ -276,6 +277,71 @@ class MonitorRetentionTests(unittest.TestCase):
         self.assertEqual(run["status"], "blocked"); self.assertIsNone(payload["assessment"])
         self.assertEqual(self.db.execute("SELECT count(*) FROM investor_evidence_checkpoint_payloads").fetchone()[0], 0)
         self.assertEqual(self.db.execute("SELECT count(*) FROM investor_evidence_run_payloads").fetchone()[0], 1)
+        self.assert_no_finance()
+
+
+class PlannedMonitorRetentionTests(unittest.TestCase):
+    setUp = queue.InvestorRuntimeTests.setUp
+    save = queue.InvestorRuntimeTests.save
+    seed = planned.PlannedFundingRuntimeTests.seed
+    funding = planned.PlannedFundingRuntimeTests.funding
+    calculate = planned.PlannedFundingRuntimeTests.calculate
+    assert_no_finance = queue.InvestorRuntimeTests.assert_no_finance
+    protected_state = MonitorRetentionTests.protected_state
+
+    def test_new_request_active_data_is_not_due_and_keeps_its_funding_binding(self):
+        self.seed(); self.funding(); run, _ = self.calculate()
+        request = self.db.execute('SELECT * FROM investor_evidence_monitor_requests WHERE id=?', (run['request_id'],)).fetchone()
+        document = json.loads(request['document_json'])
+        self.assertEqual(document['schema_version'], 'investor-evidence-monitor-request-v2')
+        self.assertEqual(document['engine_version'], 'investor-evidence-model-watcher-v4')
+        before, changes = self.protected_state(), self.db.total_changes
+        for kind, identity in (('run', run['id']), ('checkpoint', run['checkpoint_id'])):
+            with self.assertRaisesRegex(WorkbenchError, 'PURGE_NOT_DUE'):
+                purge_monitor_payload(self.db, 'w', 'synthetic-investor', kind, identity, now=monitor.NOW)
+        self.assertEqual(self.protected_state(), before); self.assertEqual(self.db.total_changes, changes)
+        self.assertEqual(dict(self.db.execute('SELECT * FROM investor_evidence_monitor_requests WHERE id=?', (request['id'],)).fetchone()), dict(request))
+        self.assert_no_finance()
+
+    def test_new_request_withdrawal_cleanup_and_default_core_publish_gap_without_research_or_financial_writes(self):
+        self.seed(); self.funding(); run, _ = self.calculate()
+        rights = self.db.execute("""SELECT r.* FROM investor_monitor_evidence_inputs i
+            JOIN json_each(i.document_json,'$.segments') segment
+            JOIN json_each(segment.value,'$.snapshot.review_refs') ref
+            JOIN investor_data_reviews r ON r.id=json_extract(ref.value,'$.review_id')
+            JOIN investor_data_sources s ON s.id=r.source_id WHERE s.kind='rights' ORDER BY i.rowid DESC LIMIT 1""").fetchone()
+        later = '2026-01-03T12:15:03.000Z'
+        review_source(self.db, 'w', 'synthetic-investor', rights['source_id'], 'withdrawn', None,
+                      'Fictional planned-monitor withdrawal', rights['valid_until'], now=later)
+        before = self.protected_state()
+        studies = self.db.execute('SELECT count(*) FROM investor_trial_results').fetchone()[0]
+        with patch.object(data.longport, 'read_private_credentials_file') as secrets, patch.object(data.longport, '_collect_isolated') as network:
+            values = purge_due_source_payloads(self.db, now=later)
+            self.assertTrue(any(value.get('kind') == 'run' and value.get('entity_id') == run['id'] for value in values))
+            self.assertEqual(self.protected_state(), before)
+            self.assertEqual(self.db.execute('SELECT count(*) FROM investor_evidence_checkpoint_payloads').fetchone()[0], 0)
+            self.assertEqual(self.db.execute('SELECT count(*) FROM investor_evidence_run_payloads').fetchone()[0], 0)
+            self.assertEqual(purge_due_source_payloads(self.db, now=later), [])
+            blocked, payload = self.calculate(later)
+            secrets.assert_not_called(); network.assert_not_called()
+        self.assertEqual(blocked['status'], 'blocked'); self.assertIsNone(payload['assessment'])
+        self.assertEqual(self.db.execute('SELECT count(*) FROM investor_trial_results').fetchone()[0], studies)
+        self.assert_no_finance()
+
+    def test_malformed_new_request_cannot_authorize_retirement(self):
+        from worker.investor import source_retention
+        self.seed(); self.funding(); run, _ = self.calculate()
+        original = source_retention._object
+        def missing_binding(value):
+            document = original(value)
+            if document.get('schema_version') == 'investor-evidence-monitor-request-v2': document.pop('funding_context_hash')
+            return document
+        before, changes = self.protected_state(), self.db.total_changes
+        with patch.object(source_retention, '_object', side_effect=missing_binding):
+            with self.assertRaisesRegex(WorkbenchError, 'CONTRACT_INVALID'):
+                purge_monitor_payload(self.db, 'w', 'synthetic-investor', 'run', run['id'], now=monitor.NOW)
+        self.assertEqual(self.protected_state(), before); self.assertEqual(self.db.total_changes, changes)
+        self.assertEqual(self.db.execute('SELECT count(*) FROM investor_monitor_payload_purges').fetchone()[0], 0)
         self.assert_no_finance()
 
 

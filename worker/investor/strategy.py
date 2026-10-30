@@ -13,21 +13,27 @@ from .implementation import implementation_hash
 
 ENGINE_VERSION = "investor-diversified-reference-v1"
 EVENT_ENGINE_VERSION = "investor-diversified-reference-v2"
+SETTLED_ENGINE_VERSION = "investor-diversified-reference-v3"
 PHASES = ("train", "validation", "holdout")
 REVIEW_KEYS = ("terminal_execution_failure_count", "corporate_action_cancellation_count",
               "resolved_corporate_action_cancellation_count", "unresolved_order_review_count", "order_review_lineage_hash")
+FUNDING_KEYS = ('failed_cash_intent_count', 'pending_cash_intent_count', 'cash_intent_lineage_hash')
+
+
+def settled_cash(plan):
+    return plan.get('schema_version') == 'research-plan-v6'
 
 
 def event_review(plan):
-    return plan.get("schema_version") == "research-plan-v5"
+    return plan.get("schema_version") in ("research-plan-v5", 'research-plan-v6')
 
 
 def research_engine(plan):
-    return EVENT_ENGINE_VERSION if event_review(plan) else ENGINE_VERSION
+    return SETTLED_ENGINE_VERSION if settled_cash(plan) else EVENT_ENGINE_VERSION if event_review(plan) else ENGINE_VERSION
 
 
 def strategy_schema(plan):
-    return "investor-strategy-result-v2.schema.json" if event_review(plan) else "investor-strategy-result.schema.json"
+    return 'investor-strategy-result-v3.schema.json' if settled_cash(plan) else "investor-strategy-result-v2.schema.json" if event_review(plan) else "investor-strategy-result.schema.json"
 
 
 def validate_phase_summary(summary, plan):
@@ -49,17 +55,23 @@ def _summary(report):
             **{key: result[key] for key in keys},
             **{"benchmark_" + key: report["benchmark"][key] for key in ("twr", "annualized_unit_return", "max_drawdown", "execution_failure_count", "profit_cny", "fees_cny", "fx_fees_cny", "slippage_cny")},
             "excess_twr": report["excess_twr"], "assumptions": result["assumptions"]}
-    if report["schema_version"] == "research-result-v4":
-        summary.update(schema_version="investor-phase-summary-v2", **{key: result[key] for key in REVIEW_KEYS},
+    if report["schema_version"] in ("research-result-v4", 'research-result-v5'):
+        summary.update(schema_version='investor-phase-summary-v3' if report['schema_version'] == 'research-result-v5' else "investor-phase-summary-v2", **{key: result[key] for key in REVIEW_KEYS},
                        **{"benchmark_" + key: report["benchmark"][key] for key in REVIEW_KEYS})
+    if report['schema_version'] == 'research-result-v5':
+        summary.update(**{key: result[key] for key in FUNDING_KEYS},
+                       **{'benchmark_' + key: report['benchmark'][key] for key in FUNDING_KEYS})
     return summary
 
 
 def _usable(summary):
     execution_usable = summary["execution_failure_count"] == 0 and summary["benchmark_execution_failure_count"] == 0
-    if summary.get("schema_version") == "investor-phase-summary-v2":
+    if summary.get("schema_version") in ("investor-phase-summary-v2", 'investor-phase-summary-v3'):
         execution_usable = all(summary[prefix + key] == 0 for prefix in ("", "benchmark_")
                                for key in ("terminal_execution_failure_count", "unresolved_order_review_count"))
+    if summary.get('schema_version') == 'investor-phase-summary-v3':
+        execution_usable = execution_usable and all(summary[prefix + key] == 0 for prefix in ('', 'benchmark_')
+            for key in ('failed_cash_intent_count', 'pending_cash_intent_count'))
     return (all(summary[key] is not None for key in ("twr", "annualized_unit_return", "max_drawdown", "benchmark_twr", "benchmark_annualized_unit_return", "benchmark_max_drawdown", "excess_twr"))
             and -ONE <= decimal(summary["max_drawdown"]) <= ZERO
             and -ONE <= decimal(summary["benchmark_max_drawdown"]) <= ZERO
@@ -84,10 +96,10 @@ def _within_risk(summary, stresses, limit):
 
 @financial
 def _validate_policy(policy, dataset, plan):
-    validate_contract(policy, "investor-strategy-policy-v2.schema.json" if event_review(plan) else "investor-strategy-policy.schema.json")
+    validate_contract(policy, 'investor-strategy-policy-v3.schema.json' if settled_cash(plan) else "investor-strategy-policy-v2.schema.json" if event_review(plan) else "investor-strategy-policy.schema.json")
     if len(dataset["assets"]) > 20 or len(dataset["observations"]) > 100000 or len(dataset["sessions"]) > 30000:
         raise WorkbenchError("INVESTOR_RESEARCH_INPUT_LIMIT")
-    if plan["schema_version"] not in ("research-plan-v2", "research-plan-v3", "research-plan-v4", "research-plan-v5") or dataset["schema_version"] != "research-dataset-v2":
+    if plan["schema_version"] not in ("research-plan-v2", "research-plan-v3", "research-plan-v4", "research-plan-v5", 'research-plan-v6') or dataset["schema_version"] != "research-dataset-v2":
         raise WorkbenchError("INVESTOR_RESEARCH_VERSION_REQUIRED")
     if set(policy["roles"]) != {row["listing_id"] for row in dataset["assets"]}:
         raise WorkbenchError("INVESTOR_RESEARCH_ROLE_SCOPE")
@@ -155,7 +167,7 @@ def research_reference(dataset, plan, policy, profile, *, allow_synthetic=False,
     """
     validate_reference_inputs(dataset, plan, policy, profile, allow_synthetic=allow_synthetic)
     evaluate = evaluate or (lambda parameters, phase: _summary(compare_backtest(dataset, plan, parameters, phase)))
-    basis = {"schema_version": "investor-strategy-result-v2" if event_review(plan) else "investor-strategy-result-v1",
+    basis = {"schema_version": 'investor-strategy-result-v3' if settled_cash(plan) else "investor-strategy-result-v2" if event_review(plan) else "investor-strategy-result-v1",
              "engine_version": research_engine(plan),
              "implementation_hash": implementation_hash(),
              "profile_hash": content_hash(profile), "dataset_hash": content_hash(dataset), "plan_hash": content_hash(plan),

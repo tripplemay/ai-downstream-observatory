@@ -7,6 +7,7 @@ import plan from "../../../../contracts/v1/research-plan.schema.json";
 import boundedPlan from "../../../../contracts/v1/research-plan-v3.schema.json";
 import actionAwarePlan from "../../../../contracts/v1/research-plan-v4.schema.json";
 import eventReviewPlan from "../../../../contracts/v1/research-plan-v5.schema.json";
+import settledPlan from "../../../../contracts/v1/research-plan-v6.schema.json";
 import planInput from "../../../../contracts/v1/research-plan-input.schema.json";
 import parameters from "../../../../contracts/v1/research-parameters.schema.json";
 import fixed from "../../../../contracts/v1/research-fixed-rebalance-parameters.schema.json";
@@ -16,6 +17,7 @@ import rotation from "../../../../contracts/v1/research-rotation-parameters.sche
 import profile from "../../../../contracts/v1/investor-profile.schema.json";
 import policy from "../../../../contracts/v1/investor-strategy-policy.schema.json";
 import policyV2 from "../../../../contracts/v1/investor-strategy-policy-v2.schema.json";
+import policyV3 from "../../../../contracts/v1/investor-strategy-policy-v3.schema.json";
 import policyInput from "../../../../contracts/v1/investor-strategy-policy-input.schema.json";
 import monitor from "../../../../contracts/v1/investor-model-monitor.schema.json";
 import monitorV2 from "../../../../contracts/v1/investor-model-monitor-v2.schema.json";
@@ -24,6 +26,7 @@ import fixedPolicyState from "../../../../contracts/v1/investor-fixed-policy-sta
 import request from "../../../../contracts/v1/investor-kernel-request.schema.json";
 import strategyResult from "../../../../contracts/v1/investor-strategy-result.schema.json";
 import strategyResultV2 from "../../../../contracts/v1/investor-strategy-result-v2.schema.json";
+import strategyResultV3 from "../../../../contracts/v1/investor-strategy-result-v3.schema.json";
 import assessment from "../../../../contracts/v1/investor-model-assessment.schema.json";
 import assessmentV2 from "../../../../contracts/v1/investor-model-assessment-v2.schema.json";
 import modelDefinition from "../../../../contracts/v1/investor-model-definition.schema.json";
@@ -55,12 +58,16 @@ import longHorizonInputV3 from "../../../../contracts/v1/investor-long-horizon-i
 import longHorizonResultV3 from "../../../../contracts/v1/investor-long-horizon-result-v3.schema.json";
 import longHorizonInputV4 from "../../../../contracts/v1/investor-long-horizon-input-v4.schema.json";
 import longHorizonResultV4 from "../../../../contracts/v1/investor-long-horizon-result-v4.schema.json";
+import longHorizonInputV5 from "../../../../contracts/v1/investor-long-horizon-input-v5.schema.json";
+import longHorizonResultV5 from "../../../../contracts/v1/investor-long-horizon-result-v5.schema.json";
 import fundedHistoryInput from "../../../../contracts/v1/investor-funded-history-input.schema.json";
 import fundedHistoryResult from "../../../../contracts/v1/investor-funded-history-result.schema.json";
 import fundedHistoryInputV2 from "../../../../contracts/v1/investor-funded-history-input-v2.schema.json";
 import fundedHistoryResultV2 from "../../../../contracts/v1/investor-funded-history-result-v2.schema.json";
 import fundedHistoryInputV3 from "../../../../contracts/v1/investor-funded-history-input-v3.schema.json";
 import fundedHistoryResultV3 from "../../../../contracts/v1/investor-funded-history-result-v3.schema.json";
+import fundedHistoryInputV4 from "../../../../contracts/v1/investor-funded-history-input-v4.schema.json";
+import fundedHistoryResultV4 from "../../../../contracts/v1/investor-funded-history-result-v4.schema.json";
 import { hash } from "../ledger/service";
 import { parseStrictJson } from "../strict-json";
 import { Decimal } from "../ledger/decimal";
@@ -73,9 +80,10 @@ import { executionChecksUsable, phaseExecutionReview } from "./research-executio
 
 const ajv = new Ajv2020({ strict: true, strictRequired: false });
 addFormats(ajv);
-for (const schema of [policyV2, policyInput, strategyResultV2]) ajv.addSchema(schema);
+for (const schema of [policyV2, policyV3, policyInput, strategyResultV2, strategyResultV3, settledPlan]) ajv.addSchema(schema);
 ajv.addSchema(boundedPlan); ajv.addSchema(actionAwarePlan); ajv.addSchema(eventReviewPlan); ajv.addSchema(planInput);
 for (const schema of [longHorizonInputV4, longHorizonResultV4, fundedHistoryInputV3, fundedHistoryResultV3]) ajv.addSchema(schema);
+for (const schema of [longHorizonInputV5, longHorizonResultV5, fundedHistoryInputV4, fundedHistoryResultV4]) ajv.addSchema(schema);
 for (const schema of [common, observation, dataset, plan, parameters, fixed, fixedV2, fixedPolicy, rotation, profile, policy, monitor, monitorV2, monitorV3, fixedPolicyState, request, strategyResult, assessment, assessmentV2, modelDefinition, modelDefinitionV2, modelSnapshot, modelCheckpoint, experiment, dataFacts, dataSnapshot, evidenceInput, referencePlan, referencePlanV2, monitorDataInput, monitorDataInputV2, monitorPriceSnapshot, monitorDataProjection, evidenceCheckpoint, evidenceCheckpointV2, evidenceCheckpointV3, evidenceMonitor, evidenceMonitorRequestV2, plannedFunding, fundingPlan, longHorizonInput, longHorizonResult, longHorizonInputV2, longHorizonResultV2, longHorizonInputV3, longHorizonResultV3, fundedHistoryInput, fundedHistoryResult, fundedHistoryInputV2, fundedHistoryResultV2]) ajv.addSchema(schema);
 const validateRequest = ajv.getSchema(request.$id)!, validateStrategy = ajv.getSchema(strategyResult.$id)!, validateAssessment = ajv.getSchema(assessment.$id)!;
 type JsonObject = Record<string, unknown>;
@@ -98,9 +106,9 @@ function fail(): never { throw new Error("INVESTOR_KERNEL_RESULT_INVALID"); }
 export function validateFundedHistoryDocument(kind: "input" | "projection" | "result" | "continuous_input", value: unknown) {
   const version = (value as JsonObject | null)?.schema_version;
   const id = kind === "projection" ? fundedHistoryInput.$id + "#/$defs/projection"
-    : kind === "input" ? (version === "investor-funded-history-input-v3" ? fundedHistoryInputV3.$id : version === "investor-funded-history-input-v2" ? fundedHistoryInputV2.$id : fundedHistoryInput.$id)
-    : kind === "continuous_input" ? (version === "investor-long-horizon-input-v4" ? longHorizonInputV4.$id : version === "investor-long-horizon-input-v3" ? longHorizonInputV3.$id : longHorizonInputV2.$id)
-    : version === "investor-funded-history-result-v3" ? fundedHistoryResultV3.$id : version === "investor-funded-history-result-v2" ? fundedHistoryResultV2.$id : fundedHistoryResult.$id;
+    : kind === "input" ? (version === "investor-funded-history-input-v4" ? fundedHistoryInputV4.$id : version === "investor-funded-history-input-v3" ? fundedHistoryInputV3.$id : version === "investor-funded-history-input-v2" ? fundedHistoryInputV2.$id : fundedHistoryInput.$id)
+    : kind === "continuous_input" ? (version === "investor-long-horizon-input-v5" ? longHorizonInputV5.$id : version === "investor-long-horizon-input-v4" ? longHorizonInputV4.$id : version === "investor-long-horizon-input-v3" ? longHorizonInputV3.$id : longHorizonInputV2.$id)
+    : version === "investor-funded-history-result-v4" ? fundedHistoryResultV4.$id : version === "investor-funded-history-result-v3" ? fundedHistoryResultV3.$id : version === "investor-funded-history-result-v2" ? fundedHistoryResultV2.$id : fundedHistoryResult.$id;
   if (!ajv.getSchema(id)!(value)) throw new Error("INVESTOR_FUNDED_HISTORY_INVALID");
 }
 export function validateInvestorModelDocument(kind: "definition" | "snapshot" | "checkpoint", value: unknown) {
@@ -109,7 +117,7 @@ export function validateInvestorModelDocument(kind: "definition" | "snapshot" | 
   requireTrue(ajv.getSchema(schema.$id)!(value));
 }
 export function validateInvestorTrialDocument(kind: "experiment" | "summary", value: unknown, planVersion = "research-plan-v2") {
-  requireTrue(ajv.getSchema(kind === "experiment" ? experiment.$id : (planVersion === "research-plan-v5" ? strategyResultV2.$id : strategyResult.$id) + "#/$defs/summary")!(value));
+  requireTrue(ajv.getSchema(kind === "experiment" ? experiment.$id : (planVersion === "research-plan-v6" ? strategyResultV3.$id : planVersion === "research-plan-v5" ? strategyResultV2.$id : strategyResult.$id) + "#/$defs/summary")!(value));
 }
 export function validateInvestorSourceDocument(kind: "facts" | "snapshot" | "monitor_snapshot" | "input" | "dataset", value: unknown) {
   requireTrue(ajv.getSchema({ facts: dataFacts.$id, snapshot: dataSnapshot.$id, monitor_snapshot: monitorPriceSnapshot.$id, input: evidenceInput.$id, dataset: dataset.$id }[kind])!(value));
@@ -164,8 +172,9 @@ export function verifyInvestorKernelResult(rawRequest: unknown, rawResult: unkno
     const input = object(rawRequest), result = object(rawResult);
     sealed(result);
     if (input.action === "research") {
-      const reviewable = object(input.plan).schema_version === "research-plan-v5";
-      requireTrue(reviewable ? ajv.getSchema(strategyResultV2.$id)!(result) : validateStrategy(result));
+      const version = object(input.plan).schema_version;
+      requireTrue(version === "research-plan-v6" ? ajv.getSchema(strategyResultV3.$id)!(result)
+        : version === "research-plan-v5" ? ajv.getSchema(strategyResultV2.$id)!(result) : validateStrategy(result));
       for (const name of ["dataset", "plan", "policy", "profile"]) requireTrue(result[name + "_hash"] === hash(input[name]));
       requireTrue(result.data_mode === object(input.dataset).mode);
       const candidates = object(input.policy).candidates as JsonObject[];
@@ -186,7 +195,7 @@ export function verifyInvestorKernelResult(rawRequest: unknown, rawResult: unkno
         requireTrue(expected.has(row.parameters_hash as string));
         requireTrue(hash(row.weights) === hash(expected.get(row.parameters_hash as string)!.weights));
         requireTrue(object(row.train).phase === "train");
-        if (["research-plan-v3", "research-plan-v4", "research-plan-v5"].includes(object(input.plan).schema_version as string)) verifyBoundedResearchSummary(input.dataset as ContinuousDataset,
+        if (["research-plan-v3", "research-plan-v4", "research-plan-v5", "research-plan-v6"].includes(object(input.plan).schema_version as string)) verifyBoundedResearchSummary(input.dataset as ContinuousDataset,
           input.plan as BoundedResearchPlan, expected.get(row.parameters_hash as string)! as unknown as ContinuousParameters, object(row.train), "train");
         const stresses = row.stresses as JsonObject[];
         requireTrue(stresses.length === scenarios.length);
@@ -211,7 +220,7 @@ export function verifyInvestorKernelResult(rawRequest: unknown, rawResult: unkno
         requireTrue(loss !== null);
         const chosen = rows.find(row => row.parameters_hash === hash(result.selected_parameters));
         requireTrue(chosen && chosen.risk_budget_pass === true && phases.length > 0 && hash(phases[0]) === hash(chosen.train));
-        if (["research-plan-v3", "research-plan-v4", "research-plan-v5"].includes(object(input.plan).schema_version as string)) for (const summary of phases.slice(1))
+        if (["research-plan-v3", "research-plan-v4", "research-plan-v5", "research-plan-v6"].includes(object(input.plan).schema_version as string)) for (const summary of phases.slice(1))
           verifyBoundedResearchSummary(input.dataset as ContinuousDataset, input.plan as BoundedResearchPlan,
             result.selected_parameters as ContinuousParameters, summary, summary.phase as "validation" | "holdout");
         const eligible = rows.filter(row => row.risk_budget_pass === true).sort((a, b) => {

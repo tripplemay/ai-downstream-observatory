@@ -37,9 +37,12 @@ export function FundedComparisonResults({ value, binding }: { value: FundedCompa
               [p.execution_review ? "原始撤单 / 跳过 / 到期" : "模拟执行缺口", String(p.execution_failure_count)],
               ...(p.execution_review ? [["未解决执行缺口", String(p.execution_review.terminal_failure_count)],
                 ["公司行动撤单 / 已闭合", `${p.execution_review.cancellations} / ${p.execution_review.resolved_cancellations}`],
-                ["未完成复核", String(p.execution_review.unresolved_reviews)]] : [])].map(([label, text]) => <React.Fragment key={label}><dt className="text-muted-foreground">{label}</dt><dd className="break-words text-right tabular-nums">{text}</dd></React.Fragment>)}
+                ["未完成复核", String(p.execution_review.unresolved_reviews)]] : []),
+              ...(p.cash_intent_review ? [["未完成交收后买入意图", String(p.cash_intent_review.pending_intents)],
+                ["失败交收后买入意图", String(p.cash_intent_review.failed_intents)]] : [])].map(([label, text]) => <React.Fragment key={label}><dt className="text-muted-foreground">{label}</dt><dd className="break-words text-right tabular-nums">{text}</dd></React.Fragment>)}
           </dl><p className="mt-3 text-xs text-muted-foreground">费用 {money(p.fees_cny)} · 换汇成本 {money(p.fx_fees_cny)} · 滑点 {money(p.slippage_cny)} CNY；税务覆盖依赖来源假设，未承诺全税费或持续盈利。</p>
           <p className="mt-2 text-xs text-muted-foreground">最深回撤后的恢复：{p.recovered_at ?? "窗口内未确认恢复，或无可确认回撤"}。新本金不被当作投资收益。</p>
+          {p.cash_intent_review && <p className="mt-2 text-xs text-muted-foreground">交收后买入意图是研究状态，不是真实委托。原始订单错误为零，也不代表意图已完成；失败或未完成均阻止完整准入。</p>}
         </section>;
       })}</div>}
       {binding && candidate.paths && <InvestorFundedAnalysisPanel comparison={value} binding={binding} parameters={candidate.parameters_hash} />}

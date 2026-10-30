@@ -91,11 +91,13 @@ class OrderReviews:
         self.events.append({'type': 'order_review_failed', 'at': stamp(at), 'review_id': identity,
                             'order_id': order['id']})
 
-    def complete(self, at, *, within_tolerance=False, no_sales_repair_satisfied=False):
+    def complete(self, at, *, within_tolerance=False, no_sales_repair_satisfied=False, sale_scope_no_longer_needed=False):
         row = self.active
         if row is None or row['status'] == 'failed':
             return
         if no_sales_repair_satisfied and (not within_tolerance or row['allow_sales']):
+            raise WorkbenchError('ORDER_REVIEW_COMPLETION_INVALID')
+        if sale_scope_no_longer_needed and (not within_tolerance or not row['allow_sales'] or no_sales_repair_satisfied):
             raise WorkbenchError('ORDER_REVIEW_COMPLETION_INVALID')
         if within_tolerance:
             if row['status'] != 'pending_evaluation':
@@ -104,7 +106,8 @@ class OrderReviews:
                 self.orders[key]['state'] not in ('filled', 'settled') for key in row['current_replacement_order_ids']):
             return
         row.update(status='resolved', completed_at=stamp(at),
-                   completion_reason='no_sales_repair_no_longer_needed' if no_sales_repair_satisfied
+                   completion_reason='sale_scope_no_longer_needed' if sale_scope_no_longer_needed
+                   else 'no_sales_repair_no_longer_needed' if no_sales_repair_satisfied
                    else 'targets_within_tolerance' if within_tolerance else 'replacement_orders_filled')
         self.events.append({'type': 'order_review_resolved', 'at': stamp(at), 'review_id': row['id'],
                             'reason': row['completion_reason']})

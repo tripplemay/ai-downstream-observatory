@@ -3,7 +3,7 @@ import { hash, type Actor } from "../ledger/service";
 import { parseStrictJson } from "../strict-json";
 import { investorInstant, investorProfileSchema } from "./schemas";
 import { readFundedStudyContext } from "./funded-study";
-import { fundedComparisonSchema, fundedComparisonDenials, type FundedComparison } from "./funded-comparison-schemas";
+import { fundedComparisonSchema, fundedComparisonDenials, fundedPathExecutionUsable, type FundedComparison } from "./funded-comparison-schemas";
 import { assertFundedComparisonBuild, replayStoredFundedComparison, withFundedComparisonCapacity } from "./funded-comparison-process";
 
 export function fundedComparisonSnapshot(db: Database.Database, actor: Actor, now: string) {
@@ -70,8 +70,9 @@ export async function getFundedComparison(db: Database.Database, actor: Actor, o
       if (entry.result) {
         try {
           const replay = await replayStoredFundedComparison(entry.input, entry.result, options.signal);
-          candidate = { ...candidate, status: entry.candidate.status === "failed" ? "verified_with_execution_gaps" : "verified_retrospective",
-            reason_code: entry.candidate.reason_code, economics_hash: replay.economics_hash, paths: replay.paths };
+          const complete = entry.candidate.status !== "failed" && Object.values(replay.paths).every(fundedPathExecutionUsable);
+          candidate = { ...candidate, status: complete ? "verified_retrospective" : "verified_with_execution_gaps",
+            reason_code: complete ? null : entry.candidate.reason_code ?? "FUNDED_STUDY_EXECUTION_GAPS", economics_hash: replay.economics_hash, paths: replay.paths };
         } catch (error) {
           if (options.signal?.aborted) throw error;
           candidate.reason_code = "FUNDED_COMPARISON_REPLAY_FAILED";

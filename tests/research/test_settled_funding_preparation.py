@@ -97,7 +97,7 @@ class SettledFundingPreparationTests(unittest.TestCase):
         self.assertEqual(Fraction(order['worst_total_cash_cny']), Fraction(-(-(exact * 100).numerator // (exact * 100).denominator), 100))
         self.assertEqual(getcontext().prec, original_precision)
 
-    def test_current_research_versions_cannot_select_this_unintegrated_preparation(self):
+    def test_old_plans_and_incomplete_version_tags_cannot_select_the_new_funding_rule(self):
         from tests.research.settled_funding_fixtures import sale_funded_case
         from worker.research.snapshot import validate_plan
         data, original, unused = sale_funded_case()

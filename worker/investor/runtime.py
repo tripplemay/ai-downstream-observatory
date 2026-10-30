@@ -7,7 +7,7 @@ from worker.market.contracts import validate_contract
 from worker.orchestration.db import WorkbenchError, canonical_json, content_hash, instant, new_id, transaction
 from worker.orchestration.jobs import JobCommit, enqueue_job
 from .implementation import implementation_hash
-from .strategy import ENGINE_VERSION, EVENT_ENGINE_VERSION, research_engine, research_reference
+from .strategy import ENGINE_VERSION, EVENT_ENGINE_VERSION, SETTLED_ENGINE_VERSION, research_engine, research_reference
 from .trials import TrialRecorder
 
 
@@ -86,7 +86,7 @@ def _binding(connection, job, now, *, header_only=False):
         raise WorkbenchError("INVESTOR_RESEARCH_BINDING_INVALID")
     document = _json(request["document_json"])
     if (not isinstance(document, dict) or set(document) != {"schema_version", "engine_version", "profile_hash", "input_hash"}
-            or document["schema_version"] != "investor-research-request-v1" or document["engine_version"] not in (ENGINE_VERSION, EVENT_ENGINE_VERSION)
+            or document["schema_version"] != "investor-research-request-v1" or document["engine_version"] not in (ENGINE_VERSION, EVENT_ENGINE_VERSION, SETTLED_ENGINE_VERSION)
             or content_hash(document) != request["input_version"]):
         raise WorkbenchError("INVESTOR_RESEARCH_BINDING_INVALID")
     profile = connection.execute("SELECT * FROM investor_profiles WHERE id=? AND workspace_id=?", (request["profile_id"], job["scope"])).fetchone()

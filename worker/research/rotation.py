@@ -2,7 +2,7 @@
 
 from bisect import bisect_right
 from datetime import datetime
-from decimal import ROUND_CEILING, ROUND_FLOOR
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_EVEN, localcontext
 from heapq import heappop, heappush
 from zoneinfo import ZoneInfo
 
@@ -11,13 +11,20 @@ from worker.accounting import (
     cashflow_profit, decimal, drawdown, exact_twr, quantize_cash, xirr,
 )
 from worker.accounting.decimal_math import ONE, ZERO, financial
-from worker.orchestration.db import WorkbenchError, instant, stamp
+from worker.orchestration.db import WorkbenchError, content_hash, instant, stamp
 from .snapshot import MarketView
 from .fixed_policy import VERSION as FIXED_POLICY_VERSION, class_drift, cooldown_elapsed, period as policy_period
 from .order_reviews import OrderReviews
+from .cash_intents import CashIntents
+from .settled_funding import prepare_settled_cash_buys
 
 
 ENGINE_VERSION = "monthly-rotation-rebalance-v1"
+
+
+@financial
+def _reported_ratio(numerator, denominator):
+    return canonical(numerator / denominator) if denominator > ZERO else None
 
 
 def _next_month(at, zone):
@@ -29,22 +36,31 @@ def _next_month(at, zone):
 @financial
 def run_rotation_portfolio(dataset, plan, parameters, phase, *, progress=None):
     """Consume a validated frozen v2 plan/dataset; never read or write a DB."""
+    if plan['schema_version'] == 'research-plan-v6':
+        with localcontext() as arithmetic:
+            arithmetic.prec = 256
+            return _run_portfolio(dataset, plan, parameters, phase, progress=progress)
     return _run_portfolio(dataset, plan, parameters, phase, progress=progress)
 
 
 @financial
 def run_continuous_portfolio(dataset, plan, releases, *, progress=None, holding_baseline=False):
     """Internal engine for a validated continuous plan and frozen releases."""
+    if plan['schema_version'] == 'investor-long-horizon-plan-v5':
+        with localcontext() as arithmetic:
+            arithmetic.prec = 256
+            return _run_portfolio(dataset, plan, plan['parameters'], 'continuous', releases=releases, progress=progress, holding_baseline=holding_baseline)
     return _run_portfolio(dataset, plan, plan["parameters"], "continuous", releases=releases, progress=progress, holding_baseline=holding_baseline)
 
 
 def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=None, holding_baseline=False):
     continuous = releases is not None
-    reviewable = plan["schema_version"] in ("research-plan-v5", "investor-long-horizon-plan-v4")
+    settled_funding = plan['schema_version'] in ('research-plan-v6', 'investor-long-horizon-plan-v5')
+    reviewable = settled_funding or plan["schema_version"] in ("research-plan-v5", "investor-long-horizon-plan-v4")
     action_aware = reviewable or plan["schema_version"] == "research-plan-v4"
-    bounded = plan["schema_version"] in ("research-plan-v3", "research-plan-v4", "research-plan-v5", "investor-long-horizon-plan-v3", "investor-long-horizon-plan-v4")
+    bounded = settled_funding or plan["schema_version"] in ("research-plan-v3", "research-plan-v4", "research-plan-v5", "investor-long-horizon-plan-v3", "investor-long-horizon-plan-v4")
     execution = plan["execution"]
-    expected_plans = ("investor-long-horizon-plan-v1", "investor-long-horizon-plan-v2", "investor-long-horizon-plan-v3", "investor-long-horizon-plan-v4") if continuous else ("research-plan-v2", "research-plan-v3", "research-plan-v4", "research-plan-v5")
+    expected_plans = ("investor-long-horizon-plan-v1", "investor-long-horizon-plan-v2", "investor-long-horizon-plan-v3", "investor-long-horizon-plan-v4", 'investor-long-horizon-plan-v5') if continuous else ("research-plan-v2", "research-plan-v3", "research-plan-v4", "research-plan-v5", "research-plan-v6")
     if (dataset["schema_version"] != "research-dataset-v2" or plan["schema_version"] not in expected_plans
             or execution["model"] != ("next_session_close_bounded_fixed_quantity" if bounded else "next_session_close_fixed_quantity")
             or execution["settlement_model"] != "explicit_market_calendar"
@@ -57,7 +73,7 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
     if bounded:
         if continuous:
             from worker.market.contracts import validate_contract
-            validate_contract(plan, "investor-long-horizon-input-v4.schema.json" if reviewable else "investor-long-horizon-input-v3.schema.json", fragment="$defs/plan")
+            validate_contract(plan, 'investor-long-horizon-input-v5.schema.json' if settled_funding else "investor-long-horizon-input-v4.schema.json" if reviewable else "investor-long-horizon-input-v3.schema.json", fragment="$defs/plan")
             if (decimal(execution["cash_quantum"]) != decimal("0.01")
                     or any(not ZERO <= decimal(execution[name]) <= 10000 for name in (
                         "buy_price_buffer_bps", "buy_fx_buffer_bps", "commission_bps", "fx_bps"))
@@ -67,6 +83,9 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
         else:
             from .snapshot import validate_plan
             validate_plan(plan, dataset)
+            if settled_funding and content_hash(parameters) not in {
+                    content_hash(row) for row in [*plan['parameter_candidates'], plan['benchmark']]}:
+                raise WorkbenchError('SETTLED_CASH_PARAMETERS_OUTSIDE_PLAN')
         if not low_frequency:
             raise WorkbenchError("BOUNDED_RESEARCH_REQUIRES_FIXED_POLICY")
     if not isinstance(holding_baseline, bool) or holding_baseline and not (continuous and low_frequency):
@@ -92,6 +111,9 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
     pending, unsettled, sale_receivables, dividend_payments = [], [], [], {}
     orders, slots, events, curve, valued_flows = {}, {}, [], [], []
     reviews = OrderReviews(orders, events, parameters["weights"]) if reviewable else None
+    intents = CashIntents(orders, events, reviews, content_hash({'parameters': parameters, 'execution': execution,
+        'decision_times': plan['decision_times'], 'window': window,
+        **({'funding_policy': plan['funding_policy']} if continuous else {})})) if settled_funding else None
     funding_pending, last_proposed_at = False, None
     deferred_review = None
     costs = fx_costs = slippage_costs = cash_rounding = buys = sells = ZERO
@@ -172,8 +194,9 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
         fee = max(decimal(execution["minimum_fee_cny"]), principal * decimal(execution["commission_bps"]) / 10000)
         fx_fee = principal * decimal(execution["fx_bps"]) / 10000 if currency != "CNY" else ZERO
         unrounded = principal + fee + fx_fee if side == "buy" else principal - fee - fx_fee
-        amount = ((unrounded / decimal(execution["cash_quantum"])).to_integral_value(rounding=ROUND_CEILING)
-                  * decimal(execution["cash_quantum"])) if bounded and side == "buy" else quantize_cash(unrounded, execution["cash_quantum"])
+        amount = ((unrounded / decimal(execution["cash_quantum"])).to_integral_value(
+                  rounding=ROUND_CEILING if side == 'buy' else ROUND_HALF_EVEN)
+                  * decimal(execution["cash_quantum"])) if settled_funding or bounded and side == "buy" else quantize_cash(unrounded, execution["cash_quantum"])
         if amount <= ZERO:
             raise WorkbenchError("ORDER_BELOW_CASH_PRECISION")
         rounding = amount - unrounded if side == "buy" else unrounded - amount
@@ -209,6 +232,8 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                 sale_receivables.remove(payment)
                 cash["CNY"] += payment["amount"]
                 orders[payment["order_id"]]["state"] = "settled"
+                if settled_funding:
+                    orders[payment['order_id']]['settled_at'] = stamp(payment['settled_at'])
                 events.append({"type": "sale_cash_settlement", "at": stamp(at), "order_id": payment["order_id"],
                                "amount_cny": canonical(payment["amount"]), "settlement_evidence": payment["evidence"]})
 
@@ -304,12 +329,89 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
             events.append({**base, "outcome": "blocked", "deltas": [], "reason_codes": [str(exc)]})
             return
         base.update(deltas=deltas, nav_cny=canonical(value), tolerance_cny=canonical(tolerance))
+        if continuous:
+            base.update(deployment_base_cny=canonical(deployment_value), locked_cash_cny=canonical(locked_cash))
+        cash_intent = intents.active if intents is not None else None
+        if cash_intent is not None and cash_intent['state'] in ('failed', 'expired'):
+            events.append({**base, 'outcome': 'blocked', 'reason_codes': ['CASH_INTENT_TERMINAL_FAILURE']})
+            return
+        if cash_intent is not None and cash_intent['state'] == 'waiting_decision' and reviews.active is None:
+            declaration = cash_intent['declaration']
+            scope = [row for row in deltas if row['listing_id'] in declaration['buy_listing_ids']]
+            needs_now = [row for row in scope if not row['within_tolerance'] and decimal(row['difference_cny']) > ZERO]
+            events.append({'type': 'cash_intent_reassessment', 'at': stamp(at), 'intent_id': declaration['id'],
+                           'nav_cny': canonical(value), 'deltas': scope,
+                           'current_sale_order_ids': list(cash_intent['current_sale_order_ids'])})
+            if not needs_now:
+                intents.resolve(at, 'original_buy_scope_no_longer_needed')
+                events.append({**base, 'outcome': 'unchanged', 'reason_codes': ['CASH_INTENT_BUY_SCOPE_NO_LONGER_NEEDED']})
+                return
+            foreign_cash = sum((amount * fx(currency, at) for currency, amount in cash.items() if currency != 'CNY' and amount), ZERO)
+            floor = locked_cash + max(ZERO, deployment_value * (ONE - sum(weights.values(), ZERO)) - foreign_cash)
+            floor = (floor * 100).to_integral_value(rounding=ROUND_CEILING) / 100
+            needs_document, executable = [], {}
+            try:
+                for index, row in enumerate(needs_now, 1):
+                    listing = row['listing_id']
+                    price, rate, price_id, fx_id, evidence = quotes[listing]
+                    quote, asset = observation_by_id[price_id], market.assets[listing]
+                    fx_row = observation_by_id.get(fx_id)
+                    close_at = next_close(listing, at, instant(declaration['deadline']))
+                    if close_at is None:
+                        raise WorkbenchError('NO_EXECUTABLE_CLOSE:' + listing)
+                    executable[listing] = close_at
+                    needs_document.append({'listing_id': listing, 'order_id': 'order:%06d' % (len(orders) + index),
+                        'need_cny': canonical((decimal(row['difference_cny']) * 100).to_integral_value(rounding=ROUND_FLOOR) / 100),
+                        'quantity_step': asset['quantity_step'], 'currency': asset['currency'], 'close': canonical(price),
+                        'fx_cny_per_unit': canonical(rate), 'observed_at': quote['observed_at'],
+                        'available_at': stamp(market.available(quote)), 'mark_kind': evidence['mark_kind'],
+                        'fx_observed_at': fx_row['observed_at'] if fx_row else None,
+                        'fx_available_at': stamp(market.available(fx_row)) if fx_row else None,
+                        'price_observation_id': price_id, 'fx_observation_id': fx_id or 'fx:CNY:constant'})
+                current_sales = cash_intent['current_sale_order_ids']
+                document = {'schema_version': 'settled-cash-buy-preparation-v2',
+                    'intent': {**declaration, 'sale_order_ids': list(current_sales),
+                               'buy_listing_ids': [row['listing_id'] for row in needs_now]},
+                    'decision_at': stamp(at), 'decision_times': plan['decision_times'],
+                    'cash': {'as_of': stamp(at), 'settled_cny': canonical(cash['CNY']),
+                             'reserved_cny': canonical(reserved()), 'floor_cny': canonical(floor)},
+                    'book': [{'id': key, 'listing_id': orders[key]['listing_id'], 'side': 'sell',
+                              'cash_intent_id': declaration['id'], 'state': orders[key]['state'],
+                              'settled_at': orders[key].get('settled_at')} for key in current_sales],
+                    'needs': needs_document, 'execution': {key: execution[key] for key in (
+                        'commission_bps', 'minimum_fee_cny', 'fx_bps', 'slippage_bps', 'buy_price_buffer_bps',
+                        'buy_fx_buffer_bps', 'cash_quantum', 'max_fx_age_seconds')}}
+                preparation = prepare_settled_cash_buys(document)
+                for listing, close_at in executable.items():
+                    if any(instant(action['published_at']) <= at and (dataset['mode'] != 'actual_replay'
+                           or instant(action['ingested_at']) <= at) and at < instant(action['at']) <= close_at
+                           for action in action_windows.get(listing, ([], []))[1]):
+                        raise WorkbenchError('KNOWN_ACTION_BEFORE_SCHEDULED_CLOSE')
+            except WorkbenchError as exc:
+                events.append({**base, 'outcome': 'blocked', 'reason_codes': [str(exc)], 'cash_intent_id': declaration['id']})
+                return
+            planned = []
+            for prepared in preparation['orders']:
+                listing = prepared['listing_id']
+                order = {'id': prepared['order_id'], 'listing_id': listing, 'side': 'buy',
+                    'quantity': decimal(prepared['quantity']), 'budget': decimal(prepared['budget_cny']),
+                    'cash_floor': floor, 'decision_at': at, 'expires_at': instant(declaration['deadline']),
+                    'dependencies': list(current_sales), 'state': 'scheduled', 'execute_at': executable[listing],
+                    'allow_sales': False, 'price_cap': decimal(prepared['buy_price_cap']),
+                    'fx_cap': decimal(prepared['buy_fx_cap']), 'worst_total_cash': decimal(prepared['worst_total_cash_cny'])}
+                if continuous:
+                    order['locked_cash_at_decision'] = locked_cash
+                orders[order['id']] = order
+                planned.append(order)
+            intents.publish(planned, preparation, at)
+            publish_orders(planned, at, instant(declaration['deadline']), quotes)
+            events.append({**base, 'outcome': 'proposed', 'reason_codes': ['SETTLED_CASH_BUY_BATCH_FROZEN'],
+                           'order_ids': [row['id'] for row in planned], 'partial': False})
+            return
         reviewing = reviews is not None and reviews.active is not None
         review_scope = set(reviews.active["listing_ids"]) if reviewing else None
         if reviewing:
             base["reassessment_scope"] = sorted(review_scope)
-        if continuous:
-            base.update(deployment_base_cny=canonical(deployment_value), locked_cash_cny=canonical(locked_cash))
         allow_sales = True
         if low_frequency:
             classes = class_drift(weights, parameters["roles"], {row["listing_id"]: decimal(row["current_cny"]) for row in deltas},
@@ -339,7 +441,9 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                 funding_pending = False
         actionable = [row for row in deltas if review_scope is None or row["listing_id"] in review_scope]
         targets_satisfied = all(row["within_tolerance"] for row in actionable)
-        if targets_satisfied or reviewing and not allow_sales and all(
+        sale_review_satisfied = cash_intent is not None and cash_intent['state'] in ('waiting_sales', 'waiting_decision') and reviewing and all(
+            row['within_tolerance'] or decimal(row['difference_cny']) > ZERO for row in actionable)
+        if targets_satisfied or sale_review_satisfied or reviewing and not allow_sales and all(
                 row["within_tolerance"] or decimal(row["difference_cny"]) < ZERO for row in actionable):
             if action_aware:
                 if not reviewing:
@@ -347,8 +451,9 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                     funding_pending = False
                 resolve_deferred(at, "targets_within_tolerance")
                 if reviews is not None:
-                    reviews.complete(at, within_tolerance=True, no_sales_repair_satisfied=not targets_satisfied)
-            events.append({**base, "outcome": "unchanged", "reason_codes": ["TARGETS_WITHIN_TOLERANCE"]})
+                    reviews.complete(at, within_tolerance=True, no_sales_repair_satisfied=not targets_satisfied and not sale_review_satisfied,
+                                     sale_scope_no_longer_needed=sale_review_satisfied and not targets_satisfied)
+            events.append({**base, "outcome": "unchanged", "reason_codes": ["SELL_SCOPE_NO_LONGER_NEEDED" if sale_review_satisfied and not targets_satisfied else "TARGETS_WITHIN_TOLERANCE"]})
             return
         issues, planned, projected_sales = [], [], ZERO
         sales, needs = [], {}
@@ -361,6 +466,8 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                      "decision_at": at, "expires_at": expiry, "dependencies": list(dependencies), "state": "planned"}
             if continuous:
                 order["locked_cash_at_decision"] = locked_cash
+            if cash_intent is not None:
+                order['expires_at'] = min(expiry, instant(cash_intent['declaration']['deadline']))
             if reviewable:
                 order["allow_sales"] = allow_sales
             if bounds is not None:
@@ -402,7 +509,8 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
         available = max(ZERO, cash["CNY"] - cash_floor) + projected_sales
         total_need = sum(needs.values(), ZERO)
         deployment = min(available, total_need)
-        for listing, need in sorted(needs.items()):
+        deferred_buys = settled_funding and (bool(sales) or cash_intent is not None and cash_intent['state'] in ('waiting_sales', 'waiting_decision'))
+        for listing, need in ([] if deferred_buys else sorted(needs.items())):
             allocation = deployment * need / total_need if total_need else ZERO
             if bounded:
                 allocation = (allocation * 100).to_integral_value(rounding=ROUND_FLOOR) / 100
@@ -445,7 +553,7 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
             else:
                 issues.append("NO_SETTLED_OR_DEPENDENT_CASH:" + listing)
         if action_aware:
-            if reviews is not None and reviews.active is not None and (issues or not planned):
+            if (reviews is not None and reviews.active is not None or settled_funding) and (issues or not planned):
                 for order in planned:
                     del orders[order["id"]]
                 events.append({**base, "outcome": "blocked", "reason_codes": sorted(set(issues + ["ORDER_REVIEW_REPLACEMENT_INCOMPLETE"]))})
@@ -477,6 +585,17 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                 resolve_deferred(at, "new_orders_proposed")
             if reviews is not None and reviews.active is not None:
                 reviews.publish(planned, at)
+                if intents is not None and intents.active is not None:
+                    intents.bind_replacements(planned, at)
+            if settled_funding and sales and needs and intents.active is None:
+                intents.declare(sales, needs, at, expiry)
+        publish_orders(planned, at, expiry, quotes)
+        events.append({**base, "outcome": "proposed" if planned else "blocked", "reason_codes": sorted(set(issues)),
+                       "order_ids": [row["id"] for row in planned], "partial": bool(issues)})
+        if low_frequency and planned:
+            last_proposed_at = at
+
+    def publish_orders(planned, at, expiry, quotes):
         for order in planned:
             pending.append(order)
             if order["state"] == "scheduled":
@@ -486,17 +605,13 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                            "side": order["side"], "listing_id": order["listing_id"], "quantity": canonical(order["quantity"]),
                            "budget_cny": canonical(order["budget"]) if order["side"] == "buy" else None,
                            "execute_at": stamp(order["execute_at"]) if order["state"] == "scheduled" else None,
-                           "expires_at": stamp(expiry), "funding": order["state"], "dependency_order_ids": order["dependencies"],
+                           "expires_at": stamp(order['expires_at'] if settled_funding else expiry), "funding": order["state"], "dependency_order_ids": order["dependencies"],
                            "decision_price_observation_id": price_id, "decision_fx_observation_id": fx_id,
                            "decision_price_mark": price_mark,
+                           **({'cash_intent_id': order['cash_intent_id']} if 'cash_intent_id' in order else {}),
                            **({"origin_review_id": order["origin_review_id"], "replaces_order_ids": order["replaces_order_ids"]} if "origin_review_id" in order else {}),
                            **({"buy_price_cap": canonical(order["price_cap"]), "buy_fx_cap": canonical(order["fx_cap"]),
                                "worst_total_cash_cny": canonical(order["worst_total_cash"])} if bounded and order["side"] == "buy" else {})})
-        events.append({**base, "outcome": "proposed" if planned else "blocked", "reason_codes": sorted(set(issues)),
-                       "order_ids": [row["id"] for row in planned], "partial": bool(issues)})
-        if low_frequency and planned:
-            last_proposed_at = at
-
     while times:
         if progress is not None:
             progress()
@@ -630,11 +745,13 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
         activate(at)
         if reviews is not None:
             reviews.complete(at)
+        if intents is not None:
+            intents.refresh(at)
         if at in decisions:
             evaluate(at)
         carry_marks = []
         total = nav(at, carry_marks=carry_marks)
-        curve.append({"at": stamp(at), "nav_cny": canonical(total), "unit_nav": canonical(total / units),
+        curve.append({"at": stamp(at), "nav_cny": canonical(total), "unit_nav": _reported_ratio(total, units),
                       "cash_cny": canonical(sum((amount * fx(currency, at) for currency, amount in cash.items() if amount), ZERO)),
                       "derived_carry_marks": sorted(carry_marks, key=lambda row: row["listing_id"])})
         if continuous or bounded:
@@ -664,7 +781,7 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
             events.append({"type": "policy_deployment_failed", "at": stamp(end), **deferred_review,
                            "reason": "DEFERRED_POLICY_REVIEW_UNRESOLVED"})
     raw_failures = sum(row["type"] in ("execution_skipped", "order_expired", "policy_deployment_failed") for row in events)
-    engine = ("continuous-event-review-hold-v1" if holding_baseline else "continuous-event-review-funding-v1") if reviewable and continuous else "fixed-policy-event-review-rebalance-v5" if reviewable else "fixed-policy-action-aware-bounded-rebalance-v4" if action_aware else ("continuous-bounded-hold-new-cash-v1" if holding_baseline else "continuous-bounded-fixed-policy-funding-v1") if continuous and bounded else "fixed-policy-bounded-rebalance-v3" if bounded else "continuous-hold-new-cash-v1" if holding_baseline else "continuous-fixed-policy-funding-v1" if continuous else "fixed-policy-rebalance-v2" if low_frequency else ENGINE_VERSION
+    engine = ('continuous-settled-intent-hold-v1' if holding_baseline else 'continuous-settled-intent-funding-v1') if settled_funding and continuous else 'fixed-policy-settled-intent-rebalance-v6' if settled_funding else ("continuous-event-review-hold-v1" if holding_baseline else "continuous-event-review-funding-v1") if reviewable and continuous else "fixed-policy-event-review-rebalance-v5" if reviewable else "fixed-policy-action-aware-bounded-rebalance-v4" if action_aware else ("continuous-bounded-hold-new-cash-v1" if holding_baseline else "continuous-bounded-fixed-policy-funding-v1") if continuous and bounded else "fixed-policy-bounded-rebalance-v3" if bounded else "continuous-hold-new-cash-v1" if holding_baseline else "continuous-fixed-policy-funding-v1" if continuous else "fixed-policy-rebalance-v2" if low_frequency else ENGINE_VERSION
     return {"engine_version": engine, "phase": phase, "window": window,
             "initial_equity_cny": canonical(initial), "contributions_cny": canonical(sum(flow_map.values(), ZERO)),
             "ending_nav_cny": canonical(closing), "profit_cny": canonical(cashflow_profit(closing, initial, flow_map.values())),
@@ -676,10 +793,10 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
             "recovered_at": stamp(risk.recovered_at) if risk.recovered_at else None,
             "fees_cny": canonical(costs), "fx_fees_cny": canonical(fx_costs), "slippage_cny": canonical(slippage_costs),
             "cash_rounding_cny": canonical(cash_rounding),
-            "buy_turnover_on_mean_observed_nav": canonical(buys / mean_nav) if mean_nav > ZERO else None,
-            "sell_turnover_on_mean_observed_nav": canonical(sells / mean_nav) if mean_nav > ZERO else None,
-            "total_turnover_on_mean_observed_nav": canonical((buys + sells) / mean_nav) if mean_nav > ZERO else None,
-            "ending_cash_ratio": canonical(decimal(curve[-1]["cash_cny"]) / closing) if closing > ZERO else None,
+            "buy_turnover_on_mean_observed_nav": _reported_ratio(buys, mean_nav),
+            "sell_turnover_on_mean_observed_nav": _reported_ratio(sells, mean_nav),
+            "total_turnover_on_mean_observed_nav": _reported_ratio(buys + sells, mean_nav),
+            "ending_cash_ratio": _reported_ratio(decimal(curve[-1]["cash_cny"]), closing),
             "positions": {key: canonical(value) for key, value in sorted(positions.items())},
             "ending_cash": {key: canonical(value) for key, value in sorted(cash.items())},
             "ending_receivables": {"sale_cny": canonical(sum((row["amount"] for row in sale_receivables), ZERO)),
@@ -688,6 +805,7 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                                             "quantity": canonical(row["quantity"]), "settled_at": stamp(row["settled_at"])} for row in unsettled],
             "execution_failure_count": raw_failures,
             **(reviews.result(raw_failures) if reviews is not None else {}),
+            **(intents.result() if intents is not None else {}),
             **{("policy_evaluation_counts" if low_frequency else "monthly_evaluation_counts"):
                 {outcome: sum(row["type"] == "evaluation" and row["outcome"] == outcome for row in events)
                  for outcome in (("proposed", "unchanged", "blocked", "deferred") if action_aware else ("proposed", "unchanged", "blocked"))}},
@@ -705,6 +823,9 @@ def _run_portfolio(dataset, plan, parameters, phase, *, releases=None, progress=
                             *(["deferred_review_requires_later_valid_review_or_fails_phase"] if action_aware else []),
                             *(["raw_action_cancellations_preserved_and_only_resolved_lineage_closes_terminal_gaps",
                                "post_action_raw_close_and_declared_future_decision_required_for_replacement"] if reviewable else []),
+                            *(['sell_only_publication_then_declared_decision_with_settled_cash',
+                               'cash_floor_upward_cent_and_remaining_buy_need_downward_cent',
+                               'failed_frozen_buy_never_resized_or_retried'] if settled_funding else []),
                             *( ["no_calendar_or_class_drift_rebalancing" if holding_baseline else "half_year_or_year_calendar_review_plus_absolute_class_drift", "cooldown_uses_evaluation_local_calendar_days",
                                 "new_cny_cash_repairs_without_sales" if holding_baseline else "new_cny_cash_repairs_without_sales_before_rebalancing", "orders_expire_at_next_month_boundary", "unsettled_assets_block_new_orders"]
                                if low_frequency else ["monthly_first_decision_only", "unsettled_assets_block_new_monthly_orders"]), "no_margin", "no_cash_interest",

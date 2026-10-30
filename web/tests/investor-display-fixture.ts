@@ -83,7 +83,7 @@ export function mountInvestorDisplay<P>(t: { after: (fn: () => void) => void }, 
   const flush = () => new Promise<void>(resolve => setImmediate(resolve));
   const expand = (initial: Tree) => {
     let node = initial;
-    while (typeof node.type === "function" && ["Card", "ReferencePlanCard", "ModelChange", "ResearchTask", "ModelWatch", "PolicyReview", "Scenario", "FundedComparisonResults"].includes(node.type.name)) node = node.type(node.props);
+    while (typeof node.type === "function" && ["Card", "ResearchCost", "ReferencePlanCard", "ModelChange", "ResearchTask", "ModelWatch", "PolicyReview", "Scenario", "FundedComparisonResults"].includes(node.type.name)) node = node.type(node.props);
     return node;
   };
   const visit = (value: unknown, found: Tree[]) => { if (Array.isArray(value)) { value.forEach(child => visit(child, found)); return; }
