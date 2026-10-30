@@ -176,6 +176,15 @@ WITH source_snapshots AS (
         WHERE t.capture_id=c.id AND (d.valid_until<=:at OR d.decision!='approved'
           OR EXISTS(SELECT 1 FROM investor_data_reviews newer WHERE newer.source_id=d.source_id AND newer.version>d.version))))
   UNION ALL
+  SELECT 'issuer',c.id,c.workspace_id,c.retain_until FROM investor_issuer_captures c
+    JOIN investor_issuer_requests r ON r.id=c.request_id AND r.workspace_id=c.workspace_id
+    JOIN investor_issuer_authorities a ON a.id=r.authority_id AND a.workspace_id=c.workspace_id
+    WHERE c.status='captured' AND c.created_at<=:at
+      AND NOT EXISTS(SELECT 1 FROM investor_issuer_purges p WHERE p.capture_id=c.id)
+      AND (c.retain_until<=:at OR json_extract(a.document_json,'$.valid_until')<=:at
+        OR NOT EXISTS(SELECT 1 FROM investor_issuer_controls x WHERE x.id=r.control_id AND x.enabled=1
+          AND x.version=(SELECT max(version) FROM investor_issuer_controls WHERE authority_id=r.authority_id)))
+  UNION ALL
   SELECT 'checkpoint',c.id,c.workspace_id,c.valid_until FROM investor_evidence_model_checkpoints c
     WHERE c.created_at<=:at AND EXISTS(SELECT 1 FROM investor_evidence_checkpoint_payloads b WHERE b.checkpoint_id=c.id)
       AND NOT EXISTS(SELECT 1 FROM investor_monitor_payload_purges p WHERE p.kind='checkpoint' AND p.entity_id=c.id)
@@ -207,6 +216,7 @@ def purge_due_source_payloads(db, *, limit=100, now=None, stop_requested=None):
     from .data_evidence import purge_price_payload
     from .confirmed_capture import purge_confirmed_payload
     from .evidence_monitor_runtime import purge_monitor_payload
+    from .issuer_sources import purge_issuer_capture
     purged = []
     for row in rows:
         if stop_requested and stop_requested():
@@ -215,6 +225,8 @@ def purge_due_source_payloads(db, *, limit=100, now=None, stop_requested=None):
             result = purge_price_payload(db, row["workspace_id"], row["owner_id"], row["id"], now=at)
         elif row["kind"] == "confirmed":
             result = purge_confirmed_payload(db, row["workspace_id"], row["owner_id"], row["id"], now=at)
+        elif row["kind"] == "issuer":
+            result = purge_issuer_capture(db, row["workspace_id"], row["owner_id"], row["id"], now=at)
         else:
             result = purge_monitor_payload(db, row["workspace_id"], row["owner_id"], row["kind"], row["id"], now=at)
         purged.append(result)

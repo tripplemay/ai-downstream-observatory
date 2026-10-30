@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-issuer-authority.schema.json",
+  "type": "object",
+  "required": ["schema_version", "provider", "fund_id", "has_distribution_yield", "uses", "retention_days", "valid_from", "valid_until", "clause_references", "authorization_basis", "collection_cadence"],
+  "properties": {
+    "schema_version": {"const": "investor-issuer-authority-v1"},
+    "provider": {"const": "vanguard_issuer_distributions"},
+    "fund_id": {"type": "string", "pattern": "^[0-9]{4}$"},
+    "has_distribution_yield": {"type": "boolean"},
+    "uses": {"type": "array", "minItems": 4, "maxItems": 4, "uniqueItems": true, "items": {"enum": ["private_research", "private_retention", "private_display", "private_backup"]}},
+    "retention_days": {"type": "integer", "minimum": 1, "maximum": 36600},
+    "valid_from": {"$ref": "common.schema.json#/$defs/instant"},
+    "valid_until": {"$ref": "common.schema.json#/$defs/instant"},
+    "clause_references": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "string", "minLength": 1, "maxLength": 300}},
+    "authorization_basis": {"const": "owner_declared_private_use_not_provider_certified"},
+    "collection_cadence": {"const": "at_most_one_request_per_issuer_day"}
+  },
+  "additionalProperties": false
+}

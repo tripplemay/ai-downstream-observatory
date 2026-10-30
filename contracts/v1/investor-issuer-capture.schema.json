@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-issuer-capture.schema.json",
+  "$defs": {
+    "control": {
+      "type": "object", "required": ["schema_version", "authority_id", "authority_hash", "version", "enabled", "created_at"],
+      "properties": {"schema_version": {"const": "investor-issuer-control-v1"},
+        "authority_id": {"$ref": "common.schema.json#/$defs/id"}, "authority_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "version": {"type": "integer", "minimum": 1}, "enabled": {"type": "boolean"}, "created_at": {"$ref": "common.schema.json#/$defs/instant"}},
+      "additionalProperties": false
+    },
+    "request": {
+      "type": "object", "required": ["schema_version", "authority_id", "authority_hash", "control_id", "control_hash", "request_key", "fund_id", "issuer_day", "start_date", "end_date", "created_at", "collection_scope"],
+      "properties": {"schema_version": {"const": "investor-issuer-request-v1"},
+        "authority_id": {"$ref": "common.schema.json#/$defs/id"}, "authority_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "control_id": {"$ref": "common.schema.json#/$defs/id"}, "control_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "request_key": {"type": "string", "pattern": "^[a-f0-9]{32}$"}, "issuer_day": {"$ref": "common.schema.json#/$defs/date"},
+        "fund_id": {"type": "string", "pattern": "^[0-9]{4}$"},
+        "start_date": {"$ref": "common.schema.json#/$defs/date"}, "end_date": {"$ref": "common.schema.json#/$defs/date"},
+        "created_at": {"$ref": "common.schema.json#/$defs/instant"}, "collection_scope": {"const": "unapproved_distribution_draft_only"}},
+      "additionalProperties": false
+    },
+    "result": {
+      "type": "object", "required": ["schema_version", "capture_id", "workspace_id", "request_id", "request_hash", "qualification", "status", "reason_code", "raw_sha256", "raw_bytes", "draft_hash", "parser_version", "transport", "created_at", "retain_until", "owner_reviewed", "research_admitted", "corporate_actions_complete", "live_advice_eligible"],
+      "properties": {"schema_version": {"const": "investor-issuer-capture-v1"},
+        "capture_id": {"$ref": "common.schema.json#/$defs/id"}, "workspace_id": {"$ref": "common.schema.json#/$defs/id"},
+        "request_id": {"$ref": "common.schema.json#/$defs/id"}, "request_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "qualification": {"enum": ["isolated_fixed_issuer_https", "injected_test_issuer"]},
+        "status": {"enum": ["captured", "transport_failed", "superseded"]}, "reason_code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,119}$"},
+        "raw_sha256": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/hash"}]},
+        "raw_bytes": {"oneOf": [{"type": "null"}, {"type": "integer", "minimum": 1, "maximum": 1048576}]},
+        "draft_hash": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/hash"}]},
+        "parser_version": {"oneOf": [{"type": "null"}, {"const": "vanguard-distributions-draft-v1"}]},
+        "transport": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/transport"}]},
+        "created_at": {"$ref": "common.schema.json#/$defs/instant"}, "retain_until": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/instant"}]},
+        "owner_reviewed": {"const": false}, "research_admitted": {"const": false}, "corporate_actions_complete": {"const": false}, "live_advice_eligible": {"const": false}},
+      "allOf": [{"if": {"properties": {"status": {"const": "captured"}}}, "then": {"properties": {"reason_code": {"const": "ISSUER_DRAFT_CAPTURED"}, "raw_sha256": {"type": "string"}, "raw_bytes": {"type": "integer"}, "draft_hash": {"type": "string"}, "parser_version": {"type": "string"}, "transport": {"type": "object"}, "retain_until": {"type": "string"}}},
+        "else": {"properties": {"raw_sha256": {"type": "null"}, "raw_bytes": {"type": "null"}, "draft_hash": {"type": "null"}, "parser_version": {"type": "null"}, "transport": {"type": "null"}, "retain_until": {"type": "null"}}}},
+        {"if": {"properties": {"status": {"const": "superseded"}}}, "then": {"properties": {"reason_code": {"const": "ISSUER_AUTHORITY_CHANGED"}}}},
+        {"if": {"properties": {"status": {"const": "transport_failed"}}}, "then": {"properties": {"reason_code": {"enum": ["ISSUER_CAPTURE_TRANSPORT_FAILED", "ISSUER_CAPTURE_RESPONSE_INVALID", "ISSUER_CAPTURE_TIMEOUT", "ISSUER_CAPTURE_ROUTE_FORBIDDEN", "ISSUER_CAPTURE_HTTP_FORBIDDEN", "ISSUER_CAPTURE_RATE_LIMITED", "ISSUER_CAPTURE_UNAVAILABLE", "ISSUER_CAPTURE_INVALID_RESPONSE"]}}}}],
+      "additionalProperties": false
+    },
+    "transport": {
+      "type": "object",
+      "required": ["schema_version", "source_url", "request", "started_at", "completed_at", "retrieved_at", "http_status", "headers", "raw_sha256", "raw_bytes", "redirects_followed"],
+      "properties": {
+        "schema_version": {"const": "vanguard-fixed-issuer-https-v1"},
+        "source_url": {"type": "string", "maxLength": 256},
+        "request": {"type": "object", "required": ["fund_id", "has_distribution_yield"], "properties": {"fund_id": {"type": "string", "pattern": "^[0-9]{4}$"}, "has_distribution_yield": {"type": "boolean"}}, "additionalProperties": false},
+        "started_at": {"$ref": "common.schema.json#/$defs/instant"}, "completed_at": {"$ref": "common.schema.json#/$defs/instant"}, "retrieved_at": {"$ref": "common.schema.json#/$defs/instant"},
+        "http_status": {"const": 200}, "redirects_followed": {"const": 0}, "raw_sha256": {"$ref": "common.schema.json#/$defs/hash"},
+        "raw_bytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "headers": {"type": "object", "required": ["content-type"], "properties": {"content-type": {"type": "string", "maxLength": 1024}, "content-length": {"type": "string", "maxLength": 7}, "date": {"type": "string", "maxLength": 1024}, "last-modified": {"type": "string", "maxLength": 1024}, "etag": {"type": "string", "maxLength": 1024}}, "additionalProperties": false}
+      },
+      "additionalProperties": false
+    }
+  }
+}

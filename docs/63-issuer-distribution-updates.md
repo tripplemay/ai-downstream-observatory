@@ -66,8 +66,10 @@ historical review, new research trial or holdout replay is introduced.
 
 ## Required continuation
 
-1. Persist the bounded capture/raw receipt under an explicit approved fund
-   identity, currency, amount basis and usage authority, with owner/lease scope.
+1. Persist the bounded capture/raw receipt under an explicit private collection
+   authority, with owner scope. The [issuer staging layer](65-private-issuer-capture-storage.md)
+   supplies this separate permission/retention boundary; it does not approve
+   fund identity, currency, amount basis or financial use.
 2. Establish current distribution and split coverage with declared assumptions;
    payload count and optional provider descriptions are not completeness proof.
 3. Publish reviewed current-source snapshots without replacing frozen research

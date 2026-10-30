@@ -15,6 +15,7 @@ from .monitor_data import build_monitor_data, check_reference_listing_identity
 from .monitor_admission import admit_monitor_data, current_monitor_model
 from .history_collection import plan_history, collect_history, MAX_BATCH_CALLS
 from .confirmed_capture import collect_confirmed_prices, resolve_confirmed_capture, purge_confirmed_payload
+from . import issuer_sources
 
 
 def _private_descriptor(value):
@@ -98,6 +99,17 @@ def _parser():
     confirmed.add_argument("--credentials-file", required=True)
     for command in ("check-confirmed-capture", "purge-confirmed-payload"):
         commands.add_parser(command).add_argument("--capture", required=True)
+    commands.add_parser("register-issuer-authority").add_argument("--file", required=True)
+    control = commands.add_parser("control-issuer-authority")
+    control.add_argument("--authority", required=True)
+    flags = control.add_mutually_exclusive_group(required=True)
+    flags.add_argument("--enable", action="store_true"); flags.add_argument("--disable", action="store_true")
+    issuer = commands.add_parser("collect-issuer-draft")
+    for name in ("authority", "request-key", "start", "end"):
+        issuer.add_argument("--" + name, required=True)
+    commands.add_parser("inspect-issuer-request").add_argument("--request-key", required=True)
+    for command in ("check-issuer-capture", "purge-issuer-capture"):
+        commands.add_parser(command).add_argument("--capture", required=True)
     return parser
 
 
@@ -112,6 +124,27 @@ def main(argv=None):
         if args.command == "store-source":
             row = store_source(db, args.workspace, args.actor, args.kind, _read_private_json(args.file, 131072))
             result = {"source_id": row["id"], "kind": row["kind"], "content_hash": row["content_hash"]}
+        elif args.command == "register-issuer-authority":
+            row = issuer_sources.register_authority(db, args.workspace, args.actor, _read_private_json(args.file, 16384))
+            control = db.execute("SELECT enabled FROM investor_issuer_controls WHERE authority_id=? ORDER BY version DESC LIMIT 1", (row["id"],)).fetchone()
+            result = {"authority_id": row["id"], "content_hash": row["content_hash"], "enabled": bool(control[0]),
+                "authorization_basis": "owner_declared_private_use_not_provider_certified", "research_admitted": False}
+        elif args.command == "control-issuer-authority":
+            row = issuer_sources.set_authority_enabled(db, args.workspace, args.actor, args.authority, args.enable)
+            result = {"control_id": row["id"], "version": row["version"], "enabled": bool(row["enabled"]), "research_admitted": False}
+        elif args.command == "collect-issuer-draft":
+            result = issuer_sources.collect_issuer_draft(db, args.workspace, args.actor, args.authority, args.request_key, args.start, args.end)
+        elif args.command == "inspect-issuer-request":
+            result = issuer_sources.request_state(db, args.workspace, args.actor, args.request_key)
+        elif args.command == "check-issuer-capture":
+            value = issuer_sources.resolve_issuer_capture(db, args.workspace, args.actor, args.capture)
+            row = value["capture"]
+            result = {"capture_id": row["id"], "raw_sha256": row["raw_sha256"], "raw_bytes": row["raw_bytes"],
+                "qualification": row["qualification"], "retain_until": row["retain_until"], "record_count": len(value["draft"]["records"]),
+                "gaps": value["draft"]["gaps"], "research_admitted": False, "market_values_output": False, "live_advice_eligible": False}
+        elif args.command == "purge-issuer-capture":
+            row = issuer_sources.purge_issuer_capture(db, args.workspace, args.actor, args.capture)
+            result = {"capture_id": row["capture_id"], "reason": row["reason"], "created_at": row["created_at"], "backup_purge_verified": False}
         elif args.command == "review-source":
             document = _read_private_json(args.file, MAX_REVIEW_BYTES)
             _assert(set(document) == {"decision", "facts", "reason", "valid_until"})
@@ -182,7 +215,7 @@ def main(argv=None):
         return 0
     except Exception as error:
         code = str(error).split(":", 1)[0]
-        if not re.fullmatch(r"(?:INVESTOR_DATA_[A-Z_]+|LONGPORT_[A-Z_]+|WORKBENCH_[A-Z_]+|RESTORE_PENDING_REVIEW|SCHEMA_VERSION_MISMATCH|MIGRATION_MANIFEST_MISMATCH|CONTRACT_INVALID)", code):
+        if not re.fullmatch(r"(?:INVESTOR_(?:DATA|ISSUER)_[A-Z_]+|LONGPORT_[A-Z_]+|WORKBENCH_[A-Z_]+|RESTORE_PENDING_REVIEW|SCHEMA_VERSION_MISMATCH|MIGRATION_MANIFEST_MISMATCH|CONTRACT_INVALID)", code):
             code = "INVESTOR_DATA_PIPELINE_FAILED"
         print(canonical_json({"error": code}), file=sys.stderr)
         return 1

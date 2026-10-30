@@ -14,6 +14,9 @@ from worker.investor import data_pipeline
 from worker.investor import history_collection
 from worker.investor.data_evidence import review_source
 from worker.market.providers import longport
+from tests.investor.test_issuer_sources import Collector, policy as issuer_policy, START as ISSUER_START, END as ISSUER_END
+from worker.investor import issuer_sources
+from worker.orchestration.db import stamp
 
 
 NOW, EXPIRY, START, END = evidence.NOW, evidence.EXPIRY, evidence.START, evidence.END
@@ -67,6 +70,50 @@ class DataPipelineCliTests(unittest.TestCase):
             status, out, error = self.invoke("store-source", "--kind", "rights", "--file", self.file(body))
             self.assertEqual((status, out), (1, "")); self.assertNotIn("PRIVATE-FIXTURE", error)
         self.assertEqual(self.db.execute("SELECT count(*) FROM investor_data_sources").fetchone()[0], 0)
+
+    def test_issuer_cli_explicit_private_policy_enable_capture_inspect_and_withdraw_is_metadata_only(self):
+        policy=issuer_policy(clause_references=["PRIVATE-FIXTURE-NOT-PROVIDER-CERTIFICATION"])
+        with patch.object(issuer_sources.receiver,"collect_vanguard_distribution_draft",
+                side_effect=lambda **request:Collector(stamp())(**request)) as transport, \
+                patch.object(longport,"read_private_credentials_file") as credentials:
+            status,out,error=self.invoke("register-issuer-authority","--file",self.file(json.dumps(policy)))
+            self.assertEqual((status,error),(0,"")); authority=json.loads(out)["authority_id"]
+            self.assertFalse(json.loads(out)["enabled"]); self.assertNotIn("PRIVATE-FIXTURE",out)
+            args=("collect-issuer-draft","--authority",authority,"--request-key","a"*32,"--start",ISSUER_START,"--end",ISSUER_END)
+            status,out,error=self.invoke(*args)
+            self.assertEqual((status,out),(1,""));self.assertIn("AUTHORITY_INACTIVE",error);transport.assert_not_called()
+            status,out,error=self.invoke("control-issuer-authority","--authority",authority,"--enable")
+            self.assertEqual((status,error),(0,"")); self.assertTrue(json.loads(out)["enabled"])
+            status,out,error=self.invoke(*args)
+            self.assertEqual((status,error),(0,"")); result=json.loads(out); capture=result["capture_id"]
+            self.assertEqual(result["status"],"captured"); self.assertFalse(result["automatic_retry_permitted"])
+            self.assertEqual(transport.call_count,1)
+            status,out,error=self.invoke("inspect-issuer-request","--request-key","a"*32)
+            self.assertEqual((status,error),(0,""));self.assertEqual(json.loads(out),result)
+            status,out,error=self.invoke("check-issuer-capture","--capture",capture)
+            self.assertEqual((status,error),(0,"")); metadata=json.loads(out)
+            self.assertFalse(metadata["market_values_output"]);self.assertFalse(metadata["research_admitted"])
+            for forbidden in ("records","amount","source_url","clause_references","raw_base64"):
+                self.assertNotIn(forbidden,metadata)
+            before=self.db.total_changes
+            status,out,error=self.invoke(*args)
+            self.assertEqual((status,error),(0,"")); self.assertEqual(json.loads(out),result)
+            self.assertEqual(transport.call_count,1);self.assertEqual(self.db.total_changes,before)
+            self.invoke("control-issuer-authority","--authority",authority,"--disable")
+            status,out,error=self.invoke("purge-issuer-capture","--capture",capture)
+            self.assertEqual((status,error),(0,""));self.assertFalse(json.loads(out)["backup_purge_verified"])
+            self.assertEqual(self.db.execute("SELECT count(*) FROM investor_issuer_payloads").fetchone()[0],0)
+            credentials.assert_not_called()
+        self.assert_no_finance()
+
+    def test_issuer_cli_rejects_public_private_inputs_and_all_endpoint_clock_or_test_overrides(self):
+        path=Path(self.file(json.dumps(issuer_policy())));path.chmod(0o644)
+        status,out,error=self.invoke("register-issuer-authority","--file",str(path))
+        self.assertEqual((status,out),(1,""));self.assertIn("PRIVATE_FILE_REQUIRED",error)
+        args=("collect-issuer-draft","--authority","missing","--request-key","a"*32,"--start",ISSUER_START,"--end",ISSUER_END)
+        for override in ("--url","--now","--allow-synthetic","--test-collector","--credentials-file"):
+            with self.assertRaises(SystemExit):self.invoke(*args,override,"FICTIONAL")
+        self.assertEqual(self.db.execute("SELECT count(*) FROM investor_issuer_requests").fetchone()[0],0)
 
     def test_missing_rights_stop_collection_before_credential_read_or_sdk(self):
         refs = self.prepare(); facts = json.loads(refs[0]["document_json"])["facts"]; facts["uses"].remove("private_backup")

@@ -231,6 +231,11 @@
       "version": 46,
       "file": "0046_investor_observation_archive.sql",
       "sha256": "dda59dbc519d1458bf39cb98041d9bfc547ea23e5cea41098aad5af82a111e5b"
+    },
+    {
+      "version": 47,
+      "file": "0047_investor_issuer_captures.sql",
+      "sha256": "606d4d7bb19a2ed3f6e392796f706a6ad3f2e07626ffb691dcb60560b4e73bf0"
     }
   ]
 }

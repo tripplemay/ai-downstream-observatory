@@ -11,6 +11,36 @@ const directory = new URL('../../contracts/v1/', import.meta.url);
 for (const name of fs.readdirSync(directory).filter(name => name.endsWith('.schema.json')))
   ajv.addSchema(JSON.parse(fs.readFileSync(new URL(name, directory), 'utf8')));
 
+test('issuer permission and capture contracts are closed staging records, never financial admission or arbitrary transport metadata', () => {
+  const authority = ajv.getSchema('https://etf-workbench.invalid/contracts/v1/investor-issuer-authority.schema.json');
+  const child = spawnSync(process.env.WORKBENCH_TEST_PYTHON ?? process.env.WORKBENCH_PYTHON ?? 'python3',
+    ['-c', 'import json; from tests.investor.test_issuer_sources import policy; print(json.dumps(policy()))'],
+    { cwd: new URL('../../', import.meta.url), encoding: 'utf8', timeout: 30000 });
+  assert.equal(child.status, 0, child.stderr); const policy = JSON.parse(child.stdout);
+  assert.equal(authority(policy), true, JSON.stringify(authority.errors));
+  for (const change of [{ uses: [...policy.uses, 'external_ai'] }, { authorization_basis: 'provider_certified' },
+    { fund_id: '9998/../../' }, { enabled: true }, { app_secret: 'fictional' }]) assert.equal(authority({ ...policy, ...change }), false);
+  const id = 'https://etf-workbench.invalid/contracts/v1/investor-issuer-capture.schema.json';
+  const result = ajv.getSchema(id + '#/$defs/result'), at = '2026-01-03T12:00:03.000Z';
+  const failure = { schema_version: 'investor-issuer-capture-v1', capture_id: 'c', workspace_id: 'w', request_id: 'r', request_hash: 'a'.repeat(64),
+    qualification: 'injected_test_issuer', status: 'transport_failed', reason_code: 'ISSUER_CAPTURE_RATE_LIMITED',
+    raw_sha256: null, raw_bytes: null, draft_hash: null, parser_version: null, transport: null, created_at: at, retain_until: null,
+    owner_reviewed: false, research_admitted: false, corporate_actions_complete: false, live_advice_eligible: false };
+  assert.equal(result(failure), true, JSON.stringify(result.errors));
+  for (const change of [{ reason_code: 'PRIVATE_UNRECOGNIZED_DIAGNOSTIC' }, { status: 'superseded' }, { raw_bytes: 1 },
+    { owner_reviewed: true }, { research_admitted: true }, { corporate_actions_complete: true }, { live_advice_eligible: true },
+    { raw: '{}' }, { qualification: 'owner_reviewed_reconstructed' }]) assert.equal(result({ ...failure, ...change }), false);
+  const captured = { ...failure, status: 'captured', reason_code: 'ISSUER_DRAFT_CAPTURED', raw_sha256: 'b'.repeat(64), raw_bytes: 2,
+    draft_hash: 'c'.repeat(64), parser_version: 'vanguard-distributions-draft-v1', retain_until: '2026-01-04T12:00:03.000Z',
+    transport: { schema_version: 'vanguard-fixed-issuer-https-v1', source_url: 'https://fictional.invalid/fixture',
+      request: { fund_id: '9998', has_distribution_yield: false }, started_at: at, completed_at: at, retrieved_at: at,
+      http_status: 200, headers: { 'content-type': 'application/json' }, raw_sha256: 'b'.repeat(64), raw_bytes: 2, redirects_followed: 0 } };
+  assert.equal(result(captured), true, JSON.stringify(result.errors));
+  for (const transport of [{ ...captured.transport, credential: 'fictional' }, { ...captured.transport, raw_base64: 'e30=' },
+    { ...captured.transport, redirects_followed: 1 }, { ...captured.transport, headers: { ...captured.transport.headers, 'set-cookie': 'fictional' } }])
+    assert.equal(result({ ...captured, transport }), false);
+});
+
 test('bounded funding has explicit closed versions and does not relabel old economics or grant execution', () => {
   const child = spawnSync(process.env.WORKBENCH_TEST_PYTHON ?? process.env.WORKBENCH_PYTHON ?? 'python3', ['-c',
     "import json; from tests.investor.bounded_funding_fixtures import bounded_input; from worker.investor.funded_history import prepare_funded_history,calculate_funded_history; d=bounded_input(); p,k=prepare_funded_history(d,allow_synthetic=True); print(json.dumps({'input':d,'continuous':k,'result':calculate_funded_history(d,allow_synthetic=True)}))"],
