@@ -25,12 +25,27 @@ def _check(value, code="VANGUARD_DISTRIBUTION_INVALID"):
         raise WorkbenchError(code)
 
 
+def distribution_url(fund_id, has_distribution_yield):
+    _check(type(fund_id) is str and re.fullmatch(r"[0-9]{4}", fund_id))
+    _check(type(has_distribution_yield) is bool)
+    flag = "true" if has_distribution_yield else "false"
+    return f"https://advisors.vanguard.com/investments/products/api/funds/{fund_id}/pricing/distributions?hasDistributionYield={flag}"
+
+
 def _day(value):
     _check(type(value) is str and _DATE.fullmatch(value))
     try:
         return date.fromisoformat(value)
     except ValueError:
         raise WorkbenchError("VANGUARD_DISTRIBUTION_INVALID") from None
+
+
+def distribution_window(retrieved_at, start_date, end_date):
+    _check(type(retrieved_at) is str and _INSTANT.fullmatch(retrieved_at))
+    received = instant(retrieved_at)
+    start, end = _day(start_date), _day(end_date)
+    _check(0 <= (end - start).days < 3660 and end <= received.astimezone(ZoneInfo("America/New_York")).date())
+    return received, start, end
 
 
 def _number(value):
@@ -58,12 +73,8 @@ def _rows(raw):
 def parse_vanguard_distributions(raw, *, fund_id, has_distribution_yield, retrieved_at, start_date, end_date):
     """Dates and amount are reported fields, not point-in-time economic approval."""
     try:
-        _check(type(fund_id) is str and re.fullmatch(r"[0-9]{4}", fund_id))
-        _check(type(has_distribution_yield) is bool)
-        _check(type(retrieved_at) is str and _INSTANT.fullmatch(retrieved_at))
-        received = instant(retrieved_at)
-        start, end = _day(start_date), _day(end_date)
-        _check(0 <= (end - start).days < 3660 and end <= received.astimezone(ZoneInfo("America/New_York")).date())
+        url = distribution_url(fund_id, has_distribution_yield)
+        received, start, end = distribution_window(retrieved_at, start_date, end_date)
         rows = _rows(raw)
         keys, selected, archive_dates = set(), [], []
         for row in rows:
@@ -90,9 +101,8 @@ def parse_vanguard_distributions(raw, *, fund_id, has_distribution_yield, retrie
                     "currency": None, "ex_date": ex.isoformat(), "record_date": record.isoformat(),
                     "pay_date": pay.isoformat(), "date_precision": "date_not_instant",
                     "published_at": None, "tax_per_unit": None})
-        flag = "true" if has_distribution_yield else "false"
         return {"schema_version": PARSER_VERSION, "source": {"provider": "vanguard_issuer",
-            "url": f"https://advisors.vanguard.com/investments/products/api/funds/{fund_id}/pricing/distributions?hasDistributionYield={flag}",
+            "url": url,
             "requested_fund_id": fund_id, "requested_has_distribution_yield": has_distribution_yield,
             "raw_sha256": sha256(raw).hexdigest(), "raw_bytes": len(raw), "retrieved_at": stamp(received),
             "parser_version": PARSER_VERSION, "range_start": start_date, "range_end": end_date,

@@ -25,6 +25,29 @@ invalid amounts are rejected without rounding or skipping. The window ends no
 later than the actual retrieval date in New York. Reported payment dates may be
 later than the selected ex-date window; dates are not silently converted to UTC.
 
+## Fixed transport and isolated capture
+
+`vanguard_transport.py` permits only the fixed issuer HTTPS host, a four-digit
+fund ID and a boolean query flag. It checks all resolved addresses before
+connecting to a numeric public address, verifies TLS host/certificate normally,
+and rejects redirects, ambiguous framing, compression, unexpected MIME/charset,
+empty/truncated/oversize bodies and elapsed body reads. It neither accepts
+arbitrary URLs/headers/credentials nor follows redirects or retries a request.
+Only bounded non-sensitive response metadata is retained with exact body hashes.
+
+The low-level socket timeout alone does not bound DNS/header parsing.
+`collect_vanguard_distribution_draft` in `vanguard_capture.py` therefore runs
+the whole network operation under the existing kernel/parent process deadline.
+Its private temporary HOME and explicit environment exclude credentials/proxies;
+the child accepts only a closed request. The parent independently checks returned
+request identity, fixed URL, clock interval, headers, bytes, base64 framing and
+SHA-256 before replaying the body parser. A timeout/error is terminal for that
+call, not an automatic resend. Temporary transport state is removed on failure.
+
+The result is an in-memory raw body, receipt and draft. No workspace database,
+source review, queue, schedule, actual finance or AI gateway is modified. The
+receipt is collector evidence, not an exchange signature or permission grant.
+
 ## Facts deliberately not supplied
 
 The payload lacks a fund-identity assertion, currency, an explicit amount-basis
@@ -41,8 +64,8 @@ historical review, new research trial or holdout replay is introduced.
 
 ## Required continuation
 
-1. Bind a bounded official download and immutable raw receipt to an explicit
-   approved fund identity, currency, amount basis and usage authority.
+1. Persist the bounded capture/raw receipt under an explicit approved fund
+   identity, currency, amount basis and usage authority, with owner/lease scope.
 2. Establish current distribution and split coverage with declared assumptions;
    payload count and optional provider descriptions are not completeness proof.
 3. Publish reviewed current-source snapshots without replacing frozen research
