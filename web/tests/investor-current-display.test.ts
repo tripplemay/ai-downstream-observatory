@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { currentInvestorDisplay, currentPlanDisplay } from "../src/components/workbench/research-format";
-import { displayBefore, displayUntil, displayState } from "./investor-display-state-fixture";
+import { displayBefore, displayUntil, displayState, historicalDisplayState } from "./investor-display-state-fixture";
 
 test("current projection invalidates at the exact review boundary but never rewrites history or promotes evidence", () => {
   const state = displayState(), original = JSON.stringify(state), until = Date.parse(displayUntil);
@@ -43,4 +43,42 @@ test("source-context expiry hides candidates and registry without deleting the s
   const result = currentInvestorDisplay(input, until);
   assert.equal(result.researchTask?.status, "outdated"); assert.equal(result.researchTask?.study, null); assert.equal(result.researchTask?.registry, null);
   assert.ok(result.gaps.some(gap => gap.code === "REFERENCE_SOURCE_EXPIRED")); assert.notEqual(input.research_task.study, null);
+});
+
+test("reference progress distinguishes generated and saved artifacts without promoting missing monitoring evidence", () => {
+  for (const saved of [false, true]) {
+    const state = historicalDisplayState(saved), original = JSON.stringify(state);
+    const view = currentInvestorDisplay(state, Date.parse(displayBefore));
+    assert.equal(view.outcome, "insufficient_evidence"); assert.equal(view.stale, false);
+    assert.equal(view.referenceProgress?.title, saved ? "研究方案已保存，监测尚未就绪" : "历史参考组合已生成");
+    assert.equal(view.referenceProgress?.href, saved ? "#research-model-watch" : "#research-reference-plan");
+    assert.equal(view.gaps[0].code, "RECONSTRUCTED_RESEARCH_ONLY");
+    assert.equal(state.model_watch?.model_nav_cny ?? null, null);
+    assert.equal(JSON.stringify(state), original);
+    assert.equal(currentInvestorDisplay(state, Date.parse(displayUntil)).referenceProgress, null);
+  }
+});
+test("progress cannot hide source invalidation, unknown risk, profile changes, failed monitoring or actual outcomes", () => {
+  const before = Date.parse(displayBefore);
+  const states = [historicalDisplayState(), historicalDisplayState(true), historicalDisplayState(true), historicalDisplayState(),
+    historicalDisplayState(), historicalDisplayState(true), historicalDisplayState(), historicalDisplayState(true)];
+  states[0].effective_gaps[0].code = "REFERENCE_SOURCE_NO_LONGER_CURRENT";
+  states[1].model_watch!.status = "failed";
+  states[2].model_watch!.plan_id = "fictional-other-plan";
+  states[3].profile!.document.loss_tolerance = null;
+  states[4].plan!.quality = "different_profile";
+  states[5].model_watch!.profile_id = "fictional-other-profile";
+  states[6].read_only = true;
+  states[7].effective_outcome = "decision_required";
+  for (const state of states) assert.equal(currentInvestorDisplay(state, before).referenceProgress, null);
+  assert.equal(currentInvestorDisplay(displayState("observe"), before).referenceProgress, null);
+});
+test("paused and blocked observation are described without claiming successful monitoring or enabling anything", () => {
+  const state = historicalDisplayState(true);
+  state.model_watch!.enabled = false; state.model_watch!.status = "paused";
+  assert.equal(currentInvestorDisplay(state, Date.parse(displayBefore)).referenceProgress?.title, "研究方案已保存，观察任务已暂停");
+  state.model_watch!.enabled = true; state.model_watch!.status = "blocked";
+  const view = currentInvestorDisplay(state, Date.parse(displayBefore));
+  assert.equal(view.referenceProgress?.title, "研究方案已保存，监测证据仍不足");
+  assert.equal(view.outcome, "insufficient_evidence");
 });

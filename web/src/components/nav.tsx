@@ -100,7 +100,7 @@ export function NavLinks({
 
 export function Brand() {
   return (
-    <Link href="/" className="flex items-center gap-2 px-5 py-4">
+    <Link href="/" prefetch={false} className="flex items-center gap-2 px-5 py-4">
       <TrafficCone className="h-5 w-5 text-red-500" />
       <span className="text-sm font-semibold tracking-tight">ETF 投资工作台</span>
     </Link>

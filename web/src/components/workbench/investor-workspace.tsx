@@ -110,7 +110,7 @@ function ResearchCost({ value }: { value: string }) {
 }
 function ReferencePlanCard({ plan, task, disabled, onSave }: { plan: InvestorPlan | null; task: InvestorResearchTask | null; disabled: boolean; onSave: () => void }) {
   const empty = task ? researchTaskStatus(task) : null;
-  return <Card title={plan?.document.data_mode === "reconstructed" ? "历史研究参考组合" : plan?.quality === "current" ? "当前参考组合" : "研究组合与历史参考"}>
+  return <Card id="research-reference-plan" title={plan?.document.data_mode === "reconstructed" ? "历史研究参考组合" : plan?.quality === "current" ? "当前参考组合" : "研究组合与历史参考"}>
     {plan ? <>
       <p className="text-sm">研究参考 · {plan.quality !== "current" ? "历史方案，不能用于当前行动" : plan.saved_for_observation ? "已保存观察" : "待保存"} · 非实际持仓</p>
       <p className="mt-2 break-words text-xs text-muted-foreground">历史数据截止 {plan.document.data_cutoff} · 来源最晚有效至 {plan.document.valid_until}</p>
@@ -190,7 +190,7 @@ function ModelWatch({ watch: storedWatch, disabled, onToggle, nowMs }: { watch: 
     research_observe: "参考模型复核完成，继续观察", research_decision: "参考模型出现变化，等待你审阅",
     overdue: "复核已到期，旧结论不能继续使用", paused: "已暂停后台观察", outdated: "约束或输入已变化，等待重新复核",
     expired: "参考策略已过期，需重新研究", failed: "后台复核失败，不能当作无需调整" };
-  return <Card title="持续观察"><div className="flex flex-wrap items-start justify-between gap-3"><div>
+  return <Card id="research-model-watch" title="持续观察"><div className="flex flex-wrap items-start justify-between gap-3"><div>
     <p role="status" className="text-sm font-medium">{states[watch.status]}</p>
     <p className="mt-2 text-xs text-muted-foreground">最后复核：{watch.completed_at ?? "尚未完成"} · 下一次：{watch.next_check_at ?? "输入更新后"}</p>
   </div><Button variant="outline" disabled={disabled} onClick={onToggle}>{watch.enabled ? "暂停观察任务" : "恢复观察任务"}</Button></div>
@@ -271,7 +271,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
   const [data, setData] = useState<InvestorState | null>(initial), [editing, setEditing] = useState(initial.profile === null);
   const [busy, setBusy] = useState(true), [hydrated, setHydrated] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const [pending, setPending] = useState<{ body: string; binding: string; workspace: string | null } | null>(null);
-  const alive = useRef(true), invalidated = useRef(false), generation = useRef(0);
+  const alive = useRef(true), invalidated = useRef(false), generation = useRef(0), refreshInFlight = useRef(false);
   const accountScope = useRef(false), [accountScopeLocked, setAccountScopeLocked] = useState(false);
   const lockAccountScope = useCallback((value: boolean) => { accountScope.current = value; setAccountScopeLocked(value); }, []);
   const note = useRef<HTMLTextAreaElement>(null);
@@ -313,10 +313,13 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
     setData(state); return true;
   }
   async function refresh(clearError = true) {
-    if (busy || !sessionVerified || invalidated.current || accountScope.current) return;
-    const sequence = ++generation.current; setBusy(true); if (clearError) setError("");
-    try { await load(sequence); } catch (e) { if (alive.current) setError(e instanceof Error ? e.message : "INVESTOR_UNAVAILABLE"); }
-    finally { if (alive.current && sequence === generation.current) setBusy(false); }
+    if (busy || refreshInFlight.current || !sessionVerified || invalidated.current || accountScope.current) return;
+    const sequence = ++generation.current; refreshInFlight.current = true;
+    // Background reads must not disable a focused form; writes keep their lock.
+    if (clearError) { setBusy(true); setError(""); }
+    try { await load(sequence); }
+    catch (e) { if (alive.current && !invalidated.current && sequence === generation.current) setError(e instanceof Error ? e.message : "INVESTOR_UNAVAILABLE"); }
+    finally { refreshInFlight.current = false; if (clearError && alive.current && sequence === generation.current) setBusy(false); }
   }
   useEffect(() => {
     if (view === "observations" || busy || pending || editing || accountScopeLocked || !sessionVerified || invalidated.current) return;
@@ -373,6 +376,14 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
     ? <PolicyReview value={latest.document.model_change.policy_evaluation} /> : null;
   const title = view === "plan" ? "组合方案" : view === "observations" ? "观察记录" : view === "accounts" ? "账户资料" : "ETF 投资工作台";
   const riskPanel = data && <InvestorRiskPanel state={data} binding={initialSessionBinding} disabled={locked || editing} onCommand={command} />;
+  const referenceCard = <ReferencePlanCard key="reference" plan={plan} task={display?.researchTask ?? null} disabled={locked} onSave={() => plan && command({ action: "save_plan", plan_id: plan.id })} />;
+  const riskConfirmed = !!profile && profile.document.loss_tolerance !== null;
+  const referenceFirst = plan?.quality === "current" && plan.document.data_mode === "reconstructed"
+    && riskConfirmed && !display?.stale;
+  const planRiskDetails = <details key="risk" data-testid="plan-risk-details" open={referenceFirst ? undefined : true} className="min-w-0 rounded-2xl border bg-card shadow-sm">
+    <summary className="cursor-pointer rounded-2xl p-5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring md:p-6"><span className="font-semibold">风险预算与损失情景</span><span className="mt-2 block text-sm text-muted-foreground">{profile?.document.loss_tolerance ? "已记录研究风险范围；可核对或修改，不代表亏损上限或交易授权。" : "风险范围尚未确认；先比较损失情景，不默认选择风险或权重。"}</span></summary>
+    <div className="p-3 pt-0 md:p-5 md:pt-0">{riskPanel}</div>
+  </details>;
   const researchDetails = data && profile && <>
     <InvestorFundingPanel key={`${profile.id}:${data.funding.plan?.id ?? data.funding.status}`} state={data.funding} profile={profile}
       study={data.funded_study} studyUnavailable={data.funded_study_unavailable}
@@ -383,7 +394,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
   const evidenceGaps = display && display.gaps.length > 0 && <Card title="还缺哪些证据"><div className="grid gap-3 lg:grid-cols-2">{display.gaps.map(gap => <div key={gap.code} className="rounded-xl border p-4"><h3 className="flex items-center gap-2 text-sm font-semibold"><CircleHelp className="h-4 w-4 shrink-0 text-amber-600" />{gap.title}</h3><p className="mt-2 text-sm text-muted-foreground">{gap.detail}</p><p className="mt-3 text-xs">下一步：{gap.action}</p>{gap.affected_markets.length > 0 && <p className="mt-2 text-xs text-muted-foreground">影响：{gap.affected_markets.map(m => marketLabels[m]).join(" / ")}</p>}</div>)}</div></Card>;
   return <div inert={!hydrated} aria-busy={busy} data-hydrated={hydrated} className="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 md:p-8">
     <header className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[.2em] text-muted-foreground">ETF / RESEARCH & OBSERVATION</p><h1 className="mt-2 text-3xl font-semibold tracking-tight">{title}</h1><p className="mt-2 max-w-2xl text-sm text-muted-foreground">策略形成参考组合，系统解释变化，你决定是否在券商交易。</p></div><div className="flex flex-wrap items-center gap-3"><InvestorNotificationsPanel workspaceId={data?.workspace_id ?? null} binding={initialSessionBinding} disabled={!sessionVerified || !data || accountScopeLocked || pending !== null || invalidated.current} readOnly={data?.read_only ?? true} revision={data?.revision ?? 0} />{view !== "observations" && <Button variant="outline" disabled={busy || accountScopeLocked || !sessionVerified || invalidated.current} onClick={() => void refresh()}>刷新状态</Button>}<span className="flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs"><ShieldCheck className="h-4 w-4" />研究模式 · 不自动交易</span></div></header>
-    <nav aria-label="工作台主导航" className="flex gap-1 overflow-x-auto rounded-xl border bg-muted/40 p-1">{([["overview", "/workbench", "总览"], ["plan", "/workbench/plan", "组合方案"], ["observations", "/workbench/observations", "观察记录"], ["accounts", "/workbench/accounts", "账户资料"]] as const).map(([key, href, label]) => <Link key={key} href={href} aria-current={view === key ? "page" : undefined} className={`shrink-0 rounded-lg px-3 py-2.5 text-sm sm:px-4 ${view === key ? "bg-background font-semibold shadow-sm" : "text-muted-foreground hover:bg-background"}`}>{label}</Link>)}</nav>
+    <nav aria-label="工作台主导航" className="grid grid-cols-4 gap-1 rounded-xl border bg-muted/40 p-1 sm:flex">{([["overview", "/workbench", "总览"], ["plan", "/workbench/plan", "组合方案"], ["observations", "/workbench/observations", "观察记录"], ["accounts", "/workbench/accounts", "账户资料"]] as const).map(([key, href, label]) => <Link key={key} href={href} prefetch={false} aria-current={view === key ? "page" : undefined} className={`flex min-h-11 min-w-0 items-center justify-center rounded-lg px-1 py-2.5 text-xs sm:px-4 sm:text-sm ${view === key ? "bg-background font-semibold shadow-sm" : "text-muted-foreground hover:bg-background"}`}>{label}</Link>)}</nav>
     {error && <div role="alert" className="break-words rounded-xl border border-red-500/30 bg-red-500/5 p-4 text-sm">{errorLabels[error] ?? "操作未完成，请重新核对研究记录。"}</div>}
     {notice && <div role="status" className="rounded-xl border p-4 text-sm">{notice}</div>}
     {data?.read_only && <div role="status" className="rounded-xl border border-amber-500/40 p-4 text-sm">恢复只读模式：可查看证据，暂不能保存偏好、复核或记录决定。</div>}
@@ -394,16 +405,18 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
       {(editing || !profile) && view !== "observations" && <section className={panel}><ProfileForm key={profile?.id ?? "first"} initial={profile?.document ?? null} disabled={locked} onSave={document => command({ action: "save_profile", profile: document })} /></section>}
       {view !== "observations" && profile && <>
         <section className={`min-w-0 rounded-2xl border p-5 md:p-7 ${currentOutcome === "decision_required" ? "border-blue-500/30 bg-blue-500/5" : currentOutcome === "observe" ? "border-emerald-500/30 bg-emerald-500/5" : "border-amber-500/30 bg-amber-500/5"}`}>
-          <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-sm text-muted-foreground">今天的研究结论</p><h2 className="mt-2 text-2xl font-semibold">{currentOutcome ? labels[currentOutcome] : "等待首次评估"}</h2><p className="mt-2 max-w-3xl text-sm">{(currentOutcome === "insufficient_evidence" && (display?.stale || latest?.document.outcome !== "insufficient_evidence") ? display?.gaps[0]?.detail : display?.researchBlocker?.detail ?? latest?.document.reasons[0]) ?? "尚无可复核的研究评估，不能据此判断是否需要调整。"}</p></div>
-            {display?.researchBlocker ? <Button asChild variant="outline" className="h-11"><Link href="/workbench/plan#research-execution-checks">查看研究检查</Link></Button>
+          <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-sm text-muted-foreground">{display?.referenceProgress ? "研究进度与当前监测" : "今天的研究结论"}</p><h2 className="mt-2 text-2xl font-semibold">{display?.referenceProgress?.title ?? (currentOutcome ? labels[currentOutcome] : "等待首次评估")}</h2>
+            {display?.referenceProgress && <><p data-testid="current-monitor-outcome" className="mt-3 text-sm font-medium">当前监测：{currentOutcome ? labels[currentOutcome] : "等待首次评估"}</p><p className="mt-2 max-w-3xl text-sm">{display.referenceProgress.detail}</p></>}
+            <p className="mt-2 max-w-3xl text-sm">{(currentOutcome === "insufficient_evidence" && (display?.stale || latest?.document.outcome !== "insufficient_evidence") ? display?.gaps[0]?.detail : display?.researchBlocker?.detail ?? latest?.document.reasons[0]) ?? "尚无可复核的研究评估，不能据此判断是否需要调整。"}</p></div>
+            {display?.referenceProgress ? <div className="flex flex-wrap gap-3"><Button asChild variant="outline" className="h-11"><Link href={display.referenceProgress.href} prefetch={false}>{display.referenceProgress.action}</Link></Button><details className="text-sm"><summary className="cursor-pointer rounded-lg p-3">手动研究检查</summary><Button variant="outline" disabled={locked} onClick={() => command({ action: "evaluate" })}>重新检查研究条件</Button></details></div>
+              : display?.researchBlocker ? <Button asChild variant="outline" className="h-11"><Link href="/workbench/plan#research-execution-checks" prefetch={false}>查看研究检查</Link></Button>
               : <Button variant="outline" disabled={locked} onClick={() => command({ action: "evaluate" })}>重新检查研究条件</Button>}
           </div>
           <div className="mt-5 flex flex-wrap gap-x-6 gap-y-2 border-t pt-4 text-xs text-muted-foreground"><span>研究参考 · 非实际持仓</span><span>{latest?.document.data_cutoff ? `数据截止：${latest.document.data_cutoff}` : data.research_task?.study?.source_context ? `历史研究截止：${data.research_task.study.source_context.range_end}（非当前行情）` : "数据截止：尚无合格数据"}</span><span>约束版本：{profile.version}</span><span>币种：人民币为研究预算口径</span></div>
         </section>
         {currentOutcome === "decision_required" && latest && <Card title="变化卡 · 决定由你作出"><p className="text-sm">仅记录你的审阅意见，不批准交易、不预占资金，也不代表成交。</p>{latest.document.model_change && <ModelChange change={latest.document.model_change} plan={plan?.document ?? null} />}{plan && <div className="mt-3 space-y-2 text-sm"><ResearchCost value={plan.document.estimated_cost} />{plan.document.counterarguments.map((s, i) => <p key={i}>反对理由：{s}</p>)}</div>}<label className="mt-4 flex flex-col gap-2 text-sm">审阅备注（可选）<textarea ref={note} maxLength={2000} className="min-h-20 rounded-lg border bg-background p-3" /></label><div className="mt-4 flex flex-wrap gap-3">{(["accept_idea", "defer", "reject"] as const).map(decision => <Button key={decision} variant={decision === "accept_idea" ? "default" : "outline"} disabled={locked} onClick={() => command({ action: "review", observation_id: latest.id, decision, note: note.current?.value ?? "" })}>{decisionLabels[decision]}</Button>)}</div></Card>}
         {view !== "overview" && policyReview}
-        {view === "overview" ? evidenceGaps : riskPanel}
-        <ReferencePlanCard plan={plan} task={display?.researchTask ?? null} disabled={locked} onSave={() => plan && command({ action: "save_plan", plan_id: plan.id })} />
+        {view === "overview" ? <>{evidenceGaps}{referenceCard}</> : riskConfirmed ? [referenceCard, planRiskDetails] : [planRiskDetails, referenceCard]}
         {view === "overview" ? <details data-testid="overview-research-details" className="min-w-0 rounded-2xl border bg-card shadow-sm">
           <summary className="cursor-pointer rounded-2xl p-5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring md:p-6">
             <span className="font-semibold">风险、投入与研究详情</span>
@@ -420,8 +433,8 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
         <Card title="策略解释与反证"><div className="flex items-start gap-3"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" /><div className="min-w-0 flex-1"><p className="text-sm">规则结论由确定性核验产生；AI 仅提供单独标注的解释与反证，不生成价格或替你批准交易。</p>{display?.stale && <p role="status" className="mt-3 text-sm">当前观察已到期，停止展示旧 AI 正文与生成入口；刷新并核对新观察后再请求解释。</p>}<InvestorAiPanel state={data} binding={initialSessionBinding} disabled={locked || editing || !!display?.stale} /><details className="mt-4 text-sm"><summary className="cursor-pointer">查看已记录输入版本与历史证据</summary><pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify({ profile_hash: profile.content_hash, observation: latest }, null, 2)}</pre></details></div></div></Card>
       </>}
       {view === "observations" && <InvestorHistoryPanel workspaceId={data.workspace_id} binding={initialSessionBinding} disabled={!sessionVerified || pending !== null || invalidated.current} observationId={historyObservationId} />}
-      {view === "overview" && profile && <Card title="最近观察">{data.observations.length === 0 ? <p className="text-sm text-muted-foreground">尚无观察记录。先保存研究偏好，不需要创建真实账户。</p> : <div className="space-y-3">{data.observations.slice(0, 3).map(row => <article key={row.id} id={`research-observation-${row.id}`} className="rounded-xl border p-4"><div className="flex flex-wrap justify-between gap-2"><h3 className="text-sm font-semibold">{labels[row.document.outcome]}</h3><time className="text-xs text-muted-foreground">{row.document.evaluated_at}</time></div><p className="mt-2 text-sm text-muted-foreground">{row.document.reasons[0]}</p><p className="mt-2 text-xs text-muted-foreground">约束 v{row.document.profile_version} · 数据截止 {row.document.data_cutoff ?? "未知"}</p>{data.decisions.filter(decision => decision.observation_id === row.id).map(decision => <p key={decision.id} className="mt-3 border-t pt-3 text-sm">你的决定：{decisionLabels[decision.decision]} · {decision.note || "无备注"} <span className="text-xs text-muted-foreground">（审阅记录，非成交）</span></p>)}</article>)}</div>}<p className="mt-3 text-xs text-muted-foreground">总览只展示近期摘要与部分决定，完整历史请进入观察归档。</p><Link className="mt-4 inline-block text-sm underline" href="/workbench/observations">查看观察归档</Link></Card>}
+      {view === "overview" && profile && <Card title="最近观察">{data.observations.length === 0 ? <p className="text-sm text-muted-foreground">尚无观察记录。先保存研究偏好，不需要创建真实账户。</p> : <div className="space-y-3">{data.observations.slice(0, 3).map(row => <article key={row.id} id={`research-observation-${row.id}`} className="rounded-xl border p-4"><div className="flex flex-wrap justify-between gap-2"><h3 className="text-sm font-semibold">{labels[row.document.outcome]}</h3><time className="text-xs text-muted-foreground">{row.document.evaluated_at}</time></div><p className="mt-2 text-sm text-muted-foreground">{row.document.reasons[0]}</p><p className="mt-2 text-xs text-muted-foreground">约束 v{row.document.profile_version} · 数据截止 {row.document.data_cutoff ?? "未知"}</p>{data.decisions.filter(decision => decision.observation_id === row.id).map(decision => <p key={decision.id} className="mt-3 border-t pt-3 text-sm">你的决定：{decisionLabels[decision.decision]} · {decision.note || "无备注"} <span className="text-xs text-muted-foreground">（审阅记录，非成交）</span></p>)}</article>)}</div>}<p className="mt-3 text-xs text-muted-foreground">总览只展示近期摘要与部分决定，完整历史请进入观察归档。</p><Link className="mt-4 inline-block text-sm underline" href="/workbench/observations" prefetch={false}>查看观察归档</Link></Card>}
     </>}
-    <footer className="flex flex-wrap justify-between gap-3 border-t pt-4 text-xs text-muted-foreground"><span>研究参考、实际持仓和可执行待审结果分开。投资不保证持续盈利。</span><Link href="/workbench/ledger" className="underline">高级账本与运营入口</Link></footer>
+    <footer className="flex flex-wrap justify-between gap-3 border-t pt-4 text-xs text-muted-foreground"><span>研究参考、实际持仓和可执行待审结果分开。投资不保证持续盈利。</span><Link href="/workbench/ledger" prefetch={false} className="underline">高级账本与运营入口</Link></footer>
   </div>;
 }

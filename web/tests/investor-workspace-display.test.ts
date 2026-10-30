@@ -6,7 +6,7 @@ import * as schemas from "../src/server/investor/schemas";
 import * as losses from "../src/server/investor/loss-scenarios";
 import { acquisitionDeadlines } from "../src/components/workbench/investor-acquisition";
 import { mountInvestorDisplay } from "./investor-display-fixture";
-import { displayBinding as binding, displayBefore, displayUntil, displayFuture, displayState } from "./investor-display-state-fixture";
+import { displayBinding as binding, displayBefore, displayUntil, displayFuture, displayState, historicalDisplayState } from "./investor-display-state-fixture";
 import { blockedResearchDisplayState } from "./investor-research-blocker-fixture";
 import { actionCostMethodology, reviewCostMethodology, settlementCostMethodology } from "../src/server/investor/reference-cost-methodology";
 
@@ -249,4 +249,75 @@ test("plan keeps full risk and economic panels visible without the overview fold
   assert.equal(funding.props.state, h.state.funding);
   assert.equal(h.node("InvestorFundedComparisonPanel")!.props.state, h.state);
   assert.equal(h.requests.length, 0);
+});
+
+test("qualified historical reference leads the plan page while confirmed risk remains mounted in a closed disclosure", async t => {
+  for (const saved of [false, true]) {
+    const state = historicalDisplayState(saved), original = JSON.stringify(state), h = mount(t, state, "plan"); await h.flush();
+    const nodes = h.nodes(), reference = nodes.find(node => node.type === "section" && node.props.id === "research-reference-plan")!,
+      risk = nodes.find(node => node.type === "InvestorRiskPanel")!;
+    const fold = nodes.find(node => node.props["data-testid"] === "plan-risk-details")!;
+    assert.ok(reference); assert.ok(risk); assert.ok(fold); assert.equal(!!fold.props.open, false);
+    assert.ok(nodes.indexOf(reference) < nodes.indexOf(fold)); assert.ok(nodes.indexOf(fold) < nodes.indexOf(risk));
+    assert.equal(risk.props.state, state); assert.equal(risk.props.binding, binding);
+    const current = nodes.find(node => node.props["data-testid"] === "current-monitor-outcome")!;
+    assert.equal(h.words(current), "当前监测：证据不足");
+    assert.match(h.text(), saved ? /研究方案已保存，监测尚未就绪/ : /历史参考组合已生成/);
+    assert.ok(h.nodes().some(node => node.type === "Link" && node.props.href === (saved ? "#research-model-watch" : "#research-reference-plan")));
+    assert.equal(h.requests.length, 0); assert.equal(JSON.stringify(state), original); h.close();
+  }
+});
+test("missing risk leads, while evidence expiry expands risk without moving the confirmed-risk form or submitting", async t => {
+  const state = historicalDisplayState(); state.profile!.document.loss_tolerance = null;
+  const h = mount(t, state, "plan"); await h.flush();
+  assert.equal(h.nodes().find(node => node.props["data-testid"] === "plan-risk-details")!.props.open, true);
+  assert.equal(h.nodes().some(node => node.props["data-testid"] === "current-monitor-outcome"), false);
+  const nodes = h.nodes(), risk = nodes.find(node => node.type === "InvestorRiskPanel")!,
+    reference = nodes.find(node => node.type === "section" && node.props.id === "research-reference-plan")!;
+  assert.ok(risk); assert.ok(reference); assert.ok(nodes.indexOf(risk) < nodes.indexOf(reference));
+  h.close();
+  const ready = mount(t, historicalDisplayState(), "plan"); await ready.flush(); await ready.advance(until);
+  assert.equal(ready.headline(), "证据不足"); assert.equal(ready.card("历史研究参考组合"), undefined);
+  const expiredNodes = ready.nodes(), expiredFold = expiredNodes.find(node => node.props["data-testid"] === "plan-risk-details")!;
+  const expiredReference = expiredNodes.find(node => node.type === "section" && node.props.id === "research-reference-plan")!;
+  assert.ok(expiredReference); assert.ok(expiredFold); assert.equal(expiredFold.props.open, true);
+  assert.ok(expiredNodes.indexOf(expiredReference) < expiredNodes.indexOf(expiredFold));
+  assert.equal(ready.requests.length, 0);
+});
+test("main navigation is compact and never speculatively fetches other expensive research routes", async t => {
+  const h = mount(t); await h.flush();
+  const nav = h.nodes().find(node => node.type === "nav" && node.props["aria-label"] === "工作台主导航")!;
+  assert.match(String(nav.props.className), /grid-cols-4/); assert.doesNotMatch(String(nav.props.className), /overflow-x-auto/);
+  for (const href of ["/workbench", "/workbench/plan", "/workbench/observations", "/workbench/accounts"]) {
+    const link = h.nodes().find(node => node.type === "Link" && node.props.href === href)!;
+    assert.equal(link.props.prefetch, false); assert.match(String(link.props.className), /min-h-11/);
+  }
+  assert.equal(h.requests.length, 0);
+});
+test("background refresh is single-flight and does not lock risk editing; explicit refresh still locks", async t => {
+  const state = historicalDisplayState(true), h = mount(t, state, "plan"); await h.flush();
+  await h.advance(before + 5000); assert.equal(h.requests.length, 1); assert.equal(h.requests[0].method, "GET");
+  assert.equal(h.node("InvestorRiskPanel")!.props.disabled, false);
+  await h.click("刷新状态"); await h.advance(before + 10000);
+  assert.equal(h.requests.length, 1); assert.equal(h.node("InvestorRiskPanel")!.props.disabled, false);
+  await h.reply(0, { ...state, session_binding: binding });
+  await h.click("刷新状态"); assert.equal(h.requests.length, 2);
+  assert.equal(h.node("InvestorRiskPanel")!.props.disabled, true);
+  await h.reply(1, { ...state, session_binding: binding });
+  assert.equal(h.node("InvestorRiskPanel")!.props.disabled, false);
+  assert.equal(h.requests.every(row => row.method === "GET"), true);
+});
+test("an older background response or error cannot replace state or unlock a pending human mutation", async t => {
+  for (const failed of [false, true]) {
+    const state = historicalDisplayState(true), h = mount(t, state, "plan"); await h.flush(); await h.advance(before + 5000);
+    await h.click("暂停观察任务"); assert.equal(h.requests.length, 2); assert.equal(h.requests[1].method, "POST");
+    assert.equal(h.node("InvestorRiskPanel")!.props.disabled, true);
+    if (failed) await h.fail(0);
+    else await h.reply(0, { ...state, revision: state.revision + 100, session_binding: binding });
+    assert.equal((h.node("InvestorRiskPanel")!.props.state as typeof state).revision, state.revision);
+    assert.equal(h.node("InvestorRiskPanel")!.props.disabled, true);
+    assert.doesNotMatch(h.text(), /操作未完成，请重新核对研究记录/);
+    await h.reply(1, { error: "INVESTOR_REVISION_CONFLICT" }, 409);
+    assert.equal(h.node("InvestorRiskPanel")!.props.disabled, false); assert.equal(h.requests.length, 2); h.close();
+  }
 });

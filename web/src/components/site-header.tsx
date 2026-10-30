@@ -37,8 +37,8 @@ export function SiteHeader({ nav }: { nav?: React.ReactNode }) {
           </div>
           <div className="py-3" onClick={() => setOpen(false)}>
             {nav ?? <nav className="space-y-2 px-4">
-              {INVESTOR_NAVIGATION.map(item => <Link key={item.href} className="block px-3 py-3 text-sm" href={item.href}>{item.label}</Link>)}
-              <details><summary className="cursor-pointer px-3 py-3 text-xs text-muted-foreground">高级 / 运营</summary>{ADVANCED_NAVIGATION.map(item => <Link key={item.href} className="block px-3 py-2 text-sm text-muted-foreground" href={item.href}>{item.label}</Link>)}</details>
+              {INVESTOR_NAVIGATION.map(item => <Link key={item.href} className="block px-3 py-3 text-sm" href={item.href} prefetch={false}>{item.label}</Link>)}
+              <details><summary className="cursor-pointer px-3 py-3 text-xs text-muted-foreground">高级 / 运营</summary>{ADVANCED_NAVIGATION.map(item => <Link key={item.href} className="block px-3 py-2 text-sm text-muted-foreground" href={item.href} prefetch={false}>{item.label}</Link>)}</details>
             </nav>}
           </div>
         </SheetContent>
