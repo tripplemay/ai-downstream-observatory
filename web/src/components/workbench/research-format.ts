@@ -96,6 +96,29 @@ function currentResearchBlocker(state: InvestorState, task: InvestorResearchTask
     && task.registry?.phases.train.completed === study.candidates.length;
   return (phase ? phaseFailed : trainIncomplete) ? researchTaskStatus(task) : null;
 }
+function currentReferenceProgress(state: InvestorState, plan: InvestorPlan | null, watch: InvestorModelWatch | null,
+  stale: boolean, now: number) {
+  if (stale || state.read_only || state.effective_outcome !== "insufficient_evidence" || !plan || plan.quality !== "current"
+    || plan.document.data_mode !== "reconstructed" || plan.document.reference_evidence?.qualification !== "owner_reviewed_reconstructed"
+    || !state.profile || state.profile.document.loss_tolerance === null || plan.document.profile_id !== state.profile.id
+    || Date.parse(plan.document.created_at) > now
+    || state.effective_gaps.some(gap => gap.code.startsWith("REFERENCE_SOURCE_") || gap.code === "REFERENCE_PLAN_SOURCE_CHANGED"
+      || gap.code === "RISK_BUDGET_UNCONFIRMED")
+    || watch && (watch.plan_id !== plan.id || watch.profile_id !== state.profile.id)) return null;
+  if (!plan.saved_for_observation && !watch) return {
+    title: "历史参考组合已生成", detail: "先核对下方 ETF、成本和损失情景，再决定是否保存为研究观察方案。尚未形成当前监测结论。",
+    href: "#research-reference-plan", action: "查看参考组合",
+  };
+  if (!plan.saved_for_observation || !watch) return null;
+  if (!watch.enabled && watch.status === "paused") return {
+    title: "研究方案已保存，观察任务已暂停", detail: "已保留研究参考，但没有启用后续观察；暂停不表示无需调整。",
+    href: "#research-model-watch", action: "查看观察状态",
+  };
+  if (!watch.enabled || !["awaiting_inputs", "awaiting_evaluation", "queued", "running", "retrying", "blocked"].includes(watch.status)) return null;
+  return { title: watch.status === "blocked" ? "研究方案已保存，监测证据仍不足" : "研究方案已保存，监测尚未就绪",
+    detail: "已登记模型观察任务。行情、后台进度和当前结论分开核对；保存成功不代表行情完整或无需调整。",
+    href: "#research-model-watch", action: "查看监测进度" };
+}
 export function currentInvestorDisplay(state: InvestorState, nowMs: number) {
   const now = Math.max(nowMs, Date.parse(state.checked_at));
   const plan = currentPlanDisplay(state.plan, now);
@@ -117,8 +140,11 @@ export function currentInvestorDisplay(state: InvestorState, nowMs: number) {
   const researchBlocker = localGaps.length ? null : currentResearchBlocker(state, researchTask, now);
   const gaps = [...localGaps, ...state.effective_gaps.filter(value => !codes.has(value.code)).map(value =>
     value.code === "RECONSTRUCTED_RESEARCH_ONLY" && researchBlocker ? { ...value, ...researchBlocker } : value)];
+  // Progress describes saved artifacts; it never promotes the monitoring outcome.
+  const referenceProgress = currentReferenceProgress(state, plan, modelWatch, localGaps.length > 0, now);
   // This display-only projection can invalidate, never promote or rewrite server history.
   return { plan, researchTask, modelWatch, gaps, researchBlocker, stale: localGaps.length > 0,
+    referenceProgress,
     outcome: localGaps.length ? "insufficient_evidence" as const : state.effective_outcome };
 }
 export function investorPollInterval(state: InvestorState | null): number | null {

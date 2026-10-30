@@ -6,7 +6,7 @@ import * as schemas from "../src/server/investor/schemas";
 import * as losses from "../src/server/investor/loss-scenarios";
 import { acquisitionDeadlines } from "../src/components/workbench/investor-acquisition";
 import { mountInvestorDisplay } from "./investor-display-fixture";
-import { displayBinding as binding, displayBefore, displayUntil, displayFuture, displayState } from "./investor-display-state-fixture";
+import { displayBinding as binding, displayBefore, displayUntil, displayFuture, displayState, historicalDisplayState } from "./investor-display-state-fixture";
 import { blockedResearchDisplayState } from "./investor-research-blocker-fixture";
 import { actionCostMethodology, reviewCostMethodology, settlementCostMethodology } from "../src/server/investor/reference-cost-methodology";
 
@@ -248,5 +248,46 @@ test("plan keeps full risk and economic panels visible without the overview fold
   assert.equal(risk.props.state, h.state); assert.equal(risk.props.binding, binding);
   assert.equal(funding.props.state, h.state.funding);
   assert.equal(h.node("InvestorFundedComparisonPanel")!.props.state, h.state);
+  assert.equal(h.requests.length, 0);
+});
+
+test("qualified historical reference leads the plan page while confirmed risk remains mounted in a closed disclosure", async t => {
+  for (const saved of [false, true]) {
+    const state = historicalDisplayState(saved), original = JSON.stringify(state), h = mount(t, state, "plan"); await h.flush();
+    const nodes = h.nodes(), reference = nodes.find(node => node.type === "section" && node.props.id === "research-reference-plan")!,
+      risk = nodes.find(node => node.type === "InvestorRiskPanel")!;
+    const fold = nodes.find(node => node.props["data-testid"] === "plan-risk-details")!;
+    assert.ok(reference); assert.ok(risk); assert.ok(fold); assert.equal(!!fold.props.open, false);
+    assert.ok(nodes.indexOf(reference) < nodes.indexOf(fold)); assert.ok(nodes.indexOf(fold) < nodes.indexOf(risk));
+    assert.equal(risk.props.state, state); assert.equal(risk.props.binding, binding);
+    const current = nodes.find(node => node.props["data-testid"] === "current-monitor-outcome")!;
+    assert.equal(h.words(current), "当前监测：证据不足");
+    assert.match(h.text(), saved ? /研究方案已保存，监测尚未就绪/ : /历史参考组合已生成/);
+    assert.ok(h.nodes().some(node => node.type === "Link" && node.props.href === (saved ? "#research-model-watch" : "#research-reference-plan")));
+    assert.equal(h.requests.length, 0); assert.equal(JSON.stringify(state), original); h.close();
+  }
+});
+test("missing risk and expired evidence keep risk visible, remove the ready headline and never submit implicitly", async t => {
+  const state = historicalDisplayState(); state.profile!.document.loss_tolerance = null;
+  const h = mount(t, state, "plan"); await h.flush();
+  assert.equal(h.nodes().find(node => node.props["data-testid"] === "plan-risk-details")!.props.open, true);
+  assert.equal(h.nodes().some(node => node.props["data-testid"] === "current-monitor-outcome"), false);
+  const nodes = h.nodes(), risk = nodes.find(node => node.type === "InvestorRiskPanel")!,
+    reference = nodes.find(node => node.type === "section" && node.props.id === "research-reference-plan")!;
+  assert.ok(risk); assert.ok(reference); assert.ok(nodes.indexOf(risk) < nodes.indexOf(reference));
+  h.close();
+  const ready = mount(t, historicalDisplayState(), "plan"); await ready.flush(); await ready.advance(until);
+  assert.equal(ready.headline(), "证据不足"); assert.equal(ready.card("历史研究参考组合"), undefined);
+  assert.equal(ready.nodes().find(node => node.props["data-testid"] === "plan-risk-details")!.props.open, true);
+  assert.equal(ready.requests.length, 0);
+});
+test("main navigation is compact and never speculatively fetches other expensive research routes", async t => {
+  const h = mount(t); await h.flush();
+  const nav = h.nodes().find(node => node.type === "nav" && node.props["aria-label"] === "工作台主导航")!;
+  assert.match(String(nav.props.className), /grid-cols-4/); assert.doesNotMatch(String(nav.props.className), /overflow-x-auto/);
+  for (const href of ["/workbench", "/workbench/plan", "/workbench/observations", "/workbench/accounts"]) {
+    const link = h.nodes().find(node => node.type === "Link" && node.props.href === href)!;
+    assert.equal(link.props.prefetch, false); assert.match(String(link.props.className), /min-h-11/);
+  }
   assert.equal(h.requests.length, 0);
 });
