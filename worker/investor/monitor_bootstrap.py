@@ -75,7 +75,15 @@ def _reviews(db, workspace, kind, at):
     rows = db.execute("""SELECT r.id FROM investor_data_reviews r JOIN investor_data_sources s ON s.id=r.source_id AND s.workspace_id=r.workspace_id
         WHERE r.workspace_id=? AND s.kind=? AND r.decision='approved' AND r.created_at<=? AND r.valid_until>?
           AND r.version=(SELECT max(version) FROM investor_data_reviews WHERE source_id=r.source_id)
-        ORDER BY r.created_at DESC,r.id LIMIT ?""", (workspace, kind, at, at, MAX_REVIEW_CANDIDATES + 1)).fetchall()
+          AND (s.kind!='fx' OR NOT EXISTS(SELECT 1 FROM investor_fx_publications p WHERE p.workspace_id=r.workspace_id
+                AND (p.usd_review_id=r.id OR p.hkd_review_id=r.id))
+            OR EXISTS(SELECT 1 FROM investor_fx_publications p JOIN investor_fx_authorities a ON a.id=p.authority_id AND a.workspace_id=p.workspace_id
+                JOIN investor_fx_controls control ON control.id=json_extract(p.document_json,'$.control_id') AND control.authority_id=a.id
+                WHERE p.workspace_id=r.workspace_id AND (p.usd_review_id=r.id OR p.hkd_review_id=r.id)
+                AND p.id=(SELECT id FROM investor_fx_publications head WHERE head.authority_id=p.authority_id AND head.status='published' ORDER BY head.sequence DESC LIMIT 1)
+                AND control.enabled=1 AND control.version=(SELECT max(version) FROM investor_fx_controls WHERE authority_id=a.id)
+                AND control.created_at<=? AND json_extract(a.document_json,'$.valid_from')<=? AND json_extract(a.document_json,'$.valid_until')>?))
+        ORDER BY r.created_at DESC,r.id LIMIT ?""", (workspace, kind, at, at, at, at, at, MAX_REVIEW_CANDIDATES + 1)).fetchall()
     _assert(len(rows) <= MAX_REVIEW_CANDIDATES, "INVESTOR_BOOTSTRAP_SOURCE_LIMIT")
     return [resolve_review(db, workspace, row["id"], kind, now=at) for row in rows]
 

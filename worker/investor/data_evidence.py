@@ -192,6 +192,9 @@ def resolve_review(db, workspace_id, review_id, kind, *, now=None, require_curre
         latest = db.execute("SELECT id FROM investor_data_reviews WHERE source_id=? ORDER BY version DESC LIMIT 1", (source["id"],)).fetchone()
         _assert(latest[0] == review_id, "INVESTOR_DATA_REVIEW_SUPERSEDED")
     validate_facts(kind, document["facts"])
+    if kind == "fx":
+        from .managed_fx import validate_managed_review
+        validate_managed_review(db, workspace_id, review, document["facts"], checked)
     return {"review": dict(review), "source": dict(source), "facts": document["facts"]}
 
 

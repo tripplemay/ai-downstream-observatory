@@ -186,8 +186,10 @@ class ConfirmedFeedTests(unittest.TestCase):
         self.model()
         confirmed_feed.discover_confirmed_watches(self.db, now=EARLY)
         history = enqueue_job(self.db, "market_collect_prices", "fictional-history", "fixture", "1", now=EARLY)
+        enqueue_job(self.db, "investor_current_fx", "fictional-reference", "fixture", "1", max_attempts=1, now=EARLY)
         reserved = "2026-01-04T06:56:00.000Z"
         self.assertIsNone(claim_job(self.db, "history", job_type="market_collect_prices", now=reserved))
+        self.assertIsNone(claim_job(self.db, "reference", job_type="investor_current_fx", now=reserved))
         lease = claim_job(self.db, "watch", lease_seconds=300, job_type=confirmed_feed.JOB_TYPE, now=START)
         self.assertIsNotNone(lease)
         second = open_database(self.path)

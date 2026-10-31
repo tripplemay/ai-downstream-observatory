@@ -129,6 +129,10 @@ def source_unavailable_reason(db, workspace_id, document, now):
             return "REFERENCE_SOURCE_NO_LONGER_CURRENT"
         if now >= row["valid_until"]:
             return "REFERENCE_SOURCE_EXPIRED"
+        from .managed_fx import managed_review_unavailable
+        managed = managed_review_unavailable(db, workspace_id, row["id"], now)
+        if managed:
+            return managed
     for ref in document["snapshot"]["capture_refs"]:
         versioned = document["snapshot"]["schema_version"] == "investor-monitor-price-snapshot-v1"
         _assert(ref.get("kind") in ("historical_sdk", "confirmed_sdk") if versioned else "kind" not in ref)

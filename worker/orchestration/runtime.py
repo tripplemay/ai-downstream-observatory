@@ -263,6 +263,9 @@ def command_handler(connection, clock=None, lease_seconds=300, stop_requested=No
     clock = (lambda: None) if clock is None else clock
     supported = role_commands(role)
     def handle(job, lease):
+        if job["job_type"] == "investor_current_fx" and role == "longport":
+            from worker.investor.managed_fx import prepare_current_fx
+            return prepare_current_fx(connection, job, lease, clock=clock, stop_requested=stop_requested)
         if job["job_type"] == "investor_initial_prices" and role == "longport":
             from worker.investor.initial_prices import prepare_initial_price
             return prepare_initial_price(connection, job, lease, clock=clock, stop_requested=stop_requested)
@@ -413,7 +416,9 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
         from worker.investor.evidence_monitor_runtime import discover_evidence_monitor_requests
         from worker.investor.confirmed_feed import admit_completed_feeds, refresh_monitor_sources
         from worker.investor.monitor_bootstrap import bootstrap_monitor_inputs
+        from worker.investor.managed_fx import publish_current_fx
         purge_due_source_payloads(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        publish_current_fx(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         admit_completed_feeds(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         refresh_monitor_sources(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         bootstrap_monitor_inputs(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
@@ -427,6 +432,8 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
     elif role == "longport":
         from worker.investor.confirmed_feed import discover_confirmed_watches
         from worker.investor.initial_prices import discover_initial_prices
+        from worker.investor.managed_fx import discover_current_fx
+        discover_current_fx(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
         discover_confirmed_watches(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
         discover_initial_prices(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
         discover_due_price_collections(connection, limit=price_collection_discovery_limit, now=clock(),
@@ -434,5 +441,5 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
     sync_requests(connection, now=clock(), command_types=supported)
     # One oldest-ready selection avoids starving periodic jobs behind a busy
     # ingestion stream while still excluding unsupported modules' jobs.
-    types = (*supported, "investor_research", "investor_funded_study", "investor_monitor", "investor_evidence_monitor") if role == "core" else (*supported, "investor_confirmed_watch", "investor_initial_prices") if role == "longport" else supported
+    types = (*supported, "investor_research", "investor_funded_study", "investor_monitor", "investor_evidence_monitor") if role == "core" else (*supported, "investor_confirmed_watch", "investor_initial_prices", "investor_current_fx") if role == "longport" else supported
     return run_one(connection, owner, command_handler(connection, clock, lease_seconds, stop_requested, role), job_type=types, lease_seconds=lease_seconds, clock=clock)

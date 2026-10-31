@@ -51,6 +51,10 @@ separately. Neither capture nor retrieval extends it.
 
 ## Integration status
 
+The later [standing-rule feed](68-managed-reference-fx-feed.md) adds the separate
+durable producer/head integration described as outstanding below. This receiver's
+pure return value remains unapproved; it does not itself acquire that authority.
+
 The pure draft deliberately does not invent `monitor_series`. Explicit owner
 authority, supplier-use/retention binding, source review and overlap checks are
 still required before using it in the [current-FX selector](64-current-fx-source-selection.md).
