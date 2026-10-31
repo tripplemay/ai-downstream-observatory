@@ -227,10 +227,11 @@ def _no_retained_overlap(db, workspace_id, rights_id, listing_id, calendar_id, s
     _assert(existing is None, "INVESTOR_DATA_HISTORY_CAPTURE_WINDOWS_CONFLICT")
 
 
-def prepare_prices(db, workspace_id, actor_id, rights_id, listing_id, calendar_id, start, end, *, now=None, client=None, sdk_version=None, credentials_file=None, prevent_retained_overlap=False):
+def prepare_prices(db, workspace_id, actor_id, rights_id, listing_id, calendar_id, start, end, *, now=None, client=None, sdk_version=None, credentials_file=None, prevent_retained_overlap=False, before_collect=None):
     """Internal same-connection commit closure, never caller-supplied prepared JSON."""
     _assert(client is not None or now is None, "INVESTOR_DATA_PRODUCTION_CLOCK_NOT_CALLER_CONTROLLED")
     _assert(type(prevent_retained_overlap) is bool)
+    _assert(before_collect is None or callable(before_collect))
     assert_writable(db)
     _owner(db, workspace_id, actor_id)
     before = _milliseconds(now)
@@ -238,6 +239,7 @@ def prepare_prices(db, workspace_id, actor_id, rights_id, listing_id, calendar_i
     frozen_binding = canonical_json(binding)
     if prevent_retained_overlap:
         _no_retained_overlap(db, workspace_id, rights_id, listing_id, calendar_id, start, end, before)
+    if before_collect is not None: before_collect()
     request = _object(frozen_binding)["request"]
     result = longport.collect_longport_candles(mapping=request["mapping"], start_date=start, end_date=end,
         expected_dates=request["expected_dates"], client=client, sdk_version=sdk_version, credentials_file=credentials_file)

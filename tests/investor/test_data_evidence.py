@@ -98,6 +98,18 @@ class InvestorDataTests(unittest.TestCase):
         self.assertFalse(result["manifest"]["external_ai_authorized"])
         self.assert_no_finance()
 
+    def test_internal_before_collect_guard_cannot_be_noncallable_or_swallowed(self):
+        refs = self.prepare(); before = self.db.execute("SELECT count(*) FROM investor_price_captures").fetchone()[0]
+        def stopped(): raise WorkbenchError("FICTIONAL_BEFORE_COLLECT_STOP")
+        for guard in (7, stopped):
+            client = FictionalClient()
+            with self.assertRaises(WorkbenchError):
+                collect_prices(self.db, "w", "synthetic-investor", *(row["id"] for row in refs[:3]), START, END,
+                    now=NOW, client=client, sdk_version="4.3.7", before_collect=guard)
+            self.assertEqual(client.calls, 0)
+            self.assertEqual(self.db.execute("SELECT count(*) FROM investor_price_captures").fetchone()[0], before)
+        self.assert_no_finance()
+
     def test_stubbed_official_repeat_capture_retains_rows_and_builds_each_observation_once(self):
         refs = self.prepare(); capture = self.stub_official_capture(refs, exact_repeat=True)
         value = resolve_capture(self.db, "w", capture["id"], now=NOW)

@@ -191,19 +191,46 @@ def prepare_initial_price(db, job, lease, *, clock=None, stop_requested=None):
     row, value = request_header(db, job["scope"], job["period"], at)
     _assert(job["id"] == lease.job_id and job["job_type"] == JOB_TYPE and job["command_request_id"] is None
         and job["max_attempts"] == 1 and job["input_version"] == row["content_hash"])
-    if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
-    assert_lease(db, lease, now=at)
+    def guard():
+        checked = _clock(clock())
+        if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
+        assert_writable(db)
+        assert_lease(db, lease, now=checked)
+        return checked
+    at = guard()
     try:
-        with transaction(db, immediate=False):
+        with transaction(db, immediate=False), _fact_validation_scope():
             _current(db, row, value, at)
             if _available(db, row["workspace_id"], value, at): status = "already_available"
     except WorkbenchError: status = "superseded"
+    guard()
+    def before_collect():
+        checked = guard()
+        control = _latest(db, "investor_model_controls", row["model_id"], "version DESC")
+        model = db.execute("SELECT profile_id,plan_id FROM investor_models WHERE id=? AND workspace_id=?", (row["model_id"], row["workspace_id"])).fetchone()
+        profile = db.execute("SELECT id FROM investor_profiles WHERE workspace_id=? ORDER BY version DESC LIMIT 1", (row["workspace_id"],)).fetchone()
+        selected = db.execute("SELECT plan_id FROM investor_plan_selections WHERE workspace_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["workspace_id"],)).fetchone()
+        owner = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (row["workspace_id"],)).fetchone()
+        _assert(control and control["id"] == row["control_id"] and control["enabled"] == 1 and model and profile and selected and owner
+            and owner[0] == row["actor_id"] and profile[0] == model["profile_id"] and selected[0] == model["plan_id"]
+            and not db.execute("SELECT 1 FROM investor_monitor_evidence_inputs WHERE model_id=?", (row["model_id"],)).fetchone(), "INITIAL_PRICE_SUPERSEDED_BEFORE_IO")
+        for kind in ("rights", "listing", "calendar"):
+            current = db.execute("""SELECT id FROM investor_data_reviews r WHERE id=? AND workspace_id=? AND decision='approved'
+                AND created_at<=? AND valid_until>? AND version=(SELECT max(version) FROM investor_data_reviews WHERE source_id=r.source_id)""",
+                (row[kind + "_review_id"], row["workspace_id"], checked, checked)).fetchone()
+            _assert(current is not None, "INITIAL_PRICE_SUPERSEDED_BEFORE_IO")
+        checked = guard()
+        _assert(instant(checked) + timedelta(seconds=longport.CALL_TIMEOUT_SECONDS + 1) < instant(value["valid_until"]))
+        _assert(instant(checked) + timedelta(seconds=longport.CALL_TIMEOUT_SECONDS + 1) < instant(lease.lease_until))
     if status is None:
         try:
-            _assert(instant(at) + timedelta(seconds=longport.CALL_TIMEOUT_SECONDS + 1) < instant(value["valid_until"]))
-            _assert(instant(at) + timedelta(seconds=longport.CALL_TIMEOUT_SECONDS + 1) < instant(lease.lease_until))
             prepared = data_evidence.prepare_prices(db, row["workspace_id"], row["actor_id"],
-                *(row[kind + "_review_id"] for kind in ("rights", "listing", "calendar")), row["session_date"], row["session_date"], prevent_retained_overlap=True)
+                *(row[kind + "_review_id"] for kind in ("rights", "listing", "calendar")), row["session_date"], row["session_date"],
+                prevent_retained_overlap=True, before_collect=before_collect)
+            guard()
+        except WorkbenchError as error:
+            if str(error) in ("WORKER_STOP_REQUESTED", "STALE_OR_EXPIRED_LEASE", "WORKBENCH_READ_ONLY", "RESTORE_PENDING_REVIEW"): raise
+            status = "superseded" if str(error) == "INITIAL_PRICE_SUPERSEDED_BEFORE_IO" else "transport_failed"
         except Exception: status = "transport_failed"
     def commit_effect(connection):
         checked = _clock(clock())
@@ -216,7 +243,8 @@ def prepare_initial_price(db, job, lease, *, clock=None, stop_requested=None):
         _assert(capture["qualification"] == "isolated_official_sdk")
         return _run(connection, row, job, "collected", _clock(clock()), capture)
     def effect(connection):
-        try: return commit_effect(connection)
+        try:
+            with _fact_validation_scope(): return commit_effect(connection)
         except WorkbenchError as error:
             if str(error) in ("WORKER_STOP_REQUESTED", "STALE_OR_EXPIRED_LEASE"): raise
             raise WorkbenchError("INITIAL_PRICE_COMMIT_FAILED") from None
