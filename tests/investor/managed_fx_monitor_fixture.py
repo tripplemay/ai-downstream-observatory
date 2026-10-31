@@ -36,7 +36,7 @@ def output(db, model, at, calls):
         "checkpoints": db.execute("SELECT count(*) FROM investor_evidence_model_checkpoints").fetchone()[0]}
 
 
-def run(db, stage, fixed=False):
+def run(db, stage, fixed=False, owner_costs=False):
     for name in FINANCE:
         if db.execute("SELECT count(*) FROM " + name).fetchone()[0]: raise WorkbenchError("SYNTHETIC_EMPTY_FINANCE_REQUIRED")
     if stage == "history":
@@ -58,6 +58,8 @@ def run(db, stage, fixed=False):
     if owner != "synthetic-investor": raise WorkbenchError("SYNTHETIC_OWNER_REQUIRED")
     if stage == "seed":
         if db.execute("SELECT 1 FROM investor_monitor_evidence_inputs").fetchone(): raise WorkbenchError("SYNTHETIC_EMPTY_MONITOR_REQUIRED")
+        if bool(db.execute("SELECT 1 FROM investor_monitor_cost_assumptions").fetchone()) != owner_costs:
+            raise WorkbenchError("SYNTHETIC_EXPLICIT_OWNER_COST_MODE_REQUIRED")
         _, definition, _ = monitor_admission.current_monitor_model(db, workspace, model["id"], SEED)
         _, windows, _, _ = confirmed_monitor_fixture.create(db, definition=definition, workspace=workspace, events=False, next_calendar=True)
         # These NEW fixture-only manual current reviews are never used as input.
@@ -74,13 +76,14 @@ def run(db, stage, fixed=False):
         run_pending_once(db, "fictional-first-reference-core", role="core", clock=lambda: SEED)
         value = output(db, model, SEED, collector.calls)
         reasons = [json.loads(row[0])["reason_codes"] for row in db.execute("SELECT document_json FROM investor_evidence_monitor_runs")]
-        if value["unavailable_reason"] or value["checkpoints"] != 0 or reasons != [["CANNOT_COMPARE_CHANGE_COST"]]:
+        expected = value["checkpoints"] == 1 and len(reasons) == 1 and "CANNOT_COMPARE_CHANGE_COST" not in reasons[0] if owner_costs else value["checkpoints"] == 0 and reasons == [["CANNOT_COMPARE_CHANGE_COST"]]
+        if value["unavailable_reason"] or not expected:
             diagnostic = {"unavailable_reason": value["unavailable_reason"], "checkpoints": value["checkpoints"],
                 "quality_gaps": value["projection"].get("quality_gaps") if value["projection"] else None,
                 "monitor_runs": [json.loads(row[0])["reason_codes"] for row in db.execute("SELECT document_json FROM investor_evidence_monitor_runs")],
                 "jobs": [dict(row) for row in db.execute("SELECT job_type,status,result_json FROM job_runs ORDER BY rowid")]}
             raise WorkbenchError("SYNTHETIC_MANAGED_BOOTSTRAP_FAILED:" + canonical_json(diagnostic))
-        value["expected_cost_gap"] = "CANNOT_COMPARE_CHANGE_COST"
+        value["expected_cost_gap"] = None if owner_costs else "CANNOT_COMPARE_CHANGE_COST"
         return value
     if stage == "costs":
         at = "2026-01-02T12:05:04.000Z"
@@ -121,12 +124,14 @@ def run(db, stage, fixed=False):
 def main():
     parser = argparse.ArgumentParser(); parser.add_argument("--db", required=True)
     parser.add_argument("--stage", choices=("history", "seed", "costs", "advance", "withdraw"), required=True)
-    parser.add_argument("--fixed-policy-v2", action="store_true"); args = parser.parse_args()
+    parser.add_argument("--fixed-policy-v2", action="store_true")
+    parser.add_argument("--owner-costs-before-seed", action="store_true"); args = parser.parse_args()
+    if args.owner_costs_before_seed and args.stage != "seed": raise WorkbenchError("SYNTHETIC_OWNER_COSTS_SEED_ONLY")
     path = Path(args.db).resolve(strict=True)
     if path.name != "workbench.db" or path.parent.parent != Path(tempfile.gettempdir()).resolve() or not path.parent.name.startswith("etf-investor-synthetic-"):
         raise WorkbenchError("SYNTHETIC_FIXTURE_DATABASE_REQUIRED")
     db = open_database(path)
-    try: print(canonical_json(run(db, args.stage, args.fixed_policy_v2)))
+    try: print(canonical_json(run(db, args.stage, args.fixed_policy_v2, args.owner_costs_before_seed)))
     finally: db.close()
 
 

@@ -19,6 +19,7 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--worker-python", required=True)
     parser.add_argument("--strict-zero-tolerance", action="store_true", help="Keep the original zero tolerance and inspect nonzero subcent deltas")
+    parser.add_argument("--with-monitor-costs", action="store_true", help="Exercise the ordinary cost form, real committed-response loss and explicit unknown reset")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     db, output = Path(args.db).resolve(strict=True), Path(args.output).resolve()
@@ -45,12 +46,14 @@ def main():
         return {str(file.relative_to(root)): sha256(file.read_bytes()).hexdigest() for file in sorted(set(files))}
 
     assert all(value == 0 for value in facts().values())
-    checks, errors, posts = [], [], []
+    checks, errors, posts, cost_posts, lost_cost_receipts, investor_gets = [], [], [], [], [], []
     report = {"status": "RUNNING", "synthetic_fixture_only": True, "headless": True, "http_responses_mocked": False,
               "playwright_version": importlib.metadata.version("playwright"), "checks": checks,
               "source_sha256": sources(), "production_changed": False, "real_provider_called": False,
               "external_ai_called": False, "personal_profile_changed": False,
               "strict_zero_tolerance": args.strict_zero_tolerance,
+              "monitor_costs": args.with_monitor_costs,
+              "transport_fault": "discard one real committed cost response before the browser receives it" if args.with_monitor_costs else None,
               "limits": ["invented owner reviews and stub SDK data, not real market or licence acceptance",
                          "loopback self-signed HTTPS is not public TLS, container, native-browser or production acceptance",
                          "empty account transcription is not a complete funded securities/account execution loop"]}
@@ -77,8 +80,15 @@ def main():
                 context = browser.new_context(viewport={"width": 1440, "height": 1000}, ignore_https_errors=True)
                 page = context.new_page()
                 page.on("pageerror", lambda error: errors.append(str(error)))
-                page.on("request", lambda request: posts.append(json.loads(request.post_data)["action"])
-                        if request.method == "POST" and request.url == base + "/api/workbench/investor" else None)
+                def record_request(request):
+                    if request.method == "GET" and request.url == base + "/api/workbench/investor":
+                        investor_gets.append(request.url)
+                    if request.method == "POST" and request.url == base + "/api/workbench/investor":
+                        action = json.loads(request.post_data)["action"]
+                        posts.append(action)
+                        if action == "set_monitor_costs":
+                            cost_posts.append(request.post_data)
+                page.on("request", record_request)
 
                 def go(path):
                     page.goto(base + path)
@@ -90,7 +100,10 @@ def main():
                         page.set_viewport_size({"width": width, "height": height})
                         page.evaluate("() => new Promise(requestAnimationFrame)")
                         check(name + " " + label + " has no horizontal overflow", page.evaluate("document.documentElement.scrollWidth <= innerWidth"))
-                        page.screenshot(path=str(output / (name + "-" + label + ".png")), full_page=True)
+                        if name.startswith("cost-"):
+                            page.locator("section[aria-labelledby=monitor-cost-title]").screenshot(path=str(output / (name + "-" + label + ".png")))
+                        else:
+                            page.screenshot(path=str(output / (name + "-" + label + ".png")), full_page=True)
                     page.set_viewport_size({"width": 1440, "height": 1000})
 
                 page.goto(base + "/workbench")
@@ -169,6 +182,81 @@ def main():
                 expect(page.get_by_text("你的决定：暂缓", exact=False).first).to_be_visible()
                 check("human decision survives route navigation without financial writes", state()["decisions"][0]["decision"] == "defer" and all(n == 0 for n in facts().values()))
                 capture("history")
+                if args.with_monitor_costs:
+                    go("/workbench/plan")
+                    costs = page.locator("section[aria-labelledby=monitor-cost-title]")
+                    expect(costs.get_by_role("button", name="确认监测费用假设", exact=True)).to_be_enabled()
+                    frozen_model = state()["model_watch"]["id"]
+                    frozen_profile = state()["profile"]
+                    frozen_plan = state()["plan"]
+                    counts = facts()
+                    costs.get_by_role("button", name="确认监测费用假设", exact=True).click()
+                    for name in ("commission_bps", "minimum_fee_cny", "fx_bps", "slippage_bps", "maximum_cost_fraction", "validity_days"):
+                        expect(costs.locator("[name=" + name + "]")).to_have_value("")
+                    expect(costs.get_by_role("checkbox")).not_to_be_checked()
+                    expect(page.get_by_role("button", name="刷新状态", exact=True)).to_be_disabled()
+                    expect(page.get_by_role("button", name="修改研究偏好", exact=True)).to_be_disabled()
+                    costs.locator("[name=commission_bps]").fill("1")
+                    costs.locator("[name=commission_bps]").focus()
+                    get_count = len(investor_gets)
+                    # Observe beyond the ordinary 60-second poll without changing the browser clock.
+                    page.wait_for_timeout(65000)
+                    check("active native cost draft suspends ordinary background reads", len(investor_gets) == get_count)
+                    capture("cost-draft")
+                    expect(costs.locator("[name=commission_bps]")).to_have_value("1")
+                    expect(costs.locator("[name=commission_bps]")).to_be_focused()
+                    costs.get_by_role("button", name="取消编辑", exact=True).click()
+                    check("cancelled empty cost draft writes nothing and unlocks refresh", not cost_posts and facts() == counts)
+                    expect(page.get_by_role("button", name="刷新状态", exact=True)).to_be_enabled()
+                    costs.get_by_role("button", name="确认监测费用假设", exact=True).click()
+                    expect(costs.locator("[name=commission_bps]")).to_have_value("")
+                    values = {"commission_bps": "1", "minimum_fee_cny": "1", "fx_bps": "2", "slippage_bps": "3", "maximum_cost_fraction": "0.01"}
+                    for name, value in values.items():
+                        costs.locator("[name=" + name + "]").fill(value)
+                    costs.locator("select[name=validity_days]").select_option("7")
+                    costs.get_by_role("button", name="保存为研究监测假设", exact=True).click()
+                    check("native required acknowledgement prevents an unconfirmed POST", not cost_posts)
+                    costs.get_by_role("checkbox").check()
+
+                    def discard_cost_once(route):
+                        if route.request.method == "POST" and route.request.post_data_json.get("action") == "set_monitor_costs" and not lost_cost_receipts:
+                            response = route.fetch()
+                            assert response.status == 200
+                            lost_cost_receipts.append(response.json())
+                            route.abort("failed")
+                        else:
+                            route.continue_()
+
+                    page.route(base + "/api/workbench/investor", discard_cost_once)
+                    costs.get_by_role("button", name="保存为研究监测假设", exact=True).click()
+                    retry = page.get_by_role("button", name="核对并重试原请求", exact=True)
+                    expect(retry).to_be_enabled(timeout=30000)
+                    check("lost response is a real committed cost command with a pending warning", len(lost_cost_receipts) == 1
+                          and state()["monitor_costs"]["version"] == 1 and state()["monitor_costs"]["status"] == "pending")
+                    retry.click()
+                    expect(retry).to_have_count(0, timeout=30000)
+                    check("cost retry sends byte-identical original body without a second version", len(cost_posts) == 2
+                          and cost_posts[0] == cost_posts[1] and state()["monitor_costs"]["version"] == 1)
+                    seed("core")
+                    page.get_by_role("button", name="刷新状态", exact=True).click()
+                    expect(costs).to_contain_text("已应用明确确认的研究费用假设", timeout=30000)
+                    costs.get_by_text("查看已确认假设及有效期", exact=True).click()
+                    check("explicit values and bounded TTL reach independently checked current state", all(state()["monitor_costs"]["costs"][name] == value for name, value in values.items())
+                          and state()["monitor_costs"]["valid_until"] <= state()["monitor_costs"]["model_valid_until"])
+                    capture("cost-applied")
+                    costs.get_by_role("button", name="修改监测费用假设", exact=True).click()
+                    expect(costs.locator("select[name=validity_days]")).to_have_value("")
+                    expect(costs.get_by_role("checkbox")).not_to_be_checked()
+                    costs.get_by_role("button", name="明确恢复为未知成本", exact=True).click()
+                    expect(page.get_by_role("button", name="刷新状态", exact=True)).to_be_enabled(timeout=30000)
+                    seed("core")
+                    page.get_by_role("button", name="刷新状态", exact=True).click()
+                    expect(costs).to_contain_text("尚未单独确认费用", timeout=30000)
+                    after = state()
+                    check("explicit unknown reset preserves model profile plan and all financial facts", after["monitor_costs"]["version"] == 2
+                          and after["monitor_costs"]["costs"] is None and after["monitor_costs"]["valid_until"] is None
+                          and after["model_watch"]["id"] == frozen_model and after["profile"] == frozen_profile and after["plan"] == frozen_plan and facts() == counts)
+                    capture("cost-unknown")
                 go("/workbench/accounts")
                 expect(page.get_by_label("账本名称", exact=True)).to_be_enabled(timeout=30000)
                 page.get_by_label("账本名称", exact=True).fill("FICTIONAL UI BOOK")
@@ -191,6 +279,17 @@ def main():
                 expect(reconciliation).to_contain_text("本次资料匹配", timeout=30000)
                 check("independent empty statement is saved without financial facts", all(facts()[t] == 0 for t in tables[2:]))
                 capture("accounts")
+                if args.with_monitor_costs:
+                    go("/workbench/plan")
+                    costs = page.locator("section[aria-labelledby=monitor-cost-title]")
+                    costs.get_by_role("button", name="修改监测费用假设", exact=True).click()
+                    costs.locator("[name=commission_bps]").fill("9.876")
+                    page.evaluate("window.dispatchEvent(new Event('workbench:session-invalidated'))")
+                    expect(page.locator("[data-session-boundary-status=held]")).to_be_visible()
+                    expect(page.locator("[data-session-boundary-content]")).to_be_hidden()
+                    expect(page.locator('[role="alert"]').filter(has_text="登录状态已变化，请重新登录后查看。")).to_have_count(1)
+                    expect(costs).to_have_count(0)
+                    check("session invalidation removes native cost draft and cannot submit it", len(cost_posts) == 3)
                 check("no JavaScript page errors", not errors)
                 check("research phases and review commands reached real HTTP", all(action in posts for action in ("save_profile", "evaluate", "save_plan", "review", "create_account_book", "reconcile_linked_account")) and posts.count("save_profile") == 2)
                 report["financial_counts"] = facts()
@@ -209,6 +308,8 @@ def main():
         raise
     finally:
         report["page_errors"] = errors
+        report["cost_request_sha256"] = [sha256(body.encode()).hexdigest() for body in cost_posts]
+        report["discarded_committed_cost_responses"] = len(lost_cost_receipts)
         report["source_end_sha256"] = sources()
         report["source_changed_during_run"] = sorted(key for key in set(report["source_sha256"]) | set(report["source_end_sha256"])
             if report["source_sha256"].get(key) != report["source_end_sha256"].get(key))

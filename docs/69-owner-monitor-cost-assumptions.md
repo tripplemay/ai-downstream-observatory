@@ -77,8 +77,31 @@ again by the server; expiry cannot be waived by keeping an old form open.
 Fictional command/core/Node tests exercise unknown-cost bootstrap, explicit
 assumptions, replacement, immutable ancestors, restore/idempotency guards,
 explicit clearing and corruption. Component/schema checks are not a substitute
-for actual browser form, lost-response and mobile acceptance. Broader source/
-monitor/funding regressions, exact-head CI, protected release and real-source
-normal/funding/stale production monitoring remain required. No personal fee
-parameters, provider credentials, source data or actual financial facts belong
-in the public test corpus.
+for actual browser form, lost-response and mobile acceptance.
+
+The cost-specific suite additionally exercises an ordinary owner declaration
+made before the first monitor input: default core binds it during automatic
+bootstrap, without another study, model save or source-policy change. A populated
+temporary encrypted archive roundtrip preserves all table rows/rowids, the cost
+receipt, v3 input and checkpoints. Node and Python replay the restored evidence;
+the restore marker still prevents owner writes and core/provider/verifier work.
+The archive and restored directory are removed with the fictional test fixture;
+this is not an additional production backup or independent-machine recovery.
+
+An opt-in production-build Chromium journey, `browser_v2_journey.py
+--with-monitor-costs`, verifies desktop/mobile form layout, empty first-use
+values/validity, native required acknowledgement, cancellation, and a focused
+draft across more than one normal polling interval. It discards one actual
+committed POST response, verifies byte-identical retry without a new version,
+applies the declaration through ordinary core, and explicitly restores unknown
+costs. Session invalidation removes the draft while the outer session boundary
+keeps protected content hidden. The test does not expose concealed content to
+make an error banner visible. Browser clock and HTTP response payloads are not
+rewritten; the market evidence and empty account documents remain fictional.
+
+These local checks do not establish actual tariffs, investment validity, current
+source completeness or public production readiness. Broader source/monitor/
+funding regressions, exact-head CI, protected release and real-source normal/
+funding/stale production monitoring remain required. No personal fee parameters,
+provider credentials, source data or actual financial facts belong in the public
+test corpus.
