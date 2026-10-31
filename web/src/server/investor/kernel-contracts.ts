@@ -79,6 +79,7 @@ import { verifyBoundedResearchSummary, type BoundedResearchPlan } from "./bounde
 import type { ContinuousDataset } from "./continuous-market";
 import type { ContinuousParameters } from "./continuous-economics";
 import { executionChecksUsable, phaseExecutionReview } from "./research-execution";
+import { verifyInvestorKernelProof } from "./kernel-read-scope";
 
 const ajv = new Ajv2020({ strict: true, strictRequired: false });
 addFormats(ajv);
@@ -179,66 +180,74 @@ export function verifyInvestorKernelResult(rawRequest: unknown, rawResult: unkno
       const version = object(input.plan).schema_version;
       requireTrue(version === "research-plan-v6" ? ajv.getSchema(strategyResultV3.$id)!(result)
         : version === "research-plan-v5" ? ajv.getSchema(strategyResultV2.$id)!(result) : validateStrategy(result));
-      for (const name of ["dataset", "plan", "policy", "profile"]) requireTrue(result[name + "_hash"] === hash(input[name]));
-      requireTrue(result.data_mode === object(input.dataset).mode);
-      const candidates = object(input.policy).candidates as JsonObject[];
-      const scenarios = object(input.policy).stress_scenarios as JsonObject[], roles = object(object(input.policy).roles);
-      for (const candidate of candidates) {
-        if (candidate.schema_version !== "research-fixed-rebalance-parameters-v2") continue;
-        const weights = object(candidate.weights), candidateRoles = object(candidate.roles);
-        requireTrue(Object.keys(weights).sort().join() === Object.keys(candidateRoles).sort().join());
-        requireTrue(Object.keys(weights).every(listing => candidateRoles[listing] === roles[listing]));
-        const threshold = new Decimal(candidate.class_drift_threshold as string);
-        requireTrue(threshold.gt(0) && threshold.lte(1));
-      }
-      const loss = object(input.profile).loss_tolerance as string | null;
-      const expected = new Map(candidates.map(row => [hash(row), row]));
-      const rows = result.candidates as JsonObject[];
-      requireTrue(new Set(rows.map(row => row.parameters_hash)).size === rows.length);
-      for (const row of rows) {
-        requireTrue(expected.has(row.parameters_hash as string));
-        requireTrue(hash(row.weights) === hash(expected.get(row.parameters_hash as string)!.weights));
-        requireTrue(object(row.train).phase === "train");
-        if (["research-plan-v3", "research-plan-v4", "research-plan-v5", "research-plan-v6"].includes(object(input.plan).schema_version as string)) verifyBoundedResearchSummary(input.dataset as ContinuousDataset,
-          input.plan as BoundedResearchPlan, expected.get(row.parameters_hash as string)! as unknown as ContinuousParameters, object(row.train), "train");
-        const stresses = row.stresses as JsonObject[];
-        requireTrue(stresses.length === scenarios.length);
-        for (const [index, scenario] of scenarios.entries()) {
-          const stress = stresses[index], returns = object(scenario.role_returns);
-          requireTrue(stress.id === scenario.id && stress.label === scenario.label);
-          let total = new Decimal(0);
-          for (const [listing, weight] of Object.entries(object(row.weights))) {
-            const shock = new Decimal(returns[roles[listing] as string] as string);
-            requireTrue(shock.gte(-1) && shock.lte(1));
-            total = total.plus(new Decimal(weight as string).times(shock));
+      verifyInvestorKernelProof(() => ["research-plan-v3", "research-plan-v4", "research-plan-v5", "research-plan-v6"].includes(version as string)
+        ? hash({
+          input, result, decimal: {
+            precision: Decimal.precision, rounding: Decimal.rounding,
+            minE: Decimal.minE, maxE: Decimal.maxE, toExpNeg: Decimal.toExpNeg, toExpPos: Decimal.toExpPos, modulo: Decimal.modulo
           }
-          numericEqual(stress.portfolio_return as string, total);
-        }
-        requireTrue(row.risk_budget_pass === (loss === null ? null : withinRisk(object(row.train), stresses, loss)));
-      }
-      if (result.status !== "insufficient_evidence") requireTrue(rows.length === candidates.length);
-      const phases = result.phase_evidence as JsonObject[];
-      requireTrue(phases.every((row, index) => row.phase === ["train", "validation", "holdout"][index]));
-      if (result.selected_parameters !== null) {
-        requireTrue(expected.has(hash(result.selected_parameters)));
-        requireTrue(loss !== null);
-        const chosen = rows.find(row => row.parameters_hash === hash(result.selected_parameters));
-        requireTrue(chosen && chosen.risk_budget_pass === true && phases.length > 0 && hash(phases[0]) === hash(chosen.train));
-        if (["research-plan-v3", "research-plan-v4", "research-plan-v5", "research-plan-v6"].includes(object(input.plan).schema_version as string)) for (const summary of phases.slice(1))
-          verifyBoundedResearchSummary(input.dataset as ContinuousDataset, input.plan as BoundedResearchPlan,
-            result.selected_parameters as ContinuousParameters, summary, summary.phase as "validation" | "holdout");
-        const eligible = rows.filter(row => row.risk_budget_pass === true).sort((a, b) => {
-          const left = object(a.train), right = object(b.train);
-          return new Decimal(right.annualized_unit_return as string).cmp(left.annualized_unit_return as string)
-            || new Decimal(right.max_drawdown as string).cmp(left.max_drawdown as string)
-            || new Decimal(left.buy_turnover_on_mean_observed_nav as string).add(left.sell_turnover_on_mean_observed_nav as string)
-              .cmp(new Decimal(right.buy_turnover_on_mean_observed_nav as string).add(right.sell_turnover_on_mean_observed_nav as string))
-            || (a.parameters_hash as string).localeCompare(b.parameters_hash as string, "en");
+        }) : null, () => {
+          for (const name of ["dataset", "plan", "policy", "profile"]) requireTrue(result[name + "_hash"] === hash(input[name]));
+          requireTrue(result.data_mode === object(input.dataset).mode);
+          const candidates = object(input.policy).candidates as JsonObject[];
+          const scenarios = object(input.policy).stress_scenarios as JsonObject[], roles = object(object(input.policy).roles);
+          for (const candidate of candidates) {
+            if (candidate.schema_version !== "research-fixed-rebalance-parameters-v2") continue;
+            const weights = object(candidate.weights), candidateRoles = object(candidate.roles);
+            requireTrue(Object.keys(weights).sort().join() === Object.keys(candidateRoles).sort().join());
+            requireTrue(Object.keys(weights).every(listing => candidateRoles[listing] === roles[listing]));
+            const threshold = new Decimal(candidate.class_drift_threshold as string);
+            requireTrue(threshold.gt(0) && threshold.lte(1));
+          }
+          const loss = object(input.profile).loss_tolerance as string | null;
+          const expected = new Map(candidates.map(row => [hash(row), row]));
+          const rows = result.candidates as JsonObject[];
+          requireTrue(new Set(rows.map(row => row.parameters_hash)).size === rows.length);
+          for (const row of rows) {
+            requireTrue(expected.has(row.parameters_hash as string));
+            requireTrue(hash(row.weights) === hash(expected.get(row.parameters_hash as string)!.weights));
+            requireTrue(object(row.train).phase === "train");
+            if (["research-plan-v3", "research-plan-v4", "research-plan-v5", "research-plan-v6"].includes(object(input.plan).schema_version as string)) verifyBoundedResearchSummary(input.dataset as ContinuousDataset,
+              input.plan as BoundedResearchPlan, expected.get(row.parameters_hash as string)! as unknown as ContinuousParameters, object(row.train), "train");
+            const stresses = row.stresses as JsonObject[];
+            requireTrue(stresses.length === scenarios.length);
+            for (const [index, scenario] of scenarios.entries()) {
+              const stress = stresses[index], returns = object(scenario.role_returns);
+              requireTrue(stress.id === scenario.id && stress.label === scenario.label);
+              let total = new Decimal(0);
+              for (const [listing, weight] of Object.entries(object(row.weights))) {
+                const shock = new Decimal(returns[roles[listing] as string] as string);
+                requireTrue(shock.gte(-1) && shock.lte(1));
+                total = total.plus(new Decimal(weight as string).times(shock));
+              }
+              numericEqual(stress.portfolio_return as string, total);
+            }
+            requireTrue(row.risk_budget_pass === (loss === null ? null : withinRisk(object(row.train), stresses, loss)));
+          }
+          if (result.status !== "insufficient_evidence") requireTrue(rows.length === candidates.length);
+          const phases = result.phase_evidence as JsonObject[];
+          requireTrue(phases.every((row, index) => row.phase === ["train", "validation", "holdout"][index]));
+          if (result.selected_parameters !== null) {
+            requireTrue(expected.has(hash(result.selected_parameters)));
+            requireTrue(loss !== null);
+            const chosen = rows.find(row => row.parameters_hash === hash(result.selected_parameters));
+            requireTrue(chosen && chosen.risk_budget_pass === true && phases.length > 0 && hash(phases[0]) === hash(chosen.train));
+            if (["research-plan-v3", "research-plan-v4", "research-plan-v5", "research-plan-v6"].includes(object(input.plan).schema_version as string)) for (const summary of phases.slice(1))
+              verifyBoundedResearchSummary(input.dataset as ContinuousDataset, input.plan as BoundedResearchPlan,
+                result.selected_parameters as ContinuousParameters, summary, summary.phase as "validation" | "holdout");
+            const eligible = rows.filter(row => row.risk_budget_pass === true).sort((a, b) => {
+              const left = object(a.train), right = object(b.train);
+              return new Decimal(right.annualized_unit_return as string).cmp(left.annualized_unit_return as string)
+                || new Decimal(right.max_drawdown as string).cmp(left.max_drawdown as string)
+                || new Decimal(left.buy_turnover_on_mean_observed_nav as string).add(left.sell_turnover_on_mean_observed_nav as string)
+                  .cmp(new Decimal(right.buy_turnover_on_mean_observed_nav as string).add(right.sell_turnover_on_mean_observed_nav as string))
+                || (a.parameters_hash as string).localeCompare(b.parameters_hash as string, "en");
+            });
+            requireTrue(eligible[0]?.parameters_hash === hash(result.selected_parameters));
+            if (result.status === "reference_ready") requireTrue(phases.every(row => withinRisk(row, chosen.stresses as JsonObject[], loss)));
+          }
+          if (result.status === "risk_options_ready") requireTrue(loss === null && rows.some(row => usableSummary(object(row.train))));
         });
-        requireTrue(eligible[0]?.parameters_hash === hash(result.selected_parameters));
-        if (result.status === "reference_ready") requireTrue(phases.every(row => withinRisk(row, chosen.stresses as JsonObject[], loss)));
-      }
-      if (result.status === "risk_options_ready") requireTrue(loss === null && rows.some(row => usableSummary(object(row.train))));
     } else {
       if (object(input.document).schema_version === "investor-model-monitor-v3") {
         requireTrue(ajv.getSchema(assessmentV2.$id)!(result));

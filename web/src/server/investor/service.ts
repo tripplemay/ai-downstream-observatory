@@ -25,6 +25,7 @@ import { emptyFundingState } from "./funding-schemas";
 import { appendFundedStudyRequest, createFundedStudyRequest, readFundedStudyTask } from "./funded-study";
 import { readInvestorAcquisition, investorAcquisitionUnavailable } from "./acquisition";
 import { appendMonitorCosts, readMonitorCostState } from "./monitor-costs";
+import { withInvestorKernelReadScope } from "./kernel-read-scope";
 
 type Workspace = { id: string; owner_id: string; revision: number };
 type ProfileRow = { id: string; version: number; document_json: string; content_hash: string; created_at: string };
@@ -249,7 +250,7 @@ export function executeInvestorCommand(db: Database.Database, actor: Actor, raw:
 export function getInvestorState(db: Database.Database, actor: Actor, now = new Date().toISOString(), options: { includeRecentHistory?: boolean } = {}): InvestorState {
   const owner = principal(actor); clock(now);
   const observationLimit = options.includeRecentHistory === false ? 1 : 50, decisionLimit = options.includeRecentHistory === false ? 0 : 50;
-  return db.transaction(() => {
+  return db.transaction(() => withInvestorKernelReadScope(() => {
     const ws = workspace(db, owner);
     let readOnly = false;
     try { assertWritableDatabase(db); } catch (error) { if (error instanceof Error && error.message === "WORKBENCH_READ_ONLY") readOnly = true; else throw error; }
@@ -350,7 +351,7 @@ export function getInvestorState(db: Database.Database, actor: Actor, now = new 
       observations_truncated: rows.length > observationLimit, decisions: decisions.slice(0, decisionLimit), decisions_truncated: decisions.length > decisionLimit,
       plan, research_task: researchTask, model_watch: modelWatch, monitor_costs: monitorCosts, effective_outcome: effectiveOutcome, effective_gaps: effectiveGaps,
       actual_holdings_status: actualHoldingsStatus };
-  })();
+  }))();
 }
 
 export function isInvestorClientError(code: string) {
