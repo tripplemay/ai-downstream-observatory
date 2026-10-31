@@ -189,8 +189,9 @@ class InitialPriceTests(unittest.TestCase):
         lease = claim_job(self.db, "fictional-provider", 300, initial_prices.JOB_TYPE, now=NOW)
         job = dict(self.db.execute("SELECT * FROM job_runs WHERE id=?", (lease.job_id,)).fetchone())
         stopped = [False]; before = self.db.execute("SELECT count(*) FROM investor_price_captures").fetchone()[0]
-        with self.clocked(), self.transport(during=lambda: stopped.__setitem__(0, True)):
+        with self.clocked(), self.transport():
             prepared = initial_prices.prepare_initial_price(self.db, job, lease, clock=lambda: NOW, stop_requested=lambda: stopped[0])
+            stopped[0] = True
             with self.assertRaisesRegex(WorkbenchError, "WORKER_STOP_REQUESTED"):
                 complete_job(self.db, lease, None, effect=prepared["effect"], now=NOW, clock=lambda: NOW)
         self.assertEqual(self.db.execute("SELECT count(*) FROM investor_price_captures").fetchone()[0], before)
