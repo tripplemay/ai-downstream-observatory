@@ -41,6 +41,8 @@ import referencePlan from "../../../../contracts/v1/investor-reference-plan.sche
 import referencePlanV2 from "../../../../contracts/v1/investor-reference-plan-v2.schema.json";
 import monitorDataInput from "../../../../contracts/v1/investor-monitor-data-input.schema.json";
 import monitorDataInputV2 from "../../../../contracts/v1/investor-monitor-data-input-v2.schema.json";
+import monitorDataInputV3 from "../../../../contracts/v1/investor-monitor-data-input-v3.schema.json";
+import monitorCosts from "../../../../contracts/v1/investor-monitor-costs.schema.json";
 import monitorPriceSnapshot from "../../../../contracts/v1/investor-monitor-price-snapshot.schema.json";
 import monitorDataProjection from "../../../../contracts/v1/investor-monitor-data-projection.schema.json";
 import evidenceCheckpoint from "../../../../contracts/v1/investor-evidence-model-checkpoint.schema.json";
@@ -84,7 +86,7 @@ for (const schema of [policyV2, policyV3, policyInput, strategyResultV2, strateg
 ajv.addSchema(boundedPlan); ajv.addSchema(actionAwarePlan); ajv.addSchema(eventReviewPlan); ajv.addSchema(planInput);
 for (const schema of [longHorizonInputV4, longHorizonResultV4, fundedHistoryInputV3, fundedHistoryResultV3]) ajv.addSchema(schema);
 for (const schema of [longHorizonInputV5, longHorizonResultV5, fundedHistoryInputV4, fundedHistoryResultV4]) ajv.addSchema(schema);
-for (const schema of [common, observation, dataset, plan, parameters, fixed, fixedV2, fixedPolicy, rotation, profile, policy, monitor, monitorV2, monitorV3, fixedPolicyState, request, strategyResult, assessment, assessmentV2, modelDefinition, modelDefinitionV2, modelSnapshot, modelCheckpoint, experiment, dataFacts, dataSnapshot, evidenceInput, referencePlan, referencePlanV2, monitorDataInput, monitorDataInputV2, monitorPriceSnapshot, monitorDataProjection, evidenceCheckpoint, evidenceCheckpointV2, evidenceCheckpointV3, evidenceMonitor, evidenceMonitorRequestV2, plannedFunding, fundingPlan, longHorizonInput, longHorizonResult, longHorizonInputV2, longHorizonResultV2, longHorizonInputV3, longHorizonResultV3, fundedHistoryInput, fundedHistoryResult, fundedHistoryInputV2, fundedHistoryResultV2]) ajv.addSchema(schema);
+for (const schema of [common, observation, dataset, plan, parameters, fixed, fixedV2, fixedPolicy, rotation, profile, policy, monitor, monitorV2, monitorV3, fixedPolicyState, request, strategyResult, assessment, assessmentV2, modelDefinition, modelDefinitionV2, modelSnapshot, modelCheckpoint, experiment, dataFacts, dataSnapshot, evidenceInput, referencePlan, referencePlanV2, monitorDataInput, monitorDataInputV2, monitorDataInputV3, monitorCosts, monitorPriceSnapshot, monitorDataProjection, evidenceCheckpoint, evidenceCheckpointV2, evidenceCheckpointV3, evidenceMonitor, evidenceMonitorRequestV2, plannedFunding, fundingPlan, longHorizonInput, longHorizonResult, longHorizonInputV2, longHorizonResultV2, longHorizonInputV3, longHorizonResultV3, fundedHistoryInput, fundedHistoryResult, fundedHistoryInputV2, fundedHistoryResultV2]) ajv.addSchema(schema);
 const validateRequest = ajv.getSchema(request.$id)!, validateStrategy = ajv.getSchema(strategyResult.$id)!, validateAssessment = ajv.getSchema(assessment.$id)!;
 type JsonObject = Record<string, unknown>;
 type Quote = { listing_id: string; market: "CN" | "HK" | "US"; currency: string; close: string; observed_at: string; known_at: string; expected_close_at: string; valid_until: string };
@@ -124,8 +126,10 @@ export function validateInvestorSourceDocument(kind: "facts" | "snapshot" | "mon
 }
 export function validateInvestorReferenceDocument(value: unknown) { requireTrue(ajv.getSchema((value as JsonObject | null)?.schema_version === "investor-reference-plan-v2" ? referencePlanV2.$id : referencePlan.$id)!(value)); }
 export function validateInvestorMonitorDataDocument(kind: "input" | "projection", value: unknown) {
-  requireTrue(ajv.getSchema(kind === "input" ? ((value as JsonObject | null)?.schema_version === "investor-monitor-data-input-v2" ? monitorDataInputV2.$id : monitorDataInput.$id) : monitorDataProjection.$id)!(value));
+  const version = (value as JsonObject | null)?.schema_version;
+  requireTrue(ajv.getSchema(kind === "input" ? (version === "investor-monitor-data-input-v3" ? monitorDataInputV3.$id : version === "investor-monitor-data-input-v2" ? monitorDataInputV2.$id : monitorDataInput.$id) : monitorDataProjection.$id)!(value));
 }
+export function validateInvestorMonitorCostRecord(value: unknown) { requireTrue(ajv.getSchema(monitorCosts.$id + "#/$defs/record")!(value)); }
 export function validateInvestorEvidenceCheckpoint(value: unknown) {
   const version = (value as JsonObject | null)?.schema_version;
   requireTrue(ajv.getSchema(version === "investor-evidence-model-checkpoint-v3" ? evidenceCheckpointV3.$id

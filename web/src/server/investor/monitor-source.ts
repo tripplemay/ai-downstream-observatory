@@ -7,6 +7,7 @@ import { validateInvestorModelDocument, validateInvestorMonitorDataDocument } fr
 import { readInvestorDataSnapshot, readInvestorMonitorPriceSnapshot, type VerifiedSourceReview } from "./source-inputs";
 import { parseStrictJson } from "../strict-json";
 import { readEvidenceReference } from "./reference-evidence";
+import { verifyMonitorCostSettings } from "./monitor-costs";
 
 type Obj = Record<string, unknown>;
 const zones: Record<string, string> = { CN: "Asia/Shanghai", HK: "Asia/Hong_Kong", US: "America/New_York" };
@@ -69,6 +70,10 @@ export function readInvestorMonitorEvidenceSource(db: Database.Database, workspa
       check((definition.schema_version === "investor-model-definition-v2") === (reference.document.schema_version === "investor-reference-plan-v2")
         && (reference.document.schema_version !== "investor-reference-plan-v2" || hash(definition.fixed_policy) === hash(reference.document.fixed_policy)));
       if (fixedPolicyUnsupported(reference.document)) return { row: input, document, projection: null, catalog: null, unavailable_reason: fixedPolicyMonitorGap };
+      if (Object.hasOwn(obj(document.settings), "cost_assumptions")) {
+        try { verifyMonitorCostSettings(db, workspace, definition, obj(document.settings), text(document.created_at)); }
+        catch { return { row: input, document, projection: null, catalog: null, unavailable_reason: "MONITOR_COST_ASSUMPTIONS_UNAVAILABLE" }; }
+      }
       const rebuilt = replayInvestorMonitorData(db, workspace, definition, reference.document.targets, document, now, evaluatedAt);
       return { row: input, document, ...rebuilt };
     } catch { throw new Error("INVESTOR_EVIDENCE_INVALID"); }
@@ -89,6 +94,7 @@ function replay(db: Database.Database, workspace: string, rawDefinition: unknown
       && definition.data_mode === "reconstructed" && time(definition.created_at) <= at && at < time(definition.valid_until) && at <= time(evaluatedAt) && time(evaluatedAt) <= time(now)
       && definition.target_definition_hash === modelDefinitionHash(definition as Parameters<typeof modelDefinitionHash>[0]));
     const targets = rows(definition.targets), settings = obj(document.settings), policy = obj(settings.policy);
+    const costDeadline = verifyMonitorCostSettings(db, workspace, definition, settings, created);
     check(targets.length === new Set(targets.map(row => row.listing_id)).size
       && targets.every(row => amount(text(row.weight)).gt(0)) && targets.reduce((sum,row) => sum.add(text(row.weight)), new Decimal(0)).eq(1)
       && amount(text(policy.weight_band)).gte(0) && amount(text(policy.weight_band)).lte(1) && amount(text(policy.absolute_band_cny)).gte(0));
@@ -127,6 +133,7 @@ function replay(db: Database.Database, workspace: string, rawDefinition: unknown
         check(obj(obj(definition.fixed_policy).parameters).roles && obj(obj(obj(definition.fixed_policy).parameters).roles)[text(target.listing_id)] === spec.role);
     }
     const baseExpiry = min([time(document.valid_until), time(definition.valid_until)]), deadlines = [baseExpiry];
+    if (costDeadline !== null) deadlines.push(time(costDeadline));
     const quotes: Obj[] = [], fx: Obj[] = [], coverage: Record<string, Obj> = {}, events: Obj[] = [], gaps: string[] = [];
     for (const market of [...markets].sort()) {
       const reviewed = [...reviews.values()].find(row => row.source.kind === "calendar" && row.facts.market === market); check(reviewed);

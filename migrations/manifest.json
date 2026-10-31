@@ -241,6 +241,12 @@
       "version": 48,
       "file": "0048_investor_managed_fx.sql",
       "sha256": "eb220ccd08f5c7cd59a96e9032e888f9cc449cf8bbb0b7f47e34f04b1eb9b070"
+    },
+    {
+      "version": 49,
+      "file": "0049_investor_monitor_costs.sql",
+      "sha256": "13ac01af3eec8a4d6ef3d61aaa24948f7eb3804af4c6c8af1e4b0c6404107be4",
+      "foreign_key_rebuild": true
     }
   ]
 }

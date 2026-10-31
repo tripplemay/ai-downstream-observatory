@@ -417,8 +417,10 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
         from worker.investor.confirmed_feed import admit_completed_feeds, refresh_monitor_sources
         from worker.investor.monitor_bootstrap import bootstrap_monitor_inputs
         from worker.investor.managed_fx import publish_current_fx
+        from worker.investor.monitor_costs import refresh_cost_inputs
         purge_due_source_payloads(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         publish_current_fx(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        refresh_cost_inputs(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         admit_completed_feeds(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         refresh_monitor_sources(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         bootstrap_monitor_inputs(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)

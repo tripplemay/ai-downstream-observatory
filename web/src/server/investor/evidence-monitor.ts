@@ -6,6 +6,7 @@ import { modelAssessmentObservation, validateInvestorEvidenceCheckpoint, validat
 import { EvidenceActionRestatement, EvidenceCheckpointLimitRequired, replayEvidenceModel } from "./evidence-model-state";
 import { replayEvidenceAssessment } from "./evidence-model-assessment";
 import { readInvestorMonitorEvidenceSource } from "./monitor-source";
+import { verifyMonitorCostSettings } from "./monitor-costs";
 import { readEvidenceReference } from "./reference-evidence";
 import { modelWatchSchema, observationSchema, type InvestorObservation } from "./schemas";
 import type { InvestorObservationRecord, InvestorProfileVersion } from "./types";
@@ -87,6 +88,7 @@ export function readEvidenceCheckpoint(db: Database.Database, workspace: string,
     if (db.prepare("SELECT 1 FROM investor_monitor_payload_purges WHERE kind='checkpoint' AND entity_id=?").get(header.id)) return { checkpoint: null, unavailable_reason: "MONITOR_CHECKPOINT_PAYLOAD_PURGED" };
     const source = readInvestorMonitorEvidenceSource(db, workspace, text(model.id), text(header.input_id), now, text(header.created_at));
     if (!source.projection) return { checkpoint: null, unavailable_reason: source.unavailable_reason };
+    verifyMonitorCostSettings(db, workspace, definition, source.document.settings as Obj, text(header.created_at));
     expiry = earliest(expiry, source.document.valid_until);
     check(header.valid_until === expiry);
     const stored = payload(db, "investor_evidence_checkpoint_payloads", "checkpoint_id", header.id, 4194304); validateInvestorEvidenceCheckpoint(stored);
@@ -132,6 +134,8 @@ export function readEvidenceMonitorRun(db: Database.Database, workspace: string,
     const unavailableResult = (reason: string) => ({ row, model, definition, request, run, observation: blocked(definition, text(request.input_version), text(row.created_at), reason), unavailable_reason: reason });
     if (unavailable) return unavailableResult(unavailable);
     const source = readInvestorMonitorEvidenceSource(db, workspace, text(model.id), text(request.input_id), now, text(row.created_at));
+    if (source.unavailable_reason === "MONITOR_COST_ASSUMPTIONS_UNAVAILABLE") return unavailableResult(source.unavailable_reason);
+    if (source.projection) verifyMonitorCostSettings(db, workspace, definition, source.document.settings as Obj, text(row.created_at));
     const priorHeader = request.checkpoint_id === null ? null : db.prepare("SELECT * FROM investor_evidence_model_checkpoints WHERE id=? AND workspace_id=? AND model_id=?").get(request.checkpoint_id, workspace, model.id) as Obj | undefined;
     check(request.checkpoint_id === null || priorHeader && time(priorHeader.created_at) <= time(request.created_at));
     check(bound.checkpoint_hash === (priorHeader?.content_hash ?? null));

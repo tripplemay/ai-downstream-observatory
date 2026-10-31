@@ -40,7 +40,9 @@ def _settings(db, workspace, model, definition, reference, at):
     settings = {"policy": {"version": VERSION, "weight_band": parameters["tolerance"]["weight"],
         "absolute_band_cny": parameters["tolerance"]["absolute_cny"], "max_fx_age_seconds": min(MAX_QUOTE_AGE_SECONDS, execution["max_fx_age_seconds"]), "costs": None},
         "funding_intent": None, "max_quote_age_seconds": MAX_QUOTE_AGE_SECONDS}
-    validate_contract(settings, "investor-monitor-data-input.schema.json", fragment="$defs/settings")
+    from .monitor_costs import current_settings
+    settings = current_settings(db, workspace, definition, settings, at)
+    validate_contract(settings, "investor-monitor-data-input-v3.schema.json" if "cost_assumptions" in settings else "investor-monitor-data-input.schema.json", fragment="$defs/settings")
     return settings
 
 

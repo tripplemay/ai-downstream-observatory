@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-monitor-costs.schema.json",
+  "$defs": {
+    "binding": {"type": "object", "required": ["id", "content_hash"], "properties": {
+      "id": {"$ref": "common.schema.json#/$defs/id"}, "content_hash": {"$ref": "common.schema.json#/$defs/hash"}
+    }, "additionalProperties": false},
+    "nonnegative": {"allOf": [{"$ref": "common.schema.json#/$defs/decimal"}, {"type": "string", "pattern": "^[0-9]"}]},
+    "costs": {"oneOf": [{"type": "null"}, {"allOf": [
+      {"$ref": "investor-model-monitor.schema.json#/properties/policy/properties/costs"},
+      {"type": "object", "properties": {
+        "commission_bps": {"$ref": "#/$defs/nonnegative"}, "minimum_fee_cny": {"$ref": "#/$defs/nonnegative"},
+        "fx_bps": {"$ref": "#/$defs/nonnegative"}, "slippage_bps": {"$ref": "#/$defs/nonnegative"}, "maximum_cost_fraction": {"$ref": "#/$defs/nonnegative"}
+      }}
+    ]}]},
+    "record": {
+      "type": "object", "required": ["schema_version", "workspace_id", "model_id", "model_hash", "profile_hash", "plan_hash", "version", "costs", "created_at", "effective_from", "valid_until", "basis", "trading_permission"],
+      "properties": {
+        "schema_version": {"const": "investor-monitor-cost-assumptions-v1"},
+        "workspace_id": {"$ref": "common.schema.json#/$defs/id"}, "model_id": {"$ref": "common.schema.json#/$defs/id"},
+        "model_hash": {"$ref": "common.schema.json#/$defs/hash"}, "profile_hash": {"$ref": "common.schema.json#/$defs/hash"}, "plan_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "version": {"type": "integer", "minimum": 1, "maximum": 1000}, "costs": {"$ref": "#/$defs/costs"},
+        "created_at": {"$ref": "investor-reference-plan.schema.json#/$defs/instant"}, "effective_from": {"$ref": "investor-reference-plan.schema.json#/$defs/instant"},
+        "valid_until": {"oneOf": [{"type": "null"}, {"$ref": "investor-reference-plan.schema.json#/$defs/instant"}]},
+        "basis": {"const": "owner_research_assumptions_not_verified_broker_tariff"}, "trading_permission": {"const": false}
+      }, "additionalProperties": false,
+      "allOf": [{"if": {"properties": {"costs": {"type": "null"}}}, "then": {"properties": {"valid_until": {"type": "null"}}}, "else": {"properties": {"valid_until": {"type": "string"}}}}]
+    }
+  }
+}

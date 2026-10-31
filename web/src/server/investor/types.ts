@@ -1,6 +1,7 @@
 import type { InvestorObservation, InvestorProfile, InvestorResearchTask, InvestorModelWatch, ReferencePlan } from "./schemas";
 import type { InvestorFundingState } from "./funding-schemas";
 import type { FundedStudyTask } from "./funded-study-schemas";
+import type { MonitorCostState } from "./monitor-cost-schemas";
 
 export type InvestorProfileVersion = { id: string; version: number; content_hash: string; created_at: string; document: InvestorProfile };
 export type InvestorObservationRecord = { id: string; content_hash: string; candidate_plan_id: string | null; document: InvestorObservation };
@@ -12,6 +13,7 @@ export type InvestorState = {
   latest: InvestorObservationRecord | null; observations: InvestorObservationRecord[]; observations_truncated: boolean;
   research_task: InvestorResearchTask | null;
   model_watch: InvestorModelWatch | null;
+  monitor_costs: MonitorCostState | null;
   funding: InvestorFundingState;
   funded_study: FundedStudyTask | null;
   funded_study_unavailable: boolean;

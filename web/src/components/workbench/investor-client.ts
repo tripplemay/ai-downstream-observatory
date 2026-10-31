@@ -3,6 +3,7 @@ import { evidenceGapSchema, investorHash, investorId, investorInstant, investorP
 import type { InvestorState } from "@/server/investor/types";
 import { fundingStateSchema, fundingTimeline } from "@/server/investor/funding-schemas";
 import { fundedStudyTaskSchema } from "@/server/investor/funded-study-schemas";
+import { monitorCostStateSchema } from "@/server/investor/monitor-cost-schemas";
 
 const natural = z.number().int().nonnegative().safe();
 const profile = z.object({ id: investorId, version: natural.refine(value => value > 0), content_hash: investorHash, created_at: investorInstant, document: investorProfileSchema }).strict();
@@ -13,6 +14,7 @@ const stateSchema = z.object({
   latest: observation.nullable(), observations: z.array(observation).max(50), observations_truncated: z.boolean(),
   research_task: researchTaskSchema.nullable(),
   model_watch: modelWatchSchema.nullable(),
+  monitor_costs: monitorCostStateSchema.nullable(),
   funding: fundingStateSchema,
   funded_study: fundedStudyTaskSchema.nullable(), funded_study_unavailable: z.boolean(),
   decisions: z.array(z.object({ id: investorId, observation_id: investorId,
@@ -26,6 +28,12 @@ export function parseInvestorState(value: unknown, binding: string): InvestorSta
   const result = stateSchema.safeParse(value);
   if (!result.success || result.data.session_binding !== binding) throw new Error("INVESTOR_RESPONSE_INVALID");
   const { session_binding: _, ...state } = result.data;
+  if (state.monitor_costs && (!state.model_watch || state.monitor_costs.model_id !== state.model_watch.id
+    || state.monitor_costs.model_valid_until !== state.model_watch.valid_until
+    || state.monitor_costs.status === "known" && (state.monitor_costs.valid_until! <= state.checked_at || state.monitor_costs.effective_from! > state.checked_at)
+    || state.monitor_costs.status === "expired" && state.monitor_costs.valid_until! > state.checked_at
+    || state.monitor_costs.editable && (state.read_only || state.model_watch.profile_id !== state.profile?.id || state.model_watch.valid_until <= state.checked_at)))
+    throw new Error("INVESTOR_RESPONSE_INVALID");
   if ((state.workspace_id === null && (state.profile !== null || state.revision !== 0 || state.observations.length > 0 || state.decisions.length > 0 || state.plan !== null || state.research_task !== null || state.model_watch !== null || state.actual_holdings_status !== "not_linked" || state.funding.status !== "not_configured" || state.funded_study !== null || state.funded_study_unavailable))
       || (state.workspace_id !== null && (state.profile === null || state.revision === 0))
       || JSON.stringify(state.profile ?? null) !== JSON.stringify(state.profile_history[0] ?? null)

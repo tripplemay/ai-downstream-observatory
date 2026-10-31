@@ -317,9 +317,11 @@ def _refresh_fx_windows(db, workspace, definition, windows, settings, at):
 
 def _admit_windows(db, workspace, actor, model_id, context, windows, at, stop_requested):
     from .monitor_bootstrap import _check_fx_selection
+    from .monitor_costs import current_settings
     if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
-    admitted = admit_monitor_data(db, workspace, actor, model_id, [window for _,window in windows], context[5]["settings"], now=at)
-    _check_fx_selection(db, workspace, context[1], [window for _,window in windows], context[5]["settings"], at)
+    settings = current_settings(db, workspace, context[1], context[5]["settings"], at)
+    admitted = admit_monitor_data(db, workspace, actor, model_id, [window for _,window in windows], settings, now=at)
+    _check_fx_selection(db, workspace, context[1], [window for _,window in windows], settings, at)
     if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
     return admitted
 
