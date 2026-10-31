@@ -24,6 +24,7 @@ import { InvestorNotificationsPanel } from "./investor-notifications-panel";
 import { acquisitionDeadlines, InvestorAcquisitionPanel } from "./investor-acquisition";
 import { useInvestorDisplayClock } from "./investor-display-clock";
 import { InvestorMonitorCostPanel } from "./investor-monitor-cost-panel";
+import { InvestorActionDrafts } from "./investor-action-drafts";
 import type { ResearchExecutionReview, ResearchCashIntentReview } from "@/server/investor/research-execution";
 
 export type InvestorView = "overview" | "plan" | "observations" | "accounts";
@@ -342,7 +343,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
     data?.model_watch?.acquisition?.status, data?.model_watch?.acquisition?.markets.map(row => row.status).join("|")]);
   const acquisitionClockKey = [...acquisitionDeadlines(data?.model_watch?.acquisition, data?.model_watch?.valid_until),
     ...[data?.model_watch?.next_check_at, data?.plan?.document.valid_until, data?.research_task?.study?.source_context?.valid_until, data?.latest?.document.next_review_at,
-      data?.monitor_costs?.effective_from, data?.monitor_costs?.valid_until]
+      data?.monitor_costs?.effective_from, data?.monitor_costs?.valid_until, data?.action_drafts?.refresh_after]
       .filter((value): value is string => !!value).map(Date.parse)].join("|");
   const displayNow = useInvestorDisplayClock(data?.checked_at ?? null, acquisitionClockKey);
   const displayClock = useRef(displayNow);
@@ -439,6 +440,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
         </details> : researchDetails}
         {data.model_watch && <ModelWatch watch={data.model_watch} nowMs={displayNow} disabled={locked || !data.model_watch.enabled && !canResumeInvestorWatch(data, displayNow)}
           onToggle={() => command({ action: "set_monitoring", model_id: data.model_watch!.id, enabled: !data.model_watch!.enabled })} />}
+        {data.action_drafts && <InvestorActionDrafts value={data.action_drafts} nowMs={displayNow} />}
         {data.monitor_costs && (data.monitor_costs.editable || data.monitor_costs.version > 0) && <InvestorMonitorCostPanel
           key={`${data.monitor_costs.model_id}:${data.monitor_costs.version}`} state={data.monitor_costs} nowMs={displayNow}
           disabled={baseLocked || editing || scopeState.account} onCommand={intent => command(intent, "costs")} onEditingChange={lockCostScope} />}
