@@ -10,7 +10,7 @@ from tests.investor.test_fx_selection import SERIES
 from worker.investor import monitor_bootstrap
 from worker.investor.data_evidence import review_source
 from worker.investor.monitor_data import build_monitor_data, resolve_monitor_data
-from worker.orchestration.db import WorkbenchError
+from worker.orchestration.db import WorkbenchError, canonical_json, content_hash, transaction
 
 
 NOW = fixtures.NOW
@@ -28,6 +28,21 @@ class FxBootstrapTests(unittest.TestCase):
         self.reference = {"targets": [
             {**target, "symbol": json.loads(ref["listing"]["document_json"])["facts"]["provider_symbol"]}
             for target, ref in zip(self.definition["targets"], self.refs)]}
+        profile_id = queue.InvestorRuntimeTests.save(self)
+        profile = self.db.execute("SELECT * FROM investor_profiles WHERE id=?", (profile_id,)).fetchone()
+        self.definition.update(profile_id=profile_id, profile_version=profile["version"],
+            profile_hash=profile["content_hash"], plan_hash=content_hash(self.reference))
+        self.definition["target_definition_hash"] = content_hash({key: self.definition[key]
+            for key in ("profile_hash", "plan_hash", "targets")})
+        # Persist the scoped model header; only its expensive research qualification
+        # is stubbed below. Planning must not create or change this fixture state.
+        with transaction(self.db):
+            self.db.execute("INSERT INTO audit_events(id,actor_id,action,object_type,object_id,payload_json,created_at) VALUES('fx-select-audit','synthetic-investor','investor_save_plan','investor_workspace','w','{}',?)", (NOW,))
+            self.db.execute("INSERT INTO investor_reference_plans(id,workspace_id,profile_id,document_json,content_hash,created_at) VALUES(?,'w',?,?,?,?)",
+                (self.definition["plan_id"], profile_id, canonical_json(self.reference), content_hash(self.reference), NOW))
+            self.db.execute("INSERT INTO investor_plan_selections(id,workspace_id,plan_id,actor_id,created_at,audit_id) VALUES('fx-selection','w',?,'synthetic-investor',?,'fx-select-audit')", (self.definition["plan_id"], NOW))
+            self.db.execute("INSERT INTO investor_models(id,workspace_id,profile_id,plan_id,selection_id,document_json,content_hash,created_at) VALUES(?,'w',?,?,'fx-selection',?,?,?)",
+                (self.definition["model_id"], profile_id, self.definition["plan_id"], canonical_json(self.definition), content_hash(self.definition), NOW))
 
     def plan(self):
         # Only the stored research/model context is stubbed. Source resolution,
@@ -102,7 +117,7 @@ class FxBootstrapTests(unittest.TestCase):
         self.extra_fx("series-new-conflict", ("2026-01-01", "2026-01-03"), series=SERIES, value="1.3")
         with self.assertRaisesRegex(WorkbenchError, "RESTATEMENT_REQUIRED"): self.plan()
         self.assertEqual(self.db.execute("SELECT count(*) FROM investor_monitor_evidence_inputs").fetchone()[0], 0)
-        self.assertEqual(self.db.execute("SELECT count(*) FROM investor_models").fetchone()[0], 0)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM investor_models").fetchone()[0], 1)
         self.assert_no_finance()
 
     def test_frozen_age_ceiling_is_honored_without_selecting_older_review_by_creation_time(self):

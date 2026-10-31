@@ -76,6 +76,13 @@ unnecessary empty-path model checks. An initial profile fixture incorrectly
 assigned settlement metadata to closed days; only the invented fixture changed,
 and the original failure remains in private evidence. No calendar rule was relaxed.
 
+Full CI exposed seven existing FX bootstrap tests whose mocked model context
+had no stored model header. Their fictional setup now persists the scoped
+profile, reference, selection and model with normal database constraints; the
+production membership check and FX assertions are unchanged. All seven cases
+and the complete 198-case Python discovery shard passed locally. The original
+CI failures remain failures, pending new exact-commit checks.
+
 No migration, strategy, risk, fee/tax assumption, source authority, daily budget,
 timeout or lease duration changes. Closed earlier price attempts are not retried.
 Exact-commit CI, normal protected deployment and independent runtime acceptance
