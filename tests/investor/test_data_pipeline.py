@@ -18,6 +18,8 @@ from tests.investor.test_issuer_sources import Collector, policy as issuer_polic
 from worker.investor import issuer_sources
 from tests.investor.test_managed_fx import Collector as FxCollector, policy as fx_policy, AT as FX_AT
 from worker.investor import managed_fx
+from worker.investor import eodhd_sources
+from tests.investor import test_eodhd_sources as eodhd_fixture
 from worker.orchestration.runtime import run_pending_once
 from worker.orchestration.db import stamp
 
@@ -107,6 +109,39 @@ class DataPipelineCliTests(unittest.TestCase):
             self.assertEqual((status,error),(0,""));self.assertFalse(json.loads(out)["backup_purge_verified"])
             self.assertEqual(self.db.execute("SELECT count(*) FROM investor_issuer_payloads").fetchone()[0],0)
             credentials.assert_not_called()
+        self.assert_no_finance()
+
+    def test_eodhd_cli_has_private_explicit_controls_metadata_only_and_no_manual_fetch_or_test_override(self):
+        original_clock, original_ms = eodhd_sources._clock, eodhd_sources._milliseconds
+        with patch.object(eodhd_sources, "_clock", side_effect=lambda value=None: original_clock(eodhd_fixture.AT if value is None else value)), \
+                patch.object(eodhd_sources, "_milliseconds", side_effect=lambda value=None: original_ms(eodhd_fixture.REGISTER if value is None else value)), \
+                patch.dict("os.environ", {"WORKBENCH_EODHD_ENABLED": "1"}), \
+                patch.object(eodhd_sources.receiver, "collect_eodhd_action_draft", side_effect=AssertionError("NO_REAL_NETWORK")) as transport:
+            doc = eodhd_fixture.policy(clause_references=["PRIVATE-FIXTURE-NOT-A-PROVIDER-CERTIFICATE"])
+            status, out, error = self.invoke("register-eodhd-authority", "--file", self.file(json.dumps(doc)))
+            self.assertEqual((status, error), (0, "")); authority = json.loads(out)["authority_id"]
+            self.assertFalse(json.loads(out)["enabled"]); self.assertNotIn("PRIVATE-FIXTURE", out)
+            status, out, error = self.invoke("control-eodhd-authority", "--authority", authority, "--enable")
+            self.assertEqual((status, error), (0, "")); self.assertTrue(json.loads(out)["enabled"])
+            jobs = eodhd_sources.discover_eodhd_requests(self.db, now=eodhd_fixture.AT)
+            status, out, error = self.invoke("inspect-eodhd-request", "--request", jobs[0]["period"])
+            self.assertEqual((status, error), (0, "")); self.assertEqual(json.loads(out)["status"], "queued")
+            for forbidden in ("api_token", "clause_references", "raw", "records", "url_without_credentials"):
+                self.assertNotIn(forbidden, json.loads(out))
+            from worker.orchestration.jobs import run_one
+            completed = run_one(self.db, "fictional-cli-eodhd", lambda job, lease: eodhd_sources.prepare_eodhd_capture(self.db, job, lease,
+                clock=lambda: eodhd_fixture.AT, test_collector=eodhd_fixture.Collector()), job_type=eodhd_sources.JOB_TYPE,
+                lease_seconds=180, clock=lambda: eodhd_fixture.AT)
+            capture = json.loads(completed["result_json"])["capture_id"]
+            status, out, error = self.invoke("check-eodhd-capture", "--capture", capture)
+            self.assertEqual((status, out), (1, "")); self.assertEqual(json.loads(error), {"error": "INVESTOR_EODHD_SYNTHETIC_CAPTURE_FORBIDDEN"})
+            for command in ("collect-eodhd-draft", "retry-eodhd-request"):
+                with self.assertRaises(SystemExit): self.invoke(command)
+            for override in ("--url", "--now", "--allow-synthetic", "--test-collector", "--credentials-file"):
+                with self.assertRaises(SystemExit): self.invoke("inspect-eodhd-request", "--request", jobs[0]["period"], override, "FICTIONAL")
+            status, out, error = self.invoke("control-eodhd-authority", "--authority", authority, "--disable")
+            self.assertEqual((status, error), (0, "")); self.assertFalse(json.loads(out)["enabled"])
+            transport.assert_not_called()
         self.assert_no_finance()
 
     def test_issuer_cli_rejects_public_private_inputs_and_all_endpoint_clock_or_test_overrides(self):

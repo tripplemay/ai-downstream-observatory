@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-eodhd-source.schema.json",
+  "$defs": {
+    "policy": {
+      "type": "object",
+      "required": ["schema_version", "provider", "symbols", "kinds", "uses", "valid_from", "valid_until", "retention_years", "timezone", "run_after_hour", "lookback_days", "max_requests_per_day", "automatic_retry", "clause_references", "authorization_basis", "raw_ai_sharing", "quote_replacement", "trading_permission"],
+      "properties": {
+        "schema_version": {"const": "investor-eodhd-policy-v1"}, "provider": {"const": "eodhd_action_drafts"},
+        "symbols": {"const": ["VT.US", "BND.US"]}, "kinds": {"const": ["div", "splits"]},
+        "uses": {"type": "array", "minItems": 4, "maxItems": 4, "uniqueItems": true, "items": {"enum": ["private_research", "private_retention", "private_display", "private_backup"]}},
+        "valid_from": {"$ref": "common.schema.json#/$defs/instant"}, "valid_until": {"$ref": "common.schema.json#/$defs/instant"},
+        "retention_years": {"const": 10}, "timezone": {"const": "America/New_York"}, "run_after_hour": {"const": 1},
+        "lookback_days": {"const": 365}, "max_requests_per_day": {"const": 4}, "automatic_retry": {"const": false},
+        "clause_references": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "string", "minLength": 1, "maxLength": 300}},
+        "authorization_basis": {"const": "owner_declared_private_use_not_provider_certified"},
+        "raw_ai_sharing": {"const": false}, "quote_replacement": {"const": false}, "trading_permission": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "control": {
+      "type": "object", "required": ["schema_version", "authority_id", "authority_hash", "version", "enabled", "created_at"],
+      "properties": {
+        "schema_version": {"const": "investor-eodhd-control-v1"}, "authority_id": {"$ref": "common.schema.json#/$defs/id"},
+        "authority_hash": {"$ref": "common.schema.json#/$defs/hash"}, "version": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "enabled": {"type": "boolean"}, "created_at": {"$ref": "common.schema.json#/$defs/instant"}
+      }, "additionalProperties": false
+    },
+    "parameters": {
+      "type": "object", "required": ["kind", "symbol", "start_date", "end_date"],
+      "properties": {"kind": {"enum": ["div", "splits"]}, "symbol": {"enum": ["VT.US", "BND.US"]},
+        "start_date": {"$ref": "common.schema.json#/$defs/date"}, "end_date": {"$ref": "common.schema.json#/$defs/date"}},
+      "additionalProperties": false
+    },
+    "request": {
+      "type": "object", "required": ["schema_version", "authority_id", "authority_hash", "control_id", "control_hash", "source_day", "parameters", "created_at", "valid_until", "collection_scope"],
+      "properties": {
+        "schema_version": {"const": "investor-eodhd-request-v1"}, "authority_id": {"$ref": "common.schema.json#/$defs/id"},
+        "authority_hash": {"$ref": "common.schema.json#/$defs/hash"}, "control_id": {"$ref": "common.schema.json#/$defs/id"}, "control_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "source_day": {"$ref": "common.schema.json#/$defs/date"}, "parameters": {"$ref": "#/$defs/parameters"},
+        "created_at": {"$ref": "common.schema.json#/$defs/instant"}, "valid_until": {"$ref": "common.schema.json#/$defs/instant"},
+        "collection_scope": {"const": "private_unapproved_action_drafts_only"}
+      }, "additionalProperties": false
+    },
+    "transport": {
+      "type": "object", "required": ["schema_version", "url_without_credentials", "request", "started_at", "completed_at", "retrieved_at", "http_status", "raw_sha256", "raw_bytes", "redirects_followed", "response_format", "credential_in_receipt"],
+      "properties": {
+        "schema_version": {"const": "eodhd-fixed-actions-https-v1"}, "url_without_credentials": {"type": "string", "maxLength": 256},
+        "request": {"$ref": "#/$defs/parameters"}, "started_at": {"$ref": "common.schema.json#/$defs/instant"}, "completed_at": {"$ref": "common.schema.json#/$defs/instant"},
+        "retrieved_at": {"$ref": "common.schema.json#/$defs/instant"}, "http_status": {"const": 200}, "raw_sha256": {"$ref": "common.schema.json#/$defs/hash"},
+        "raw_bytes": {"type": "integer", "minimum": 1, "maximum": 262144}, "redirects_followed": {"const": 0},
+        "response_format": {"const": "utf8_json_identity"}, "credential_in_receipt": {"const": false}
+      }, "additionalProperties": false
+    },
+    "capture": {
+      "type": "object", "required": ["schema_version", "capture_id", "workspace_id", "request_id", "request_hash", "job_id", "fencing_token", "qualification", "status", "reason_code", "raw_sha256", "raw_bytes", "draft_hash", "parser_version", "transport", "created_at", "retain_until", "owner_reviewed", "research_admitted", "corporate_actions_complete", "live_advice_eligible"],
+      "properties": {
+        "schema_version": {"const": "investor-eodhd-capture-v1"}, "capture_id": {"$ref": "common.schema.json#/$defs/id"}, "workspace_id": {"$ref": "common.schema.json#/$defs/id"},
+        "request_id": {"$ref": "common.schema.json#/$defs/id"}, "request_hash": {"$ref": "common.schema.json#/$defs/hash"}, "job_id": {"$ref": "common.schema.json#/$defs/id"},
+        "fencing_token": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "qualification": {"enum": ["isolated_fixed_eodhd_https", "injected_test_eodhd"]}, "status": {"enum": ["captured", "transport_failed", "superseded"]},
+        "reason_code": {"enum": ["EODHD_ACTION_DRAFT_CAPTURED", "EODHD_SLOT_NO_LONGER_CURRENT", "EODHD_CAPTURE_TRANSPORT_FAILED", "EODHD_CAPTURE_RESPONSE_INVALID", "EODHD_CAPTURE_TIMEOUT", "EODHD_CAPTURE_ROUTE_FORBIDDEN", "EODHD_CAPTURE_AUTH_FAILED", "EODHD_CAPTURE_RATE_LIMITED", "EODHD_CAPTURE_UNAVAILABLE"]},
+        "raw_sha256": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/hash"}]}, "raw_bytes": {"oneOf": [{"type": "null"}, {"type": "integer", "minimum": 1, "maximum": 262144}]},
+        "draft_hash": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/hash"}]}, "parser_version": {"oneOf": [{"type": "null"}, {"const": "eodhd-action-draft-v1"}]},
+        "transport": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/transport"}]}, "created_at": {"$ref": "common.schema.json#/$defs/instant"},
+        "retain_until": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/instant"}]},
+        "owner_reviewed": {"const": false}, "research_admitted": {"const": false}, "corporate_actions_complete": {"const": false}, "live_advice_eligible": {"const": false}
+      },
+      "allOf": [
+        {"if": {"properties": {"status": {"const": "captured"}}}, "then": {"properties": {"reason_code": {"const": "EODHD_ACTION_DRAFT_CAPTURED"}, "raw_sha256": {"type": "string"}, "raw_bytes": {"type": "integer"}, "draft_hash": {"type": "string"}, "parser_version": {"type": "string"}, "transport": {"type": "object"}, "retain_until": {"type": "string"}}}, "else": {"properties": {"raw_sha256": {"type": "null"}, "raw_bytes": {"type": "null"}, "draft_hash": {"type": "null"}, "parser_version": {"type": "null"}, "transport": {"type": "null"}, "retain_until": {"type": "null"}}}},
+        {"if": {"properties": {"status": {"const": "superseded"}}}, "then": {"properties": {"reason_code": {"const": "EODHD_SLOT_NO_LONGER_CURRENT"}}}},
+        {"if": {"properties": {"status": {"const": "transport_failed"}}}, "then": {"properties": {"reason_code": {"enum": ["EODHD_CAPTURE_TRANSPORT_FAILED", "EODHD_CAPTURE_RESPONSE_INVALID", "EODHD_CAPTURE_TIMEOUT", "EODHD_CAPTURE_ROUTE_FORBIDDEN", "EODHD_CAPTURE_AUTH_FAILED", "EODHD_CAPTURE_RATE_LIMITED", "EODHD_CAPTURE_UNAVAILABLE"]}}}}
+      ], "additionalProperties": false
+    }
+  }
+}

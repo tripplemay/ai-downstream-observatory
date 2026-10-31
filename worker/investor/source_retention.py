@@ -201,6 +201,10 @@ WITH source_snapshots AS (
         OR NOT EXISTS(SELECT 1 FROM investor_fx_controls control WHERE control.id=r.control_id AND control.enabled=1
           AND control.version=(SELECT max(version) FROM investor_fx_controls WHERE authority_id=a.id)))
   UNION ALL
+  SELECT 'eodhd',c.id,c.workspace_id,c.retain_until FROM investor_eodhd_captures c
+    WHERE c.status='captured' AND c.created_at<=:at AND c.retain_until<=:at
+      AND NOT EXISTS(SELECT 1 FROM investor_eodhd_purges p WHERE p.capture_id=c.id)
+  UNION ALL
   SELECT 'checkpoint',c.id,c.workspace_id,c.valid_until FROM investor_evidence_model_checkpoints c
     WHERE c.created_at<=:at AND EXISTS(SELECT 1 FROM investor_evidence_checkpoint_payloads b WHERE b.checkpoint_id=c.id)
       AND NOT EXISTS(SELECT 1 FROM investor_monitor_payload_purges p WHERE p.kind='checkpoint' AND p.entity_id=c.id)
@@ -234,6 +238,7 @@ def purge_due_source_payloads(db, *, limit=100, now=None, stop_requested=None):
     from .evidence_monitor_runtime import purge_monitor_payload
     from .issuer_sources import purge_issuer_capture
     from .managed_fx import purge_capture as purge_fx_capture
+    from .eodhd_sources import purge_eodhd_capture
     purged = []
     for row in rows:
         if stop_requested and stop_requested():
@@ -246,6 +251,8 @@ def purge_due_source_payloads(db, *, limit=100, now=None, stop_requested=None):
             result = purge_issuer_capture(db, row["workspace_id"], row["owner_id"], row["id"], now=at)
         elif row["kind"] == "fx":
             result = purge_fx_capture(db, row["workspace_id"], row["owner_id"], row["id"], now=at)
+        elif row["kind"] == "eodhd":
+            result = purge_eodhd_capture(db, row["workspace_id"], row["owner_id"], row["id"], now=at)
         else:
             result = purge_monitor_payload(db, row["workspace_id"], row["owner_id"], row["kind"], row["id"], now=at)
         purged.append(result)

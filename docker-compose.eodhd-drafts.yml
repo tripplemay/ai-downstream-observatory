@@ -1,0 +1,12 @@
+services:
+  market-provider:
+    environment:
+      WORKBENCH_EODHD_ENABLED: "1"
+      EODHD_CREDENTIALS_FILE: /run/etf-workbench/eodhd.env
+    volumes:
+      - type: bind
+        source: ${WORKBENCH_EODHD_CREDENTIALS_FILE:?Set independent protected EODHD credential file}
+        target: /run/etf-workbench/eodhd.env
+        read_only: true
+        bind:
+          create_host_path: false

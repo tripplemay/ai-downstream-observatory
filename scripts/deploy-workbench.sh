@@ -56,6 +56,20 @@ if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then
   [[ "$WORKBENCH_MARKET_PROVIDER_ENV_FILE" != "$WORKBENCH_RUNTIME_ENV_FILE" && "$WORKBENCH_MARKET_PROVIDER_ENV_FILE" != "$WORKBENCH_BACKUP_KEY_FILE" ]] || { printf 'Market provider credentials must use a separate file\n' >&2; exit 2; }
   export WORKBENCH_MARKET_PROVIDER_ENV_FILE
 fi
+WORKBENCH_EODHD_ENABLED=${WORKBENCH_EODHD_ENABLED:-0}
+[[ "$WORKBENCH_EODHD_ENABLED" == 0 || "$WORKBENCH_EODHD_ENABLED" == 1 ]] || { printf 'EODHD enable flag must be 0 or 1\n' >&2; exit 2; }
+if [[ "$WORKBENCH_EODHD_ENABLED" == 1 ]]; then
+  [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]] || { printf 'EODHD requires isolated market provider role\n' >&2; exit 2; }
+  : "${WORKBENCH_EODHD_CREDENTIALS_FILE:?Set independent protected EODHD credential file}"
+  safe_path "$WORKBENCH_EODHD_CREDENTIALS_FILE" || { printf 'Invalid EODHD credential path\n' >&2; exit 2; }
+  for value in "$WORKBENCH_RUNTIME_ENV_FILE" "$WORKBENCH_BACKUP_KEY_FILE" "$WORKBENCH_MARKET_PROVIDER_ENV_FILE" "$config"; do
+    [[ "$WORKBENCH_EODHD_CREDENTIALS_FILE" != "$value" ]] || { printf 'EODHD credentials must use a separate file\n' >&2; exit 2; }
+  done
+  for value in "$WORKBENCH_DATA_DIR_HOST" "$WORKBENCH_BACKUP_DIR_HOST" "$WORKBENCH_RESTORE_PARENT_DIR" "$WORKBENCH_DEPLOY_ROOT/releases"; do
+    [[ "$WORKBENCH_EODHD_CREDENTIALS_FILE" != "$value" && "$WORKBENCH_EODHD_CREDENTIALS_FILE" != "$value/"* ]] || { printf 'EODHD credentials must remain outside data and releases\n' >&2; exit 2; }
+  done
+  export WORKBENCH_EODHD_CREDENTIALS_FILE
+fi
 WORKBENCH_RELEASE_SHA=$release_sha
 COMPOSE_PARALLEL_LIMIT=${COMPOSE_PARALLEL_LIMIT:-1}
 for value in "$WORKBENCH_DEPLOY_ROOT" "$WORKBENCH_LEGACY_DIR" "$WORKBENCH_LEGACY_DATA_DIR" "$WORKBENCH_DATA_DIR_HOST" "$WORKBENCH_BACKUP_DIR_HOST" "$WORKBENCH_RESTORE_PARENT_DIR" "$WORKBENCH_RUNTIME_ENV_FILE" "$WORKBENCH_BACKUP_KEY_FILE"; do
@@ -77,6 +91,7 @@ fi
 if ((execute == 0)); then
   printf 'PLAN ONLY: %s\n' "$release_sha"
   printf 'Optional market provider enabled: %s\n' "$WORKBENCH_MARKET_PROVIDER_ENABLED"
+  printf 'Optional EODHD drafts available: %s (not source authorization)\n' "$WORKBENCH_EODHD_ENABLED"
   printf 'Core research lease seconds: %s\n' "$WORKBENCH_CORE_LEASE_SECONDS"
   printf 'Verified off-host image bundle supplied: %s\n' "$([[ -n "$image_bundle" ]] && printf 1 || printf 0)"
   printf '%s\n' 'Validate protected configuration and isolated UID 10001 volumes' 'Build exact release-tagged web/worker images before stopping existing services' 'Back up current workbench with its compatible previous image, or snapshot legacy SQLite online' 'Stop previous writers; take final backup; migrate new schema explicitly' 'Archive legacy rows only as legacy research; never create actual funds' 'Create encrypted backup and restore into a new rehearsal directory' 'Start isolated workbench project; verify schema, auth, HTTP and worker health' 'Failure stops new writers and preserves all new facts; no database overwrite rollback'
@@ -95,11 +110,22 @@ read -r staged_sha < "$release_dir/.release-sha"
 (cd "$release_dir" && diff -u <(find . -type f ! -name .release-files.sha256 | LC_ALL=C sort) <(sed -E 's/^[a-f0-9]{64}  //' .release-files.sha256 | LC_ALL=C sort))
 secret_files=("$WORKBENCH_RUNTIME_ENV_FILE" "$WORKBENCH_BACKUP_KEY_FILE")
 if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then secret_files+=("$WORKBENCH_MARKET_PROVIDER_ENV_FILE"); fi
+if [[ "$WORKBENCH_EODHD_ENABLED" == 1 ]]; then secret_files+=("$WORKBENCH_EODHD_CREDENTIALS_FILE"); fi
 for secret_file in "${secret_files[@]}"; do
   [[ -f "$secret_file" && ! -L "$secret_file" ]] || { printf 'Secret file missing or symlinked\n' >&2; exit 2; }
   mode=$(stat -c '%a' "$secret_file")
   (( (8#$mode & 077) == 0 )) || { printf 'Secret file permissions too broad\n' >&2; exit 2; }
 done
+assert_eodhd_credentials() {
+  [[ "${WORKBENCH_EODHD_ENABLED:-0}" == 1 ]] || return 0
+  [[ -f "$WORKBENCH_EODHD_CREDENTIALS_FILE" && ! -L "$WORKBENCH_EODHD_CREDENTIALS_FILE"
+    && $(realpath "$WORKBENCH_EODHD_CREDENTIALS_FILE") == "$WORKBENCH_EODHD_CREDENTIALS_FILE" ]] || { printf 'Aliased EODHD credential path rejected\n' >&2; return 1; }
+  [[ $(stat -c '%u:%a:%h' "$WORKBENCH_EODHD_CREDENTIALS_FILE") == 10001:600:1 ]] || { printf 'EODHD credentials require UID 10001, mode 0600 and one link\n' >&2; return 1; }
+  for value in "$WORKBENCH_RUNTIME_ENV_FILE" "$WORKBENCH_BACKUP_KEY_FILE" "$WORKBENCH_MARKET_PROVIDER_ENV_FILE" "$config"; do
+    [[ ! "$WORKBENCH_EODHD_CREDENTIALS_FILE" -ef "$value" ]] || { printf 'Aliased EODHD credentials rejected\n' >&2; return 1; }
+  done
+}
+assert_eodhd_credentials
 [[ $(stat -c '%u' "$WORKBENCH_BACKUP_KEY_FILE") == 10001 ]] || { printf 'Backup key must be readable by UID 10001 and mode 0600\n' >&2; exit 2; }
 [[ $(stat -c '%u' "$WORKBENCH_RUNTIME_ENV_FILE") == 0 ]] || { printf 'Runtime environment must be root-owned\n' >&2; exit 2; }
 if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then
@@ -136,6 +162,10 @@ if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then
   build_services+=(market-provider)
   start_services+=(market-provider)
   release_images+=("etf-workbench-market-provider:$release_sha")
+fi
+if [[ "${WORKBENCH_EODHD_ENABLED:-0}" == 1 ]]; then
+  [[ -f "$release_dir/docker-compose.eodhd-drafts.yml" ]] || { printf 'EODHD Compose overlay missing\n' >&2; exit 2; }
+  compose_options+=(-f "$release_dir/docker-compose.eodhd-drafts.yml")
 fi
 compose() { docker compose "${compose_options[@]}" "$@"; }
 market_provider_ids() {
@@ -239,6 +269,7 @@ docker image inspect "${release_images[@]}" --format '{{.Id}} {{index .Config.La
 compose run --rm --no-deps web node /app/scripts/check-workbench-runtime.mjs --config-only > "$evidence/auth-configuration.json"
 if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then
   compose run --rm --no-deps --entrypoint python market-provider -c 'import os; from worker.market.providers.longport import _credentials, _load_sdk; assert not any(k in os.environ for k in ("WORKBENCH_PASSWORD_HASH","WORKBENCH_SESSION_SECRET")); _credentials(); _load_sdk(); print("provider credential presence and SDK import checked without network")' > "$evidence/market-provider-configuration.txt"
+  compose run --rm --no-deps --entrypoint python market-provider -c 'from worker.market.providers.eodhd_capture import check_runtime_configuration; from worker.orchestration.db import canonical_json; print(canonical_json(check_runtime_configuration()))' > "$evidence/eodhd-configuration.json"
 fi
 compose run --rm --no-deps --entrypoint node backup --input-type=module -e 'import {readPassphrase} from "/app/scripts/backup-workbench.mjs"; await readPassphrase(); console.log("backup key configured");' > "$evidence/backup-key-check.txt"
 assert_no_recovery
