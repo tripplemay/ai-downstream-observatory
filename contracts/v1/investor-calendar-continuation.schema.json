@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-calendar-continuation.schema.json",
+  "type": "object",
+  "required": ["schema_version", "workspace_id", "source_id", "source_hash", "previous_review_id", "previous_review_hash", "new_review_id", "new_review_hash", "market", "previous_facts_hash", "previous_range_end", "extended_range_end", "created_at", "approval_basis", "scope", "collection_permission", "trading_permission"],
+  "properties": {
+    "schema_version": {"const": "investor-calendar-continuation-v1"},
+    "workspace_id": {"$ref": "common.schema.json#/$defs/id"},
+    "source_id": {"$ref": "common.schema.json#/$defs/id"},
+    "source_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "previous_review_id": {"$ref": "common.schema.json#/$defs/id"},
+    "previous_review_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "new_review_id": {"$ref": "common.schema.json#/$defs/id"},
+    "new_review_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "market": {"enum": ["CN", "HK", "US"]},
+    "previous_facts_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "previous_range_end": {"$ref": "common.schema.json#/$defs/date"},
+    "extended_range_end": {"$ref": "common.schema.json#/$defs/date"},
+    "created_at": {"$ref": "common.schema.json#/$defs/instant"},
+    "approval_basis": {"const": "owner_reviewed_unchanged_calendar_prefix"},
+    "scope": {"const": "historical_prefix_only_not_source_renewal"},
+    "collection_permission": {"const": false},
+    "trading_permission": {"const": false}
+  },
+  "additionalProperties": false
+}

@@ -44,6 +44,11 @@ def _context(db, workspace, model_id, at):
         authorities[identity] = spec
     targets = {target["listing_id"] for target in definition["targets"]}
     _assert(targets <= set(authorities))
+    from .calendar_continuation import current_calendar_review
+    for identity in targets:
+        spec = authorities[identity]
+        current = current_calendar_review(db, workspace, spec["calendar_review_id"], at)
+        authorities[identity] = {**spec, "calendar_review_id": current["review"]["id"]}
     return model, definition, control, source, {identity: authorities[identity] for identity in targets}
 
 

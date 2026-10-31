@@ -252,6 +252,11 @@
       "version": 50,
       "file": "0050_investor_issuer_schedule.sql",
       "sha256": "550398a0d1f827e81dd41a17c8f4a1e0eeefad88eb512ff48f7a77aa951bb187"
+    },
+    {
+      "version": 51,
+      "file": "0051_investor_calendar_continuation.sql",
+      "sha256": "fd4767ad730598bf7288b131d563d2e9a69f512f6b1c6035534e40a12a080c1e"
     }
   ]
 }
