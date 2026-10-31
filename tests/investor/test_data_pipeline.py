@@ -206,13 +206,13 @@ class DataPipelineCliTests(unittest.TestCase):
         self.assertEqual(self.db.total_changes, before)
         self.assert_no_finance()
 
-    def monitor_fixture(self, fixed_policy=False, confirmed_latest=False, external_ai=False, extra_closed_day=False):
+    def monitor_fixture(self, fixed_policy=False, confirmed_latest=False, external_ai=False, extra_closed_day=False, market="CN"):
         from tests.investor.test_monitor_data import InvestorMonitorDataTests, NOW as monitor_now
         from tests.investor.fixtures import profile
         from worker.orchestration.db import canonical_json, content_hash, transaction
         from worker.orchestration.runtime import run_pending_once
         queue.InvestorRuntimeTests.save(self, profile("0.30"))
-        evidence_fixture.create(self.db, "w", "synthetic-investor", fixed_policy_v2=fixed_policy)
+        evidence_fixture.create(self.db, "w", "synthetic-investor", fixed_policy_v2=fixed_policy, research_market=market)
         self.assertEqual(run_pending_once(self.db, "fictional", clock=lambda: NOW)["status"], "succeeded")
         row = self.db.execute("SELECT * FROM investor_reference_plans").fetchone()
         plan = json.loads(row["document_json"])
@@ -232,7 +232,7 @@ class DataPipelineCliTests(unittest.TestCase):
             self.db.execute("INSERT INTO investor_model_controls(id,workspace_id,model_id,version,enabled,actor_id,audit_id,created_at) VALUES('monitor-control','w',?,1,1,'synthetic-investor','monitor-select-audit',?)", (definition["model_id"], monitor_now))
         fixture = InvestorMonitorDataTests(methodName="test_three_market_different_closes_actual_receipt_time_and_newer_fx")
         fixture.db = self.db
-        _, windows, settings, refs = fixture.fixture(("CN", "CN"), identities=[target["listing_id"] for target in definition["targets"]],
+        _, windows, settings, refs = fixture.fixture((market, market), identities=[target["listing_id"] for target in definition["targets"]],
             roles=definition["fixed_policy"]["parameters"]["roles"] if fixed_policy else None, confirmed_latest=confirmed_latest, external_ai=external_ai, extra_closed_day=extra_closed_day)
         return definition, windows, settings, refs
 

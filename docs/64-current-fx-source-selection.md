@@ -63,9 +63,11 @@ require an unrelated FX authority.
 
 Work is bounded by 128 resolved reviews and 100000 compared rows. Limits fail
 closed; they are not a claim of ten-year rolling-source capacity. The scheduled
-producer still needs explicit long-lived authority/head and retention governance,
-and the later callback-feed admission must carry that lineage forward. This
-increment does not silently refresh later feed windows or reset a saved model.
+producer still needs explicit long-lived authority/head and retention governance.
+The [subsequent monitor refresh](66-current-fx-monitor-refresh.md) now carries
+explicit reviewed-series continuity into later callback windows and handles
+late source arrival without a provider retry. That separate increment does not
+reset a saved model or provide the remaining long-lived producer registry.
 
 Issuer identity/amount basis, complete distribution/split coverage, actual current
 FX capture/admission, independent monitor publication and normal/funding/stale

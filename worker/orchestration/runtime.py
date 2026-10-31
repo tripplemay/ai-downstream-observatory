@@ -411,10 +411,11 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
         from worker.investor.source_retention import purge_due_source_payloads
         from worker.investor.model_runtime import discover_monitor_requests
         from worker.investor.evidence_monitor_runtime import discover_evidence_monitor_requests
-        from worker.investor.confirmed_feed import admit_completed_feeds
+        from worker.investor.confirmed_feed import admit_completed_feeds, refresh_monitor_sources
         from worker.investor.monitor_bootstrap import bootstrap_monitor_inputs
         purge_due_source_payloads(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         admit_completed_feeds(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        refresh_monitor_sources(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         bootstrap_monitor_inputs(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         sync_research_requests(connection, limit=discovery_limit, now=clock())
         purge_due_funded_results(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)

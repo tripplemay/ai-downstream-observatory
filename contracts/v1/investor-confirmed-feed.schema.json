@@ -38,6 +38,17 @@
         "created_at": {"$ref": "#/$defs/at"}, "live_advice_eligible": {"const": false}
       }
     },
+    "refresh": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "model_id", "model_hash", "control_id", "previous_input_id", "previous_input_hash", "input_id", "input_hash", "created_at", "live_advice_eligible"],
+      "properties": {
+        "schema_version": {"const": "investor-monitor-source-refresh-v1"},
+        "model_id": {"$ref": "#/$defs/id"}, "model_hash": {"$ref": "#/$defs/hash"}, "control_id": {"$ref": "#/$defs/id"},
+        "previous_input_id": {"$ref": "#/$defs/id"}, "previous_input_hash": {"$ref": "#/$defs/hash"},
+        "input_id": {"$ref": "#/$defs/id"}, "input_hash": {"$ref": "#/$defs/hash"},
+        "created_at": {"$ref": "#/$defs/at"}, "live_advice_eligible": {"const": false}
+      }
+    },
     "admission": {
       "type": "object", "additionalProperties": false,
       "required": ["schema_version", "run_id", "run_hash", "input_id", "input_hash", "status", "reason_code", "created_at", "live_advice_eligible"],

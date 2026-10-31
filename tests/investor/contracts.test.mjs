@@ -11,6 +11,17 @@ const directory = new URL('../../contracts/v1/', import.meta.url);
 for (const name of fs.readdirSync(directory).filter(name => name.endsWith('.schema.json')))
   ajv.addSchema(JSON.parse(fs.readFileSync(new URL(name, directory), 'utf8')));
 
+test('monitor source-refresh audit binds old and new input versions without a source, cash or trade grant', () => {
+  const validate = ajv.getSchema('investor-confirmed-feed.schema.json#/$defs/refresh');
+  const value = { schema_version: 'investor-monitor-source-refresh-v1', model_id: 'm', model_hash: 'a'.repeat(64), control_id: 'c',
+    previous_input_id: 'old', previous_input_hash: 'b'.repeat(64), input_id: 'new', input_hash: 'c'.repeat(64),
+    created_at: '2026-01-04T21:02:02.000Z', live_advice_eligible: false };
+  assert.equal(validate(value), true, JSON.stringify(validate.errors));
+  for (const change of [{ live_advice_eligible: true }, { approved: true }, { quotes: [] }, { actual_cash_cny: '100' },
+    { execution_authorized: true }, { previous_input_hash: 'unknown' }, { schema_version: 'investor-confirmed-feed-admission-v1' }])
+    assert.equal(validate({ ...value, ...change }), false);
+});
+
 test('issuer permission and capture contracts are closed staging records, never financial admission or arbitrary transport metadata', () => {
   const authority = ajv.getSchema('https://etf-workbench.invalid/contracts/v1/investor-issuer-authority.schema.json');
   const child = spawnSync(process.env.WORKBENCH_TEST_PYTHON ?? process.env.WORKBENCH_PYTHON ?? 'python3',

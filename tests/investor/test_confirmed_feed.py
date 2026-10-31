@@ -31,23 +31,48 @@ class ConfirmedFeedTests(unittest.TestCase):
     assert_no_finance = queue.InvestorRuntimeTests.assert_no_finance
     monitor_fixture = pipeline.DataPipelineCliTests.monitor_fixture
 
-    def model(self, fixed=False):
+    def model(self, fixed=False, market="CN"):
+        seed_at = SEED if market == "CN" else "2026-01-02T22:05:03.000Z"
         original = fixtures.InvestorMonitorDataTests.reviewed
         def extended(fixture, kind, facts, label):
             facts = deepcopy(facts)
             if kind in ("calendar", "actions"): facts["range_end"] = "2026-01-05"
             if kind == "calendar":
                 for day in (4, 5):
-                    close = instant(f"2026-01-{day:02d}T07:00:00.000Z")
+                    close = instant(f"2026-01-{day:02d}T" + {"CN":"07", "HK":"08", "US":"21"}[market] + ":00:00.000Z")
                     facts["days"].append({"date": f"2026-01-{day:02d}", "kind": "full", "close_at": stamp(close),
                         "available_at": stamp(close + timedelta(minutes=1)), "settled_at": stamp(close + timedelta(days=1)),
                         "settlement_rule_known_at": "2025-12-01T00:00:00Z"})
+            if kind == "fx":
+                facts["monitor_series"] = {"authority_id":"fictional-feed-reference-series", "revision_policy":"append_only_no_restatements"}
             return original(fixture, kind, facts, label)
-        with patch.object(fixtures, "NOW", SEED), patch.object(fixtures.InvestorMonitorDataTests, "reviewed", extended):
-            self.definition, windows, settings, self.refs = self.monitor_fixture(fixed_policy=fixed, confirmed_latest=True)
-        self.seed = monitor_admission.admit_monitor_data(self.db, "w", "synthetic-investor", self.definition["model_id"], windows, settings, now=SEED)
-        self.assertEqual(run_pending_once(self.db, "fictional-seed-core", clock=lambda: SEED)["status"], "succeeded")
+        with patch.object(fixtures, "NOW", seed_at), patch.object(fixtures.InvestorMonitorDataTests, "reviewed", extended):
+            self.definition, windows, settings, self.refs = self.monitor_fixture(fixed_policy=fixed, confirmed_latest=True, market=market)
+        self.seed = monitor_admission.admit_monitor_data(self.db, "w", "synthetic-investor", self.definition["model_id"], windows, settings, now=seed_at)
+        self.assertEqual(run_pending_once(self.db, "fictional-seed-core", clock=lambda: seed_at)["status"], "succeeded")
         return self.seed
+
+    def test_new_current_same_series_fx_after_callback_extends_the_saved_us_model(self):
+        from worker.investor.data_evidence import store_source
+        self.model(market="US")
+        result,calls,_=self.watch(start="2026-01-04T20:58:00.000Z",end="2026-01-04T21:01:02.000Z")
+        self.assertEqual((result["status"],calls),("succeeded",1))
+        old=self.db.execute("SELECT r.* FROM investor_data_reviews r JOIN investor_data_sources s ON s.id=r.source_id WHERE s.kind='fx' AND json_extract(r.document_json,'$.facts.monitor_series') IS NOT NULL").fetchone()
+        facts=deepcopy(json.loads(old["document_json"])["facts"])
+        facts["rows"].append({"observed_at":"2026-01-04T20:00:00Z","assumed_available_at":"2026-01-04T20:01:00Z","value":"1.3"})
+        at="2026-01-04T21:01:02.000Z"
+        source=store_source(self.db,"w","synthetic-investor","fx",{"title":"FICTIONAL current FX","reference":"synthetic://feed/current-fx","excerpt":"Invented software fixture, not a supplier permission"},now=at)
+        current=review_source(self.db,"w","synthetic-investor",source["id"],"approved",facts,"Fictional explicit append-only source review",fixtures.EXPIRY,now=at)
+        run_pending_once(self.db,"fictional-fx-core",clock=lambda:at)
+        admission=self.db.execute("SELECT * FROM investor_confirmed_feed_admissions").fetchone()
+        self.assertEqual(admission["status"],"admitted")
+        latest=self.db.execute("SELECT * FROM investor_monitor_evidence_inputs WHERE id=?",(admission["input_id"],)).fetchone()
+        document=json.loads(latest["document_json"])
+        fx_ids=[row["review_id"] for row in document["segments"][0]["snapshot"]["review_refs"] if row["review_id"] in (old["id"],current["id"])]
+        self.assertEqual(fx_ids,[current["id"]]);self.assertEqual(document["settings"],json.loads(self.seed["document_json"])["settings"])
+        self.assertEqual(self.db.execute("SELECT count(*) FROM investor_models").fetchone()[0],1)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM investor_evidence_model_checkpoints").fetchone()[0],2)
+        self.assert_no_finance()
 
     def watch(self, *, start=START, end=END, bars=None, during=None, stop_requested=None, late_failure=False):
         times = [start]
