@@ -257,6 +257,11 @@
       "version": 51,
       "file": "0051_investor_calendar_continuation.sql",
       "sha256": "fd4767ad730598bf7288b131d563d2e9a69f512f6b1c6035534e40a12a080c1e"
+    },
+    {
+      "version": 52,
+      "file": "0052_investor_eodhd_drafts.sql",
+      "sha256": "e9a3f199b35cf64d46aa105607f99f7d48d23cf9b0a24be9567e17fc7b9a9736"
     }
   ]
 }

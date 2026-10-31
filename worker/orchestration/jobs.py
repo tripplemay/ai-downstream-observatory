@@ -86,11 +86,16 @@ def claim_job(connection, owner, lease_seconds=60, job_type=None, now=None):
             SELECT 1 FROM job_runs active WHERE active.job_type IN ('market_collect_prices','investor_confirmed_watch','investor_initial_prices')
               AND active.status='running' AND active.lease_until>?))"""
         parameters.append(current)
-        query += """ AND (job_type NOT IN ('market_collect_prices','investor_initial_prices','investor_current_fx','investor_issuer_capture') OR NOT EXISTS (
+        query += """ AND (job_type NOT IN ('market_collect_prices','investor_initial_prices','investor_current_fx','investor_issuer_capture','investor_eodhd_capture') OR NOT EXISTS (
             SELECT 1 FROM job_runs reserved JOIN investor_confirmed_feed_requests r ON r.id=reserved.period AND r.workspace_id=reserved.scope
             WHERE reserved.job_type='investor_confirmed_watch' AND reserved.status IN ('queued','retry_queued') AND r.latest_start>=?
               AND reserved.not_before<=?))"""
         parameters.extend([current, stamp(instant(current) + timedelta(seconds=120))])
+        # An unknown EODHD outcome must close its day before another call starts.
+        query += """ AND (job_type!='investor_eodhd_capture' OR NOT EXISTS (
+            SELECT 1 FROM job_runs active WHERE active.job_type='investor_eodhd_capture'
+              AND active.status='running' AND active.lease_until>?))"""
+        parameters.append(current)
         if isinstance(job_type, tuple):
             if not job_type or any(not isinstance(value, str) or not value for value in job_type):
                 raise WorkbenchError("INVALID_JOB_TYPE_FILTER")

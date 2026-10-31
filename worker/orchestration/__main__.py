@@ -44,6 +44,8 @@ def main(argv=None):
                 _credentials()
             except Exception:
                 raise WorkbenchError("LONGPORT_RUNTIME_NOT_CONFIGURED") from None
+            from worker.market.providers.eodhd_capture import check_runtime_configuration
+            check_runtime_configuration()
         connection = open_database(args.db)
         discovery_state = DiscoveryState()
         collection_discovery_state = CollectionDiscoveryState()
