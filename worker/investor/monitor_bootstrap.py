@@ -103,11 +103,11 @@ def _check_fx_selection(db, workspace, definition, windows, settings, at):
 
 
 def _plan_bootstrap(db, workspace, model_id, at):
-    model, definition, reference = current_monitor_model(db, workspace, model_id, at)
-    targets = {target["listing_id"]: target for target in reference["targets"]}
+    _assert(db.execute("SELECT 1 FROM investor_models WHERE id=? AND workspace_id=?", (model_id, workspace)).fetchone(), "INVESTOR_DATA_OUT_OF_SCOPE")
     earliest = (instant(at) - timedelta(seconds=MAX_QUOTE_AGE_SECONDS)).date().isoformat()
     # Cheap headers bound the first-input search; every selected receipt is then
     # replayed. It never calls a provider or picks a price from mutable latest rows.
+    # An empty search cannot admit anything and needs no historical rebuild.
     rows = db.execute("""SELECT 'historical' kind,c.id,c.created_at FROM investor_price_captures c
         JOIN investor_price_payloads p ON p.capture_id=c.id WHERE c.workspace_id=? AND c.qualification='isolated_official_sdk'
           AND c.created_at<=? AND c.retain_until>? AND json_extract(c.receipt_json,'$.request.end_date')>=?
@@ -116,6 +116,9 @@ def _plan_bootstrap(db, workspace, model_id, at):
           AND c.status='complete' AND c.created_at<=? AND c.retain_until>?
         ORDER BY created_at DESC,id LIMIT ?""", (workspace, at, at, earliest, workspace, at, at, MAX_CAPTURE_CANDIDATES + 1)).fetchall()
     _assert(len(rows) <= MAX_CAPTURE_CANDIDATES, "INVESTOR_BOOTSTRAP_SOURCE_LIMIT")
+    _assert(rows, "INVESTOR_BOOTSTRAP_PRICES_NOT_READY")
+    model, definition, reference = current_monitor_model(db, workspace, model_id, at)
+    targets = {target["listing_id"]: target for target in reference["targets"]}
     candidates = []
     for row in rows:
         candidate = _candidate(db, workspace, row, targets, at)

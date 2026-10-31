@@ -26,11 +26,13 @@ CODES = {"collected": "INITIAL_PRICE_COLLECTED", "already_available": "INITIAL_P
 
 def _context(db, workspace, model_id, at):
     model, definition, reference = current_monitor_model(db, workspace, model_id, at)
-    _assert(reference_source_current(db, workspace, model["plan_id"], at, verify_result=True))
+    # Fixed references already verify the full source/result binding above.
+    if definition["schema_version"] != "investor-model-definition-v2":
+        _assert(reference_source_current(db, workspace, model["plan_id"], at, verify_result=True))
     control = _latest(db, "investor_model_controls", model_id, "version DESC")
     _assert(control and control["enabled"] == 1 and control["created_at"] <= at)
     _assert(not db.execute("SELECT 1 FROM investor_monitor_evidence_inputs WHERE model_id=?", (model_id,)).fetchone())
-    source = resolve_evidence_input(db, workspace, reference["reference_evidence"]["source_input_id"], now=at)
+    source = resolve_evidence_input(db, workspace, reference["reference_evidence"]["source_input_id"], now=at, header_only=True)
     authorities = {}
     for ref in source["document"]["snapshot"]["capture_refs"]:
         row = db.execute("SELECT * FROM investor_price_captures WHERE id=? AND workspace_id=?", (ref["capture_id"], workspace)).fetchone()
