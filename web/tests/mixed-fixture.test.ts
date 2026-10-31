@@ -13,9 +13,9 @@ import { recordFact, revision } from "../src/server/ledger/service";
 
 const actor = { id: "owner", kind: "human" as const };
 const root = path.resolve("..");
-function fixture() {
+function fixture(now?: string) {
   const directory = mkdtempSync(path.join(tmpdir(), "etf-mixed-fixture-test-"));
-  const input = { filename: path.join(directory, "workbench.db"), dataDir: path.join(directory, "data"), history: 30, listings: 10, marketRows: 50 };
+  const input = { filename: path.join(directory, "workbench.db"), dataDir: path.join(directory, "data"), history: 30, listings: 10, marketRows: 50, now };
   try { return { directory, input, value: createWorkbenchMixedFixture(input), close: () => rmSync(directory, { recursive: true, force: true }) }; }
   catch (error) { rmSync(directory, { recursive: true, force: true }); throw error; }
 }
@@ -44,6 +44,25 @@ test("mixed fixture is fresh, bounded, current and contains no measured successf
     assert.throws(() => createWorkbenchMixedFixture({ ...f.input, filename: "relative.db" }), /TEMP_PATH_REQUIRED/);
     assert.throws(() => createWorkbenchMixedFixture({ ...f.input, now: "2026-01-01T00:00:00.000Z" }), /CURRENT_CLOCK_REQUIRED/);
   } finally { db.close(); f.close(); }
+});
+
+test("mixed fixture date-only facts always precede the reconciliation cutoff day at UTC and leap-day boundaries", t => {
+  for (const now of ["2026-11-01T00:00:00.000Z", "2026-11-01T00:04:59.999Z", "2026-11-01T00:05:00.000Z",
+    "2026-11-01T00:05:00.999Z", "2026-11-01T00:05:01.000Z", "2028-03-01T00:05:00.000Z"]) {
+    const clock = t.mock.method(Date, "now", () => Date.parse(now));
+    let f: ReturnType<typeof fixture> | undefined;
+    try {
+      f = fixture(now);
+      const cutoff = new Date(Date.parse(f.value.clock.seeded_at) - 1000).toISOString();
+      assert.ok(f.value.clock.effective_date < cutoff.slice(0, 10), now);
+      const db = openWorkbench(f.value.filename);
+      try {
+        assert.equal((db.prepare("SELECT count(*) n FROM ledger_events WHERE effective_at=? AND time_precision='date'").get(f.value.clock.effective_date) as { n: number }).n, 30);
+        assert.deepEqual(db.pragma("foreign_key_check"), []);
+        assert.equal(db.pragma("integrity_check", { simple: true }), "ok");
+      } finally { db.close(); }
+    } finally { f?.close(); clock.mock.restore(); }
+  }
 });
 
 test("mixed templates keep market and valuation scopes separate from approval and small ledger CAS", () => {

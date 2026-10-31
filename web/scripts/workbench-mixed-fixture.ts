@@ -53,7 +53,10 @@ export function createWorkbenchMixedFixture(input: MixedFixtureOptions) {
   closeSync(openSync(filename, "wx", 0o600));
   const migration = migrateWorkbench(filename), db = openWorkbench(filename);
   const at = new Date(Date.parse(now) - 300000).toISOString(), observedAt = new Date(Date.parse(now) - 120000).toISOString();
-  const effectiveDate = new Date(Date.parse(now) - 86400000).toISOString().slice(0, 10);
+  const cutoff = new Date(Date.parse(at) - 1000).toISOString();
+  // Date-only seed facts must precede the cutoff's completed UTC day, including
+  // the first five minutes after midnight and the seed's exact midnight.
+  const effectiveDate = new Date(Date.parse(cutoff) - 86400000).toISOString().slice(0, 10);
   const validUntil = new Date(Date.parse(now) + 86400000).toISOString();
   const options = { dataDir, now: at };
   try {
@@ -110,7 +113,6 @@ export function createWorkbenchMixedFixture(input: MixedFixtureOptions) {
           risk_classification: { index_id: "synthetic-mixed-index", region: portfolio === portfolios.approval ? "CN" : "US", sector: "broad" } } }, { now: utc6(at) });
     }
     const envelope = (key: string) => ({ portfolio_id: portfolios.approval, expected_revision: 1, idempotency_key: key, reason: notice });
-    const cutoff = new Date(Date.parse(at) - 1000).toISOString();
     reconcileAccount(db, human, { portfolio_id: portfolios.approval, account_id: approvalAccount, expected_revision: 1,
       attachment_id: attach({ schema_version: 1, portfolio_id: portfolios.approval, account_id: approvalAccount, cutoff_at: cutoff,
         coverage: { currencies: ["CNY"], ledger_accounts: [...RECONCILIATION_BALANCES], positions_complete: true, balances_complete: true },
