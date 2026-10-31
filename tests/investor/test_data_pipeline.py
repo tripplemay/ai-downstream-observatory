@@ -14,6 +14,12 @@ from worker.investor import data_pipeline
 from worker.investor import history_collection
 from worker.investor.data_evidence import review_source
 from worker.market.providers import longport
+from tests.investor.test_issuer_sources import Collector, policy as issuer_policy, START as ISSUER_START, END as ISSUER_END
+from worker.investor import issuer_sources
+from tests.investor.test_managed_fx import Collector as FxCollector, policy as fx_policy, AT as FX_AT
+from worker.investor import managed_fx
+from worker.orchestration.runtime import run_pending_once
+from worker.orchestration.db import stamp
 
 
 NOW, EXPIRY, START, END = evidence.NOW, evidence.EXPIRY, evidence.START, evidence.END
@@ -67,6 +73,94 @@ class DataPipelineCliTests(unittest.TestCase):
             status, out, error = self.invoke("store-source", "--kind", "rights", "--file", self.file(body))
             self.assertEqual((status, out), (1, "")); self.assertNotIn("PRIVATE-FIXTURE", error)
         self.assertEqual(self.db.execute("SELECT count(*) FROM investor_data_sources").fetchone()[0], 0)
+
+    def test_issuer_cli_explicit_private_policy_enable_capture_inspect_and_withdraw_is_metadata_only(self):
+        policy=issuer_policy(clause_references=["PRIVATE-FIXTURE-NOT-PROVIDER-CERTIFICATION"])
+        with patch.object(issuer_sources.receiver,"collect_vanguard_distribution_draft",
+                side_effect=lambda **request:Collector(stamp())(**request)) as transport, \
+                patch.object(longport,"read_private_credentials_file") as credentials:
+            status,out,error=self.invoke("register-issuer-authority","--file",self.file(json.dumps(policy)))
+            self.assertEqual((status,error),(0,"")); authority=json.loads(out)["authority_id"]
+            self.assertFalse(json.loads(out)["enabled"]); self.assertNotIn("PRIVATE-FIXTURE",out)
+            args=("collect-issuer-draft","--authority",authority,"--request-key","a"*32,"--start",ISSUER_START,"--end",ISSUER_END)
+            status,out,error=self.invoke(*args)
+            self.assertEqual((status,out),(1,""));self.assertIn("AUTHORITY_INACTIVE",error);transport.assert_not_called()
+            status,out,error=self.invoke("control-issuer-authority","--authority",authority,"--enable")
+            self.assertEqual((status,error),(0,"")); self.assertTrue(json.loads(out)["enabled"])
+            status,out,error=self.invoke(*args)
+            self.assertEqual((status,error),(0,"")); result=json.loads(out); capture=result["capture_id"]
+            self.assertEqual(result["status"],"captured"); self.assertFalse(result["automatic_retry_permitted"])
+            self.assertEqual(transport.call_count,1)
+            status,out,error=self.invoke("inspect-issuer-request","--request-key","a"*32)
+            self.assertEqual((status,error),(0,""));self.assertEqual(json.loads(out),result)
+            status,out,error=self.invoke("check-issuer-capture","--capture",capture)
+            self.assertEqual((status,error),(0,"")); metadata=json.loads(out)
+            self.assertFalse(metadata["market_values_output"]);self.assertFalse(metadata["research_admitted"])
+            for forbidden in ("records","amount","source_url","clause_references","raw_base64"):
+                self.assertNotIn(forbidden,metadata)
+            before=self.db.total_changes
+            status,out,error=self.invoke(*args)
+            self.assertEqual((status,error),(0,"")); self.assertEqual(json.loads(out),result)
+            self.assertEqual(transport.call_count,1);self.assertEqual(self.db.total_changes,before)
+            self.invoke("control-issuer-authority","--authority",authority,"--disable")
+            status,out,error=self.invoke("purge-issuer-capture","--capture",capture)
+            self.assertEqual((status,error),(0,""));self.assertFalse(json.loads(out)["backup_purge_verified"])
+            self.assertEqual(self.db.execute("SELECT count(*) FROM investor_issuer_payloads").fetchone()[0],0)
+            credentials.assert_not_called()
+        self.assert_no_finance()
+
+    def test_issuer_cli_rejects_public_private_inputs_and_all_endpoint_clock_or_test_overrides(self):
+        path=Path(self.file(json.dumps(issuer_policy())));path.chmod(0o644)
+        status,out,error=self.invoke("register-issuer-authority","--file",str(path))
+        self.assertEqual((status,out),(1,""));self.assertIn("PRIVATE_FILE_REQUIRED",error)
+        args=("collect-issuer-draft","--authority","missing","--request-key","a"*32,"--start",ISSUER_START,"--end",ISSUER_END)
+        for override in ("--url","--now","--allow-synthetic","--test-collector","--credentials-file"):
+            with self.assertRaises(SystemExit):self.invoke(*args,override,"FICTIONAL")
+        self.assertEqual(self.db.execute("SELECT count(*) FROM investor_issuer_requests").fetchone()[0],0)
+
+    def test_managed_fx_private_cli_controls_and_inspects_metadata_but_never_fetches_or_exposes_rates(self):
+        doc = fx_policy(clause_references=["PRIVATE-FIXTURE-STANDING-RULE"])
+        original_clock = managed_fx._clock
+        with patch.object(managed_fx, "_clock", side_effect=lambda value=None: original_clock(FX_AT if value is None else value)), \
+                patch.object(managed_fx.receiver, "collect_current_fx_draft", side_effect=FxCollector()) as transport, \
+                patch.object(longport, "read_private_credentials_file") as credentials:
+            status, out, error = self.invoke("register-fx-authority", "--file", self.file(json.dumps(doc)))
+            self.assertEqual((status, error), (0, "")); authority = json.loads(out)["authority_id"]
+            self.assertFalse(json.loads(out)["enabled"]); self.assertNotIn("PRIVATE-FIXTURE", out)
+            transport.assert_not_called()
+            status, out, error = self.invoke("control-fx-authority", "--authority", authority, "--enable")
+            self.assertEqual((status, error), (0, "")); self.assertTrue(json.loads(out)["enabled"])
+            transport.assert_not_called()
+            result = run_pending_once(self.db, "fictional-cli-source-provider", role="longport", lease_seconds=180, clock=lambda: FX_AT)
+            self.assertEqual(result["status"], "succeeded"); self.assertEqual(transport.call_count, 1)
+            run_pending_once(self.db, "fictional-cli-source-core", role="core", clock=lambda: FX_AT)
+            status, out, error = self.invoke("inspect-fx-request", "--feed-day", "2026-01-03")
+            self.assertEqual((status, error), (0, "")); request = json.loads(out)
+            self.assertEqual(request["status"], "captured"); self.assertFalse(request["automatic_retry_permitted"])
+            capture = request["capture_id"]
+            for command, key, identifier in (("check-fx-capture", "--capture", capture), ("check-fx-head", "--authority", authority)):
+                status, out, error = self.invoke(command, key, identifier)
+                self.assertEqual((status, error), (0, "")); metadata = json.loads(out)
+                self.assertFalse(metadata["market_values_output"])
+                for forbidden in ("facts", "rows", "payload", "raw_base64", "clause_references"): self.assertNotIn(forbidden, metadata)
+                self.assertNotIn("PRIVATE-FIXTURE", out)
+            self.invoke("control-fx-authority", "--authority", authority, "--disable")
+            status, out, error = self.invoke("purge-fx-capture", "--capture", capture)
+            self.assertEqual((status, error), (0, "")); self.assertFalse(json.loads(out)["backup_purge_verified"])
+            self.assertEqual(self.db.execute("SELECT count(*) FROM investor_fx_payloads").fetchone()[0], 0)
+            self.assertEqual(transport.call_count, 1); credentials.assert_not_called()
+        self.assert_no_finance()
+
+    def test_managed_fx_cli_rejects_insecure_policy_and_endpoint_clock_synthetic_or_fetch_overrides(self):
+        source = Path(self.file(json.dumps(fx_policy()))); source.chmod(0o644)
+        status, out, error = self.invoke("register-fx-authority", "--file", str(source))
+        self.assertEqual((status, out), (1, "")); self.assertIn("PRIVATE_FILE_REQUIRED", error)
+        source.chmod(0o600)
+        for option in ("--url", "--now", "--allow-synthetic", "--credentials-file", "--test-collector"):
+            with self.assertRaises(SystemExit): self.invoke("register-fx-authority", "--file", str(source), option, "FICTIONAL")
+        with self.assertRaises(SystemExit): self.invoke("collect-fx-draft", "--authority", "fictional")
+        self.assertEqual(self.db.execute("SELECT count(*) FROM investor_fx_authorities").fetchone()[0], 0)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM investor_fx_requests").fetchone()[0], 0)
 
     def test_missing_rights_stop_collection_before_credential_read_or_sdk(self):
         refs = self.prepare(); facts = json.loads(refs[0]["document_json"])["facts"]; facts["uses"].remove("private_backup")
@@ -159,13 +253,13 @@ class DataPipelineCliTests(unittest.TestCase):
         self.assertEqual(self.db.total_changes, before)
         self.assert_no_finance()
 
-    def monitor_fixture(self, fixed_policy=False, confirmed_latest=False, external_ai=False, extra_closed_day=False):
+    def monitor_fixture(self, fixed_policy=False, confirmed_latest=False, external_ai=False, extra_closed_day=False, market="CN"):
         from tests.investor.test_monitor_data import InvestorMonitorDataTests, NOW as monitor_now
         from tests.investor.fixtures import profile
         from worker.orchestration.db import canonical_json, content_hash, transaction
         from worker.orchestration.runtime import run_pending_once
         queue.InvestorRuntimeTests.save(self, profile("0.30"))
-        evidence_fixture.create(self.db, "w", "synthetic-investor", fixed_policy_v2=fixed_policy)
+        evidence_fixture.create(self.db, "w", "synthetic-investor", fixed_policy_v2=fixed_policy, research_market=market)
         self.assertEqual(run_pending_once(self.db, "fictional", clock=lambda: NOW)["status"], "succeeded")
         row = self.db.execute("SELECT * FROM investor_reference_plans").fetchone()
         plan = json.loads(row["document_json"])
@@ -185,7 +279,7 @@ class DataPipelineCliTests(unittest.TestCase):
             self.db.execute("INSERT INTO investor_model_controls(id,workspace_id,model_id,version,enabled,actor_id,audit_id,created_at) VALUES('monitor-control','w',?,1,1,'synthetic-investor','monitor-select-audit',?)", (definition["model_id"], monitor_now))
         fixture = InvestorMonitorDataTests(methodName="test_three_market_different_closes_actual_receipt_time_and_newer_fx")
         fixture.db = self.db
-        _, windows, settings, refs = fixture.fixture(("CN", "CN"), identities=[target["listing_id"] for target in definition["targets"]],
+        _, windows, settings, refs = fixture.fixture((market, market), identities=[target["listing_id"] for target in definition["targets"]],
             roles=definition["fixed_policy"]["parameters"]["roles"] if fixed_policy else None, confirmed_latest=confirmed_latest, external_ai=external_ai, extra_closed_day=extra_closed_day)
         return definition, windows, settings, refs
 

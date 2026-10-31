@@ -34,12 +34,12 @@ class InvestorMonitorDataTests(unittest.TestCase):
         rights = self.reviewed("rights", {"provider": "longport", "account_region": "SG", "markets": list(dict.fromkeys(markets)),
             "uses": ["private_research", "private_retention", "private_display", "private_backup"] + (["external_ai"] if external_ai else []), "retention_days": 30,
             "valid_from": "2025-01-01T00:00:00Z", "valid_until": EXPIRY, "clause_references": ["Fictional rights only"]}, "rights")
-        windows, targets, references, calendar_cache, market_windows = [], [], [], {}, {}
+        windows, targets, references, calendar_cache, market_windows, fx_cache = [], [], [], {}, {}, {}
         for index, market in enumerate(markets):
             currency = {"CN": "CNY", "HK": "HKD", "US": "USD"}[market]
             identity, hour = identities[index] if identities else "fixture-" + market, {"CN": 7, "HK": 8, "US": 20}[market]
             mapping = {"listing_id": identity, "market": market, "currency": currency,
-                "provider_symbol": "501998.SH" if identity == "CN:ALPHA" else {"CN": "501999.SH", "HK": "9999.HK", "US": "FIC01.US"}[market]}
+                "provider_symbol": {"CN:ALPHA": "501998.SH", "US:BETA": "FIC02.US", "HK:ALPHA": "9998.HK"}.get(identity, {"CN": "501999.SH", "HK": "9999.HK", "US": "FIC01.US"}[market])}
             listing = self.reviewed("listing", {**mapping, "quantity_step": "1", "tradable_from": "2020-01-01T00:00:00Z", "tradable_until": None,
                 "product_type": "ETF", "leveraged": False, "inverse": False, "role": roles[identity] if roles else "growth", "fee_rate": "0.001", "fee_as_of": "2025-01-01",
                 "economic_exposure": "Fictional exposure", "historical_universe_basis": "retrospectively_selected_not_survivorship_free"}, identity + "-listing")
@@ -51,8 +51,9 @@ class InvestorMonitorDataTests(unittest.TestCase):
               + ([{"date": "2026-01-04", "kind": "closed", "close_at": None, "available_at": None, "settled_at": None, "settlement_rule_known_at": None}] if extra_closed_day else [])}, market + "-calendar")
             if market == "US":
                 facts = json.loads(calendar["document_json"])["facts"]
-                facts["days"][1].update(kind="closed", close_at=None, available_at=None, settled_at=None, settlement_rule_known_at=None)
-                calendar = review_source(self.db, self.workspace_id, "synthetic-investor", calendar["source_id"], "approved", facts, "Fictional US holiday only", EXPIRY, now=NOW)
+                if facts["days"][1]["kind"] != "closed":
+                    facts["days"][1].update(kind="closed", close_at=None, available_at=None, settled_at=None, settlement_rule_known_at=None)
+                    calendar = review_source(self.db, self.workspace_id, "synthetic-investor", calendar["source_id"], "approved", facts, "Fictional US holiday only", EXPIRY, now=NOW)
             calendar_cache[market] = calendar
             declared = [{"id": "fictional-dividend:" + identity, "listing_id": identity, "type": "dividend", "at": "2026-01-01T03:00:00Z",
                 "published_at": "2025-12-30T00:00:00Z", "source_evidence": "Fictional action only", "gross_per_unit": "1.1", "tax_per_unit": "0.1", "pay_at": "2026-01-02T01:00:00Z"},
@@ -92,9 +93,10 @@ class InvestorMonitorDataTests(unittest.TestCase):
                         "listing_review_id": listing["id"], "calendar_review_id": calendar["id"], "session_date": end}], watch_seconds=1)
             fx_ids = []
             if currency != "CNY":
-                fx = self.reviewed("fx", {"currency": currency, "unit": "CNY_per_unit_currency", "rows": [
+                fx = fx_cache.get(currency) or self.reviewed("fx", {"currency": currency, "unit": "CNY_per_unit_currency", "rows": [
                     {"observed_at": "2026-01-01T10:00:00Z", "assumed_available_at": "2026-01-01T10:01:00Z", "value": "1.2"},
                     {"observed_at": NOW[:10] + "T10:00:00Z", "assumed_available_at": NOW[:10] + "T10:01:00Z", "value": "1.25"}]}, currency + "-fx")
+                fx_cache[currency] = fx
                 fx_ids.append(fx["id"])
             if market in market_windows:
                 market_windows[market]["capture_ids"].append(capture["id"])

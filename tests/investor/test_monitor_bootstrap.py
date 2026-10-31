@@ -199,6 +199,16 @@ class MonitorBootstrapTests(unittest.TestCase):
             self.assertEqual(monitor_bootstrap.bootstrap_monitor_inputs(self.db, now=self.now), [])
         self.assertIsNone(self.source()); self.assert_no_finance()
 
+    def test_fx_selection_commit_fence_runs_before_admission_and_rolls_back_as_gap(self):
+        self.model()
+        revision = self.db.execute("SELECT revision FROM investor_workspaces").fetchone()[0]
+        with patch.object(monitor_bootstrap, "_check_fx_selection", side_effect=WorkbenchError("INVESTOR_BOOTSTRAP_FX_SELECTION_CHANGED")) as fence, \
+                patch.object(monitor_bootstrap, "admit_monitor_data") as admission:
+            self.assertEqual(monitor_bootstrap.bootstrap_monitor_inputs(self.db, now=self.now), [])
+        self.assertEqual(fence.call_count, 1); admission.assert_not_called()
+        self.assertIsNone(self.source()); self.assertEqual(self.db.execute("SELECT revision FROM investor_workspaces").fetchone()[0], revision)
+        self.assertEqual(self.gap()["code"], "MONITOR_BOOTSTRAP_EVIDENCE_GAP"); self.assert_no_finance()
+
     def test_resealed_old_research_run_cannot_supply_unverified_default_settings(self):
         self.model()
         run = self.db.execute("SELECT * FROM investor_research_runs").fetchone()

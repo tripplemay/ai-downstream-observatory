@@ -65,6 +65,8 @@ def resolve_checkpoint(db, workspace, definition, checkpoint_id, now):
         _assert(header["valid_until"] == expiry)
         source = resolve_monitor_data(db, workspace, definition, document, now=now, evaluated_at=header["created_at"])
         if source["unavailable_reason"]: return None, source["unavailable_reason"]
+        from .monitor_costs import verify_settings
+        verify_settings(db, workspace, definition, document["settings"], header["created_at"])
         stored = _payload(db, "investor_evidence_checkpoint_payloads", "checkpoint_id", header["id"], 4194304)
         funding = _funding_at(db, workspace, stored["funding_binding"], header["created_at"], now) if stored.get("schema_version") == "investor-evidence-model-checkpoint-v3" else None
         replay = advance_evidence_model(definition, source["projection"], previous, header["created_at"], input_hash=row["content_hash"],
@@ -103,6 +105,10 @@ def discover_evidence_monitor_requests(db, *, limit=100, now=None):
             _assert(control["enabled"] == 1 and control["created_at"] <= at and source["created_at"] <= at)
             previous = _latest(db, "investor_evidence_model_checkpoints", model["id"], "sequence DESC")
             _, document = monitor_evidence_document(db, model["workspace_id"], model["id"], source["id"], at)
+            from .monitor_costs import current_settings
+            try:
+                if current_settings(db, model["workspace_id"], definition, document["settings"], at) != document["settings"]: continue
+            except ValueError: continue
             projected = resolve_monitor_data(db, model["workspace_id"], definition, document, now=at)
             owner = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (model["workspace_id"],)).fetchone()
             try: funding = read_planned_funding_monitor(db, model["workspace_id"], owner[0], model["id"], now=at)
@@ -145,6 +151,10 @@ def _binding(db, job, now):
         current_checkpoint = _latest(db, "investor_evidence_model_checkpoints", model["id"], "sequence DESC")
         current = current_control["id"] == control["id"] and control["enabled"] == 1 and current_source["id"] == source["id"]
         current = current and (current_checkpoint["id"] if current_checkpoint else None) == request["checkpoint_id"]
+        if current:
+            from .monitor_costs import current_settings
+            try: current = current_settings(db, job["scope"], definition, document["settings"], now) == document["settings"]
+            except ValueError: current = False
         latest_funding = db.execute("SELECT id,content_hash FROM investor_funding_plans WHERE workspace_id=? ORDER BY version DESC LIMIT 1", (job["scope"],)).fetchone()
         funding = None
         if funded:

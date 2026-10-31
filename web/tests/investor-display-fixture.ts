@@ -20,7 +20,7 @@ function compile(url: URL) {
 
 // Actual component/hook code with controlled events and transport, not a DOM or native-browser acceptance.
 export function mountInvestorDisplay<P>(t: { after: (fn: () => void) => void }, source: URL, name: string, initial: P,
-  imports: Record<string, unknown>, start: number) {
+  imports: Record<string, unknown>, start: number, extraGlobals: Record<string, unknown> = {}) {
   let props = initial, wall = start, elapsed = 0, timerId = 0, cursor = 0, scheduled = false, mounted = true, tree: Tree;
   const timers = new Map<number, { callback: () => void; at: number; interval?: number }>(), hooks: unknown[] = [];
   const effects: { dependencies?: unknown[]; cleanup?: () => void }[] = []; let pending: (() => void)[] = [];
@@ -64,6 +64,7 @@ export function mountInvestorDisplay<P>(t: { after: (fn: () => void) => void }, 
       requests.push({ url, options, method: options.method ?? "GET", resolve, reject });
       for (const notify of [...requestWaiters]) notify();
     }),
+    ...extraGlobals,
   };
   function load(url: URL) {
     const module = { exports: {} as Record<string, (value: P) => Tree> };

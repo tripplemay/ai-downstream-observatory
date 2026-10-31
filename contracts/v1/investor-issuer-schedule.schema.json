@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-issuer-schedule.schema.json",
+  "$defs": {
+    "policy": {
+      "type": "object", "required": ["schema_version", "authority_id", "authority_hash", "lookback_days", "run_after_hour", "timezone", "valid_from", "valid_until", "standing_collection_authorized", "collection_scope", "automatic_retry_permitted"],
+      "properties": {
+        "schema_version": {"const": "investor-issuer-schedule-policy-v1"},
+        "authority_id": {"$ref": "common.schema.json#/$defs/id"}, "authority_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "lookback_days": {"type": "integer", "minimum": 1, "maximum": 3660}, "run_after_hour": {"type": "integer", "minimum": 0, "maximum": 23},
+        "timezone": {"const": "America/New_York"}, "valid_from": {"$ref": "common.schema.json#/$defs/instant"}, "valid_until": {"$ref": "common.schema.json#/$defs/instant"},
+        "standing_collection_authorized": {"const": true}, "collection_scope": {"const": "unapproved_distribution_draft_only"}, "automatic_retry_permitted": {"const": false}
+      }, "additionalProperties": false
+    },
+    "control": {
+      "type": "object", "required": ["schema_version", "schedule_id", "schedule_hash", "version", "enabled", "created_at"],
+      "properties": {"schema_version": {"const": "investor-issuer-schedule-control-v1"}, "schedule_id": {"$ref": "common.schema.json#/$defs/id"},
+        "schedule_hash": {"$ref": "common.schema.json#/$defs/hash"}, "version": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "enabled": {"type": "boolean"}, "created_at": {"$ref": "common.schema.json#/$defs/instant"}}, "additionalProperties": false
+    },
+    "request": {
+      "type": "object", "required": ["schema_version", "workspace_id", "schedule_id", "schedule_hash", "control_id", "control_hash", "issuer_request_id", "issuer_request_hash", "created_at", "valid_until"],
+      "properties": {"schema_version": {"const": "investor-issuer-scheduled-request-v1"}, "workspace_id": {"$ref": "common.schema.json#/$defs/id"},
+        "schedule_id": {"$ref": "common.schema.json#/$defs/id"}, "schedule_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "control_id": {"$ref": "common.schema.json#/$defs/id"}, "control_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "issuer_request_id": {"$ref": "common.schema.json#/$defs/id"}, "issuer_request_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "created_at": {"$ref": "common.schema.json#/$defs/instant"}, "valid_until": {"$ref": "common.schema.json#/$defs/instant"}}, "additionalProperties": false
+    },
+    "result": {
+      "type": "object", "required": ["schema_version", "workspace_id", "request_id", "request_hash", "job_id", "fencing_token", "capture_id", "capture_hash", "status", "created_at", "research_admitted"],
+      "properties": {"schema_version": {"const": "investor-issuer-scheduled-result-v1"}, "workspace_id": {"$ref": "common.schema.json#/$defs/id"},
+        "request_id": {"$ref": "common.schema.json#/$defs/id"}, "request_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "job_id": {"$ref": "common.schema.json#/$defs/id"}, "fencing_token": {"type": "integer", "minimum": 1},
+        "capture_id": {"$ref": "common.schema.json#/$defs/id"}, "capture_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "status": {"enum": ["captured", "transport_failed", "superseded"]}, "created_at": {"$ref": "common.schema.json#/$defs/instant"},
+        "research_admitted": {"const": false}}, "additionalProperties": false
+    }
+  }
+}

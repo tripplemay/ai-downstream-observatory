@@ -7,6 +7,7 @@ import { priceInstant, replayLongportProjection } from "../market-price-source";
 import { investorInstant } from "./schemas";
 import { validateInvestorSourceDocument } from "./kernel-contracts";
 import { readInvestorConfirmedCapture } from "./confirmed-source";
+import { managedFxReviewUnavailable, verifyManagedFxReview } from "./managed-fx-source";
 
 type Obj = Record<string, unknown>;
 type Row = { id: string; workspace_id: string; document_json: string; content_hash: string; created_at: string; actor_id: string; audit_id: string; valid_until: string; source_qualification: string };
@@ -63,6 +64,7 @@ function review(db: Database.Database, workspace: string, ref: Obj, now: string)
       && (facts.fee_as_of as string) <= row.created_at.slice(0, 10)
       && (!facts.tradable_until || priceInstant(facts.tradable_from) < priceInstant(facts.tradable_until)));
   }
+  if (source.kind === "fx") verifyManagedFxReview(db, workspace, row as unknown as Obj, facts, now);
   return { row, source, facts };
 }
 
@@ -84,6 +86,7 @@ function unavailable(db: Database.Database, workspace: string, document: Obj, no
     const latest = db.prepare("SELECT id FROM investor_data_reviews WHERE source_id=? ORDER BY version DESC LIMIT 1").get(row.source_id) as Obj;
     if (latest.id !== row.id || row.decision !== "approved") return "REFERENCE_SOURCE_NO_LONGER_CURRENT";
     if (now >= (row.valid_until as string)) return "REFERENCE_SOURCE_EXPIRED";
+    const managed = managedFxReviewUnavailable(db, workspace, row.id, now); if (managed) return managed;
   }
   for (const ref of list(snapshot.capture_refs, 1000)) {
     const versioned = snapshot.schema_version === "investor-monitor-price-snapshot-v1";

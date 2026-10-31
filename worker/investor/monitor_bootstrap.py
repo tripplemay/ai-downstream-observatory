@@ -13,15 +13,17 @@ from .model_runtime import _clock
 from .monitor_admission import admit_monitor_data, current_monitor_model
 from .reference_plan import reference_source_current
 from .source_inputs import resolve_evidence_input
+from .fx_selection import GAPS as FX_GAPS, select_current_fx
 
 
-VERSION = "investor-monitor-bootstrap-quality-v1"
+VERSION = "investor-monitor-bootstrap-quality-v2"
 MAX_QUOTE_AGE_SECONDS = 604800
 MAX_CAPTURE_CANDIDATES = 128
 MAX_REVIEW_CANDIDATES = 128
 GAPS = {"INVESTOR_BOOTSTRAP_SOURCE_LIMIT", "INVESTOR_BOOTSTRAP_IDENTITY_CHANGED", "INVESTOR_BOOTSTRAP_PRICES_NOT_READY",
     "INVESTOR_BOOTSTRAP_CALENDAR_AMBIGUOUS", "INVESTOR_BOOTSTRAP_PRICES_CONFLICT", "INVESTOR_BOOTSTRAP_LISTING_AMBIGUOUS",
-    "INVESTOR_BOOTSTRAP_CAPTURE_SCOPE_AMBIGUOUS", "INVESTOR_BOOTSTRAP_ACTIONS_NOT_UNIQUE", "INVESTOR_BOOTSTRAP_FX_NOT_UNIQUE"}
+    "INVESTOR_BOOTSTRAP_CAPTURE_SCOPE_AMBIGUOUS", "INVESTOR_BOOTSTRAP_ACTIONS_NOT_UNIQUE",
+    "INVESTOR_BOOTSTRAP_FX_SELECTION_CHANGED"} | FX_GAPS
 
 
 def _settings(db, workspace, model, definition, reference, at):
@@ -38,7 +40,9 @@ def _settings(db, workspace, model, definition, reference, at):
     settings = {"policy": {"version": VERSION, "weight_band": parameters["tolerance"]["weight"],
         "absolute_band_cny": parameters["tolerance"]["absolute_cny"], "max_fx_age_seconds": min(MAX_QUOTE_AGE_SECONDS, execution["max_fx_age_seconds"]), "costs": None},
         "funding_intent": None, "max_quote_age_seconds": MAX_QUOTE_AGE_SECONDS}
-    validate_contract(settings, "investor-monitor-data-input.schema.json", fragment="$defs/settings")
+    from .monitor_costs import current_settings
+    settings = current_settings(db, workspace, definition, settings, at)
+    validate_contract(settings, "investor-monitor-data-input-v3.schema.json" if "cost_assumptions" in settings else "investor-monitor-data-input.schema.json", fragment="$defs/settings")
     return settings
 
 
@@ -73,9 +77,29 @@ def _reviews(db, workspace, kind, at):
     rows = db.execute("""SELECT r.id FROM investor_data_reviews r JOIN investor_data_sources s ON s.id=r.source_id AND s.workspace_id=r.workspace_id
         WHERE r.workspace_id=? AND s.kind=? AND r.decision='approved' AND r.created_at<=? AND r.valid_until>?
           AND r.version=(SELECT max(version) FROM investor_data_reviews WHERE source_id=r.source_id)
-        ORDER BY r.created_at DESC,r.id LIMIT ?""", (workspace, kind, at, at, MAX_REVIEW_CANDIDATES + 1)).fetchall()
+          AND (s.kind!='fx' OR NOT EXISTS(SELECT 1 FROM investor_fx_publications p WHERE p.workspace_id=r.workspace_id
+                AND (p.usd_review_id=r.id OR p.hkd_review_id=r.id))
+            OR EXISTS(SELECT 1 FROM investor_fx_publications p JOIN investor_fx_authorities a ON a.id=p.authority_id AND a.workspace_id=p.workspace_id
+                JOIN investor_fx_controls control ON control.id=json_extract(p.document_json,'$.control_id') AND control.authority_id=a.id
+                WHERE p.workspace_id=r.workspace_id AND (p.usd_review_id=r.id OR p.hkd_review_id=r.id)
+                AND p.id=(SELECT id FROM investor_fx_publications head WHERE head.authority_id=p.authority_id AND head.status='published' ORDER BY head.sequence DESC LIMIT 1)
+                AND control.enabled=1 AND control.version=(SELECT max(version) FROM investor_fx_controls WHERE authority_id=a.id)
+                AND control.created_at<=? AND json_extract(a.document_json,'$.valid_from')<=? AND json_extract(a.document_json,'$.valid_until')>?))
+        ORDER BY r.created_at DESC,r.id LIMIT ?""", (workspace, kind, at, at, at, at, at, MAX_REVIEW_CANDIDATES + 1)).fetchall()
     _assert(len(rows) <= MAX_REVIEW_CANDIDATES, "INVESTOR_BOOTSTRAP_SOURCE_LIMIT")
     return [resolve_review(db, workspace, row["id"], kind, now=at) for row in rows]
+
+
+def _current_fx(db, workspace, targets, settings, at):
+    currencies = {row["currency"] for row in targets} - {"CNY"}
+    return select_current_fx(_reviews(db, workspace, "fx", at) if currencies else [], currencies,
+        at=at, max_age_seconds=settings["policy"]["max_fx_age_seconds"])
+
+
+def _check_fx_selection(db, workspace, definition, windows, settings, at):
+    chosen = _current_fx(db, workspace, definition["targets"], settings, at)
+    _assert(set(chosen.values()) == {identity for window in windows for identity in window["fx_review_ids"]},
+        "INVESTOR_BOOTSTRAP_FX_SELECTION_CHANGED")
 
 
 def _plan_bootstrap(db, workspace, model_id, at):
@@ -113,7 +137,9 @@ def _plan_bootstrap(db, workspace, model_id, at):
         if scope & covered: continue
         chosen.append(row); covered.update(scope)
     _assert(covered == set(targets), "INVESTOR_BOOTSTRAP_CAPTURE_SCOPE_AMBIGUOUS")
-    actions, rates = _reviews(db, workspace, "actions", at), _reviews(db, workspace, "fx", at)
+    settings = _settings(db, workspace, model, definition, reference, at)
+    actions = _reviews(db, workspace, "actions", at)
+    current_fx = _current_fx(db, workspace, targets.values(), settings, at)
     windows = []
     for market in sorted(calendars):
         day = calendars[market][1]
@@ -125,15 +151,13 @@ def _plan_bootstrap(db, workspace, model_id, at):
             _assert(len(matches) == 1, "INVESTOR_BOOTSTRAP_ACTIONS_NOT_UNIQUE")
             action_ids.append(matches[0]["review"]["id"])
         for currency in sorted({targets[identity]["currency"] for identity in identities} - {"CNY"}):
-            matches = [row for row in rates if row["facts"]["currency"] == currency]
-            _assert(len(matches) == 1, "INVESTOR_BOOTSTRAP_FX_NOT_UNIQUE")
-            fx_ids.append(matches[0]["review"]["id"])
+            fx_ids.append(current_fx[currency])
         window = {"capture_ids": sorted(row["id"] for row in selected if row["kind"] == "historical"),
             "action_review_ids": action_ids, "fx_review_ids": fx_ids, "start_date": day, "end_date": day}
         confirmed = sorted(row["id"] for row in selected if row["kind"] == "confirmed")
         if confirmed: window["confirmed_capture_ids"] = confirmed
         windows.append(window)
-    return model, definition, reference, windows, _settings(db, workspace, model, definition, reference, at)
+    return model, definition, reference, windows, settings
 
 
 def plan_bootstrap(db, workspace, model_id, at):
@@ -156,12 +180,13 @@ def bootstrap_monitor_inputs(db, *, limit=100, now=None, stop_requested=None):
         if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
         try:
             with transaction(db, immediate=False):
-                model, _, reference, windows, settings = plan_bootstrap(db, row["workspace_id"], row["id"], at)
+                model, definition, reference, windows, settings = plan_bootstrap(db, row["workspace_id"], row["id"], at)
             with transaction(db):
                 checked = _clock(now)
                 control = db.execute("SELECT * FROM investor_model_controls WHERE model_id=? ORDER BY version DESC LIMIT 1", (row["id"],)).fetchone()
                 _assert(control and control["enabled"] == 1 and control["created_at"] <= checked, "INVESTOR_BOOTSTRAP_MODEL_DISABLED")
                 if db.execute("SELECT 1 FROM investor_monitor_evidence_inputs WHERE model_id=?", (row["id"],)).fetchone(): continue
+                _check_fx_selection(db, row["workspace_id"], definition, windows, settings, checked)
                 actor = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (row["workspace_id"],)).fetchone()[0]
                 source = admit_monitor_data(db, row["workspace_id"], actor, row["id"], windows, settings, now=checked)
                 if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")

@@ -1,7 +1,7 @@
 """Invented sources and stubbed official transport, NEVER real market evidence."""
 
 import argparse
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 import tempfile
@@ -12,7 +12,7 @@ from tests.investor.fixtures import fixed_policy_input, research_input
 from worker.investor.data_evidence import collect_prices, review_source, store_source
 from worker.investor.source_inputs import admit_evidence_input
 from worker.market.providers import longport
-from worker.orchestration.db import WorkbenchError, canonical_json, instant, open_database
+from worker.orchestration.db import WorkbenchError, canonical_json, instant, open_database, stamp
 
 
 NOW = "2026-01-02T12:00:03.000Z"
@@ -20,9 +20,27 @@ EXPIRY = "2027-01-01T00:00:00.000Z"
 START, END = "2025-01-01", "2025-06-10"
 
 
-def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, funded_year=False, funded_calendar=False, external_ai=False, initial_monitor_calendar=False, bounded_execution_v3=False, browser_cent_tolerance=False, action_aware_execution_v4=False, event_review_execution_v5=False, train_execution_gap=False, settled_intent_execution_v6=False, train_settled_orphan=False, funded_settled_orphan=False):
+def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, funded_year=False, funded_calendar=False, external_ai=False, initial_monitor_calendar=False, bounded_execution_v3=False, browser_cent_tolerance=False, action_aware_execution_v4=False, event_review_execution_v5=False, train_execution_gap=False, settled_intent_execution_v6=False, train_settled_orphan=False, funded_settled_orphan=False, research_market="CN"):
     if initial_monitor_calendar and (funded_year or funded_calendar): raise WorkbenchError("SYNTHETIC_INITIAL_CALENDAR_CONFLICT")
     data, plan, policy = fixed_policy_input() if fixed_policy_v2 else research_input()
+    if research_market not in ("CN", "HK", "US"):
+        raise WorkbenchError("SYNTHETIC_RESEARCH_MARKET_INVALID")
+    if research_market != "CN":
+        if any((funded_year, funded_calendar, initial_monitor_calendar, bounded_execution_v3, action_aware_execution_v4,
+                event_review_execution_v5, settled_intent_execution_v6, train_execution_gap, train_settled_orphan, funded_settled_orphan)):
+            raise WorkbenchError("SYNTHETIC_FOREIGN_FIXTURE_SCOPE")
+        currency = {"HK": "HKD", "US": "USD"}[research_market]
+        shift = timedelta(hours=1 if research_market == "HK" else 14)
+        def foreign(value):
+            if isinstance(value, dict):
+                return {foreign(key): research_market if key == "market" else currency if key in ("currency", "unit") and item == "CNY" else foreign(item)
+                    for key, item in value.items()}
+            if isinstance(value, list): return [foreign(item) for item in value]
+            if isinstance(value, str):
+                if "T07:" in value or "T09:" in value: return stamp(instant(value) + shift)
+                return value.replace("CN:ALPHA", research_market + ":ALPHA").replace("CN:BETA", research_market + ":BETA")
+            return value
+        data, plan, policy = foreign(data), foreign(plan), foreign(policy)
     causal_event = event_review_execution_v5 or settled_intent_execution_v6
     if train_settled_orphan and (not settled_intent_execution_v6 or not fixed_policy_v2 or funded_year or funded_calendar):
         raise WorkbenchError('SYNTHETIC_SETTLED_ORPHAN_SCOPE')
@@ -85,10 +103,10 @@ def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, 
             "reference": "synthetic://stub-transport/" + label, "excerpt": "Invented software fixture, not provider rights, prices, eligibility or a real licence"}, now=now)
         return review_source(db, workspace, actor, source["id"], "approved", facts, "Fictional regression only", EXPIRY, now=now)
 
-    rights = reviewed("rights", {"provider": "longport", "account_region": "SG", "markets": ["CN"],
+    rights = reviewed("rights", {"provider": "longport", "account_region": "SG", "markets": [research_market],
         "uses": ["private_research", "private_retention", "private_display", "private_backup"] + (["external_ai"] if external_ai else []), "retention_days": 30,
         "valid_from": "2025-01-01T00:00:00Z", "valid_until": EXPIRY, "clause_references": ["FICTIONAL, not a licence"]}, "rights")
-    calendar_facts = {"market": "CN", "range_start": start_date, "range_end": end_date,
+    calendar_facts = {"market": research_market, "range_start": start_date, "range_end": end_date,
         "days": [{"date": row["session_date"], "kind": "full", "close_at": row["close_at"], "available_at": row["available_at"],
             "settled_at": data["settlements"][i]["settled_at"], "settlement_rule_known_at": "2023-12-01T00:00:00Z" if funded_year else "2024-12-01T00:00:00Z"}
             for i, row in enumerate(data["sessions"])]}
@@ -107,8 +125,9 @@ def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, 
             calendar_facts["days"].append(value); day += timedelta(days=1)
     calendar = reviewed("calendar", calendar_facts, "calendar")
     captures, actions, listings = [], [], []
-    for index, identity in enumerate(("CN:ALPHA", "CN:BETA")):
-        mapping = {"listing_id": identity, "provider_symbol": "501998.SH" if index == 0 else "501999.SH", "market": "CN", "currency": "CNY"}
+    for index, identity in enumerate((research_market + ":ALPHA", research_market + ":BETA")):
+        mapping = {"listing_id": identity, "provider_symbol": {"CN": ("501998.SH", "501999.SH"), "HK": ("9998.HK", "9999.HK"), "US": ("FIC01.US", "FIC02.US")}[research_market][index],
+            "market": research_market, "currency": {"CN": "CNY", "HK": "HKD", "US": "USD"}[research_market]}
         listing = reviewed("listing", {**mapping, "quantity_step": "1", "tradable_from": "2024-01-01T00:00:00Z", "tradable_until": None,
             "product_type": "ETF", "leveraged": False, "inverse": False, "role": "growth" if index == 0 else "defensive", "fee_rate": "0.001",
             "fee_as_of": "2024-01-01" if funded_year else "2025-01-01", "economic_exposure": "Fictional exposure", "historical_universe_basis": "retrospectively_selected_not_survivorship_free"}, identity)
@@ -127,7 +146,7 @@ def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, 
             candles = []
             for day in expected:
                 close = next(row["value"] for row in data["observations"] if row["listing_id"] == identity and row["observed_at"].startswith(day))
-                candles.append({"timestamp": instant(day + "T00:00:00Z").astimezone(ZoneInfo("Asia/Shanghai")).replace(hour=0),
+                candles.append({"timestamp": datetime.combine(date.fromisoformat(day), time(), tzinfo=ZoneInfo(longport._MARKETS[research_market][0])),
                     "open": Decimal(close), "high": Decimal(close), "low": Decimal(close), "close": Decimal(close),
                     "volume": 1000, "turnover": Decimal(close) * 1000, "trade_session": 0})
             projection = longport._normalize(candles, request=request, sdk_version="4.3.7", call_started_at=now, call_returned_at=now,
@@ -138,7 +157,12 @@ def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, 
                 capture = collect_prices(db, workspace, actor, rights["id"], listing["id"], calendar["id"], start.isoformat(), end.isoformat())
             captures.append(capture["id"])
             start = end + timedelta(days=1)
-    source = admit_evidence_input(db, workspace, actor, captures, actions, [], start_date, end_date, plan, policy, now=now) if admit else None
+    fx = []
+    if research_market != "CN":
+        facts = {"currency": currency, "unit": "CNY_per_unit_currency", "rows": [{"observed_at": stamp(instant(day["close_at"]) - timedelta(hours=1)),
+            "assumed_available_at": stamp(instant(day["close_at"]) - timedelta(minutes=59)), "value": "1.25"} for day in data["sessions"]]}
+        fx.append(reviewed("fx", facts, "historical-" + currency)["id"])
+    source = admit_evidence_input(db, workspace, actor, captures, actions, fx, start_date, end_date, plan, policy, now=now) if admit else None
     return {"source": source, "captures": captures, "actions": actions, "rights": rights, "listings": listings, "plan": plan, "policy": policy}
 
 
@@ -147,6 +171,7 @@ def main():
     parser.add_argument("--db", required=True)
     parser.add_argument("--now", default=NOW)
     parser.add_argument("--fixed-policy-v2", action="store_true")
+    parser.add_argument("--research-market", choices=("CN", "HK", "US"), default="CN", help="Fictional source market, never a real portfolio choice")
     parser.add_argument("--bounded-execution-v3", action="store_true", help="Explicit synthetic v3 plan; no production parameters")
     parser.add_argument("--action-aware-execution-v4", action="store_true", help="Invented v4 known-action deferral; never real evidence")
     parser.add_argument("--event-review-execution-v5", action="store_true", help="Invented v5 late-action review and explicit admission policy")
@@ -168,7 +193,7 @@ def main():
         rows = db.execute("SELECT id,owner_id FROM investor_workspaces").fetchall()
         if len(rows) != 1 or db.execute("SELECT count(*) FROM portfolios").fetchone()[0]:
             raise WorkbenchError("SYNTHETIC_EMPTY_FINANCIAL_DATABASE_REQUIRED")
-        create(db, rows[0]["id"], rows[0]["owner_id"], now=args.now, fixed_policy_v2=args.fixed_policy_v2, funded_year=args.funded_year,
+        create(db, rows[0]["id"], rows[0]["owner_id"], now=args.now, fixed_policy_v2=args.fixed_policy_v2, research_market=args.research_market, funded_year=args.funded_year,
             funded_calendar=args.funded_calendar, external_ai=args.external_ai, initial_monitor_calendar=args.initial_monitor_calendar, bounded_execution_v3=args.bounded_execution_v3, browser_cent_tolerance=args.browser_cent_tolerance, action_aware_execution_v4=args.action_aware_execution_v4, event_review_execution_v5=args.event_review_execution_v5, train_execution_gap=args.train_execution_gap, settled_intent_execution_v6=args.settled_intent_execution_v6, train_settled_orphan=args.train_settled_orphan, funded_settled_orphan=args.funded_settled_orphan)
         print(canonical_json({"status": "fictional_stub_evidence_fixture_complete", "real_provider_called": False}))
     finally:

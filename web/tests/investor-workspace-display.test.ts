@@ -37,7 +37,7 @@ function mount(t: { after: (fn: () => void) => void }, state = displayState(), v
       "lucide-react": Object.fromEntries(["ArrowRight", "CheckCircle2", "CircleHelp", "Clock3", "Eye", "ShieldCheck"].map(name => [name, name])),
       "@/components/ui/input": { Input: "Input" }, "@/components/session-boundary": { useSessionBoundary: () => null },
       "@/server/investor/schemas": schemas, "@/server/investor/loss-scenarios": losses, "./research-format": research, "./investor-client": client,
-      ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel", "history-panel"]
+      ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel", "history-panel", "monitor-cost-panel"]
         .map(name => { const component = "Investor" + name.split("-").map(value => value[0].toUpperCase() + value.slice(1)).join("");
           return ["./investor-" + name, { [component]: component }]; })),
       "./investor-acquisition": { acquisitionDeadlines, InvestorAcquisitionPanel: "InvestorAcquisitionPanel" },
@@ -320,4 +320,47 @@ test("an older background response or error cannot replace state or unlock a pen
     await h.reply(1, { error: "INVESTOR_REVISION_CONFLICT" }, 409);
     assert.equal(h.node("InvestorRiskPanel")!.props.disabled, false); assert.equal(h.requests.length, 2); h.close();
   }
+});
+
+function costDisplayState() {
+  const state = historicalDisplayState(true);
+  state.monitor_costs = { model_id: state.model_watch!.id, model_hash: "f".repeat(64), status: "unknown", version: 0, costs: null,
+    effective_from: null, valid_until: null, model_valid_until: state.model_watch!.valid_until, input_applied: false, editable: true,
+    basis: "owner_research_assumptions_not_verified_broker_tariff", trading_permission: false };
+  return state;
+}
+test("cost and funding edit locks are independent; another panel cleanup cannot unlock the active draft or background polling", async t => {
+  const h = mount(t, costDisplayState(), "plan"); await h.flush();
+  const lockCosts = async (value: boolean) => { (h.node("InvestorMonitorCostPanel")!.props.onEditingChange as (value: boolean) => void)(value); await h.flush(); };
+  await lockCosts(true); await h.fundingLock(false);
+  assert.equal(h.node("InvestorRiskPanel")!.props.disabled, true);
+  assert.equal(h.node("InvestorFundingPanel")!.props.disabled, true);
+  assert.equal(h.node("InvestorMonitorCostPanel")!.props.disabled, false);
+  assert.equal(h.button("刷新状态")!.props.disabled, true);
+  await h.advance(before + 5000); assert.equal(h.requests.length, 0);
+  await lockCosts(false); await h.fundingLock(true); await lockCosts(false);
+  assert.equal(h.node("InvestorRiskPanel")!.props.disabled, true);
+  assert.equal(h.node("InvestorFundingPanel")!.props.disabled, false);
+  assert.equal(h.node("InvestorMonitorCostPanel")!.props.disabled, true);
+  await h.fundingLock(false); assert.equal(h.node("InvestorRiskPanel")!.props.disabled, false);
+});
+test("fee submission releases only its own lock; lost response retries exact command and session invalidation clears it", async t => {
+  const state = costDisplayState(), h = mount(t, state, "plan"); await h.flush();
+  (h.node("InvestorMonitorCostPanel")!.props.onEditingChange as (value: boolean) => void)(true); await h.flush();
+  const intent = { action: "set_monitor_costs", model_id: state.model_watch!.id, model_hash: state.monitor_costs!.model_hash, expected_cost_version: 0,
+    costs: { commission_bps: "1", minimum_fee_cny: "1", fx_bps: "2", slippage_bps: "3", maximum_cost_fraction: "0.01" },
+    validity_days: 30, acknowledged_research_only: true };
+  (h.node("InvestorMonitorCostPanel")!.props.onCommand as (value: typeof intent) => void)(intent);
+  await h.waitRequests(1); assert.equal(h.requests[0].method, "POST");
+  assert.equal(JSON.parse(h.requests[0].options.body as string).action, "set_monitor_costs");
+  await h.fail(0); assert.equal(h.node("InvestorMonitorCostPanel")!.props.disabled, true);
+  await h.click("核对并重试原请求"); await h.waitRequests(2);
+  assert.equal(h.requests[1].options.body, h.requests[0].options.body);
+  assert.deepEqual(h.requests[1].options.headers, h.requests[0].options.headers);
+  await h.reply(1, { workspace_id: state.workspace_id, revision: state.revision + 1, action: "set_monitor_costs",
+    resource_id: "fictional-cost-receipt", audit_id: "fictional-cost-audit", session_binding: binding });
+  await h.waitRequests(3); assert.equal(h.requests[2].method, "GET");
+  await h.invalidate(); assert.doesNotMatch(h.text(), /研究监测费用假设/);
+  await h.reply(2, { ...state, revision: state.revision + 1, session_binding: binding });
+  assert.equal(h.node("InvestorMonitorCostPanel"), undefined); assert.match(h.text(), /登录状态已变化/);
 });

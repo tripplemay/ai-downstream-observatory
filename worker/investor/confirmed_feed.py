@@ -6,10 +6,10 @@ from zoneinfo import ZoneInfo
 
 from worker.market.contracts import validate_contract
 from worker.market.providers import longport, longport_confirmed as receiver
-from worker.orchestration.db import WorkbenchError, canonical_json, content_hash, instant, new_id, stamp, transaction
+from worker.orchestration.db import WorkbenchError, assert_writable, canonical_json, content_hash, instant, new_id, stamp, transaction
 from worker.orchestration.jobs import JobCommit, assert_lease, enqueue_job, enqueue_notification, heartbeat
 from . import confirmed_capture
-from .data_evidence import _assert, _audit, _audit_binding, _object, _owner
+from .data_evidence import _assert, _audit, _audit_binding, _object, _owner, resolve_review
 from .model_runtime import _clock, _latest
 from .monitor_admission import admit_monitor_data, current_monitor_model, latest_monitor_evidence, monitor_evidence_document
 from .monitor_data import resolve_monitor_data
@@ -295,6 +295,37 @@ def _merge_completed(db, workspace, model, windows, at):
             window.setdefault("confirmed_capture_ids", []).append(row["capture_id"]); window["end_date"] = row["session_date"]
 
 
+def _refresh_fx_windows(db, workspace, definition, windows, settings, at):
+    from .monitor_bootstrap import _current_fx
+    selected = _current_fx(db, workspace, definition["targets"], settings, at)
+    for market, window in windows:
+        currencies = {row["currency"] for row in definition["targets"] if row["market"] == market} - {"CNY"}
+        previous = [resolve_review(db, workspace, identifier, "fx", now=at) for identifier in window["fx_review_ids"]]
+        _assert({row["facts"]["currency"] for row in previous} == currencies, "CONFIRMED_FEED_FX_SCOPE_INVALID")
+        for prior in previous:
+            current = resolve_review(db, workspace, selected[prior["facts"]["currency"]], "fx", now=at)
+            if prior["review"]["id"] == current["review"]["id"]: continue
+            series = prior["facts"].get("monitor_series")
+            _assert(series is not None and current["facts"].get("monitor_series") == series,
+                "CONFIRMED_FEED_FX_AUTHORITY_REVIEW_REQUIRED")
+            # The shared selector checks retained same-series overlaps, including
+            # stale history; continuity is explicit, not inferred from equal rates.
+            _assert(max(instant(row["observed_at"]) for row in current["facts"]["rows"]) >=
+                max(instant(row["observed_at"]) for row in prior["facts"]["rows"]), "CONFIRMED_FEED_FX_TIME_REGRESSION")
+        window["fx_review_ids"] = [selected[currency] for currency in sorted(currencies)]
+
+
+def _admit_windows(db, workspace, actor, model_id, context, windows, at, stop_requested):
+    from .monitor_bootstrap import _check_fx_selection
+    from .monitor_costs import current_settings
+    if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
+    settings = current_settings(db, workspace, context[1], context[5]["settings"], at)
+    admitted = admit_monitor_data(db, workspace, actor, model_id, [window for _,window in windows], settings, now=at)
+    _check_fx_selection(db, workspace, context[1], [window for _,window in windows], settings, at)
+    if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
+    return admitted
+
+
 def admit_completed_feeds(db, *, limit=100, now=None, stop_requested=None):
     _assert(type(limit) is int and 1 <= limit <= 1000); at = _clock(now)
     with transaction(db):
@@ -306,16 +337,20 @@ def admit_completed_feeds(db, *, limit=100, now=None, stop_requested=None):
             _, request, spec = run_header(db, run, at)
             status, admitted = "blocked", None
             try:
-                _current(db, request, spec, at)
-                confirmed_capture.resolve_confirmed_capture(db, run["workspace_id"], run["capture_id"], now=at)
-                source = latest_monitor_evidence(db, run["workspace_id"], run["model_id"])
-                context = _seed(db, run["workspace_id"], run["model_id"], source["id"], at)
-                windows = _windows(db, run["workspace_id"], context[5])
-                _merge_completed(db, run["workspace_id"], run["model_id"], windows, at)
-                _assert(any(run["capture_id"] in window.get("confirmed_capture_ids", []) for _, window in windows), "CONFIRMED_FEED_INPUT_ALREADY_COVERED")
-                admitted = admit_monitor_data(db, run["workspace_id"], run["actor_id"], run["model_id"], [window for _, window in windows], context[5]["settings"], now=at)
+                with transaction(db):
+                    _current(db, request, spec, at)
+                    confirmed_capture.resolve_confirmed_capture(db, run["workspace_id"], run["capture_id"], now=at)
+                    source = latest_monitor_evidence(db, run["workspace_id"], run["model_id"])
+                    context = _seed(db, run["workspace_id"], run["model_id"], source["id"], at)
+                    windows = _windows(db, run["workspace_id"], context[5])
+                    _merge_completed(db, run["workspace_id"], run["model_id"], windows, at)
+                    _assert(any(run["capture_id"] in window.get("confirmed_capture_ids", []) for _, window in windows), "CONFIRMED_FEED_INPUT_ALREADY_COVERED")
+                    _refresh_fx_windows(db, run["workspace_id"], context[1], windows, context[5]["settings"], at)
+                    admitted = _admit_windows(db, run["workspace_id"], run["actor_id"], run["model_id"], context, windows, at, stop_requested)
                 status = "admitted"
-            except WorkbenchError:
+            except WorkbenchError as error:
+                if str(error) in ("WORKER_STOP_REQUESTED","WORKBENCH_READ_ONLY","RESTORE_PENDING_REVIEW"): raise
+                admitted = None
                 control = _latest(db, "investor_model_controls", run["model_id"], "version DESC")
                 if not control or control["id"] != request["control_id"]: status = "superseded"
             reason = {"admitted": "CONFIRMED_FEED_ADMITTED", "blocked": "CONFIRMED_FEED_INPUT_GAP", "superseded": "CONFIRMED_FEED_SUPERSEDED"}[status]
@@ -327,3 +362,58 @@ def admit_completed_feeds(db, *, limit=100, now=None, stop_requested=None):
             db.execute("INSERT INTO investor_confirmed_feed_admissions VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (run["id"], run["workspace_id"], run["model_id"], value["input_id"], status, canonical_json(value), digest, run["actor_id"], at, audit))
         return len(rows)
+
+
+def refresh_monitor_sources(db, *, limit=100, now=None, stop_requested=None):
+    """Recheck retained evidence after source arrival, never retry a provider.
+
+    Original feed admission outcomes stay immutable. A new valid monitor input
+    has its own ordinary admission/audit; no source approval or model reset.
+    """
+    _assert(type(limit) is int and 1 <= limit <= 1000); at = _clock(now); assert_writable(db)
+    if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
+    rows = db.execute("""SELECT m.*,i.id seed_id FROM investor_models m
+      JOIN investor_model_controls c ON c.model_id=m.id AND c.workspace_id=m.workspace_id
+      JOIN investor_monitor_evidence_inputs i ON i.model_id=m.id AND i.workspace_id=m.workspace_id
+      WHERE c.version=(SELECT max(version) FROM investor_model_controls WHERE model_id=m.id) AND c.enabled=1 AND c.created_at<=:at
+        AND m.profile_id=(SELECT id FROM investor_profiles WHERE workspace_id=m.workspace_id ORDER BY version DESC LIMIT 1)
+        AND m.plan_id=(SELECT plan_id FROM investor_plan_selections WHERE workspace_id=m.workspace_id ORDER BY created_at DESC,rowid DESC LIMIT 1)
+        AND json_extract(m.document_json,'$.data_mode')='reconstructed' AND json_extract(m.document_json,'$.valid_until')>:at
+        AND i.id=(SELECT id FROM investor_monitor_evidence_inputs WHERE model_id=m.id AND workspace_id=m.workspace_id ORDER BY created_at DESC,rowid DESC LIMIT 1)
+        AND (EXISTS(SELECT 1 FROM investor_confirmed_feed_runs r JOIN job_runs j ON j.id=r.job_id
+              WHERE r.model_id=m.id AND r.workspace_id=m.workspace_id AND r.status='complete' AND j.status='succeeded'
+                AND r.created_at>=i.created_at AND r.created_at<=:at
+                AND NOT EXISTS(SELECT 1 FROM json_each(i.document_json,'$.segments') s
+                  JOIN json_each(s.value,'$.snapshot.capture_refs') ref WHERE json_extract(ref.value,'$.capture_id')=r.capture_id))
+          OR EXISTS(SELECT 1 FROM investor_data_reviews r JOIN investor_data_sources s ON s.id=r.source_id AND s.workspace_id=r.workspace_id
+              WHERE r.workspace_id=m.workspace_id AND s.kind='fx' AND r.decision='approved' AND r.created_at>=i.created_at AND r.created_at<=:at
+                AND r.valid_until>:at AND r.version=(SELECT max(version) FROM investor_data_reviews WHERE source_id=r.source_id)
+                AND EXISTS(SELECT 1 FROM json_each(m.document_json,'$.targets') t WHERE json_extract(t.value,'$.currency')=json_extract(r.document_json,'$.facts.currency'))
+                AND NOT EXISTS(SELECT 1 FROM json_each(i.document_json,'$.segments') seg JOIN json_each(seg.value,'$.snapshot.review_refs') ref
+                  WHERE json_extract(ref.value,'$.review_id')=r.id)))
+      ORDER BY i.created_at,m.id LIMIT :limit""", {"at":at,"limit":limit}).fetchall()
+    refreshed = []
+    for row in rows:
+        try:
+            with transaction(db):
+                if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
+                head = latest_monitor_evidence(db, row["workspace_id"], row["id"])
+                if head is None or head["id"] != row["seed_id"]: continue
+                context = _seed(db, row["workspace_id"], row["id"], head["id"], at)
+                windows = _windows(db, row["workspace_id"], context[5]); before = canonical_json(windows)
+                _merge_completed(db, row["workspace_id"], row["id"], windows, at)
+                _refresh_fx_windows(db, row["workspace_id"], context[1], windows, context[5]["settings"], at)
+                if canonical_json(windows) == before: continue
+                actor = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (row["workspace_id"],)).fetchone()[0]
+                admitted = _admit_windows(db, row["workspace_id"], actor, row["id"], context, windows, at, stop_requested)
+                if admitted["id"] == head["id"]: continue
+                audit = {"schema_version":"investor-monitor-source-refresh-v1", "model_id":row["id"], "model_hash":row["content_hash"],
+                    "control_id":context[3]["id"], "previous_input_id":head["id"], "previous_input_hash":head["content_hash"],
+                    "input_id":admitted["id"], "input_hash":admitted["content_hash"], "created_at":at, "live_advice_eligible":False}
+                validate_contract(audit,SCHEMA,fragment="$defs/refresh")
+                _audit(db,actor,"investor_refresh_monitor_source","investor_monitor_evidence_input",admitted["id"],audit,at)
+                if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
+                refreshed.append(admitted["id"])
+        except WorkbenchError as error:
+            if str(error) in ("WORKER_STOP_REQUESTED","WORKBENCH_READ_ONLY","RESTORE_PENDING_REVIEW"): raise
+    return refreshed

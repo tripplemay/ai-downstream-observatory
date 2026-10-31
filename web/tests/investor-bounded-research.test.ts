@@ -5,6 +5,7 @@ import test from "node:test";
 import {hash} from "../src/server/ledger/service";
 import {replayBoundedComparison,type BoundedResearchPlan} from "../src/server/investor/bounded-research";
 import {verifyInvestorKernelResult} from "../src/server/investor/kernel-contracts";
+import {withInvestorKernelReadScope} from "../src/server/investor/kernel-read-scope";
 import type {ContinuousDataset} from "../src/server/investor/continuous-market";
 import type {ContinuousParameters} from "../src/server/investor/continuous-economics";
 import {investorActor as actor,investorFixture,saveSyntheticProfile,syntheticProfile} from "./investor-fixture";
@@ -31,6 +32,21 @@ test("kernel read verification recomputes v3 training summaries instead of trust
 test("completed v3 selection and all three phase receipts are independently replayable",()=>{
   const f=python("import json; from tests.research.bounded_fixtures import case; from tests.investor.fixtures import profile; from worker.investor.strategy import research_reference; d,p,s=case(); pref=profile('0.30'); print(json.dumps({'request':{'action':'research','dataset':d,'plan':p,'policy':s,'profile':pref},'result':research_reference(d,p,s,pref,allow_synthetic=True)}))");
   assert.equal(f.result.status,"reference_ready");assert.equal(verifyInvestorKernelResult(f.request,f.result).status,"reference_ready");
+});
+test("one read scope binds complete request/result bytes and still rejects resealed economics after a valid proof",()=>{
+  const f=python("import json; from tests.research.bounded_fixtures import case; from tests.investor.fixtures import profile; from worker.investor.strategy import research_reference; d,p,s=case(); pref=profile('0.30'); print(json.dumps({'request':{'action':'research','dataset':d,'plan':p,'policy':s,'profile':pref},'result':research_reference(d,p,s,pref,allow_synthetic=True)}))");
+  const reseal=(result:Record<string,unknown>)=>{const {result_hash:ignored,...body}=result;void ignored;return {...body,result_hash:hash(body)};};
+  withInvestorKernelReadScope(()=>{
+    assert.deepEqual(verifyInvestorKernelResult(f.request,f.result),f.result);
+    assert.deepEqual(verifyInvestorKernelResult(structuredClone(f.request),structuredClone(f.result)),f.result);
+    const altered=structuredClone(f.result);altered.candidates[0].train.profit_cny="999";
+    assert.throws(()=>verifyInvestorKernelResult(f.request,reseal(altered)),/RESULT_INVALID/);
+    const request=structuredClone(f.request);request.dataset.observations[0].value="999";
+    assert.throws(()=>verifyInvestorKernelResult(request,reseal({...f.result,dataset_hash:hash(request.dataset)})),/RESULT_INVALID/);
+    assert.equal(verifyInvestorKernelResult(f.request,f.result).status,"reference_ready");
+  });
+  const changed=structuredClone(f.result);changed.phase_evidence[1].profit_cny="999";
+  assert.throws(()=>verifyInvestorKernelResult(f.request,reseal(changed)),/RESULT_INVALID/);
 });
 test("admitted v3 source reaches current reference, save, monitoring, human review and stale-state guards through actual services",()=>{
   for(const funding of [false,true]) {

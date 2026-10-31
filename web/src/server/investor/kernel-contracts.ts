@@ -41,6 +41,8 @@ import referencePlan from "../../../../contracts/v1/investor-reference-plan.sche
 import referencePlanV2 from "../../../../contracts/v1/investor-reference-plan-v2.schema.json";
 import monitorDataInput from "../../../../contracts/v1/investor-monitor-data-input.schema.json";
 import monitorDataInputV2 from "../../../../contracts/v1/investor-monitor-data-input-v2.schema.json";
+import monitorDataInputV3 from "../../../../contracts/v1/investor-monitor-data-input-v3.schema.json";
+import monitorCosts from "../../../../contracts/v1/investor-monitor-costs.schema.json";
 import monitorPriceSnapshot from "../../../../contracts/v1/investor-monitor-price-snapshot.schema.json";
 import monitorDataProjection from "../../../../contracts/v1/investor-monitor-data-projection.schema.json";
 import evidenceCheckpoint from "../../../../contracts/v1/investor-evidence-model-checkpoint.schema.json";
@@ -77,6 +79,7 @@ import { verifyBoundedResearchSummary, type BoundedResearchPlan } from "./bounde
 import type { ContinuousDataset } from "./continuous-market";
 import type { ContinuousParameters } from "./continuous-economics";
 import { executionChecksUsable, phaseExecutionReview } from "./research-execution";
+import { verifyInvestorKernelProof } from "./kernel-read-scope";
 
 const ajv = new Ajv2020({ strict: true, strictRequired: false });
 addFormats(ajv);
@@ -84,7 +87,7 @@ for (const schema of [policyV2, policyV3, policyInput, strategyResultV2, strateg
 ajv.addSchema(boundedPlan); ajv.addSchema(actionAwarePlan); ajv.addSchema(eventReviewPlan); ajv.addSchema(planInput);
 for (const schema of [longHorizonInputV4, longHorizonResultV4, fundedHistoryInputV3, fundedHistoryResultV3]) ajv.addSchema(schema);
 for (const schema of [longHorizonInputV5, longHorizonResultV5, fundedHistoryInputV4, fundedHistoryResultV4]) ajv.addSchema(schema);
-for (const schema of [common, observation, dataset, plan, parameters, fixed, fixedV2, fixedPolicy, rotation, profile, policy, monitor, monitorV2, monitorV3, fixedPolicyState, request, strategyResult, assessment, assessmentV2, modelDefinition, modelDefinitionV2, modelSnapshot, modelCheckpoint, experiment, dataFacts, dataSnapshot, evidenceInput, referencePlan, referencePlanV2, monitorDataInput, monitorDataInputV2, monitorPriceSnapshot, monitorDataProjection, evidenceCheckpoint, evidenceCheckpointV2, evidenceCheckpointV3, evidenceMonitor, evidenceMonitorRequestV2, plannedFunding, fundingPlan, longHorizonInput, longHorizonResult, longHorizonInputV2, longHorizonResultV2, longHorizonInputV3, longHorizonResultV3, fundedHistoryInput, fundedHistoryResult, fundedHistoryInputV2, fundedHistoryResultV2]) ajv.addSchema(schema);
+for (const schema of [common, observation, dataset, plan, parameters, fixed, fixedV2, fixedPolicy, rotation, profile, policy, monitor, monitorV2, monitorV3, fixedPolicyState, request, strategyResult, assessment, assessmentV2, modelDefinition, modelDefinitionV2, modelSnapshot, modelCheckpoint, experiment, dataFacts, dataSnapshot, evidenceInput, referencePlan, referencePlanV2, monitorDataInput, monitorDataInputV2, monitorDataInputV3, monitorCosts, monitorPriceSnapshot, monitorDataProjection, evidenceCheckpoint, evidenceCheckpointV2, evidenceCheckpointV3, evidenceMonitor, evidenceMonitorRequestV2, plannedFunding, fundingPlan, longHorizonInput, longHorizonResult, longHorizonInputV2, longHorizonResultV2, longHorizonInputV3, longHorizonResultV3, fundedHistoryInput, fundedHistoryResult, fundedHistoryInputV2, fundedHistoryResultV2]) ajv.addSchema(schema);
 const validateRequest = ajv.getSchema(request.$id)!, validateStrategy = ajv.getSchema(strategyResult.$id)!, validateAssessment = ajv.getSchema(assessment.$id)!;
 type JsonObject = Record<string, unknown>;
 type Quote = { listing_id: string; market: "CN" | "HK" | "US"; currency: string; close: string; observed_at: string; known_at: string; expected_close_at: string; valid_until: string };
@@ -124,8 +127,10 @@ export function validateInvestorSourceDocument(kind: "facts" | "snapshot" | "mon
 }
 export function validateInvestorReferenceDocument(value: unknown) { requireTrue(ajv.getSchema((value as JsonObject | null)?.schema_version === "investor-reference-plan-v2" ? referencePlanV2.$id : referencePlan.$id)!(value)); }
 export function validateInvestorMonitorDataDocument(kind: "input" | "projection", value: unknown) {
-  requireTrue(ajv.getSchema(kind === "input" ? ((value as JsonObject | null)?.schema_version === "investor-monitor-data-input-v2" ? monitorDataInputV2.$id : monitorDataInput.$id) : monitorDataProjection.$id)!(value));
+  const version = (value as JsonObject | null)?.schema_version;
+  requireTrue(ajv.getSchema(kind === "input" ? (version === "investor-monitor-data-input-v3" ? monitorDataInputV3.$id : version === "investor-monitor-data-input-v2" ? monitorDataInputV2.$id : monitorDataInput.$id) : monitorDataProjection.$id)!(value));
 }
+export function validateInvestorMonitorCostRecord(value: unknown) { requireTrue(ajv.getSchema(monitorCosts.$id + "#/$defs/record")!(value)); }
 export function validateInvestorEvidenceCheckpoint(value: unknown) {
   const version = (value as JsonObject | null)?.schema_version;
   requireTrue(ajv.getSchema(version === "investor-evidence-model-checkpoint-v3" ? evidenceCheckpointV3.$id
@@ -175,66 +180,74 @@ export function verifyInvestorKernelResult(rawRequest: unknown, rawResult: unkno
       const version = object(input.plan).schema_version;
       requireTrue(version === "research-plan-v6" ? ajv.getSchema(strategyResultV3.$id)!(result)
         : version === "research-plan-v5" ? ajv.getSchema(strategyResultV2.$id)!(result) : validateStrategy(result));
-      for (const name of ["dataset", "plan", "policy", "profile"]) requireTrue(result[name + "_hash"] === hash(input[name]));
-      requireTrue(result.data_mode === object(input.dataset).mode);
-      const candidates = object(input.policy).candidates as JsonObject[];
-      const scenarios = object(input.policy).stress_scenarios as JsonObject[], roles = object(object(input.policy).roles);
-      for (const candidate of candidates) {
-        if (candidate.schema_version !== "research-fixed-rebalance-parameters-v2") continue;
-        const weights = object(candidate.weights), candidateRoles = object(candidate.roles);
-        requireTrue(Object.keys(weights).sort().join() === Object.keys(candidateRoles).sort().join());
-        requireTrue(Object.keys(weights).every(listing => candidateRoles[listing] === roles[listing]));
-        const threshold = new Decimal(candidate.class_drift_threshold as string);
-        requireTrue(threshold.gt(0) && threshold.lte(1));
-      }
-      const loss = object(input.profile).loss_tolerance as string | null;
-      const expected = new Map(candidates.map(row => [hash(row), row]));
-      const rows = result.candidates as JsonObject[];
-      requireTrue(new Set(rows.map(row => row.parameters_hash)).size === rows.length);
-      for (const row of rows) {
-        requireTrue(expected.has(row.parameters_hash as string));
-        requireTrue(hash(row.weights) === hash(expected.get(row.parameters_hash as string)!.weights));
-        requireTrue(object(row.train).phase === "train");
-        if (["research-plan-v3", "research-plan-v4", "research-plan-v5", "research-plan-v6"].includes(object(input.plan).schema_version as string)) verifyBoundedResearchSummary(input.dataset as ContinuousDataset,
-          input.plan as BoundedResearchPlan, expected.get(row.parameters_hash as string)! as unknown as ContinuousParameters, object(row.train), "train");
-        const stresses = row.stresses as JsonObject[];
-        requireTrue(stresses.length === scenarios.length);
-        for (const [index, scenario] of scenarios.entries()) {
-          const stress = stresses[index], returns = object(scenario.role_returns);
-          requireTrue(stress.id === scenario.id && stress.label === scenario.label);
-          let total = new Decimal(0);
-          for (const [listing, weight] of Object.entries(object(row.weights))) {
-            const shock = new Decimal(returns[roles[listing] as string] as string);
-            requireTrue(shock.gte(-1) && shock.lte(1));
-            total = total.plus(new Decimal(weight as string).times(shock));
+      verifyInvestorKernelProof(() => ["research-plan-v3", "research-plan-v4", "research-plan-v5", "research-plan-v6"].includes(version as string)
+        ? hash({
+          input, result, decimal: {
+            precision: Decimal.precision, rounding: Decimal.rounding,
+            minE: Decimal.minE, maxE: Decimal.maxE, toExpNeg: Decimal.toExpNeg, toExpPos: Decimal.toExpPos, modulo: Decimal.modulo
           }
-          numericEqual(stress.portfolio_return as string, total);
-        }
-        requireTrue(row.risk_budget_pass === (loss === null ? null : withinRisk(object(row.train), stresses, loss)));
-      }
-      if (result.status !== "insufficient_evidence") requireTrue(rows.length === candidates.length);
-      const phases = result.phase_evidence as JsonObject[];
-      requireTrue(phases.every((row, index) => row.phase === ["train", "validation", "holdout"][index]));
-      if (result.selected_parameters !== null) {
-        requireTrue(expected.has(hash(result.selected_parameters)));
-        requireTrue(loss !== null);
-        const chosen = rows.find(row => row.parameters_hash === hash(result.selected_parameters));
-        requireTrue(chosen && chosen.risk_budget_pass === true && phases.length > 0 && hash(phases[0]) === hash(chosen.train));
-        if (["research-plan-v3", "research-plan-v4", "research-plan-v5", "research-plan-v6"].includes(object(input.plan).schema_version as string)) for (const summary of phases.slice(1))
-          verifyBoundedResearchSummary(input.dataset as ContinuousDataset, input.plan as BoundedResearchPlan,
-            result.selected_parameters as ContinuousParameters, summary, summary.phase as "validation" | "holdout");
-        const eligible = rows.filter(row => row.risk_budget_pass === true).sort((a, b) => {
-          const left = object(a.train), right = object(b.train);
-          return new Decimal(right.annualized_unit_return as string).cmp(left.annualized_unit_return as string)
-            || new Decimal(right.max_drawdown as string).cmp(left.max_drawdown as string)
-            || new Decimal(left.buy_turnover_on_mean_observed_nav as string).add(left.sell_turnover_on_mean_observed_nav as string)
-              .cmp(new Decimal(right.buy_turnover_on_mean_observed_nav as string).add(right.sell_turnover_on_mean_observed_nav as string))
-            || (a.parameters_hash as string).localeCompare(b.parameters_hash as string, "en");
+        }) : null, () => {
+          for (const name of ["dataset", "plan", "policy", "profile"]) requireTrue(result[name + "_hash"] === hash(input[name]));
+          requireTrue(result.data_mode === object(input.dataset).mode);
+          const candidates = object(input.policy).candidates as JsonObject[];
+          const scenarios = object(input.policy).stress_scenarios as JsonObject[], roles = object(object(input.policy).roles);
+          for (const candidate of candidates) {
+            if (candidate.schema_version !== "research-fixed-rebalance-parameters-v2") continue;
+            const weights = object(candidate.weights), candidateRoles = object(candidate.roles);
+            requireTrue(Object.keys(weights).sort().join() === Object.keys(candidateRoles).sort().join());
+            requireTrue(Object.keys(weights).every(listing => candidateRoles[listing] === roles[listing]));
+            const threshold = new Decimal(candidate.class_drift_threshold as string);
+            requireTrue(threshold.gt(0) && threshold.lte(1));
+          }
+          const loss = object(input.profile).loss_tolerance as string | null;
+          const expected = new Map(candidates.map(row => [hash(row), row]));
+          const rows = result.candidates as JsonObject[];
+          requireTrue(new Set(rows.map(row => row.parameters_hash)).size === rows.length);
+          for (const row of rows) {
+            requireTrue(expected.has(row.parameters_hash as string));
+            requireTrue(hash(row.weights) === hash(expected.get(row.parameters_hash as string)!.weights));
+            requireTrue(object(row.train).phase === "train");
+            if (["research-plan-v3", "research-plan-v4", "research-plan-v5", "research-plan-v6"].includes(object(input.plan).schema_version as string)) verifyBoundedResearchSummary(input.dataset as ContinuousDataset,
+              input.plan as BoundedResearchPlan, expected.get(row.parameters_hash as string)! as unknown as ContinuousParameters, object(row.train), "train");
+            const stresses = row.stresses as JsonObject[];
+            requireTrue(stresses.length === scenarios.length);
+            for (const [index, scenario] of scenarios.entries()) {
+              const stress = stresses[index], returns = object(scenario.role_returns);
+              requireTrue(stress.id === scenario.id && stress.label === scenario.label);
+              let total = new Decimal(0);
+              for (const [listing, weight] of Object.entries(object(row.weights))) {
+                const shock = new Decimal(returns[roles[listing] as string] as string);
+                requireTrue(shock.gte(-1) && shock.lte(1));
+                total = total.plus(new Decimal(weight as string).times(shock));
+              }
+              numericEqual(stress.portfolio_return as string, total);
+            }
+            requireTrue(row.risk_budget_pass === (loss === null ? null : withinRisk(object(row.train), stresses, loss)));
+          }
+          if (result.status !== "insufficient_evidence") requireTrue(rows.length === candidates.length);
+          const phases = result.phase_evidence as JsonObject[];
+          requireTrue(phases.every((row, index) => row.phase === ["train", "validation", "holdout"][index]));
+          if (result.selected_parameters !== null) {
+            requireTrue(expected.has(hash(result.selected_parameters)));
+            requireTrue(loss !== null);
+            const chosen = rows.find(row => row.parameters_hash === hash(result.selected_parameters));
+            requireTrue(chosen && chosen.risk_budget_pass === true && phases.length > 0 && hash(phases[0]) === hash(chosen.train));
+            if (["research-plan-v3", "research-plan-v4", "research-plan-v5", "research-plan-v6"].includes(object(input.plan).schema_version as string)) for (const summary of phases.slice(1))
+              verifyBoundedResearchSummary(input.dataset as ContinuousDataset, input.plan as BoundedResearchPlan,
+                result.selected_parameters as ContinuousParameters, summary, summary.phase as "validation" | "holdout");
+            const eligible = rows.filter(row => row.risk_budget_pass === true).sort((a, b) => {
+              const left = object(a.train), right = object(b.train);
+              return new Decimal(right.annualized_unit_return as string).cmp(left.annualized_unit_return as string)
+                || new Decimal(right.max_drawdown as string).cmp(left.max_drawdown as string)
+                || new Decimal(left.buy_turnover_on_mean_observed_nav as string).add(left.sell_turnover_on_mean_observed_nav as string)
+                  .cmp(new Decimal(right.buy_turnover_on_mean_observed_nav as string).add(right.sell_turnover_on_mean_observed_nav as string))
+                || (a.parameters_hash as string).localeCompare(b.parameters_hash as string, "en");
+            });
+            requireTrue(eligible[0]?.parameters_hash === hash(result.selected_parameters));
+            if (result.status === "reference_ready") requireTrue(phases.every(row => withinRisk(row, chosen.stresses as JsonObject[], loss)));
+          }
+          if (result.status === "risk_options_ready") requireTrue(loss === null && rows.some(row => usableSummary(object(row.train))));
         });
-        requireTrue(eligible[0]?.parameters_hash === hash(result.selected_parameters));
-        if (result.status === "reference_ready") requireTrue(phases.every(row => withinRisk(row, chosen.stresses as JsonObject[], loss)));
-      }
-      if (result.status === "risk_options_ready") requireTrue(loss === null && rows.some(row => usableSummary(object(row.train))));
     } else {
       if (object(input.document).schema_version === "investor-model-monitor-v3") {
         requireTrue(ajv.getSchema(assessmentV2.$id)!(result));

@@ -27,7 +27,8 @@ QUALIFICATION = "owner_reviewed_reconstructed"
 def validate_monitor_data_document(document):
     _assert(type(document) is dict)
     schema = {"investor-monitor-data-input-v1": "investor-monitor-data-input.schema.json",
-        "investor-monitor-data-input-v2": "investor-monitor-data-input-v2.schema.json"}.get(document.get("schema_version"))
+        "investor-monitor-data-input-v2": "investor-monitor-data-input-v2.schema.json",
+        "investor-monitor-data-input-v3": "investor-monitor-data-input-v3.schema.json"}.get(document.get("schema_version"))
     _assert(schema is not None)
     validate_contract(document, schema)
 
@@ -45,8 +46,9 @@ def _time(value):
 
 
 def _settings(value):
+    _assert(type(value) is dict)
     validate_time_precision(value)
-    validate_contract(value, "investor-monitor-data-input.schema.json", fragment="$defs/settings")
+    validate_contract(value, "investor-monitor-data-input-v3.schema.json" if "cost_assumptions" in value else "investor-monitor-data-input.schema.json", fragment="$defs/settings")
     policy = value["policy"]
     _assert(0 <= decimal(policy["weight_band"]) <= 1 and decimal(policy["absolute_band_cny"]) >= 0)
     _cost_rates(policy["costs"])
@@ -54,7 +56,7 @@ def _settings(value):
 
 
 @financial
-def project_monitor_data(definition, source, reviews, settings, created_at):
+def project_monitor_data(definition, source, reviews, settings, created_at, *, cost_deadline=None):
     from .model_contracts import validate_definition, definition_basis
     validate_definition(definition)
     validate_time_precision(definition)
@@ -78,6 +80,7 @@ def project_monitor_data(definition, source, reviews, settings, created_at):
     fx_reviews = [row for row in reviews if row["source"]["kind"] == "fx"]
     _assert(len({row["facts"]["currency"] for row in fx_reviews}) == len(fx_reviews), "INVESTOR_DATA_MONITOR_FX_VERSIONS_CONFLICT")
     quotes, rates, coverage, events, gaps, deadlines = [], [], {}, [], [], [base_expiry]
+    if cost_deadline is not None: deadlines.append(instant(cost_deadline))
     dataset = source["dataset"]
     for market in sorted({row["market"] for row in targets.values()}):
         reviewed = calendars[market]
@@ -167,11 +170,13 @@ def project_monitor_data(definition, source, reviews, settings, created_at):
 
 
 def build_monitor_data(db, workspace_id, definition, windows, settings, *, now=None, snapshot_at=None):
+    from .monitor_costs import verify_settings
     checked = _milliseconds(now)
     frozen = checked if snapshot_at is None else _milliseconds(snapshot_at)
     _assert(type(windows) is list and 1 <= len(windows) <= 3)
     segments, catalogs, reviews, markets, observations, sessions = [], {}, {}, set(), {}, []
     with transaction(db, immediate=False):
+        cost_deadline = verify_settings(db, workspace_id, definition, settings, frozen)
         for window in windows:
             legacy = {"capture_ids", "action_review_ids", "fx_review_ids", "start_date", "end_date"}
             _assert(type(window) is dict and set(window) in (legacy, legacy | {"confirmed_capture_ids"}))
@@ -195,8 +200,9 @@ def build_monitor_data(db, workspace_id, definition, windows, settings, *, now=N
             segments.append({"snapshot": source["manifest"], "dataset_hash": source["dataset_hash"], "catalog_hash": content_hash(source["catalog"]), "valid_until": source["valid_until"]})
         merged = {"dataset": {"mode": "reconstructed", "observations": list(observations.values()), "sessions": sessions},
             "catalog": catalogs, "valid_until": min(row["valid_until"] for row in segments)}
-        projection = project_monitor_data(definition, merged, list(reviews.values()), settings, frozen)
+        projection = project_monitor_data(definition, merged, list(reviews.values()), settings, frozen, cost_deadline=cost_deadline)
     version = "investor-monitor-data-input-v2" if any(row["snapshot"]["schema_version"] == "investor-monitor-price-snapshot-v1" for row in segments) else "investor-monitor-data-input-v1"
+    if "cost_assumptions" in settings: version = "investor-monitor-data-input-v3"
     document = {"schema_version": version, "workspace_id": workspace_id, "model_id": definition["model_id"],
         "target_definition_hash": definition["target_definition_hash"], "source_qualification": QUALIFICATION,
         "segments": [{key: row[key] for key in ("snapshot", "dataset_hash", "catalog_hash")} for row in sorted(segments, key=lambda row: row["snapshot"]["capture_refs"][0]["capture_id"])],
@@ -206,12 +212,17 @@ def build_monitor_data(db, workspace_id, definition, windows, settings, *, now=N
 
 
 def resolve_monitor_data(db, workspace_id, definition, document, *, now=None, evaluated_at=None):
+    from .monitor_costs import verify_settings
     validate_monitor_data_document(document)
     checked = _milliseconds(now)
     evaluated = checked if evaluated_at is None else _milliseconds(evaluated_at)
     _assert(document["created_at"] <= evaluated <= checked)
     _assert(document["workspace_id"] == workspace_id and document["model_id"] == definition["model_id"]
         and document["target_definition_hash"] == definition["target_definition_hash"] and document["created_at"] <= checked)
+    if "cost_assumptions" in document["settings"]:
+        try: verify_settings(db, workspace_id, definition, document["settings"], document["created_at"])
+        except ValueError:
+            return {"document": document, "projection": None, "unavailable_reason": "MONITOR_COST_ASSUMPTIONS_UNAVAILABLE"}
     with transaction(db, immediate=False):
         windows = []
         for segment in document["segments"]:

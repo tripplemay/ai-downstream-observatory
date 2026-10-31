@@ -24,6 +24,8 @@ import { appendInvestorFunding, readInvestorFunding } from "./funding";
 import { emptyFundingState } from "./funding-schemas";
 import { appendFundedStudyRequest, createFundedStudyRequest, readFundedStudyTask } from "./funded-study";
 import { readInvestorAcquisition, investorAcquisitionUnavailable } from "./acquisition";
+import { appendMonitorCosts, readMonitorCostState } from "./monitor-costs";
+import { withInvestorKernelReadScope } from "./kernel-read-scope";
 
 type Workspace = { id: string; owner_id: string; revision: number };
 type ProfileRow = { id: string; version: number; document_json: string; content_hash: string; created_at: string };
@@ -157,6 +159,12 @@ export function executeInvestorCommand(db: Database.Database, actor: Actor, raw:
       auditId = writeAudit(db, owner, input.action, ws.id, input, { decision_id: resourceId, execution_authorized: false }, now);
       db.prepare("INSERT INTO investor_decisions(id,workspace_id,observation_id,decision,note,actor_id,created_at,audit_id) VALUES(?,?,?,?,?,?,?,?)")
         .run(resourceId, ws.id, input.observation_id, input.decision, input.note, owner, now, auditId);
+    } else if (input.action === "set_monitor_costs") {
+      const state = getInvestorState(db, actor, now);
+      if (!state.model_watch || state.model_watch.id !== input.model_id || !state.monitor_costs?.editable) throw new Error("INVESTOR_MONITOR_COSTS_CONTEXT_CONFLICT");
+      const { expected_revision: _, idempotency_key: __, ...intent } = input;
+      const saved = appendMonitorCosts(db, ws.id, owner, intent, now);
+      resourceId = saved.id; auditId = saved.audit_id;
     } else if (input.action === "set_monitoring") {
       const state = getInvestorState(db, actor, now);
       if (!state.model_watch || state.model_watch.id !== input.model_id) throw new Error("INVESTOR_MODEL_OUT_OF_SCOPE");
@@ -242,13 +250,13 @@ export function executeInvestorCommand(db: Database.Database, actor: Actor, raw:
 export function getInvestorState(db: Database.Database, actor: Actor, now = new Date().toISOString(), options: { includeRecentHistory?: boolean } = {}): InvestorState {
   const owner = principal(actor); clock(now);
   const observationLimit = options.includeRecentHistory === false ? 1 : 50, decisionLimit = options.includeRecentHistory === false ? 0 : 50;
-  return db.transaction(() => {
+  return db.transaction(() => withInvestorKernelReadScope(() => {
     const ws = workspace(db, owner);
     let readOnly = false;
     try { assertWritableDatabase(db); } catch (error) { if (error instanceof Error && error.message === "WORKBENCH_READ_ONLY") readOnly = true; else throw error; }
     const empty: InvestorState = { schema_version: "investor-state-v1", workspace_id: ws?.id ?? null, revision: ws?.revision ?? 0,
       checked_at: now, read_only: readOnly, profile: null, profile_history: [],
-      latest: null, observations: [], observations_truncated: false, decisions: [], decisions_truncated: false, plan: null, research_task: null, model_watch: null, funding: emptyFundingState(), funded_study: null, funded_study_unavailable: false,
+      latest: null, observations: [], observations_truncated: false, decisions: [], decisions_truncated: false, plan: null, research_task: null, model_watch: null, monitor_costs: null, funding: emptyFundingState(), funded_study: null, funded_study_unavailable: false,
       effective_outcome: "not_started", effective_gaps: [],
       live_advice_eligible: false, actual_holdings_status: "not_linked", ai_status: "not_configured" };
     if (!ws) return empty;
@@ -292,6 +300,21 @@ export function getInvestorState(db: Database.Database, actor: Actor, now = new 
     if (sourceGap && !effectiveGaps.some(value => value.code === sourceGap)) gap(sourceGap, "研究来源已失效", "来源过期、撤回、改版或载荷已删除；旧候选不再作为当前依据。");
     const selectedReference = selection ? selection.plan_id === planId ? unavailablePlan : readEvidenceReference(db, ws.id, selection.plan_id, now).unavailable_reason : null;
     const modelWatch = readInvestorModelWatch(db, ws.id, profiles[0], now, !selectedReference);
+    let monitorCosts: InvestorState["monitor_costs"] = null;
+    if (modelWatch) {
+      let costsUnavailable = false;
+      try {
+        monitorCosts = readMonitorCostState(db, ws.id, modelWatch.id, now, !readOnly && !selectedReference
+          && plan?.id === modelWatch.plan_id && plan.document.data_mode === "reconstructed" && plan.quality === "current"
+          && modelWatch.profile_id === profiles[0].id && modelWatch.valid_until > now && !fixedPolicyUnsupported(plan.document));
+        costsUnavailable = monitorCosts.status === "pending" || monitorCosts.status === "unavailable";
+      } catch { costsUnavailable = true; }
+      if (costsUnavailable) {
+        gap("MONITOR_COST_ASSUMPTIONS_PENDING", "研究监测费用尚未应用", "费用假设已变化、到期或无法核验；等待按当前证据重新评估，不沿用旧调整结论。");
+        modelWatch.model_nav_cny = null;
+        if (!["paused", "outdated", "expired"].includes(modelWatch.status)) modelWatch.status = "awaiting_evaluation";
+      }
+    }
     if (modelWatch) {
       try {
         const acquisition = readInvestorAcquisition(db, ws.id, modelWatch, profiles[0], now, !selectedReference);
@@ -326,12 +349,13 @@ export function getInvestorState(db: Database.Database, actor: Actor, now = new 
     return { ...empty, profile: profiles[0] ?? null, profile_history: profiles, latest: observations[0] ?? null, observations, funding,
       funded_study: fundedStudy, funded_study_unavailable: fundedStudyUnavailable,
       observations_truncated: rows.length > observationLimit, decisions: decisions.slice(0, decisionLimit), decisions_truncated: decisions.length > decisionLimit,
-      plan, research_task: researchTask, model_watch: modelWatch, effective_outcome: effectiveOutcome, effective_gaps: effectiveGaps,
+      plan, research_task: researchTask, model_watch: modelWatch, monitor_costs: monitorCosts, effective_outcome: effectiveOutcome, effective_gaps: effectiveGaps,
       actual_holdings_status: actualHoldingsStatus };
-  })();
+  }))();
 }
 
 export function isInvestorClientError(code: string) {
+  if (/^INVESTOR_MONITOR_COSTS_(CONTEXT_CONFLICT|INPUT_INVALID|INVALID)$/.test(code)) return true;
   if (/^INVESTOR_PROPOSAL_(CONTEXT_CONFLICT|CAPACITY_REQUIRES_REVIEW|SELECTION_INVALID|OPERATION_BLOCKED)$/.test(code)) return true;
   if (/^INVESTOR_EXECUTION_(CONTEXT_CONFLICT|CAPACITY_REQUIRES_REVIEW|SELECTION_INVALID|FACT_ALREADY_LINKED|REPORT_DUPLICATE_CONFLICT|UPLOAD_INVALID|UPLOAD_DUPLICATE_CONFLICT)$/.test(code)) return true;
   if (/^INVESTOR_VALUATION_(CONTEXT_CONFLICT|CAPACITY_REQUIRES_REVIEW|RECONCILIATION_REQUIRED|INPUT_INVALID|SOURCE_UNAVAILABLE)$/.test(code)) return true;

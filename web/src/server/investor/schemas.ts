@@ -6,6 +6,7 @@ import { cashRecordingIntentSchema } from "./cash-recording-schemas";
 import { valuationIntentSchema } from "./valuation-schemas";
 import { executionReportIntentSchema, linkExecutionIntentSchema } from "./execution-followup-schemas";
 import { proposalReviewIntentSchema } from "./proposal-review-schemas";
+import { monitorCostsIntentSchema } from "./monitor-cost-schemas";
 import { investorResearchEngines, researchExecutionReviewSchema, researchCashIntentReviewSchema, reviewCountsMatch, executionChecksUsable } from "./research-execution";
 
 export const investorId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/);
@@ -232,6 +233,7 @@ export const investorCommandSchema = z.discriminatedUnion("action", [
     decision: z.enum(["accept_idea", "defer", "reject"]), note: z.string().trim().max(2000) }).strict(),
   envelope.extend({ action: z.literal("save_plan"), plan_id: investorId }).strict(),
   envelope.extend({ action: z.literal("set_monitoring"), model_id: investorId, enabled: z.boolean() }).strict(),
+  monitorCostsIntentSchema.extend(envelope.shape).strict(),
   envelope.extend({ action: z.literal("link_portfolio"), portfolio_id: investorId.nullable(), expected_ledger_revision: revision.nullable() }).strict(),
   envelope.extend({ action: z.literal("create_account_book"), book_name: z.string().trim().min(1).max(120), account: accountBookInputSchema }).strict(),
   envelope.extend({ action: z.literal("add_linked_account"), portfolio_id: investorId, expected_ledger_revision: revision, account: accountBookInputSchema }).strict(),
@@ -246,4 +248,4 @@ export const investorCommandSchema = z.discriminatedUnion("action", [
 export type InvestorCommand = z.infer<typeof investorCommandSchema>;
 
 export const investorReceiptSchema = z.object({ workspace_id: investorId, revision: revision.refine(value => value > 0),
-  action: z.enum(["save_profile", "save_funding_plan", "compare_funding", "evaluate", "review", "save_plan", "set_monitoring", "link_portfolio", "create_account_book", "add_linked_account", "reconcile_linked_account", "record_linked_trade_fact", "record_linked_cash_fact", "request_linked_valuation", "link_recorded_execution_fact", "record_linked_execution_report", "review_linked_proposal"]), resource_id: investorId, audit_id: investorId }).strict();
+  action: z.enum(["save_profile", "save_funding_plan", "compare_funding", "evaluate", "review", "save_plan", "set_monitoring", "set_monitor_costs", "link_portfolio", "create_account_book", "add_linked_account", "reconcile_linked_account", "record_linked_trade_fact", "record_linked_cash_fact", "request_linked_valuation", "link_recorded_execution_fact", "record_linked_execution_report", "review_linked_proposal"]), resource_id: investorId, audit_id: investorId }).strict();

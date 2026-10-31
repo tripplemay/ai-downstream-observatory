@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-managed-fx.schema.json",
+  "$defs": {
+    "authority": {
+      "type": "object",
+      "required": ["schema_version", "provider", "currencies", "uses", "retention_days", "valid_from", "valid_until", "clause_references", "authorization_basis", "cadence", "publication_rule", "observation_policy", "availability_policy", "human_review_per_publication", "trading_permission"],
+      "properties": {
+        "schema_version": {"const": "investor-fx-authority-v1"}, "provider": {"const": "ecb_90d_reference"},
+        "currencies": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": {"enum": ["USD", "HKD"]}},
+        "uses": {"type": "array", "minItems": 4, "maxItems": 4, "uniqueItems": true, "items": {"enum": ["private_research", "private_retention", "private_display", "private_backup"]}},
+        "retention_days": {"type": "integer", "minimum": 1, "maximum": 36600},
+        "valid_from": {"$ref": "common.schema.json#/$defs/instant"}, "valid_until": {"$ref": "common.schema.json#/$defs/instant"},
+        "clause_references": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "string", "minLength": 1, "maxLength": 300}},
+        "authorization_basis": {"const": "owner_reviewed_standing_rule_not_provider_certified"},
+        "cadence": {"const": "one_request_per_Europe_Berlin_day_after_01_00"},
+        "publication_rule": {"const": "append_only_concordant_with_overlap"},
+        "observation_policy": {"const": "rate_date_midnight_date_anchor_not_intraday_observation"},
+        "availability_policy": {"const": "next_calendar_day_midnight_Europe_Berlin"},
+        "human_review_per_publication": {"const": false}, "trading_permission": {"const": false}
+      }, "additionalProperties": false
+    },
+    "control": {
+      "type": "object", "required": ["schema_version", "authority_id", "authority_hash", "version", "enabled", "created_at"],
+      "properties": {"schema_version": {"const": "investor-fx-control-v1"}, "authority_id": {"$ref": "common.schema.json#/$defs/id"},
+        "authority_hash": {"$ref": "common.schema.json#/$defs/hash"}, "version": {"type": "integer", "minimum": 1},
+        "enabled": {"type": "boolean"}, "created_at": {"$ref": "common.schema.json#/$defs/instant"}}, "additionalProperties": false
+    },
+    "request": {
+      "type": "object", "required": ["schema_version", "workspace_id", "authority_id", "authority_hash", "control_id", "control_hash", "feed_day", "created_at", "valid_until"],
+      "properties": {"schema_version": {"const": "investor-fx-request-v1"}, "workspace_id": {"$ref": "common.schema.json#/$defs/id"},
+        "authority_id": {"$ref": "common.schema.json#/$defs/id"}, "authority_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "control_id": {"$ref": "common.schema.json#/$defs/id"}, "control_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "feed_day": {"$ref": "common.schema.json#/$defs/date"}, "created_at": {"$ref": "common.schema.json#/$defs/instant"},
+        "valid_until": {"$ref": "common.schema.json#/$defs/instant"}}, "additionalProperties": false
+    },
+    "transport": {
+      "type": "object", "required": ["source_url", "started_at", "completed_at", "retrieved_at", "http_status", "headers", "raw_sha256", "raw_bytes", "redirects_followed"],
+      "properties": {"source_url": {"const": "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist-90d.xml"},
+        "started_at": {"$ref": "common.schema.json#/$defs/instant"}, "completed_at": {"$ref": "common.schema.json#/$defs/instant"},
+        "retrieved_at": {"$ref": "common.schema.json#/$defs/instant"}, "http_status": {"const": 200}, "redirects_followed": {"const": 0},
+        "raw_sha256": {"$ref": "common.schema.json#/$defs/hash"}, "raw_bytes": {"type": "integer", "minimum": 1, "maximum": 2097152},
+        "headers": {"type": "object", "required": ["content-type"], "properties": {
+          "content-type": {"type": "string", "maxLength": 1024}, "content-length": {"type": "string", "maxLength": 7},
+          "date": {"type": "string", "maxLength": 1024}, "last-modified": {"type": "string", "maxLength": 1024},
+          "etag": {"type": "string", "maxLength": 1024}}, "additionalProperties": false}}, "additionalProperties": false
+    },
+    "capture": {
+      "type": "object", "required": ["schema_version", "capture_id", "workspace_id", "request_id", "request_hash", "job_id", "fencing_token", "qualification", "status", "reason_code", "raw_sha256", "raw_bytes", "draft_hash", "transport", "not_before", "created_at", "retain_until", "owner_reviewed", "production_admitted"],
+      "properties": {"schema_version": {"const": "investor-fx-capture-v1"}, "capture_id": {"$ref": "common.schema.json#/$defs/id"},
+        "workspace_id": {"$ref": "common.schema.json#/$defs/id"}, "request_id": {"$ref": "common.schema.json#/$defs/id"},
+        "request_hash": {"$ref": "common.schema.json#/$defs/hash"}, "job_id": {"$ref": "common.schema.json#/$defs/id"}, "fencing_token": {"type": "integer", "minimum": 1},
+        "qualification": {"const": "isolated_ecb_reference_https"}, "status": {"enum": ["captured", "transport_failed", "superseded"]},
+        "reason_code": {"enum": ["FX_DRAFT_CAPTURED", "FX_CAPTURE_FAILED", "FX_REQUEST_SUPERSEDED"]},
+        "raw_sha256": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/hash"}]},
+        "raw_bytes": {"oneOf": [{"type": "null"}, {"type": "integer", "minimum": 1, "maximum": 2097152}]},
+        "draft_hash": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/hash"}]},
+        "transport": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/transport"}]},
+        "not_before": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/instant"}]},
+        "created_at": {"$ref": "common.schema.json#/$defs/instant"}, "retain_until": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/instant"}]},
+        "owner_reviewed": {"const": false}, "production_admitted": {"const": false}},
+      "allOf": [{"if": {"properties": {"status": {"const": "captured"}}},
+        "then": {"properties": {"reason_code": {"const": "FX_DRAFT_CAPTURED"}, "raw_sha256": {"type": "string"}, "raw_bytes": {"type": "integer"},
+          "draft_hash": {"type": "string"}, "transport": {"type": "object"}, "not_before": {"type": "string"}, "retain_until": {"type": "string"}}},
+        "else": {"properties": {"raw_sha256": {"type": "null"}, "raw_bytes": {"type": "null"}, "draft_hash": {"type": "null"}, "transport": {"type": "null"}, "not_before": {"type": "null"}, "retain_until": {"type": "null"}}}},
+        {"if": {"properties": {"status": {"const": "transport_failed"}}}, "then": {"properties": {"reason_code": {"const": "FX_CAPTURE_FAILED"}}}},
+        {"if": {"properties": {"status": {"const": "superseded"}}}, "then": {"properties": {"reason_code": {"const": "FX_REQUEST_SUPERSEDED"}}}}],
+      "additionalProperties": false
+    },
+    "ref": {
+      "type": "object", "required": ["review_id", "review_hash", "source_id", "source_hash", "facts_hash"],
+      "properties": {"review_id": {"$ref": "common.schema.json#/$defs/id"}, "review_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "source_id": {"$ref": "common.schema.json#/$defs/id"}, "source_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "facts_hash": {"$ref": "common.schema.json#/$defs/hash"}}, "additionalProperties": false
+    },
+    "publication": {
+      "type": "object", "required": ["schema_version", "publication_id", "workspace_id", "authority_id", "authority_hash", "control_id", "control_hash", "capture_id", "capture_hash", "sequence", "previous_id", "previous_hash", "status", "reason_code", "refs", "created_at", "human_review_performed", "trading_permission"],
+      "properties": {"schema_version": {"const": "investor-fx-publication-v1"}, "publication_id": {"$ref": "common.schema.json#/$defs/id"},
+        "workspace_id": {"$ref": "common.schema.json#/$defs/id"}, "authority_id": {"$ref": "common.schema.json#/$defs/id"},
+        "authority_hash": {"$ref": "common.schema.json#/$defs/hash"}, "control_id": {"$ref": "common.schema.json#/$defs/id"},
+        "control_hash": {"$ref": "common.schema.json#/$defs/hash"}, "capture_id": {"$ref": "common.schema.json#/$defs/id"},
+        "capture_hash": {"$ref": "common.schema.json#/$defs/hash"}, "sequence": {"type": "integer", "minimum": 1},
+        "previous_id": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/id"}]},
+        "previous_hash": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/hash"}]},
+        "status": {"enum": ["published", "unchanged", "blocked"]},
+        "reason_code": {"enum": ["FX_SOURCE_PUBLISHED", "FX_SOURCE_UNCHANGED", "FX_SOURCE_RESTATEMENT", "FX_SOURCE_TAIL_REGRESSION", "FX_SOURCE_OVERLAP_MISSING", "FX_SOURCE_QUARANTINED"]},
+        "refs": {"type": "object", "properties": {"USD": {"$ref": "#/$defs/ref"}, "HKD": {"$ref": "#/$defs/ref"}}, "additionalProperties": false},
+        "created_at": {"$ref": "common.schema.json#/$defs/instant"}, "human_review_performed": {"const": false}, "trading_permission": {"const": false}},
+      "allOf": [{"if": {"properties": {"status": {"const": "published"}}}, "then": {"properties": {"reason_code": {"const": "FX_SOURCE_PUBLISHED"}, "refs": {"type": "object", "minProperties": 1}}},
+        "else": {"properties": {"refs": {"type": "object", "maxProperties": 0}}}},
+        {"if": {"properties": {"status": {"const": "unchanged"}}}, "then": {"properties": {"reason_code": {"const": "FX_SOURCE_UNCHANGED"}}}},
+        {"if": {"properties": {"status": {"const": "blocked"}}}, "then": {"properties": {"reason_code": {"enum": ["FX_SOURCE_RESTATEMENT", "FX_SOURCE_TAIL_REGRESSION", "FX_SOURCE_OVERLAP_MISSING", "FX_SOURCE_QUARANTINED"]}}}}], "additionalProperties": false
+    }
+  }
+}

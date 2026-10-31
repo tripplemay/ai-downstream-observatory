@@ -32,6 +32,10 @@
     }, "additionalProperties": false},
     "fx": {"type": "object", "required": ["currency", "unit", "rows"], "properties": {
       "currency": {"enum": ["HKD", "USD"]}, "unit": {"const": "CNY_per_unit_currency"},
+      "monitor_series": {"type": "object", "required": ["authority_id", "revision_policy"], "properties": {
+        "authority_id": {"$ref": "common.schema.json#/$defs/id"},
+        "revision_policy": {"const": "append_only_no_restatements"}
+      }, "additionalProperties": false},
       "rows": {"type": "array", "minItems": 1, "maxItems": 20000, "items": {"type": "object", "required": ["observed_at", "assumed_available_at", "value"], "properties": {
         "observed_at": {"$ref": "common.schema.json#/$defs/instant"}, "assumed_available_at": {"$ref": "common.schema.json#/$defs/instant"}, "value": {"$ref": "common.schema.json#/$defs/decimal"}
       }, "additionalProperties": false}}
