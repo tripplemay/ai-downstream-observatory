@@ -17,6 +17,7 @@ import { buildExecutionFollowup, blankExecutionDraft } from "../src/components/w
 import { executionContext } from "./investor-execution-fixture";
 import { buildProposalReview } from "../src/components/workbench/investor-proposal-review-client";
 import { proposalContext } from "./investor-proposal-fixture";
+import { actionDraftProgressRequest } from "../src/server/investor/action-draft-progress-schemas";
 
 const binding = "a".repeat(64), origin = "https://synthetic.example.test";
 const input = { action: "record_linked_trade_fact", expected_revision: 2, idempotency_key: "fictional-command", portfolio_id: "fictional-book", account_id: "fictional-account",
@@ -48,6 +49,7 @@ function harness(options: { denied?: boolean; changed?: "sid" | "owner"; effectE
     } },
     "@/server/workbench-db": { openWorkbench: () => { calls.push("open"); return db; } }, "@/server/strict-json": { parseStrictJson },
     "@/server/investor/service": { executeInvestorCommand: (...args: unknown[]) => effect("execute", ...args), getInvestorState: () => ({}), isInvestorClientError },
+    "@/server/investor/action-draft-progress-schemas": { actionDraftProgressRequest },
     "@/server/investor/trade-recording": { getTradeRecordingContext: (...args: unknown[]) => effect("context", ...args) },
     "@/server/investor/cash-recording": { getCashRecordingContext: (...args: unknown[]) => effect("context", ...args) },
     "@/server/investor/execution-followup": { getExecutionFollowupContext: (...args: unknown[]) => effect("context", ...args) },

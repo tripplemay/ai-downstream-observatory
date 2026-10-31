@@ -6,10 +6,12 @@ import { assertRequestSessionBinding, sessionBinding } from "@/server/auth/sessi
 import { openWorkbench } from "@/server/workbench-db";
 import { parseStrictJson } from "@/server/strict-json";
 import { executeInvestorCommand, getInvestorState, isInvestorClientError } from "@/server/investor/service";
+import { actionDraftProgressRequest } from "@/server/investor/action-draft-progress-schemas";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const headers = { "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", Vary: "Cookie" };
+const readHeaders = { ...headers, Vary: "Cookie, " + actionDraftProgressRequest.header };
 function failure(error: unknown) {
   let status = 503, code = "INVESTOR_UNAVAILABLE";
   if (error instanceof AuthError) { status = error.status; code = error.code; }
@@ -37,10 +39,14 @@ export async function GET(request: Request) {
   try {
     const initial = await requireApiSession(); assertRequestSessionBinding(request, initial.sessionId);
     if (new URL(request.url).searchParams.size) throw new AuthError("INVALID_QUERY", 400);
+    const includeActionDraftProgress = request.headers.get(actionDraftProgressRequest.header) === actionDraftProgressRequest.value;
+    if (includeActionDraftProgress && !request.headers.get("x-workbench-session-binding")) throw new AuthError("SESSION_BINDING_REQUIRED", 400);
     const current = await requireApiSession();
     if (current.sessionId !== initial.sessionId) throw new AuthError("SESSION_CHANGED", 401);
     const db = openWorkbench();
-    try { return NextResponse.json({ ...getInvestorState(db, { id: current.userId }), session_binding: sessionBinding(current.sessionId) }, { headers }); }
+    try { return NextResponse.json({ ...getInvestorState(db, { id: current.userId }, undefined, {
+      includeActionDraftProgress }),
+      session_binding: sessionBinding(current.sessionId) }, { headers: readHeaders }); }
     finally { db.close(); }
   } catch (error) { return failure(error); }
 }

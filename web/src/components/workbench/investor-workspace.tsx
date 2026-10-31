@@ -25,6 +25,7 @@ import { acquisitionDeadlines, InvestorAcquisitionPanel } from "./investor-acqui
 import { useInvestorDisplayClock } from "./investor-display-clock";
 import { InvestorMonitorCostPanel } from "./investor-monitor-cost-panel";
 import { InvestorActionDrafts } from "./investor-action-drafts";
+import { actionDraftProgressRequest } from "@/server/investor/action-draft-progress-schemas";
 import type { ResearchExecutionReview, ResearchCashIntentReview } from "@/server/investor/research-execution";
 
 export type InvestorView = "overview" | "plan" | "observations" | "accounts";
@@ -317,7 +318,8 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
     } finally { clearTimeout(timer); }
   }
   async function load(sequence: number) {
-    const { response, value } = await request({ cache: "no-store", credentials: "same-origin", redirect: "error", headers: { "X-Workbench-Session-Binding": initialSessionBinding } });
+    const { response, value } = await request({ cache: "no-store", credentials: "same-origin", redirect: "error", headers: {
+      "X-Workbench-Session-Binding": initialSessionBinding, [actionDraftProgressRequest.header]: actionDraftProgressRequest.value } });
     if (response.status === 401) { invalidate(); return false; }
     if (!response.ok) throw new Error("INVESTOR_UNAVAILABLE");
     const state = parseInvestorState(value, initialSessionBinding);
