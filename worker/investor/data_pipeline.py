@@ -15,7 +15,7 @@ from .monitor_data import build_monitor_data, check_reference_listing_identity
 from .monitor_admission import admit_monitor_data, current_monitor_model
 from .history_collection import plan_history, collect_history, MAX_BATCH_CALLS
 from .confirmed_capture import collect_confirmed_prices, resolve_confirmed_capture, purge_confirmed_payload
-from . import issuer_sources, managed_fx
+from . import issuer_sources, managed_fx, issuer_schedule
 
 
 def _private_descriptor(value):
@@ -111,6 +111,12 @@ def _parser():
     for command in ("check-issuer-capture", "purge-issuer-capture"):
         commands.add_parser(command).add_argument("--capture", required=True)
     commands.add_parser("register-fx-authority").add_argument("--file", required=True)
+    commands.add_parser("register-issuer-schedule").add_argument("--file", required=True)
+    control = commands.add_parser("control-issuer-schedule")
+    control.add_argument("--schedule", required=True)
+    flags = control.add_mutually_exclusive_group(required=True)
+    flags.add_argument("--enable", action="store_true"); flags.add_argument("--disable", action="store_true")
+    commands.add_parser("inspect-issuer-scheduled-request").add_argument("--request", required=True)
     control = commands.add_parser("control-fx-authority")
     control.add_argument("--authority", required=True)
     flags = control.add_mutually_exclusive_group(required=True)
@@ -133,6 +139,15 @@ def main(argv=None):
         if args.command == "store-source":
             row = store_source(db, args.workspace, args.actor, args.kind, _read_private_json(args.file, 131072))
             result = {"source_id": row["id"], "kind": row["kind"], "content_hash": row["content_hash"]}
+        elif args.command == "register-issuer-schedule":
+            row = issuer_schedule.register_schedule(db, args.workspace, args.actor, _read_private_json(args.file, 4096))
+            control = db.execute("SELECT enabled FROM investor_issuer_schedule_controls WHERE schedule_id=? ORDER BY version DESC LIMIT 1", (row["id"],)).fetchone()
+            result = {"schedule_id": row["id"], "schedule_hash": row["content_hash"], "enabled": bool(control["enabled"]), "research_admitted": False}
+        elif args.command == "control-issuer-schedule":
+            row = issuer_schedule.set_schedule_enabled(db, args.workspace, args.actor, args.schedule, args.enable)
+            result = {"schedule_id": args.schedule, "control_id": row["id"], "enabled": bool(row["enabled"]), "research_admitted": False}
+        elif args.command == "inspect-issuer-scheduled-request":
+            result = issuer_schedule.inspect_scheduled_request(db, args.workspace, args.actor, args.request)
         elif args.command == "register-fx-authority":
             row = managed_fx.register_authority(db, args.workspace, args.actor, _read_private_json(args.file, 16384))
             control = db.execute("SELECT enabled FROM investor_fx_controls WHERE authority_id=? ORDER BY version DESC LIMIT 1", (row["id"],)).fetchone()

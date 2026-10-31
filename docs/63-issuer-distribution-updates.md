@@ -78,7 +78,9 @@ historical review, new research trial or holdout replay is introduced.
    The bounded first-input selection increment is documented in
    [current FX review selection](64-current-fx-source-selection.md); it is not
    yet a scheduled source producer or continuous-feed authority registry.
-4. Wire scheduled updates, independent validation and actual monitor admission;
+4. The [explicit scheduled draft layer](71-scheduled-issuer-drafts.md) connects
+   one-attempt leased collection without enabling it or approving financial use.
+   Independent financial validation and actual monitor admission must still
    handle corrections, expiry and restatement without resetting model history.
 5. Validate real source-to-homepage normal/funding/stale flows, consent-limited
    AI, accounts and all remaining engineering/production gates.

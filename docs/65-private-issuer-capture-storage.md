@@ -41,9 +41,11 @@ categories never store raw exceptions or response bodies from failed calls.
 If the process crashes, or stop/recovery prevents the result transaction, the
 durable request is `indeterminate`. This means **unknown**, not success or proven
 failure. Inspection and repeating its key never retry the HTTP operation. A new
-day permits a new explicit attempt, not replay of the uncertain one. This layer
-does not itself create recurring jobs, acquire a worker lease or authorize a
-scheduled producer; that integration remains open.
+day permits a new explicit attempt, not replay of the uncertain one. This storage
+layer does not itself authorize recurring collection. The separate
+[scheduled-draft increment](71-scheduled-issuer-drafts.md) adds explicit standing
+policies, disabled controls and leased provider jobs while sharing this daily
+budget; existing authorities are not automatically scheduled.
 
 ## Space and retention
 
@@ -99,8 +101,8 @@ strategy trials, model weights, cash, orders, research inputs or monitor queues.
 It is not a portfolio observation checkpoint.
 
 Remaining work includes verified listing/currency/per-unit basis, complete
-distributions and splits, long-lived current FX authority, scheduled producer
-and lease integration, independent monitor admission and real normal/funding/stale
+distributions and splits, actual long-lived current FX and issuer schedule
+installation, independent monitor admission and real normal/funding/stale
 homepage journeys. Fixtures test storage, retention and an encrypted temporary
 roundtrip offline; they do not prove live supplier permission, production source
 installation, business recovery RPO/RTO or full-load capacity.

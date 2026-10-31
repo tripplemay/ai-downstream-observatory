@@ -16,6 +16,7 @@ from worker.market.providers.vanguard_distributions import MAX_BYTES, PARSER_VER
 from worker.orchestration.db import WorkbenchError, assert_writable, canonical_json, content_hash, instant, new_id, stamp, transaction
 from .data_evidence import _audit, _audit_binding, _object, _owner
 from .runtime import _milliseconds
+from .model_runtime import _clock
 
 
 OFFICIAL = "isolated_fixed_issuer_https"
@@ -209,15 +210,32 @@ def collect_issuer_draft(db, workspace, actor, authority_id, request_key, start_
     request, document, fresh = _start(db, workspace, actor, authority_id, request_key, start_date, end_date, at)
     if not fresh:
         return request_state(db, workspace, actor, request_key, now=at)
-    _, policy, control = _grant(db, workspace, authority_id, at)
-    def changed():
-        stopped(); checked = _milliseconds(now)
-        grant, current, head = _grant(db, workspace, authority_id, checked)
-        return grant["content_hash"] != document["authority_hash"] or not _active(current, head, checked) or head["id"] != document["control_id"]
+    effect = _prepare_started_issuer_draft(db, workspace, actor, request, document, clock=lambda: now,
+        test_collector=test_collector, stop_requested=stop_requested)
+    with transaction(db):
+        result = effect(db)
+    return request_state(db, workspace, actor, request_key, now=result["created_at"])
+
+
+def _prepare_started_issuer_draft(db, workspace, actor, request, document, *, clock,
+        test_collector=None, stop_requested=None, guard=None, eligible=None):
+    """Transport outside the write transaction; caller owns the final commit fence."""
+    _check(not db.in_transaction, "IO_TRANSACTION_FORBIDDEN")
+    at = _clock(clock())
+    _, policy, _ = _grant(db, workspace, request["authority_id"], at)
+    def stopped(connection):
+        if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
+        assert_writable(connection)
+        if guard: guard(connection, _clock(clock()))
+    def changed(connection):
+        stopped(connection); checked = _clock(clock())
+        grant, current, head = _grant(connection, workspace, request["authority_id"], checked)
+        return (grant["content_hash"] != document["authority_hash"] or not _active(current, head, checked)
+            or head["id"] != document["control_id"] or eligible is not None and not eligible(connection, checked))
     raw = transport = draft_hash = None
     status, code = "superseded", "ISSUER_AUTHORITY_CHANGED"
-    if not changed():
-        before = stamp(instant(now)); value = None
+    if not changed(db):
+        before = stamp(instant(clock())); value = None
         try:
             collector = test_collector or receiver.collect_vanguard_distribution_draft
             value = collector(fund_id=policy["fund_id"], has_distribution_yield=policy["has_distribution_yield"],
@@ -227,46 +245,48 @@ def collect_issuer_draft(db, workspace, actor, authority_id, request_key, start_
             text = str(error)
             code = _FAILURES.get(text, "ISSUER_CAPTURE_TRANSPORT_FAILED") if isinstance(error, WorkbenchError) else "ISSUER_CAPTURE_TRANSPORT_FAILED"
             status = "transport_failed"
-        if changed():
+        if changed(db):
             status, code = "superseded", "ISSUER_AUTHORITY_CHANGED"
         elif value is not None:
             try:
-                raw, transport, draft_hash = _validated_result(value, policy, document, before, stamp(instant(now)))
+                raw, transport, draft_hash = _validated_result(value, policy, document, before, stamp(instant(clock())))
                 status, code = "captured", "ISSUER_DRAFT_CAPTURED"
             except Exception:
                 raw = transport = draft_hash = None
                 status, code = "transport_failed", "ISSUER_CAPTURE_RESPONSE_INVALID"
         elif status != "transport_failed":
             status, code = "transport_failed", "ISSUER_CAPTURE_RESPONSE_INVALID"
-    with transaction(db):
-        stopped(); created = _milliseconds(now)
-        current_request = _request_header(db, workspace, request["id"], created)[0]
+    def effect(connection):
+        stopped(connection); created = _clock(clock())
+        current_request = _request_header(connection, workspace, request["id"], created)[0]
         _check(current_request["content_hash"] == request["content_hash"])
-        if changed():
-            raw = transport = draft_hash = None; status, code = "superseded", "ISSUER_AUTHORITY_CHANGED"
-        expiry = _milliseconds(min(instant(policy["valid_until"]), instant(created) + timedelta(days=policy["retention_days"]))) if status == "captured" else None
+        data, headers, draft, final, reason = raw, transport, draft_hash, status, code
+        if changed(connection):
+            data = headers = draft = None; final, reason = "superseded", "ISSUER_AUTHORITY_CHANGED"
+        expiry = _milliseconds(min(instant(policy["valid_until"]), instant(created) + timedelta(days=policy["retention_days"]))) if final == "captured" else None
         _check(expiry is None or created < expiry)
         identifier = new_id("issuer-capture")
         receipt = {"schema_version": "investor-issuer-capture-v1", "capture_id": identifier, "workspace_id": workspace,
             "request_id": request["id"], "request_hash": request["content_hash"], "qualification": OFFICIAL if test_collector is None else SYNTHETIC,
-            "status": status, "reason_code": code, "raw_sha256": sha256(raw).hexdigest() if raw is not None else None,
-            "raw_bytes": len(raw) if raw is not None else None, "draft_hash": draft_hash,
-            "parser_version": PARSER_VERSION if raw is not None else None, "transport": transport, "created_at": created,
+            "status": final, "reason_code": reason, "raw_sha256": sha256(data).hexdigest() if data is not None else None,
+            "raw_bytes": len(data) if data is not None else None, "draft_hash": draft,
+            "parser_version": PARSER_VERSION if data is not None else None, "transport": headers, "created_at": created,
             "retain_until": expiry, "owner_reviewed": False, "research_admitted": False, "corporate_actions_complete": False, "live_advice_eligible": False}
         validate_contract(receipt, SCHEMA, fragment="$defs/result"); encoded = canonical_json(receipt)
         _check(len(encoded.encode()) <= 16384)
         digest = content_hash(receipt)
-        audit = _audit(db, actor, "investor_finish_issuer_capture", "investor_issuer_capture", identifier, {"content_hash": digest}, created)
-        db.execute("INSERT INTO investor_issuer_captures VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (identifier, workspace, request["id"], receipt["qualification"],
-            status, receipt["raw_sha256"], receipt["raw_bytes"], encoded, digest, actor, created, expiry, audit))
-        if raw is not None:
-            old = db.execute("SELECT payload FROM investor_issuer_payloads WHERE workspace_id=? AND raw_sha256=?", (workspace, receipt["raw_sha256"])).fetchone()
+        audit = _audit(connection, actor, "investor_finish_issuer_capture", "investor_issuer_capture", identifier, {"content_hash": digest}, created)
+        connection.execute("INSERT INTO investor_issuer_captures VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (identifier, workspace, request["id"], receipt["qualification"],
+            final, receipt["raw_sha256"], receipt["raw_bytes"], encoded, digest, actor, created, expiry, audit))
+        if data is not None:
+            old = connection.execute("SELECT payload FROM investor_issuer_payloads WHERE workspace_id=? AND raw_sha256=?", (workspace, receipt["raw_sha256"])).fetchone()
             if old:
-                _check(bytes(old[0]) == raw, "PAYLOAD_CONFLICT")
+                _check(bytes(old[0]) == data, "PAYLOAD_CONFLICT")
             else:
-                db.execute("INSERT INTO investor_issuer_payloads VALUES(?,?,?,?,?)", (workspace, receipt["raw_sha256"], len(raw), raw, created))
-        stopped()
-    return request_state(db, workspace, actor, request_key, now=created)
+                connection.execute("INSERT INTO investor_issuer_payloads VALUES(?,?,?,?,?)", (workspace, receipt["raw_sha256"], len(data), data, created))
+        stopped(connection)
+        return {"capture_id": identifier, "status": final, "reason_code": reason, "created_at": created}
+    return effect
 
 
 def resolve_issuer_capture(db, workspace, actor, capture_id, *, now=None, allow_synthetic=False):

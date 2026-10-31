@@ -187,9 +187,11 @@ class ConfirmedFeedTests(unittest.TestCase):
         confirmed_feed.discover_confirmed_watches(self.db, now=EARLY)
         history = enqueue_job(self.db, "market_collect_prices", "fictional-history", "fixture", "1", now=EARLY)
         enqueue_job(self.db, "investor_current_fx", "fictional-reference", "fixture", "1", max_attempts=1, now=EARLY)
+        enqueue_job(self.db, "investor_issuer_capture", "fictional-issuer", "fixture", "1", max_attempts=1, now=EARLY)
         reserved = "2026-01-04T06:56:00.000Z"
         self.assertIsNone(claim_job(self.db, "history", job_type="market_collect_prices", now=reserved))
         self.assertIsNone(claim_job(self.db, "reference", job_type="investor_current_fx", now=reserved))
+        self.assertIsNone(claim_job(self.db, "issuer", job_type="investor_issuer_capture", now=reserved))
         lease = claim_job(self.db, "watch", lease_seconds=300, job_type=confirmed_feed.JOB_TYPE, now=START)
         self.assertIsNotNone(lease)
         second = open_database(self.path)
@@ -201,6 +203,7 @@ class ConfirmedFeedTests(unittest.TestCase):
         watched = self.db.execute("SELECT * FROM job_runs WHERE id=?", (lease.job_id,)).fetchone()
         self.assertEqual((watched["status"], watched["attempt_count"], watched["max_attempts"]), ("failed", 1, 1))
         self.assertIsNotNone(claim_job(second, "history", job_type="market_collect_prices", now=expired))
+        self.assertIsNotNone(claim_job(second, "issuer", job_type="investor_issuer_capture", now=expired))
         self.assertEqual(self.db.execute("SELECT count(*) FROM investor_confirmed_feed_runs").fetchone()[0], 0)
         self.assert_no_finance()
 

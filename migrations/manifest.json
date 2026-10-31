@@ -247,6 +247,11 @@
       "file": "0049_investor_monitor_costs.sql",
       "sha256": "13ac01af3eec8a4d6ef3d61aaa24948f7eb3804af4c6c8af1e4b0c6404107be4",
       "foreign_key_rebuild": true
+    },
+    {
+      "version": 50,
+      "file": "0050_investor_issuer_schedule.sql",
+      "sha256": "550398a0d1f827e81dd41a17c8f4a1e0eeefad88eb512ff48f7a77aa951bb187"
     }
   ]
 }
