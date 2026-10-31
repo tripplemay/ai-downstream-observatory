@@ -9,6 +9,7 @@ import { mountInvestorDisplay } from "./investor-display-fixture";
 import { displayBinding as binding, displayBefore, displayUntil, displayFuture, displayState, historicalDisplayState } from "./investor-display-state-fixture";
 import { blockedResearchDisplayState } from "./investor-research-blocker-fixture";
 import { actionCostMethodology, reviewCostMethodology, settlementCostMethodology } from "../src/server/investor/reference-cost-methodology";
+import { actionDraftProgressSchema } from "../src/server/investor/action-draft-progress-schemas";
 
 const before = Date.parse(displayBefore), until = Date.parse(displayUntil);
 function validationHoldState() {
@@ -172,6 +173,7 @@ test("failed manual refresh cannot revive expired advice; a newer strictly parse
   const next = { ...h.state.latest!, id: "fictional-current-observation", content_hash: "b".repeat(64), document: { ...h.state.latest!.document,
     outcome: "observe" as const, evaluated_at: displayUntil, next_review_at: displayFuture, reasons: ["Fictional newer verified observation"] } };
   const state = { ...h.state, checked_at: displayUntil, latest: next, observations: [next, ...h.state.observations], effective_outcome: "observe" as const };
+  if (state.action_drafts) state.action_drafts = { ...state.action_drafts, checked_at: displayUntil, refresh_after: new Date(until + 60000).toISOString() };
   client.parseInvestorState({ ...state, session_binding: binding }, binding);
   await h.click("刷新状态"); await h.reply(1, { ...state, session_binding: binding });
   assert.equal(h.headline(), "继续观察"); assert.equal(h.node("InvestorAiPanel")!.props.disabled, false);
@@ -344,6 +346,25 @@ test("cost and funding edit locks are independent; another panel cleanup cannot 
   assert.equal(h.node("InvestorMonitorCostPanel")!.props.disabled, true);
   await h.fundingLock(false); assert.equal(h.node("InvestorRiskPanel")!.props.disabled, false);
 });
+test("source task metadata expires during edit locks without a GET, never revives on clock rollback and clears with the session", async t => {
+  const state = displayState(), snapshot = JSON.stringify(state);
+  state.action_drafts = actionDraftProgressSchema.parse({ ...state.action_drafts,
+    status: "future", valid_from: displayFuture, valid_until: "2026-01-06T12:00:00.000Z",
+    refresh_after: new Date(before + 100).toISOString() });
+  const h = mount(t, state); await h.flush();
+  const card = () => h.words(h.card("公司行动交叉核验进度"));
+  assert.match(card(), /采集声明尚未生效/); await h.fundingLock(true);
+  await h.advance(before + 100);
+  assert.match(card(), /状态快照已到复核时间/); assert.doesNotMatch(card(), /采集声明尚未生效/);
+  assert.equal(h.headline(), "需要你做决定"); assert.equal(h.requests.length, 0);
+  h.setWall(before - 10000); await h.wake(); assert.match(card(), /状态快照已到复核时间/);
+  await h.invalidate(); assert.equal(h.card("公司行动交叉核验进度"), undefined);
+  assert.equal(h.requests.length, 0);
+  const without = { ...state }; delete without.action_drafts;
+  const original = JSON.parse(snapshot); delete original.action_drafts;
+  assert.deepEqual(without, original);
+});
+
 test("fee submission releases only its own lock; lost response retries exact command and session invalidation clears it", async t => {
   const state = costDisplayState(), h = mount(t, state, "plan"); await h.flush();
   (h.node("InvestorMonitorCostPanel")!.props.onEditingChange as (value: boolean) => void)(true); await h.flush();
