@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from tests.investor import evidence_fixture as fixture, test_data_evidence as evidence, test_runtime as queue
-from worker.investor import data_evidence, data_snapshot
+from worker.investor import data_evidence, data_snapshot, source_inputs
 from worker.investor.data_evidence import _fact_validation_scope, resolve_capture, resolve_review, review_source, validate_facts
 from worker.market.contracts import validate_contract
 from worker.market.providers import longport
@@ -104,6 +104,38 @@ class SnapshotValidationReuseTests(unittest.TestCase):
     review = evidence.InvestorDataTests.review
     prepare = evidence.InvestorDataTests.prepare
     stub_official_capture = evidence.InvestorDataTests.stub_official_capture
+
+    def test_header_checks_reuse_only_pure_fact_validation_across_all_shards(self):
+        values = fixture.create(self.db, "w", "synthetic-investor")
+        before = self.db.total_changes
+        with patch.object(data_evidence, "validate_contract", wraps=validate_contract) as schemas, \
+                patch.object(longport, "_parse_child_projection", wraps=longport._parse_child_projection) as payloads:
+            source_inputs.resolve_evidence_input(self.db, "w", values["source"]["id"], now=fixture.NOW, header_only=True)
+            self.assertEqual(schemas.call_count, 6)
+            self.assertEqual(payloads.call_count, len(values["captures"]))
+            source_inputs.resolve_evidence_input(self.db, "w", values["source"]["id"], now=fixture.NOW, header_only=True)
+            self.assertEqual(schemas.call_count, 12)
+            self.assertEqual(payloads.call_count, 2 * len(values["captures"]))
+        self.assertEqual(self.db.total_changes, before)
+        self.assertIsNone(data_evidence._FACT_VALIDATIONS.get())
+        self.assert_no_finance()
+
+    def test_header_payload_corruption_is_rejected_after_pure_facts_are_warm(self):
+        values = fixture.create(self.db, "w", "synthetic-investor")
+        ordered = [row["capture_id"] for row in json.loads(values["source"]["document_json"])["snapshot"]["capture_refs"]]
+        target = ordered[-1]
+        original = source_inputs.resolve_capture; visited = []
+        def damaged(db, workspace, identifier, **kwargs):
+            visited.append(identifier)
+            if identifier == target:
+                db.execute("DROP TRIGGER investor_price_payload_no_update")
+                db.execute("UPDATE investor_price_payloads SET projection=? WHERE capture_id=?", (b"{}", target))
+            return original(db, workspace, identifier, **kwargs)
+        with patch.object(source_inputs, "resolve_capture", side_effect=damaged), self.assertRaises(WorkbenchError):
+            source_inputs.resolve_evidence_input(self.db, "w", values["source"]["id"], now=fixture.NOW, header_only=True)
+        self.assertEqual(visited, ordered)
+        self.assertIsNone(data_evidence._FACT_VALIDATIONS.get())
+        self.assert_no_finance()
 
     def test_shards_share_only_fact_validation_with_identical_full_reconstruction(self):
         values = fixture.create(self.db, "w", "synthetic-investor", admit=False)

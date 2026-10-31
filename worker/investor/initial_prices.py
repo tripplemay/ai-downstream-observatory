@@ -1,15 +1,16 @@
 """First monitoring prices from the selected research authority, no licence defaults."""
 
 from datetime import timedelta
+import sqlite3
 from zoneinfo import ZoneInfo
 
 from worker.market.contracts import validate_contract
 from worker.market.providers import longport
-from worker.orchestration.db import WorkbenchError, canonical_json, content_hash, instant, new_id, stamp, transaction
+from worker.orchestration.db import WorkbenchError, assert_writable, canonical_json, content_hash, instant, new_id, stamp, transaction
 from worker.orchestration.jobs import JobCommit, assert_lease, enqueue_job, enqueue_notification
 from . import data_evidence
 from .confirmed_capture import resolve_confirmed_capture
-from .data_evidence import _assert, _audit, _audit_binding, _object, _owner, collection_binding, resolve_capture
+from .data_evidence import _assert, _audit, _audit_binding, _fact_validation_scope, _object, _owner, collection_binding, resolve_capture
 from .model_runtime import _clock, _latest
 from .monitor_admission import current_monitor_model
 from .monitor_bootstrap import MAX_QUOTE_AGE_SECONDS
@@ -101,6 +102,8 @@ def _available(db, workspace, spec, at):
 
 def discover_initial_prices(db, *, limit=100, now=None, stop_requested=None):
     _assert(type(limit) is int and 1 <= limit <= 1000); at = _clock(now)
+    _assert(not db.in_transaction, "INITIAL_PRICE_DISCOVERY_REQUIRES_AUTOCOMMIT")
+    assert_writable(db)
     models = db.execute("""SELECT m.* FROM investor_models m JOIN investor_model_controls c ON c.model_id=m.id AND c.workspace_id=m.workspace_id
         WHERE c.version=(SELECT max(version) FROM investor_model_controls WHERE model_id=m.id) AND c.enabled=1 AND c.created_at<=?
           AND json_extract(m.document_json,'$.data_mode')='reconstructed' AND json_extract(m.document_json,'$.valid_until')>?
@@ -110,18 +113,30 @@ def discover_initial_prices(db, *, limit=100, now=None, stop_requested=None):
     for model in models:
         if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
         try:
-            with transaction(db):
+            # A concurrent commit prevents this WAL read snapshot from upgrading
+            # to a writer. Never publish a plan checked against an older snapshot.
+            with transaction(db, immediate=False), _fact_validation_scope():
                 context = _context(db, model["workspace_id"], model["id"], at)
+                plans = []
                 for identity in sorted(context[4]):
+                    if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
                     spec = _plan(db, model["workspace_id"], context, identity, at)
                     if _available(db, model["workspace_id"], spec, at) or db.execute("SELECT 1 FROM investor_initial_price_requests WHERE model_id=? AND listing_id=? AND session_date=?",
                             (model["id"], identity, spec["session_date"])).fetchone(): continue
+                    plans.append(spec)
+                if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
+                assert_writable(db)
+                actor = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (model["workspace_id"],)).fetchone()[0]
+                for spec in plans:
                     identifier, digest = new_id("initial-price-request"), content_hash(spec)
-                    actor = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (model["workspace_id"],)).fetchone()[0]
                     audit = _audit(db, actor, "investor_schedule_initial_price", "investor_initial_price_request", identifier, {"content_hash": digest}, at)
                     db.execute("INSERT INTO investor_initial_price_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (identifier, model["workspace_id"], model["id"], spec["control_id"], spec["reference_input_id"], identity, spec["market"], spec["session_date"],
+                        (identifier, model["workspace_id"], model["id"], spec["control_id"], spec["reference_input_id"], spec["listing_id"], spec["market"], spec["session_date"],
                         spec["rights_review_id"], spec["listing_review_id"], spec["calendar_review_id"], canonical_json(spec), digest, actor, at, audit))
+                if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
+        except sqlite3.OperationalError as error:
+            if getattr(error, "sqlite_errorcode", None) not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_BUSY_SNAPSHOT): raise
+            continue
         except WorkbenchError as error:
             if str(error) in ("WORKBENCH_READ_ONLY", "RESTORE_PENDING_REVIEW", "WORKER_STOP_REQUESTED"): raise
             enqueue_notification(db, "initial-price-gap:" + model["id"], "investor.initial_price_gap",

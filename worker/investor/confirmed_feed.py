@@ -2,6 +2,7 @@
 
 from datetime import timedelta
 from math import ceil
+import sqlite3
 from zoneinfo import ZoneInfo
 
 from worker.market.contracts import validate_contract
@@ -9,7 +10,7 @@ from worker.market.providers import longport, longport_confirmed as receiver
 from worker.orchestration.db import WorkbenchError, assert_writable, canonical_json, content_hash, instant, new_id, stamp, transaction
 from worker.orchestration.jobs import JobCommit, assert_lease, enqueue_job, enqueue_notification, heartbeat
 from . import confirmed_capture
-from .data_evidence import _assert, _audit, _audit_binding, _object, _owner, resolve_review
+from .data_evidence import _assert, _audit, _audit_binding, _fact_validation_scope, _object, _owner, resolve_review
 from .model_runtime import _clock, _latest
 from .monitor_admission import admit_monitor_data, current_monitor_model, latest_monitor_evidence, monitor_evidence_document
 from .monitor_data import resolve_monitor_data
@@ -91,28 +92,34 @@ def market_plan(db, workspace, model, definition, control, source, document, res
 def discover_confirmed_watches(db, *, limit=100, now=None, stop_requested=None):
     _assert(type(limit) is int and 1 <= limit <= 1000)
     at = _clock(now)
-    with transaction(db):
-        models = db.execute("""SELECT m.* FROM investor_models m JOIN investor_model_controls c ON c.model_id=m.id
+    _assert(not db.in_transaction, "CONFIRMED_FEED_DISCOVERY_REQUIRES_AUTOCOMMIT")
+    assert_writable(db)
+    models = db.execute("""SELECT m.* FROM investor_models m JOIN investor_model_controls c ON c.model_id=m.id
           WHERE c.version=(SELECT max(version) FROM investor_model_controls WHERE model_id=m.id) AND c.enabled=1
           AND m.profile_id=(SELECT id FROM investor_profiles WHERE workspace_id=m.workspace_id ORDER BY version DESC LIMIT 1)
           AND m.plan_id=(SELECT plan_id FROM investor_plan_selections WHERE workspace_id=m.workspace_id ORDER BY created_at DESC,rowid DESC LIMIT 1)
           AND json_extract(m.document_json,'$.data_mode')='reconstructed' AND json_extract(m.document_json,'$.valid_until')>?
           AND EXISTS(SELECT 1 FROM investor_monitor_evidence_inputs WHERE model_id=m.id)
           ORDER BY COALESCE((SELECT max(created_at) FROM investor_confirmed_feed_requests WHERE model_id=m.id),''),m.id LIMIT ?""", (at, limit)).fetchall()
-        for model in models:
-            if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
-            source = latest_monitor_evidence(db, model["workspace_id"], model["id"])
-            try:
+    for model in models:
+        if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
+        source = None
+        try:
+            with transaction(db, immediate=False), _fact_validation_scope():
+                source = latest_monitor_evidence(db, model["workspace_id"], model["id"])
                 context = _seed(db, model["workspace_id"], model["id"], source["id"], at)
                 _, definition, _, control, source, document, result = context
                 plans = []
                 for market in sorted({target["market"] for target in definition["targets"]}):
+                    if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
                     day = instant(at).astimezone(ZoneInfo(longport._MARKETS[market][0])).date().isoformat()
                     if db.execute("SELECT 1 FROM investor_confirmed_feed_requests WHERE model_id=? AND market=? AND session_date=?", (model["id"], market, day)).fetchone(): continue
                     if any(target["market"] == market and instant(target["observed_at"]).astimezone(ZoneInfo(longport._MARKETS[market][0])).date().isoformat() >= day for target in result["projection"]["quotes"]): continue
                     planned = market_plan(db, model["workspace_id"], model, definition, control, source, document, result, market, day, at)
                     if planned is None: continue
                     plans.append(planned)
+                if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
+                assert_writable(db)
                 for planned in plans:
                     identifier, digest = new_id("confirmed-feed-request"), content_hash(planned)
                     actor = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (model["workspace_id"],)).fetchone()[0]
@@ -120,13 +127,19 @@ def discover_confirmed_watches(db, *, limit=100, now=None, stop_requested=None):
                     db.execute("INSERT INTO investor_confirmed_feed_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (identifier, model["workspace_id"], model["id"], control["id"], source["id"], planned["market"], planned["session_date"],
                         planned["not_before"], planned["latest_start"], planned["stop_at"], canonical_json(planned), digest, actor, at, audit))
-            except WorkbenchError:
-                enqueue_notification(db, "confirmed-feed-source-gap:" + model["id"] + ":" + source["id"], "investor.confirmed_feed_source_gap",
-                    {"workspace_id": model["workspace_id"], "model_id": model["id"], "code": "CONFIRMED_FEED_SOURCE_GAP"}, now=at)
-        pending = db.execute("""SELECT r.* FROM investor_confirmed_feed_requests r LEFT JOIN job_runs j
+                if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
+        except sqlite3.OperationalError as error:
+            if getattr(error, "sqlite_errorcode", None) not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_BUSY_SNAPSHOT): raise
+            continue
+        except WorkbenchError as error:
+            if str(error) in ("WORKER_STOP_REQUESTED", "WORKBENCH_READ_ONLY", "RESTORE_PENDING_REVIEW"): raise
+            if source is None: raise
+            enqueue_notification(db, "confirmed-feed-source-gap:" + model["id"] + ":" + source["id"], "investor.confirmed_feed_source_gap",
+                {"workspace_id": model["workspace_id"], "model_id": model["id"], "code": "CONFIRMED_FEED_SOURCE_GAP"}, now=at)
+    pending = db.execute("""SELECT r.* FROM investor_confirmed_feed_requests r LEFT JOIN job_runs j
           ON j.job_type=? AND j.scope=r.workspace_id AND j.period=r.id AND j.input_version=r.content_hash
           WHERE j.id IS NULL ORDER BY r.not_before,r.created_at,r.id LIMIT ?""", (JOB_TYPE, limit)).fetchall()
-        return [enqueue_job(db, JOB_TYPE, row["workspace_id"], row["id"], row["content_hash"], max_attempts=1, not_before=row["not_before"], now=at) for row in pending]
+    return [enqueue_job(db, JOB_TYPE, row["workspace_id"], row["id"], row["content_hash"], max_attempts=1, not_before=row["not_before"], now=at) for row in pending]
 
 
 def _request_header(db, workspace, identifier, at):
