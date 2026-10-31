@@ -33,10 +33,14 @@ def _ref(value):
         "source_id": value["source"]["id"], "source_hash": value["source"]["content_hash"]}
 
 
-def _bindings(db, workspace, inputs, checked, *, watch_seconds=None):
+def _bindings(db, workspace, inputs, checked, *, watch_seconds=None, allow_continued=False):
     bindings, reviews = [], []
     for spec in inputs:
         loaded = {kind: resolve_review(db, workspace, spec[kind + "_review_id"], kind, now=checked) for kind in _KINDS}
+        _assert(type(allow_continued) is bool)
+        if not allow_continued:
+            from .calendar_continuation import assert_collection_calendar
+            assert_collection_calendar(db, loaded["calendar"])
         grant, asset, calendar = (loaded[kind]["facts"] for kind in _KINDS)
         _assert(USES <= set(grant["uses"]) and asset["market"] in grant["markets"]
             and instant(grant["valid_from"]) <= instant(checked) < instant(grant["valid_until"]), "INVESTOR_DATA_USE_NOT_GRANTED")
@@ -198,7 +202,7 @@ def resolve_confirmed_capture(db, workspace_id, capture_id, *, now=None, allow_s
         "INVESTOR_DATA_PAYLOAD_PURGED")
     specs = [{**{kind + "_review_id": value["reviews"][kind]["review_id"] for kind in _KINDS},
         "session_date": value["target"]["session_date"]} for value in receipt["bindings"]]
-    binding, reviews = _bindings(db, workspace_id, specs, checked)
+    binding, reviews = _bindings(db, workspace_id, specs, checked, allow_continued=True)
     _assert(binding == receipt["bindings"] and row["retain_until"] == _expiry(reviews, row["created_at"])
         and all(instant(value[kind]["review"]["created_at"]) <= instant(receipt["call_started_at"]) for value in reviews for kind in _KINDS))
     raw = db.execute("SELECT projection FROM investor_confirmed_payloads WHERE capture_id=?", (capture_id,)).fetchone()

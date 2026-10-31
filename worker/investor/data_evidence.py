@@ -142,7 +142,7 @@ def validate_facts(kind, facts):
         validated.add(key)
 
 
-def review_source(db, workspace_id, actor_id, source_id, decision, facts, reason, valid_until, *, now=None):
+def review_source(db, workspace_id, actor_id, source_id, decision, facts, reason, valid_until, *, now=None, continues_calendar_review_id=None):
     _assert(decision in ("approved", "rejected", "withdrawn") and type(reason) is str and 0 < len(reason.strip()) <= 2000)
     created, expiry = _milliseconds(now), _milliseconds(valid_until)
     _assert(created < expiry)
@@ -158,8 +158,15 @@ def review_source(db, workspace_id, actor_id, source_id, decision, facts, reason
                 _assert(facts["fee_as_of"] <= created[:10], "INVESTOR_DATA_FEE_DATE_IN_FUTURE")
         else:
             _assert(facts is None)
-        previous = db.execute("SELECT version,created_at FROM investor_data_reviews WHERE source_id=? ORDER BY version DESC LIMIT 1", (source_id,)).fetchone()
+        previous = db.execute("SELECT id,version,created_at FROM investor_data_reviews WHERE source_id=? ORDER BY version DESC LIMIT 1", (source_id,)).fetchone()
         _assert(previous is None or previous["created_at"] <= created)
+        if continues_calendar_review_id is not None:
+            _assert(source["kind"] == "calendar" and decision == "approved" and previous is not None
+                and continues_calendar_review_id == previous["id"], "INVESTOR_CALENDAR_CONTINUATION_INVALID")
+            from .calendar_continuation import check_extension, check_registration_depth
+            old = resolve_review(db, workspace_id, continues_calendar_review_id, "calendar", now=created)
+            check_extension(old, facts)
+            check_registration_depth(db, workspace_id, continues_calendar_review_id)
         identifier, version = new_id("investor-data-review"), (previous["version"] if previous else 0) + 1
         document = {"schema_version": "investor-data-review-v1", "source_id": source_id, "source_hash": source["content_hash"],
             "kind": source["kind"], "version": version, "decision": decision, "facts": facts, "reason": reason,
@@ -169,7 +176,11 @@ def review_source(db, workspace_id, actor_id, source_id, decision, facts, reason
         audit = _audit(db, actor_id, "investor_review_data_source", "investor_data_review", identifier, {"content_hash": digest}, created)
         db.execute("INSERT INTO investor_data_reviews(id,workspace_id,source_id,version,decision,document_json,content_hash,actor_id,created_at,valid_until,audit_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (identifier, workspace_id, source_id, version, decision, encoded, digest, actor_id, created, expiry, audit))
-        return dict(db.execute("SELECT * FROM investor_data_reviews WHERE id=?", (identifier,)).fetchone())
+        result = dict(db.execute("SELECT * FROM investor_data_reviews WHERE id=?", (identifier,)).fetchone())
+        if continues_calendar_review_id is not None:
+            from .calendar_continuation import register_continuation
+            result["calendar_continuation_id"] = register_continuation(db, workspace_id, actor_id, continues_calendar_review_id, identifier, created)
+        return result
 
 
 def resolve_review(db, workspace_id, review_id, kind, *, now=None, require_current=True):
@@ -190,7 +201,10 @@ def resolve_review(db, workspace_id, review_id, kind, *, now=None, require_curre
         and document["valid_until"] == review["valid_until"] and document["review_basis"] == "owner_reviewed_not_provider_certified")
     if require_current:
         latest = db.execute("SELECT id FROM investor_data_reviews WHERE source_id=? ORDER BY version DESC LIMIT 1", (source["id"],)).fetchone()
-        _assert(latest[0] == review_id, "INVESTOR_DATA_REVIEW_SUPERSEDED")
+        if latest[0] != review_id:
+            _assert(kind == "calendar", "INVESTOR_DATA_REVIEW_SUPERSEDED")
+            from .calendar_continuation import current_calendar_review
+            current_calendar_review(db, workspace_id, review_id, checked)
     validate_facts(kind, document["facts"])
     if kind == "fx":
         from .managed_fx import validate_managed_review
@@ -198,10 +212,14 @@ def resolve_review(db, workspace_id, review_id, kind, *, now=None, require_curre
     return {"review": dict(review), "source": dict(source), "facts": document["facts"]}
 
 
-def collection_binding(db, workspace, rights_id, listing_id, calendar_id, start, end, now):
+def collection_binding(db, workspace, rights_id, listing_id, calendar_id, start, end, now, *, allow_continued=False):
     rights = resolve_review(db, workspace, rights_id, "rights", now=now)
     listing = resolve_review(db, workspace, listing_id, "listing", now=now)
     calendar = resolve_review(db, workspace, calendar_id, "calendar", now=now)
+    _assert(type(allow_continued) is bool)
+    if not allow_continued:
+        from .calendar_continuation import assert_collection_calendar
+        assert_collection_calendar(db, calendar)
     grant, asset, days = rights["facts"], listing["facts"], calendar["facts"]
     _assert(USES <= set(grant["uses"]) and asset["market"] in grant["markets"]
         and instant(grant["valid_from"]) <= instant(now) < instant(grant["valid_until"]), "INVESTOR_DATA_USE_NOT_GRANTED")
@@ -320,7 +338,7 @@ def resolve_capture(db, workspace_id, capture_id, *, now=None, allow_synthetic=F
     _assert(instant(receipt["source"]["call_started_at"]) <= instant(receipt["source"]["call_returned_at"])
         < instant(row["created_at"]) + timedelta(milliseconds=1))
     request = receipt["request"]
-    binding = collection_binding(db, workspace_id, row["rights_review_id"], row["listing_review_id"], row["calendar_review_id"], request["start_date"], request["end_date"], checked)
+    binding = collection_binding(db, workspace_id, row["rights_review_id"], row["listing_review_id"], row["calendar_review_id"], request["start_date"], request["end_date"], checked, allow_continued=True)
     _assert(all(instant(binding[kind]["review"]["created_at"]) <= instant(receipt["source"]["call_started_at"]) for kind in ("rights", "listing", "calendar")))
     _assert(binding["request"] == request and receipt["review_hashes"] == {kind: binding[kind]["review"]["content_hash"] for kind in ("rights", "listing", "calendar")})
     expected_retain = min(instant(binding["rights"]["facts"]["valid_until"]), instant(binding["rights"]["review"]["valid_until"]),

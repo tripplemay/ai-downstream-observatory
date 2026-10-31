@@ -8,6 +8,7 @@ import { investorInstant } from "./schemas";
 import { validateInvestorSourceDocument } from "./kernel-contracts";
 import { readInvestorConfirmedCapture } from "./confirmed-source";
 import { managedFxReviewUnavailable, verifyManagedFxReview } from "./managed-fx-source";
+import { currentCalendarReview } from "./calendar-continuation";
 
 type Obj = Record<string, unknown>;
 type Row = { id: string; workspace_id: string; document_json: string; content_hash: string; created_at: string; actor_id: string; audit_id: string; valid_until: string; source_qualification: string };
@@ -68,12 +69,28 @@ function review(db: Database.Database, workspace: string, ref: Obj, now: string)
   return { row, source, facts };
 }
 
-/** A separate downstream-use gate still checks the original sealed, current review. */
+function bareCalendarReview(db: Database.Database, workspace: string, id: string, now: string): Review {
+  const ref = db.prepare("SELECT r.id review_id,r.content_hash review_hash,r.source_id,s.content_hash source_hash FROM investor_data_reviews r JOIN investor_data_sources s ON s.id=r.source_id AND s.workspace_id=r.workspace_id WHERE r.id=? AND r.workspace_id=? AND s.kind='calendar'")
+    .get(id, workspace) as Obj | undefined;
+  check(ref);
+  return review(db, workspace, ref, now);
+}
+
+export function readInvestorCurrentCalendarReview(db: Database.Database, workspace: string, id: string, now: string): Review {
+  return currentCalendarReview(db, workspace, bareCalendarReview(db, workspace, id, now), now,
+    (next, at) => bareCalendarReview(db, workspace, next, at));
+}
+
+/** Historical calendar continuation does not change the returned original facts. */
 export function readInvestorSourceReview(db: Database.Database, workspace: string, ref: Obj, now: string): Review {
   const value = review(db, workspace, ref, now);
   const latest = db.prepare("SELECT id FROM investor_data_reviews WHERE source_id=? AND workspace_id=? ORDER BY version DESC LIMIT 1")
     .get(value.source.id, workspace) as { id: string } | undefined;
-  check(latest?.id === value.row.id);
+  check(latest);
+  if (latest.id !== value.row.id) {
+    check(value.source.kind === "calendar");
+    currentCalendarReview(db, workspace, value, now, (id, at) => bareCalendarReview(db, workspace, id, at));
+  }
   return value;
 }
 
@@ -84,7 +101,11 @@ function unavailable(db: Database.Database, workspace: string, document: Obj, no
     const row = db.prepare("SELECT id,source_id,content_hash,version,decision,valid_until FROM investor_data_reviews WHERE id=? AND workspace_id=?").get(ref.review_id, workspace) as Obj | undefined;
     check(row && row.content_hash === ref.review_hash && row.source_id === ref.source_id);
     const latest = db.prepare("SELECT id FROM investor_data_reviews WHERE source_id=? ORDER BY version DESC LIMIT 1").get(row.source_id) as Obj;
-    if (latest.id !== row.id || row.decision !== "approved") return "REFERENCE_SOURCE_NO_LONGER_CURRENT";
+    if (row.decision !== "approved") return "REFERENCE_SOURCE_NO_LONGER_CURRENT";
+    if (latest.id !== row.id) {
+      try { readInvestorCurrentCalendarReview(db, workspace, row.id as string, now); }
+      catch { return "REFERENCE_SOURCE_NO_LONGER_CURRENT"; }
+    }
     if (now >= (row.valid_until as string)) return "REFERENCE_SOURCE_EXPIRED";
     const managed = managedFxReviewUnavailable(db, workspace, row.id, now); if (managed) return managed;
   }

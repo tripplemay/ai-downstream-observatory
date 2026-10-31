@@ -38,7 +38,7 @@ def _seed(db, workspace, model_id, input_id, at):
     return model, definition, reference, control, source, document, result
 
 
-def _specs(db, workspace, document, catalog):
+def _specs(db, workspace, document, catalog, at):
     chosen = {}
     for segment in document["segments"]:
         snapshot = segment["snapshot"]
@@ -59,11 +59,17 @@ def _specs(db, workspace, document, catalog):
                 if identity not in chosen or chosen[identity][0] < rank:
                     chosen[identity] = rank, {kind + "_review_id": target[kind + "_review_id"] for kind in ("rights", "listing", "calendar")}
     _assert(set(chosen) == set(catalog))
-    return {identity: value[1] for identity, value in sorted(chosen.items())}
+    from .calendar_continuation import current_calendar_review
+    result = {}
+    for identity, value in sorted(chosen.items()):
+        spec = value[1]
+        current = current_calendar_review(db, workspace, spec["calendar_review_id"], at)
+        result[identity] = {**spec, "calendar_review_id": current["review"]["id"]}
+    return result
 
 
 def market_plan(db, workspace, model, definition, control, source, document, result, market, day, at):
-    specs = _specs(db, workspace, document, result["catalog"])
+    specs = _specs(db, workspace, document, result["catalog"], at)
     targets = [{**specs[row["listing_id"]], "session_date": day} for row in definition["targets"] if row["market"] == market]
     _assert(targets)
     calendar = _object(db.execute("SELECT document_json FROM investor_data_reviews WHERE id=? AND workspace_id=?", (targets[0]["calendar_review_id"], workspace)).fetchone()[0])["facts"]
