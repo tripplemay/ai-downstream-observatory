@@ -2,7 +2,7 @@
 
 from worker.market.contracts import validate_contract
 from worker.orchestration.db import canonical_json, content_hash, new_id, transaction
-from .data_evidence import _assert, _audit, _audit_binding, _object, _owner, resolve_capture, resolve_review
+from .data_evidence import _assert, _audit, _audit_binding, _fact_validation_scope, _object, _owner, resolve_capture, resolve_review
 from .data_snapshot import build_dataset
 from .runtime import _milliseconds
 from .strategy import research_engine, validate_reference_inputs
@@ -108,6 +108,11 @@ def source_document(db, workspace_id, input_id, now):
 
 
 def check_source_refs(db, workspace_id, document, now):
+    with _fact_validation_scope():
+        _check_source_refs(db, workspace_id, document, now)
+
+
+def _check_source_refs(db, workspace_id, document, now):
     _assert(now < document["valid_until"], "INVESTOR_DATA_SOURCE_EXPIRED")
     for ref in document["snapshot"]["review_refs"]:
         value = resolve_review(db, workspace_id, ref["review_id"], _review_kind(db, workspace_id, ref["review_id"]), now=now)

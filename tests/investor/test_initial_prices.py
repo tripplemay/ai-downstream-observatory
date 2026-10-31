@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from tests.investor import test_monitor_bootstrap as bootstrap, test_monitor_data as monitor
 from worker.investor import data_evidence, initial_prices
 from worker.market.providers import longport
-from worker.orchestration.db import WorkbenchError, instant, stamp
+from worker.orchestration.db import WorkbenchError, instant, stamp, open_database
 from worker.orchestration.jobs import claim_job, complete_job
 from worker.orchestration.runtime import run_pending_once, command_handler
 
@@ -49,6 +49,47 @@ class InitialPriceTests(unittest.TestCase):
     def clocked(self):
         return patch.multiple(data_evidence, _milliseconds=lambda value=None: NOW if value is None else value,
             instant=lambda value=None: instant(NOW if value is None else value))
+
+    def test_discovery_validation_does_not_reserve_writer_even_between_targets(self):
+        self.prepare()
+        other = open_database(self.path); self.addCleanup(other.close)
+        other.execute("PRAGMA busy_timeout=0")
+        phases = []
+        def instrument(name, original):
+            def checked(*args, **kwargs):
+                phases.append(name)
+                other.execute("BEGIN IMMEDIATE"); other.execute("ROLLBACK")
+                return original(*args, **kwargs)
+            return checked
+        with patch.object(initial_prices, "_context", side_effect=instrument("context", initial_prices._context)), \
+                patch.object(initial_prices, "_plan", side_effect=instrument("plan", initial_prices._plan)), \
+                patch.object(initial_prices, "_available", side_effect=instrument("available", initial_prices._available)), \
+                patch.object(longport, "_collect_isolated") as sdk:
+            jobs = initial_prices.discover_initial_prices(self.db, now=NOW)
+        sdk.assert_not_called()
+        self.assertEqual(phases, ["context", "plan", "available", "plan", "available"])
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual({job["max_attempts"] for job in jobs}, {1})
+        self.assert_no_finance()
+
+    def test_concurrent_withdrawal_cannot_upgrade_stale_discovery_snapshot(self):
+        self.prepare()
+        other = open_database(self.path); self.addCleanup(other.close)
+        other.execute("PRAGMA busy_timeout=0")
+        original = initial_prices._context
+        def withdrawn(*args, **kwargs):
+            result = original(*args, **kwargs)
+            data_evidence.review_source(other, "w", "synthetic-investor", self.refs[0]["rights"]["source_id"], "withdrawn", None,
+                "Fictional concurrent withdrawal during read preparation", monitor.EXPIRY, now=NOW)
+            return result
+        with patch.object(initial_prices, "_context", side_effect=withdrawn), patch.object(longport, "_collect_isolated") as sdk:
+            self.assertEqual(initial_prices.discover_initial_prices(self.db, now=NOW), [])
+        sdk.assert_not_called()
+        self.assertEqual(self.db.execute("SELECT count(*) FROM investor_initial_price_requests").fetchone()[0], 0)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM audit_events WHERE action='investor_schedule_initial_price'").fetchone()[0], 0)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM outbox WHERE topic='investor.initial_price_gap'").fetchone()[0], 0)
+        self.assertEqual(initial_prices.discover_initial_prices(self.db, now=NOW), [])
+        self.assert_no_finance()
 
     def test_default_longport_acquires_missing_past_days_then_core_bootstraps_both_models(self):
         for fixed in (False, True):
