@@ -130,8 +130,12 @@ def source_unavailable_reason(db, workspace_id, document, now):
         row = db.execute("SELECT * FROM investor_data_reviews WHERE id=? AND workspace_id=?", (ref["review_id"], workspace_id)).fetchone()
         _assert(row is not None and row["content_hash"] == ref["review_hash"] and row["source_id"] == ref["source_id"])
         latest = db.execute("SELECT id FROM investor_data_reviews WHERE source_id=? ORDER BY version DESC LIMIT 1", (row["source_id"],)).fetchone()
-        if latest[0] != row["id"] or row["decision"] != "approved":
+        if row["decision"] != "approved":
             return "REFERENCE_SOURCE_NO_LONGER_CURRENT"
+        if latest[0] != row["id"]:
+            from .calendar_continuation import is_continued_calendar
+            if _review_kind(db, workspace_id, row["id"]) != "calendar" or not is_continued_calendar(db, workspace_id, row["id"], now):
+                return "REFERENCE_SOURCE_NO_LONGER_CURRENT"
         if now >= row["valid_until"]:
             return "REFERENCE_SOURCE_EXPIRED"
         from .managed_fx import managed_review_unavailable

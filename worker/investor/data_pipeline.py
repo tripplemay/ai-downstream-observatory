@@ -195,10 +195,14 @@ def main(argv=None):
             result = {"capture_id": row["capture_id"], "reason": row["reason"], "created_at": row["created_at"], "backup_purge_verified": False}
         elif args.command == "review-source":
             document = _read_private_json(args.file, MAX_REVIEW_BYTES)
-            _assert(set(document) == {"decision", "facts", "reason", "valid_until"})
+            required = {"decision", "facts", "reason", "valid_until"}
+            _assert(required <= set(document) <= required | {"continues_calendar_review_id"})
             row = review_source(db, args.workspace, args.actor, args.source, **document)
             result = {"review_id": row["id"], "version": row["version"], "decision": row["decision"], "content_hash": row["content_hash"],
                 "review_basis": "owner_reviewed_not_provider_certified"}
+            if "calendar_continuation_id" in row:
+                result.update(calendar_continuation_id=row["calendar_continuation_id"], historical_prefix_unchanged=True,
+                    historical_reference_expiry_extended=False, collection_permission_granted=False, trading_permission=False)
         elif args.command == "collect-prices":
             row = collect_prices(db, args.workspace, args.actor, args.rights_review, args.listing_review, args.calendar_review,
                 args.start, args.end, credentials_file=args.credentials_file)
