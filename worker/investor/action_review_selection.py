@@ -6,6 +6,24 @@ from .reviewed_actions import _check
 MAX_LINKS = 256
 
 
+def checkpoint_review_needs_replay(db, workspace, identifier, at):
+    from . import managed_actions as managed
+    return retired_action_review(db, workspace, identifier, at) or identifier.startswith(managed.PREFIX) \
+        and managed.managed_review_unavailable(db, workspace, identifier, at) == "REFERENCE_SOURCE_NO_LONGER_CURRENT"
+
+
+def check_paused_checkpoint_extension(db, workspace, previous, current, at, *, start_date, end_date):
+    from . import managed_actions as managed
+    from .reviewed_actions import read_historical_action_review
+    _check(previous["review"]["id"].startswith(managed.PREFIX), "AUTHORITY_REVIEW_REQUIRED")
+    original = read_historical_action_review(db, workspace, previous["review"]["id"], at)
+    _check(original == previous, "CONFIRMATION_INPUTS_CHANGED")
+    expected = managed.paused_control_successor(db, workspace, previous["review"]["id"], at)
+    selected = [value for value in managed.current_action_reviews(db, workspace, [previous["facts"]["listing_id"]], at)
+        if value["facts"]["range_start"] <= start_date <= end_date <= value["facts"]["range_end"]]
+    _check(len(selected) == 1 and selected[0] == expected == current, "SUCCESSION_AMBIGUOUS")
+
+
 def manual_successor_unavailable(db, workspace, identifier, at):
     """Negative metadata gate; current facts still need original-byte replay."""
     from . import action_review_workflow as workflow, managed_actions as managed

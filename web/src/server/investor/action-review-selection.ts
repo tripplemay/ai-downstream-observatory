@@ -1,12 +1,18 @@
 import type Database from "better-sqlite3";
 import { priceInstant as time } from "../market-price-source";
 import { readActionReviewConfirmationContext, readActionReviewConfirmationReceipt } from "./action-review-lineage";
-import { MANAGED_ACTION_PREFIX, readManagedActionAuthorityWitness, readManagedActionHeader, readManagedActionHistoricalReview, readManagedActionProgressRecord, readManagedActionReview } from "./managed-action-source";
+import { MANAGED_ACTION_PREFIX, managedActionReviewUnavailable, readManagedActionAuthorityWitness, readManagedActionHeader, readManagedActionHistoricalReview, readManagedActionProgressRecord, readManagedActionReview } from "./managed-action-source";
 import { readInvestorSourceReview, type VerifiedSourceReview } from "./source-inputs";
 import { hash } from "../ledger/service";
 
 type Obj=Record<string,unknown>;
 function check(value:unknown):asserts value {if(!value)throw new Error("ACTION_REVIEW_SELECTION_INVALID");}
+
+export function checkpointActionReviewNeedsReplay(db:Database.Database,workspace:string,id:unknown,now:string) {
+  check(typeof id==="string");
+  return actionReviewSourceRetired(db,workspace,id,now)||id.startsWith(MANAGED_ACTION_PREFIX)
+    &&managedActionReviewUnavailable(db,workspace,id,now)==="REFERENCE_SOURCE_NO_LONGER_CURRENT";
+}
 
 /** Negative metadata only; successful reads still reparse original evidence. */
 export function actionReviewManualUnavailable(db:Database.Database,workspace:string,id:unknown,now:string) {
@@ -95,12 +101,22 @@ export function checkpointPredecessorReview(db:Database.Database,workspace:strin
   const previous=id.startsWith(MANAGED_ACTION_PREFIX)?readManagedActionHistoricalReview(db,workspace,id,now):readInvestorSourceReview(db,workspace,ref,now);
   check(previous.row.content_hash === ref.review_hash&&previous.source.id === ref.source_id&&previous.source.content_hash === ref.source_hash);
   const {current,byNew,terminals}=currentSuccessions(db,workspace,previous.facts.listing_id,start,end,now);
+  const oldPublication=id.startsWith(MANAGED_ACTION_PREFIX)?db.prepare("SELECT * FROM investor_action_publications WHERE workspace_id=? AND id=?").get(workspace,id) as Obj:null;
+  const withoutEnd=(value:Obj)=>Object.fromEntries(Object.entries(value).filter(([key])=>key!=="range_end"));
+  if(!actionReviewSourceRetired(db,workspace,id,now)) {
+    check(oldPublication&&current.row.id.startsWith(MANAGED_ACTION_PREFIX));
+    const publication=db.prepare("SELECT * FROM investor_action_publications WHERE workspace_id=? AND id=?").get(workspace,current.row.id) as Obj;
+    const oldDoc=JSON.parse(oldPublication.document_json as string) as Obj,newDoc=JSON.parse(publication.document_json as string) as Obj;
+    check(oldPublication.authority_id===publication.authority_id&&Number(oldPublication.sequence)<Number(publication.sequence)
+      &&oldDoc.control_id!==newDoc.control_id&&(previous.facts.range_end as string)<=(current.facts.range_end as string)
+      &&hash(withoutEnd(previous.facts))===hash(withoutEnd(current.facts)));
+    return previous;
+  }
   let cursor:string;
   if(current.row.id.startsWith(MANAGED_ACTION_PREFIX)) {
     const row=db.prepare("SELECT authority_id FROM investor_action_publications WHERE workspace_id=? AND id=?").get(workspace,current.row.id) as Obj;cursor=row.authority_id as string;
   } else {const matches=[...terminals].filter(([,value])=>value.row.id === current.row.id);check(matches.length===1);cursor=matches[0][0];}
   check(terminals.has(cursor));
-  const oldPublication=id.startsWith(MANAGED_ACTION_PREFIX)?db.prepare("SELECT * FROM investor_action_publications WHERE workspace_id=? AND id=?").get(workspace,id) as Obj:null;
   const seen=new Set<string>();
   while(byNew.has(cursor)) {
     check(!seen.has(cursor)&&seen.size<256);seen.add(cursor);const entry=byNew.get(cursor)!,doc=entry.document;
@@ -109,7 +125,6 @@ export function checkpointPredecessorReview(db:Database.Database,workspace:strin
       const bound=db.prepare("SELECT sequence FROM investor_action_publications WHERE workspace_id=? AND id=?").get(workspace,doc.previous_publication_id) as Obj|undefined;
       check(bound&&time(oldPublication.created_at as string)<=time(doc.created_at as string)&&Number(oldPublication.sequence)<=Number(bound.sequence)
         &&(previous.facts.range_end as string)<=((doc.append_proof as Obj).previous_coverage_end as string));
-      const withoutEnd=(value:Obj)=>Object.fromEntries(Object.entries(value).filter(([key])=>key!=="range_end"));
       check(hash(withoutEnd(previous.facts))===hash(withoutEnd(entry.before.facts)));return previous;
     }
     cursor=doc.previous_authority_id as string;

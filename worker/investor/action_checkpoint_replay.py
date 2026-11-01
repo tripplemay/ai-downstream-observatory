@@ -1,4 +1,4 @@
-"""Replay an immutable v4 checkpoint through verified succession, never admit old input."""
+"""Replay immutable v4 checkpoints through proven extensions, never admit old input."""
 
 from contextvars import ContextVar
 from copy import deepcopy
@@ -17,7 +17,7 @@ def checkpoint_action_review(db, workspace, identifier, kind, at):
 
 
 def replay_checkpoint_monitor_source(db, workspace, definition, checkpoint, document, now):
-    from .action_review_selection import check_action_review_extension, retired_action_review
+    from .action_review_selection import check_action_review_extension, check_paused_checkpoint_extension, checkpoint_review_needs_replay, retired_action_review
     from . import managed_actions as managed
     from .monitor_admission import monitor_evidence_document
     from .monitor_data import resolve_monitor_data
@@ -37,14 +37,15 @@ def replay_checkpoint_monitor_source(db, workspace, definition, checkpoint, docu
             snapshot = segment["snapshot"]
             for ref in snapshot["review_refs"]:
                 identifier = ref["review_id"]
-                if not retired_action_review(db, workspace, identifier, now): continue
+                if not checkpoint_review_needs_replay(db, workspace, identifier, now): continue
                 previous = read_historical_action_review(db, workspace, identifier, now) if identifier.startswith(managed.PREFIX) else resolve_review(db, workspace, identifier, "actions", now=now)
                 _assert(previous["review"]["content_hash"] == ref["review_hash"] and previous["source"]["id"] == ref["source_id"]
                     and previous["source"]["content_hash"] == ref["source_hash"], "INVESTOR_MONITOR_CHECKPOINT_INPUT_CHANGED")
                 candidates = [value for value in managed.current_action_reviews(db, workspace, [previous["facts"]["listing_id"]], now)
                     if value["facts"]["range_start"] <= snapshot["range_start"] <= snapshot["range_end"] <= value["facts"]["range_end"]]
                 _assert(len(candidates) == 1, "INVESTOR_MONITOR_CHECKPOINT_SUCCESSION_AMBIGUOUS")
-                check_action_review_extension(db, workspace, previous, candidates[0], now, start_date=snapshot["range_start"], end_date=snapshot["range_end"])
+                check_extension = check_action_review_extension if retired_action_review(db, workspace, identifier, now) else check_paused_checkpoint_extension
+                check_extension(db, workspace, previous, candidates[0], now, start_date=snapshot["range_start"], end_date=snapshot["range_end"])
                 allowed[identifier] = previous
         if not allowed: return original
         token = _SCOPE.set((db, workspace, now, allowed))

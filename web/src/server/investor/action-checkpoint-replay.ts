@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type Database from "better-sqlite3";
 import { hash } from "../ledger/service";
-import { actionReviewSourceRetired, checkpointPredecessorReview } from "./action-review-selection";
+import { checkpointActionReviewNeedsReplay, checkpointPredecessorReview } from "./action-review-selection";
 import { readInvestorMonitorEvidenceSource } from "./monitor-source";
 import type { VerifiedSourceReview } from "./source-inputs";
 
@@ -24,7 +24,7 @@ export function readCheckpointMonitorSource(db:Database.Database,workspace:strin
     const reviews=new Map<string,VerifiedSourceReview>();
     for(const segment of original.document.segments as Obj[]) {
       const snapshot=segment.snapshot as Obj;
-      for(const ref of snapshot.review_refs as Obj[])if(actionReviewSourceRetired(db,workspace,ref.review_id,now))
+      for(const ref of snapshot.review_refs as Obj[])if(checkpointActionReviewNeedsReplay(db,workspace,ref.review_id,now))
         reviews.set(ref.review_id as string,checkpointPredecessorReview(db,workspace,ref,snapshot.range_start as string,snapshot.range_end as string,now));
     }
     if(!reviews.size)return original;
