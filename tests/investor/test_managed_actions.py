@@ -351,7 +351,9 @@ class ManagedActionTests(unittest.TestCase):
         self.assertIn(publication,[ref['review_id'] for ref in result['manifest']['review_refs']])
         self.assertNotIn(self.base['id'],[ref['review_id'] for ref in result['manifest']['review_refs']])
         managed.set_authority_enabled(self.db,'w','synthetic-investor',self.authority['id'],False,now=AT)
-        self.assertEqual(source_retention._snapshot_reason(self.db,'w',result['manifest'],result['valid_until'],AT),'REFERENCE_SOURCE_NO_LONGER_CURRENT')
+        self.assertEqual(source_inputs.source_unavailable_reason(self.db,'w',document,AT),'REFERENCE_SOURCE_NO_LONGER_CURRENT')
+        self.assertIsNone(source_retention._snapshot_reason(self.db,'w',result['manifest'],result['valid_until'],AT))
+        with self.assertRaises(WorkbenchError): source_inputs.check_source_refs(self.db,'w',document,AT)
         self.assert_no_finance()
 
     def test_control_replacement_alias_cannot_delete_a_prior_version(self):

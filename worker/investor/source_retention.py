@@ -6,7 +6,7 @@ from .data_evidence import _assert, _audit_binding, _object, _owner, review_head
 from .model_contracts import definition_schema, reference_schema, validate_definition
 from .model_runtime import _clock, _sealed
 from .monitor_admission import monitor_evidence_document
-from .source_inputs import source_document, source_unavailable_reason
+from .source_inputs import source_document, source_storage_unavailable_reason
 
 
 def _review_receipt(db, workspace, row, now):
@@ -45,7 +45,7 @@ def _snapshot_reason(db, workspace, snapshot, valid_until, now):
                 and audit["action"] == ("investor_purge_confirmed_payload" if confirmed else "investor_purge_price_payload")
                 and audit["object_type"] == ("investor_confirmed_capture" if confirmed else "investor_price_capture")
                 and audit["object_id"] == ref["capture_id"] and _object(audit["payload_json"]) == {"reason": purge["reason"]})
-    return source_unavailable_reason(db, workspace, {"snapshot": snapshot, "valid_until": valid_until}, now)
+    return source_storage_unavailable_reason(db, workspace, {"snapshot": snapshot, "valid_until": valid_until}, now)
 
 
 def _monitor_reason(db, workspace, definition, input_id, evaluated_at, now):
@@ -127,7 +127,31 @@ def monitor_payload_unavailable(db, row, kind, now):
 
 
 _CANDIDATES = """
-WITH source_snapshots AS (
+WITH action_dependencies AS (
+  SELECT p.id,p.workspace_id,j.key kind,json_extract(j.value,'$.capture_id') capture_id
+    FROM investor_action_publications p JOIN investor_action_authorities a ON a.id=p.authority_id AND a.workspace_id=p.workspace_id
+    JOIN json_each(a.document_json,'$.anchor_captures') j WHERE p.status='published'
+  UNION ALL
+  SELECT p.id,p.workspace_id,j.key,json_extract(j.value,'$.capture_id') FROM investor_action_publications p
+    JOIN json_each(p.document_json,'$.capture_refs') j WHERE p.status='published'
+), action_storage_unavailable AS (
+  SELECT p.id,p.workspace_id FROM investor_action_publications p JOIN investor_action_authorities a ON a.id=p.authority_id AND a.workspace_id=p.workspace_id
+    JOIN investor_data_reviews b ON b.id=a.base_review_id JOIN investor_data_reviews l ON l.id=a.listing_review_id
+    WHERE p.status='published' AND (EXISTS(SELECT 1 FROM investor_data_reviews n WHERE (n.source_id=b.source_id AND n.version>b.version)
+      OR (n.source_id=l.source_id AND n.version>l.version)) OR EXISTS(
+      SELECT 1 FROM action_dependencies d JOIN investor_issuer_captures c ON c.id=d.capture_id AND c.workspace_id=d.workspace_id
+        JOIN investor_issuer_requests r ON r.id=c.request_id AND r.workspace_id=c.workspace_id
+      WHERE d.id=p.id AND d.workspace_id=p.workspace_id AND d.kind='issuer' AND (c.retain_until<=:at
+        OR EXISTS(SELECT 1 FROM investor_issuer_purges x WHERE x.capture_id=c.id)
+        OR NOT EXISTS(SELECT 1 FROM investor_issuer_controls x WHERE x.id=r.control_id AND x.enabled=1
+          AND x.version=(SELECT max(version) FROM investor_issuer_controls WHERE authority_id=r.authority_id)))) OR EXISTS(
+      SELECT 1 FROM action_dependencies d JOIN investor_eodhd_captures c ON c.id=d.capture_id AND c.workspace_id=d.workspace_id
+        JOIN investor_eodhd_requests r ON r.id=c.request_id AND r.workspace_id=c.workspace_id
+      WHERE d.id=p.id AND d.workspace_id=p.workspace_id AND d.kind IN ('dividends','splits') AND (c.retain_until<=:at
+        OR EXISTS(SELECT 1 FROM investor_eodhd_purges x WHERE x.capture_id=c.id)
+        OR NOT EXISTS(SELECT 1 FROM investor_eodhd_controls x WHERE x.id=r.control_id AND x.enabled=1
+          AND x.version=(SELECT max(version) FROM investor_eodhd_controls WHERE authority_id=r.authority_id)))) )
+), source_snapshots AS (
   SELECT 'research' kind,i.id,i.workspace_id,i.created_at,i.valid_until,json_extract(i.document_json,'$.snapshot') snapshot
     FROM investor_evidence_inputs i
   UNION ALL
@@ -140,7 +164,7 @@ WITH source_snapshots AS (
         JOIN investor_review_headers d ON d.id=json_extract(ref.value,'$.review_id') AND d.workspace_id=s.workspace_id
         WHERE d.valid_until<=:at OR d.decision!='approved' OR EXISTS(
           SELECT 1 FROM investor_review_headers newer WHERE newer.source_id=d.source_id AND newer.version>d.version)
-          OR EXISTS(SELECT 1 FROM investor_action_unavailable_headers a WHERE a.id=d.id AND a.workspace_id=d.workspace_id)
+          OR EXISTS(SELECT 1 FROM action_storage_unavailable a WHERE a.id=d.id AND a.workspace_id=d.workspace_id)
           OR EXISTS(SELECT 1 FROM investor_fx_publications p JOIN investor_fx_captures c ON c.id=p.capture_id AND c.workspace_id=p.workspace_id
             JOIN investor_fx_authorities a ON a.id=p.authority_id AND a.workspace_id=p.workspace_id
             WHERE p.workspace_id=s.workspace_id AND (p.usd_review_id=d.id OR p.hkd_review_id=d.id)

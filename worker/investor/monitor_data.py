@@ -240,9 +240,18 @@ def resolve_monitor_data(db, workspace_id, definition, document, *, now=None, ev
         for segment in document["segments"]:
             manifest = segment["snapshot"]
             _assert(manifest["workspace_id"] == workspace_id and manifest["created_at"] == document["created_at"] and manifest["mode"] == "reconstructed")
+            from .action_review_selection import manual_successor_unavailable, retired_action_review
+            from .action_checkpoint_replay import checkpoint_action_review
+            if any(checkpoint_action_review(db, workspace_id, ref["review_id"], "actions", checked) is None
+                and retired_action_review(db, workspace_id, ref["review_id"], checked) for ref in manifest["review_refs"]):
+                return {"document": document, "projection": None, "unavailable_reason": "REFERENCE_SOURCE_NO_LONGER_CURRENT"}
             reason = source_unavailable_reason(db, workspace_id, {"snapshot": manifest, "valid_until": document["valid_until"]}, checked)
             if reason:
                 return {"document": document, "projection": None, "unavailable_reason": reason}
+            for ref in manifest["review_refs"]:
+                if checkpoint_action_review(db, workspace_id, ref["review_id"], "actions", checked) is not None: continue
+                reason = manual_successor_unavailable(db, workspace_id, ref["review_id"], checked)
+                if reason: return {"document": document, "projection": None, "unavailable_reason": reason}
             confirmed = manifest["schema_version"] in ("investor-monitor-price-snapshot-v1", "investor-monitor-source-snapshot-v2")
             window = {"capture_ids": [row["capture_id"] for row in manifest["capture_refs"] if not confirmed or row["kind"] == "historical_sdk"],
                 "action_review_ids": _snapshot_ids(db, workspace_id, manifest, "actions"), "fx_review_ids": _snapshot_ids(db, workspace_id, manifest, "fx"),

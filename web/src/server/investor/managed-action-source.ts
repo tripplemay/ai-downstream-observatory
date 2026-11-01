@@ -251,6 +251,11 @@ export function readManagedActionComparisonBasis(db:Database.Database,workspace:
   return {...context,prior,previous:current.snapshots,publicationId:actionText(head.id),historicalLimits:current.limits};
 }
 
+/** Authenticate authority metadata without treating it as source qualification. */
+export function readManagedActionAuthorityWitness(db:Database.Database,workspace:string,id:unknown,now:string) {
+  return authority(db,workspace,id,now);
+}
+
 /** Authenticate an immutable control witness without treating it as current. */
 export function readManagedActionControlWitness(db:Database.Database,workspace:string,authorityId:unknown,id:unknown,now:string) {
   const grant=authority(db,workspace,authorityId,now),row=actionRead(db,"investor_action_controls",id,workspace);
@@ -261,6 +266,21 @@ export function readManagedActionControlWitness(db:Database.Database,workspace:s
 export function readManagedActionReview(db:Database.Database,workspace:string,id:unknown,now:string):VerifiedSourceReview {
   return db.transaction(()=>{
     check(!managedActionReviewUnavailable(db,workspace,id,now));
+    return replayManagedActionReview(db,workspace,id,now);
+  }).deferred();
+}
+
+/** Raw historical comparison only; never resume or admit a retired control. */
+export function readManagedActionHistoricalReview(db:Database.Database,workspace:string,id:unknown,now:string):VerifiedSourceReview {
+  return db.transaction(()=>{
+    const {row}=publication(db,workspace,id,now);
+    check(row.status === "published" && time(now)<time(row.valid_until));
+    readManagedActionAnchorContext(db,workspace,row.authority_id,now);
+    return replayManagedActionReview(db,workspace,id,now);
+  }).deferred();
+}
+
+function replayManagedActionReview(db:Database.Database,workspace:string,id:unknown,now:string):VerifiedSourceReview {
     const value=readManagedActionHeader(db,workspace,id,now),{row,doc,grant}=publication(db,workspace,id,now),{base,listing}=baseline(db,workspace,grant,now),policy=grant.doc;
     check(listing.facts.market === "US" && listing.facts.currency === "USD" && Object.hasOwn(ACTION_TARGETS,actionText(policy.provider_symbol))
       && time(listing.facts.tradable_from) <= time(now) && (listing.facts.tradable_until === null || time(now) < time(listing.facts.tradable_until)));
@@ -280,7 +300,6 @@ export function readManagedActionReview(db:Database.Database,workspace:string,id
     check(current.day === row.source_day && validUntil === row.valid_until && candidate.candidate_range_end === row.coverage_end
       && candidate.candidate_facts_hash === doc.candidate_facts_hash && hash({authority_input:policy,anchor_binding_hash:anchorHash,current_bindings:current.bindings,candidate}) === doc.checked_input_hash);
     return value;
-  }).deferred();
 }
 
 /** Internal: the caller already used the normal original-byte review resolver. */

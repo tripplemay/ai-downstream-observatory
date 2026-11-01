@@ -11,6 +11,7 @@ import { managedFxReviewUnavailable, verifyManagedFxReview } from "./managed-fx-
 import { currentCalendarReview } from "./calendar-continuation";
 import { MANAGED_ACTION_PREFIX, managedActionReviewUnavailable, readManagedActionReview } from "./managed-action-source";
 import { actionAvailabilityRefs, indexActionAvailability } from "./monitor-action-knowledge";
+import { checkpointActionReview } from "./action-checkpoint-replay";
 
 type Obj = Record<string, unknown>;
 type Row = { id: string; workspace_id: string; document_json: string; content_hash: string; created_at: string; actor_id: string; audit_id: string; valid_until: string; source_qualification: string };
@@ -47,6 +48,8 @@ export function latestInvestorResearchInput(db: Database.Database, workspace: st
 }
 
 function review(db: Database.Database, workspace: string, ref: Obj, now: string): Review {
+  const historical=checkpointActionReview(db,workspace,ref.review_id,now);
+  if(historical) {check(historical.row.content_hash===ref.review_hash&&historical.source.id===ref.source_id&&historical.source.content_hash===ref.source_hash);return historical;}
   if (typeof ref.review_id === "string" && ref.review_id.startsWith(MANAGED_ACTION_PREFIX)) {
     const value = readManagedActionReview(db, workspace, ref.review_id, now);
     check(value.row.content_hash === ref.review_hash && value.source.id === ref.source_id && value.source.content_hash === ref.source_hash);
@@ -114,7 +117,7 @@ function unavailable(db: Database.Database, workspace: string, document: Obj, no
       catch { return "REFERENCE_SOURCE_NO_LONGER_CURRENT"; }
     }
     if (now >= (row.valid_until as string)) return "REFERENCE_SOURCE_EXPIRED";
-    const actions = managedActionReviewUnavailable(db, workspace, row.id, now); if (actions) return actions;
+    const actions = checkpointActionReview(db,workspace,row.id,now)?null:managedActionReviewUnavailable(db, workspace, row.id, now); if (actions) return actions;
     const managed = managedFxReviewUnavailable(db, workspace, row.id, now); if (managed) return managed;
   }
   for (const ref of list(snapshot.capture_refs, 1000)) {

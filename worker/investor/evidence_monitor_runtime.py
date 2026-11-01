@@ -63,7 +63,8 @@ def resolve_checkpoint(db, workspace, definition, checkpoint_id, now):
         row, document = monitor_evidence_document(db, workspace, definition["model_id"], header["input_id"], now)
         expiry = min(expiry, document["valid_until"])
         _assert(header["valid_until"] == expiry)
-        source = resolve_monitor_data(db, workspace, definition, document, now=now, evaluated_at=header["created_at"])
+        from .action_checkpoint_replay import replay_checkpoint_monitor_source
+        source = replay_checkpoint_monitor_source(db, workspace, definition, header, document, now)
         if source["unavailable_reason"]: return None, source["unavailable_reason"]
         from .monitor_costs import verify_settings
         verify_settings(db, workspace, definition, document["settings"], header["created_at"])

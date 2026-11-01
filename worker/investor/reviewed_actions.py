@@ -116,6 +116,27 @@ def check_reviewed_action_append(previous_facts, reviewed_facts, previous, curre
     return result
 
 
+def read_historical_action_review(db, workspace, identifier, at):
+    """Raw comparison proof only. Never qualify a retired control as current."""
+    from . import managed_actions as managed
+    from .data_evidence import _fact_validation_scope
+    from worker.orchestration.db import transaction
+    with transaction(db, immediate=False), _fact_validation_scope():
+        row, doc = managed._publication_header(db, workspace, identifier, at)
+        authority, policy, _ = managed._authority(db, workspace, row["authority_id"], at)
+        request = managed._request(db, workspace, row["request_id"], at)[0]
+        _check(row["status"] == "published" and row["created_at"] < row["valid_until"] and at < row["valid_until"], "HISTORICAL_PUBLICATION_INVALID")
+        prepared = managed._inputs(db, workspace, authority["actor_id"], policy, doc["capture_refs"], at)
+        _check(prepared["report"]["source_day"] == request["source_day"]
+            and prepared["checked_hash"] == doc["checked_input_hash"] and prepared["valid_until"] == row["valid_until"]
+            and prepared["candidate"]["candidate_facts_hash"] == doc["candidate_facts_hash"]
+            and prepared["candidate"]["candidate_range_end"] == row["coverage_end"]
+            and instant(prepared["current_capture_created_at"]) <= instant(row["created_at"])
+            and all(instant(value["capture"]["created_at"]) <= instant(authority["created_at"])
+                for value in prepared["anchor"]["values"].values()), "HISTORICAL_PUBLICATION_INVALID")
+        return managed.managed_review_header(db, workspace, identifier, at)
+
+
 def _historical_basis(db, workspace, actor, authority, policy, anchor, at, *, capture_reports=None):
     """A quarantined rule may be authenticated for comparison, never current admission."""
     from . import managed_actions as managed

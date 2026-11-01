@@ -168,6 +168,11 @@ export function readActionReviewConfirmation(db: Database.Database, workspace: s
   return db.transaction(() => verifiedConfirmation(db, workspace, actor, id, now).document).deferred();
 }
 
+/** Internal full proof and bound manual facts, never an HTTP/AI response. */
+export function readActionReviewConfirmationContext(db:Database.Database,workspace:string,actor:unknown,id:unknown,now:string) {
+  return db.transaction(()=>verifiedConfirmation(db,workspace,actor,id,now)).deferred();
+}
+
 /** Internal normal-resolver input; equal amounts alone never inherit knowledge. */
 function eventOrigins(db: Database.Database, workspace: string, review: VerifiedSourceReview, now: string, seen: Set<string>): Map<string, Obj> {
   check(seen.size < 256 && !seen.has(review.row.id)); const visited = new Set(seen); visited.add(review.row.id);

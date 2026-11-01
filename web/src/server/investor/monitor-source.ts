@@ -9,6 +9,8 @@ import { indexActionAvailability } from "./monitor-action-knowledge";
 import { parseStrictJson } from "../strict-json";
 import { readEvidenceReference } from "./reference-evidence";
 import { verifyMonitorCostSettings } from "./monitor-costs";
+import { actionReviewManualUnavailable, actionReviewSourceRetired } from "./action-review-selection";
+import { checkpointActionReview } from "./action-checkpoint-replay";
 
 type Obj = Record<string, unknown>;
 const zones: Record<string, string> = { CN: "Asia/Shanghai", HK: "Asia/Hong_Kong", US: "America/New_York" };
@@ -112,6 +114,12 @@ function replay(db: Database.Database, workspace: string, rawDefinition: unknown
     for (const segment of segments) {
       const snapshot = obj(segment.snapshot);
       check(snapshot.created_at === created);
+      if(rows(snapshot.review_refs).some(ref=>!checkpointActionReview(db,workspace,ref.review_id,now)&&actionReviewSourceRetired(db,workspace,ref.review_id,now)))
+        return {projection:null,catalog:null,unavailable_reason:"REFERENCE_SOURCE_NO_LONGER_CURRENT"};
+      for(const ref of rows(snapshot.review_refs))if(!checkpointActionReview(db,workspace,ref.review_id,now)) {
+        const reason=actionReviewManualUnavailable(db,workspace,ref.review_id,now);
+        if(reason)return {projection:null,catalog:null,unavailable_reason:reason};
+      }
       const expiry = segmentExpiry(db, workspace, snapshot);
       const reader = auditedActions ? readInvestorAuditedMonitorSnapshot : snapshot.schema_version === "investor-monitor-price-snapshot-v1" ? readInvestorMonitorPriceSnapshot : readInvestorDataSnapshot;
       const rebuilt = reader(db, workspace, { ...segment, created_at: created, valid_until: expiry }, now);
