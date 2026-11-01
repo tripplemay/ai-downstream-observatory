@@ -598,6 +598,27 @@ def check_same_rule_extension(db, workspace, previous, current, at):
             == {key: value for key, value in current["facts"].items() if key != "range_end"}, "HISTORICAL_RECORDS_CHANGED")
 
 
+def action_refresh_basis(db, workspace, identifier, at):
+    """Historical comparison only; never admit an old control as current evidence."""
+    return managed_review_header(db, workspace, identifier, at) if identifier.startswith(PREFIX) else resolve_review(
+        db, workspace, identifier, "actions", now=at)
+
+
+def paused_control_successor(db, workspace, identifier, at):
+    """Require a new fully replayed head under the same rule's current control."""
+    previous = managed_review_header(db, workspace, identifier, at)
+    row, doc = _publication_header(db, workspace, identifier, at)
+    authority, policy, control = _authority(db, workspace, row["authority_id"], at)
+    _check(_active((authority, policy, control), at) and not _quarantined(db, workspace, authority["id"], at)
+        and doc["control_id"] != control["id"] and at < row["valid_until"], "SOURCE_UNAVAILABLE")
+    head = db.execute("SELECT id FROM investor_action_publications WHERE authority_id=? AND workspace_id=? AND status='published' ORDER BY sequence DESC LIMIT 1",
+        (authority["id"], workspace)).fetchone()
+    _check(head is not None, "SOURCE_UNAVAILABLE")
+    current = resolve_managed_review(db, workspace, head["id"], now=at)
+    check_same_rule_extension(db, workspace, previous, current, at)
+    return current
+
+
 def inspect_authority(db, workspace, actor, identifier, *, now=None):
     at = _clock(now)
     with transaction(db, immediate=False):

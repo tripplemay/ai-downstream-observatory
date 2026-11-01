@@ -20,7 +20,7 @@ EXPIRY = "2027-01-01T00:00:00.000Z"
 START, END = "2025-01-01", "2025-06-10"
 
 
-def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, funded_year=False, funded_calendar=False, external_ai=False, initial_monitor_calendar=False, bounded_execution_v3=False, browser_cent_tolerance=False, action_aware_execution_v4=False, event_review_execution_v5=False, train_execution_gap=False, settled_intent_execution_v6=False, train_settled_orphan=False, funded_settled_orphan=False, research_market="CN"):
+def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, funded_year=False, funded_calendar=False, external_ai=False, initial_monitor_calendar=False, bounded_execution_v3=False, browser_cent_tolerance=False, action_aware_execution_v4=False, event_review_execution_v5=False, train_execution_gap=False, settled_intent_execution_v6=False, train_settled_orphan=False, funded_settled_orphan=False, research_market="CN", fixed_us_etfs=False):
     if initial_monitor_calendar and (funded_year or funded_calendar): raise WorkbenchError("SYNTHETIC_INITIAL_CALENDAR_CONFLICT")
     data, plan, policy = fixed_policy_input() if fixed_policy_v2 else research_input()
     if research_market not in ("CN", "HK", "US"):
@@ -98,6 +98,21 @@ def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, 
             for row in data['observations']:
                 if row['listing_id'] == 'CN:ALPHA' and row['observed_at'] >= '2024-01-15': row['value'] = '20'
 
+    identities = (research_market + ":ALPHA", research_market + ":BETA")
+    symbols = {"CN": ("501998.SH", "501999.SH"), "HK": ("9998.HK", "9999.HK"), "US": ("FIC01.US", "FIC02.US")}[research_market]
+    if fixed_us_etfs:
+        if research_market != "US" or funded_year or funded_calendar:
+            raise WorkbenchError("SYNTHETIC_FIXED_US_SCOPE")
+        replacements = dict(zip(identities, ("synthetic-3141", "synthetic-0928")))
+        def renamed(value):
+            if isinstance(value, dict): return {renamed(key): renamed(entry) for key, entry in value.items()}
+            if isinstance(value, list): return [renamed(entry) for entry in value]
+            if isinstance(value, str):
+                for old, new in replacements.items(): value = value.replace(old, new)
+            return value
+        data, plan, policy = renamed(data), renamed(plan), renamed(policy)
+        identities, symbols = tuple(replacements.values()), ("VT.US", "BND.US")
+
     def reviewed(kind, facts, label):
         source = store_source(db, workspace, actor, kind, {"title": "FICTIONAL " + label,
             "reference": "synthetic://stub-transport/" + label, "excerpt": "Invented software fixture, not provider rights, prices, eligibility or a real licence"}, now=now)
@@ -125,8 +140,8 @@ def create(db, workspace, actor, *, now=NOW, admit=True, fixed_policy_v2=False, 
             calendar_facts["days"].append(value); day += timedelta(days=1)
     calendar = reviewed("calendar", calendar_facts, "calendar")
     captures, actions, listings = [], [], []
-    for index, identity in enumerate((research_market + ":ALPHA", research_market + ":BETA")):
-        mapping = {"listing_id": identity, "provider_symbol": {"CN": ("501998.SH", "501999.SH"), "HK": ("9998.HK", "9999.HK"), "US": ("FIC01.US", "FIC02.US")}[research_market][index],
+    for index, identity in enumerate(identities):
+        mapping = {"listing_id": identity, "provider_symbol": symbols[index],
             "market": research_market, "currency": {"CN": "CNY", "HK": "HKD", "US": "USD"}[research_market]}
         listing = reviewed("listing", {**mapping, "quantity_step": "1", "tradable_from": "2024-01-01T00:00:00Z", "tradable_until": None,
             "product_type": "ETF", "leveraged": False, "inverse": False, "role": "growth" if index == 0 else "defensive", "fee_rate": "0.001",
