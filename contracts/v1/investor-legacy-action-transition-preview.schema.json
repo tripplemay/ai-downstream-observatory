@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-legacy-action-transition-preview.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "workspace_id", "model_id", "model_hash", "control_hash", "legacy_input_id", "legacy_input_hash", "settings_hash", "checkpoint", "audited_document_hash", "audited_projection_hash", "carry_forward", "projection_quality_gaps", "checked_at", "source_valid_until", "status", "admission_performed", "live_advice_eligible"],
+  "properties": {
+    "schema_version": {"const": "investor-legacy-action-transition-preview-v1"},
+    "workspace_id": {"$ref": "common.schema.json#/$defs/id"}, "model_id": {"$ref": "common.schema.json#/$defs/id"},
+    "model_hash": {"$ref": "common.schema.json#/$defs/hash"}, "control_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "legacy_input_id": {"$ref": "common.schema.json#/$defs/id"}, "legacy_input_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "settings_hash": {"$ref": "common.schema.json#/$defs/hash"}, "audited_document_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "audited_projection_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "checkpoint": {
+      "type": "object", "additionalProperties": false, "required": ["id", "sequence", "content_hash", "chain_hash", "processed_actions_hash"],
+      "properties": {"id": {"$ref": "common.schema.json#/$defs/id"}, "sequence": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "content_hash": {"$ref": "common.schema.json#/$defs/hash"}, "chain_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "processed_actions_hash": {"$ref": "common.schema.json#/$defs/hash"}}
+    },
+    "carry_forward": {"type": "array", "maxItems": 20000, "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "original_input_id", "original_input_hash", "original_action_hash", "audited_action_hash", "recorded_known_at", "audited_known_at"],
+      "properties": {"id": {"$ref": "common.schema.json#/$defs/id"}, "original_input_id": {"$ref": "common.schema.json#/$defs/id"},
+        "original_input_hash": {"$ref": "common.schema.json#/$defs/hash"}, "original_action_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "audited_action_hash": {"$ref": "common.schema.json#/$defs/hash"}, "recorded_known_at": {"$ref": "investor-reference-plan.schema.json#/$defs/instant"},
+        "audited_known_at": {"$ref": "investor-reference-plan.schema.json#/$defs/instant"}}
+    }},
+    "projection_quality_gaps": {"$ref": "investor-monitor-data-projection.schema.json#/properties/quality_gaps"},
+    "checked_at": {"$ref": "investor-reference-plan.schema.json#/$defs/instant"}, "source_valid_until": {"$ref": "investor-reference-plan.schema.json#/$defs/instant"},
+    "status": {"const": "awaiting_explicit_protocol_confirmation"}, "admission_performed": {"const": false}, "live_advice_eligible": {"const": false}
+  }
+}

@@ -46,6 +46,7 @@ def _source_refresh_context(db, workspace, model_id, input_id, at):
         if str(error) != "CONFIRMED_FEED_SOURCE_UNAVAILABLE":
             raise
     from .managed_actions import PREFIX, managed_review_header, managed_review_unavailable, paused_control_successor
+    from .action_review_selection import check_action_review_extension, retired_action_review
     model, definition, reference = current_monitor_model(db, workspace, model_id, at)
     source, document = monitor_evidence_document(db, workspace, model_id, input_id, at)
     control = _latest(db, "investor_model_controls", model_id, "version DESC")
@@ -55,6 +56,18 @@ def _source_refresh_context(db, workspace, model_id, input_id, at):
     for segment in document["segments"]:
         for ref in segment["snapshot"]["review_refs"]:
             identifier = ref["review_id"]
+            if retired_action_review(db, workspace, identifier, at):
+                _assert(document["schema_version"] == "investor-monitor-data-input-v4", "CONFIRMED_FEED_ACTION_PROTOCOL_REVIEW_REQUIRED")
+                from .managed_actions import action_refresh_basis, current_action_reviews
+                prior = action_refresh_basis(db, workspace, identifier, at)
+                _assert(prior["review"]["content_hash"] == ref["review_hash"] and prior["source"]["id"] == ref["source_id"]
+                    and prior["source"]["content_hash"] == ref["source_hash"], "CONFIRMED_FEED_SOURCE_UNAVAILABLE")
+                choices = [value for value in current_action_reviews(db, workspace, [prior["facts"]["listing_id"]], at)
+                    if value["facts"]["range_start"] <= segment["snapshot"]["range_start"] <= segment["snapshot"]["range_end"] <= value["facts"]["range_end"]]
+                _assert(len(choices) == 1, "CONFIRMED_FEED_ACTION_COVERAGE_NOT_UNIQUE")
+                check_action_review_extension(db, workspace, prior, choices[0], at,
+                    start_date=segment["snapshot"]["range_start"], end_date=segment["snapshot"]["range_end"])
+                changed.add(identifier); continue
             if not identifier.startswith(PREFIX):
                 continue
             header = managed_review_header(db, workspace, identifier, at)
@@ -320,7 +333,7 @@ def prepare_confirmed_watch(db, job, lease, *, clock=None, lease_seconds=300, st
 def _windows(db, workspace, document):
     values = []
     for segment in document["segments"]:
-        snapshot = segment["snapshot"]; confirmed = snapshot["schema_version"] == "investor-monitor-price-snapshot-v1"
+        snapshot = segment["snapshot"]; confirmed = snapshot["schema_version"] in ("investor-monitor-price-snapshot-v1", "investor-monitor-source-snapshot-v2")
         window = {"capture_ids": [ref["capture_id"] for ref in snapshot["capture_refs"] if not confirmed or ref["kind"] == "historical_sdk"],
             "action_review_ids": _snapshot_ids(db, workspace, snapshot, "actions"), "fx_review_ids": _snapshot_ids(db, workspace, snapshot, "fx"),
             "start_date": snapshot["range_start"], "end_date": snapshot["range_end"]}
@@ -330,6 +343,23 @@ def _windows(db, workspace, document):
         _assert(len(markets) == 1)
         values.append((markets.pop(), window))
     return values
+
+
+def _completed_refresh_current(db, request, document, at):
+    """Rebind an already completed capture, never start or retry a listener."""
+    try:
+        _current(db, request, document, at)
+        return
+    except WorkbenchError as error:
+        if str(error) != "CONFIRMED_FEED_SOURCE_UNAVAILABLE": raise
+    model, definition, _, control, source, stored = _source_refresh_context(db, request["workspace_id"], request["model_id"], request["input_id"], at)[:6]
+    _assert(control["id"] == request["control_id"], "CONFIRMED_FEED_SUPERSEDED")
+    # market_plan only needs catalog identities. All rights, listing, calendar,
+    # model, input and original watch bindings are independently rechecked.
+    identities = {row["listing_id"]: row for row in definition["targets"]}
+    planned = market_plan(db, request["workspace_id"], model, definition, control, source, stored,
+        {"catalog": identities}, request["market"], request["session_date"], at)
+    _assert(planned == document, "CONFIRMED_FEED_BINDING_INVALID")
 
 
 def _merge_completed(db, workspace, model, windows, at):
@@ -343,7 +373,7 @@ def _merge_completed(db, workspace, model, windows, at):
             if market != row["market"] or row["session_date"] <= window["end_date"]: continue
             _, request, spec = run_header(db, row, at)
             _assert(request["market"] == market and request["session_date"] == row["session_date"])
-            _current(db, request, spec, at)
+            _completed_refresh_current(db, request, spec, at)
             confirmed_capture.resolve_confirmed_capture(db, workspace, row["capture_id"], now=at)
             window.setdefault("confirmed_capture_ids", []).append(row["capture_id"]); window["end_date"] = row["session_date"]
 
@@ -370,6 +400,7 @@ def _refresh_fx_windows(db, workspace, definition, windows, settings, at):
 
 def _refresh_action_windows(db, workspace, definition, windows, at):
     from .managed_actions import action_refresh_basis, check_same_rule_extension, current_action_reviews
+    from .action_review_selection import check_action_review_extension, retired_action_review
     selected = current_action_reviews(db, workspace, [row["listing_id"] for row in definition["targets"]], at)
     for market, window in windows:
         identities = {row["listing_id"] for row in definition["targets"] if row["market"] == market}
@@ -382,7 +413,9 @@ def _refresh_action_windows(db, workspace, definition, windows, at):
             _assert(len(matches) == 1, "CONFIRMED_FEED_ACTION_COVERAGE_NOT_UNIQUE")
             current = matches[0]
             if current["review"]["id"] != prior["review"]["id"]:
-                check_same_rule_extension(db, workspace, prior, current, at)
+                if retired_action_review(db, workspace, prior["review"]["id"], at):
+                    check_action_review_extension(db, workspace, prior, current, at, start_date=window["start_date"], end_date=window["end_date"])
+                else: check_same_rule_extension(db, workspace, prior, current, at)
             replacements.append(current["review"]["id"])
         window["action_review_ids"] = sorted(replacements)
 
@@ -392,7 +425,8 @@ def _admit_windows(db, workspace, actor, model_id, context, windows, at, stop_re
     from .monitor_costs import current_settings
     if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
     settings = current_settings(db, workspace, context[1], context[5]["settings"], at)
-    admitted = admit_monitor_data(db, workspace, actor, model_id, [window for _,window in windows], settings, now=at)
+    knowledge = {"audited_action_knowledge": True} if context[5]["schema_version"] == "investor-monitor-data-input-v4" else {}
+    admitted = admit_monitor_data(db, workspace, actor, model_id, [window for _,window in windows], settings, now=at, **knowledge)
     _check_fx_selection(db, workspace, context[1], [window for _,window in windows], settings, at)
     _check_action_selection(db, workspace, context[1], [window for _,window in windows], at)
     if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
@@ -471,7 +505,13 @@ def refresh_monitor_sources(db, *, limit=100, now=None, stop_requested=None):
                 AND NOT EXISTS(SELECT 1 FROM investor_action_unavailable_headers unavailable WHERE unavailable.id=p.id AND unavailable.workspace_id=p.workspace_id)
                 AND EXISTS(SELECT 1 FROM json_each(m.document_json,'$.targets') target WHERE json_extract(target.value,'$.listing_id')=a.listing_id)
                 AND NOT EXISTS(SELECT 1 FROM json_each(i.document_json,'$.segments') seg JOIN json_each(seg.value,'$.snapshot.review_refs') ref
-                  WHERE json_extract(ref.value,'$.review_id')=p.id)))
+                  WHERE json_extract(ref.value,'$.review_id')=p.id))
+          OR EXISTS(SELECT 1 FROM investor_action_review_confirmations successor JOIN investor_action_authorities a
+              ON a.id=successor.new_authority_id AND a.workspace_id=successor.workspace_id
+              WHERE successor.workspace_id=m.workspace_id AND successor.created_at>=i.created_at AND successor.created_at<=:at
+                AND EXISTS(SELECT 1 FROM json_each(m.document_json,'$.targets') target WHERE json_extract(target.value,'$.listing_id')=a.listing_id)
+                AND NOT EXISTS(SELECT 1 FROM json_each(i.document_json,'$.segments') seg JOIN json_each(seg.value,'$.snapshot.review_refs') ref
+                  WHERE json_extract(ref.value,'$.review_id')=successor.new_review_id)))
       ORDER BY i.created_at,m.id LIMIT :limit""", {"at":at,"limit":limit}).fetchall()
     refreshed = []
     for row in rows:

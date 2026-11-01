@@ -4,10 +4,13 @@ import { hash } from "../ledger/service";
 import { Decimal, amount } from "../ledger/decimal";
 import { priceInstant } from "../market-price-source";
 import { validateInvestorModelDocument, validateInvestorMonitorDataDocument } from "./kernel-contracts";
-import { readInvestorDataSnapshot, readInvestorMonitorPriceSnapshot, type VerifiedSourceReview } from "./source-inputs";
+import { readInvestorDataSnapshot, readInvestorMonitorPriceSnapshot, readInvestorAuditedMonitorSnapshot, type VerifiedSourceReview } from "./source-inputs";
+import { indexActionAvailability } from "./monitor-action-knowledge";
 import { parseStrictJson } from "../strict-json";
 import { readEvidenceReference } from "./reference-evidence";
 import { verifyMonitorCostSettings } from "./monitor-costs";
+import { actionReviewManualUnavailable, actionReviewSourceRetired } from "./action-review-selection";
+import { checkpointActionReview } from "./action-checkpoint-replay";
 
 type Obj = Record<string, unknown>;
 const zones: Record<string, string> = { CN: "Asia/Shanghai", HK: "Asia/Hong_Kong", US: "America/New_York" };
@@ -34,7 +37,7 @@ function calendarHorizon(day: string, zone: string) {
 function segmentExpiry(db: Database.Database, workspace: string, snapshot: Obj) {
   const deadlines = [
     ...rows(snapshot.review_refs).map(ref => db.prepare("SELECT valid_until FROM investor_review_headers WHERE id=? AND workspace_id=?").get(ref.review_id, workspace) as { valid_until: string } | undefined),
-    ...rows(snapshot.capture_refs).map(ref => { const table = snapshot.schema_version === "investor-monitor-price-snapshot-v1" && ref.kind === "confirmed_sdk" ? "investor_confirmed_captures" : "investor_price_captures";
+    ...rows(snapshot.capture_refs).map(ref => { const table = ["investor-monitor-price-snapshot-v1", "investor-monitor-source-snapshot-v2"].includes(text(snapshot.schema_version)) && ref.kind === "confirmed_sdk" ? "investor_confirmed_captures" : "investor_price_captures";
       const row = db.prepare(`SELECT retain_until FROM ${table} WHERE id=? AND workspace_id=?`).get(ref.capture_id, workspace) as { retain_until: string } | undefined; return row ? { valid_until: row.retain_until } : undefined; })
   ];
   check(deadlines.length > 0 && deadlines.every(Boolean));
@@ -86,10 +89,25 @@ export function replayInvestorMonitorData(db: Database.Database, workspace: stri
   return db.transaction(() => replay(db, workspace, rawDefinition, referenceTargets, rawDocument, now, evaluatedAt)).deferred();
 }
 
-function replay(db: Database.Database, workspace: string, rawDefinition: unknown, referenceTargets: Obj[], rawDocument: unknown, now: string, evaluatedAt: string) {
+/** Verified comparison facts only; normal readers still hide expired projections. */
+export function compareInvestorMonitorData(db: Database.Database, workspace: string, definition: unknown,
+  targets: Obj[], document: unknown, now: string) {
+  return db.transaction(() => {
+    const evidence: { projection?: Obj; catalog?: Record<string, Obj> } = {};
+    const current = replay(db, workspace, definition, targets, document, now, now, (projection, catalog) => {
+      evidence.projection = projection; evidence.catalog = catalog;
+    });
+    check(evidence.projection && evidence.catalog);
+    return { comparison_projection: evidence.projection, comparison_catalog: evidence.catalog, unavailable_reason: current.unavailable_reason };
+  }).deferred();
+}
+
+function replay(db: Database.Database, workspace: string, rawDefinition: unknown, referenceTargets: Obj[], rawDocument: unknown, now: string, evaluatedAt: string,
+  comparison?: (projection: Obj, catalog: Record<string, Obj>) => void) {
   try {
     validateInvestorModelDocument("definition", rawDefinition); validateInvestorMonitorDataDocument("input", rawDocument);
     const definition = obj(rawDefinition), document = obj(rawDocument), created = text(document.created_at), at = time(created);
+    const auditedActions = document.schema_version === "investor-monitor-data-input-v4";
     check(document.workspace_id === workspace && document.model_id === definition.model_id && document.target_definition_hash === definition.target_definition_hash
       && definition.data_mode === "reconstructed" && time(definition.created_at) <= at && at < time(definition.valid_until) && at <= time(evaluatedAt) && time(evaluatedAt) <= time(now)
       && definition.target_definition_hash === modelDefinitionHash(definition as Parameters<typeof modelDefinitionHash>[0]));
@@ -105,13 +123,20 @@ function replay(db: Database.Database, workspace: string, rawDefinition: unknown
         && ["commission_bps", "fx_bps", "slippage_bps"].every(key => amount(text(costs[key])).lt(10000)) && amount(text(costs.maximum_cost_fraction)).lte(1));
     }
     const segments = rows(document.segments), reviews = new Map<string, VerifiedSourceReview>(), catalog: Record<string, Obj> = {};
-    const observations = new Map<string, Obj>(), sessions: Obj[] = [], markets = new Set<string>(), expiries: string[] = [];
+    const observations = new Map<string, Obj>(), sessions: Obj[] = [], markets = new Set<string>(), expiries: string[] = [], availabilityRefs: Obj[] = [];
     check(segments.every((row, index) => index === 0 || text(rows(obj(segments[index - 1].snapshot).capture_refs)[0].capture_id) < text(rows(obj(row.snapshot).capture_refs)[0].capture_id)));
     for (const segment of segments) {
       const snapshot = obj(segment.snapshot);
       check(snapshot.created_at === created);
+      if(rows(snapshot.review_refs).some(ref=>!checkpointActionReview(db,workspace,ref.review_id,now)&&actionReviewSourceRetired(db,workspace,ref.review_id,now)))
+        return {projection:null,catalog:null,unavailable_reason:"REFERENCE_SOURCE_NO_LONGER_CURRENT"};
+      for(const ref of rows(snapshot.review_refs))if(!checkpointActionReview(db,workspace,ref.review_id,now)) {
+        const reason=actionReviewManualUnavailable(db,workspace,ref.review_id,now);
+        if(reason)return {projection:null,catalog:null,unavailable_reason:reason};
+      }
       const expiry = segmentExpiry(db, workspace, snapshot);
-      const rebuilt = (snapshot.schema_version === "investor-monitor-price-snapshot-v1" ? readInvestorMonitorPriceSnapshot : readInvestorDataSnapshot)(db, workspace, { ...segment, created_at: created, valid_until: expiry }, now);
+      const reader = auditedActions ? readInvestorAuditedMonitorSnapshot : snapshot.schema_version === "investor-monitor-price-snapshot-v1" ? readInvestorMonitorPriceSnapshot : readInvestorDataSnapshot;
+      const rebuilt = reader(db, workspace, { ...segment, created_at: created, valid_until: expiry }, now);
       if (!rebuilt.dataset) return { projection: null, catalog: null, unavailable_reason: rebuilt.unavailable_reason };
       const sourceMarkets = new Set(Object.values(rebuilt.catalog).map(row => text(row.market)));
       check(sourceMarkets.size === 1 && [...sourceMarkets].every(market => !markets.has(market)));
@@ -122,6 +147,7 @@ function replay(db: Database.Database, workspace: string, rawDefinition: unknown
         const id = text(row.id), prior = observations.get(id); check(!prior || hash(prior) === hash(row)); observations.set(id, row);
       }
       sessions.push(...rebuilt.dataset.sessions); expiries.push(expiry);
+      if (auditedActions) availabilityRefs.push(...rows(snapshot.action_availability_refs));
     }
     check([...expiries].sort()[0] === document.valid_until && targets.length === Object.keys(catalog).length
       && referenceTargets.length === targets.length && new Set(referenceTargets.map(row => row.listing_id)).size === targets.length);
@@ -174,12 +200,14 @@ function replay(db: Database.Database, workspace: string, rawDefinition: unknown
       fx.push({ currency, value: rate.value, unit: "CNY_per_unit_currency", observed_at: milliseconds(observed), known_at: reviewed.row.created_at,
         valid_until: milliseconds(expiry), observation_hash: hash({ review_id: reviewed.row.id, review_hash: reviewed.row.content_hash, rate }) }); deadlines.push(expiry);
     }
-    for (const reviewed of [...reviews.values()].filter(row => row.source.kind === "actions").sort((a,b) => cmp(text(a.facts.listing_id),text(b.facts.listing_id)))) {
+    const actionReviews = [...reviews.values()].filter(row => row.source.kind === "actions");
+    const available = auditedActions ? indexActionAvailability(actionReviews, availabilityRefs, created) : null;
+    for (const reviewed of actionReviews.sort((a,b) => cmp(text(a.facts.listing_id),text(b.facts.listing_id)))) {
       const target = targets.find(row => row.listing_id === reviewed.facts.listing_id); check(target);
       const window = coverage[text(target.market)]; if (!window) continue;
       const cutoff = time(window.to);
       for (const event of rows(reviewed.facts.events)) {
-        const common = { listing_id: target.listing_id, known_at: reviewed.row.created_at }, id = text(event.id);
+        const common = { listing_id: target.listing_id, known_at: available ? available(reviewed.row.id, event.id).known_at : reviewed.row.created_at }, id = text(event.id);
         if (time(event.at) <= cutoff) {
           if (event.type === "split") events.push({ ...common, id: "split:" + id, kind: "split", effective_at: milliseconds(time(event.at)), ratio: event.ratio });
           else events.push({ ...common, id: "ex:" + id, kind: "dividend_ex", effective_at: milliseconds(time(event.at)), currency: target.currency,
@@ -191,11 +219,12 @@ function replay(db: Database.Database, workspace: string, rawDefinition: unknown
       }
     }
     check(events.length <= 500 && new Set(events.map(row => row.id)).size === events.length);
-    const projection = { schema_version: "investor-monitor-data-projection-v1", model_id: definition.model_id, source_qualification: "owner_reviewed_reconstructed",
+    const projection = { schema_version: auditedActions ? "investor-monitor-data-projection-v2" : "investor-monitor-data-projection-v1", model_id: definition.model_id, source_qualification: "owner_reviewed_reconstructed",
       quotes: quotes.sort((a,b) => cmp(text(a.listing_id),text(b.listing_id))), fx, corporate_action_coverage: coverage,
       corporate_actions: events.sort((a,b) => cmp(text(a.effective_at),text(b.effective_at)) || cmp(text(a.kind),text(b.kind)) || cmp(text(a.id),text(b.id))),
       funding_intent: settings.funding_intent, policy, quality_gaps: [...new Set(gaps)].sort(), created_at: created, valid_until: milliseconds(min(deadlines)), live_advice_eligible: false };
     validateInvestorMonitorDataDocument("projection", projection); check(hash(projection) === document.projection_hash);
+    comparison?.(projection, catalog);
     if (time(projection.valid_until) <= time(evaluatedAt)) return { projection: null, catalog: null, unavailable_reason: "MONITOR_DATA_PROJECTION_EXPIRED" };
     return { projection, catalog, unavailable_reason: null };
   } catch { throw new Error("INVESTOR_EVIDENCE_INVALID"); }

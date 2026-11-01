@@ -267,6 +267,27 @@
       "version": 53,
       "file": "0053_investor_action_maintenance.sql",
       "sha256": "7e9adedd4e438f9d3ecc5c90c49fcf97eab3296b21d74403d6f9b0ad3f2356bf"
+    },
+    {
+      "version": 54,
+      "file": "0054_investor_monitor_action_knowledge.sql",
+      "sha256": "122debdb9123311fc30cf5754a1d27fbb45e655374a931da79908c2b58a93d59",
+      "foreign_key_rebuild": true
+    },
+    {
+      "version": 55,
+      "file": "0055_investor_action_review_workflow.sql",
+      "sha256": "bd61f026456ba32dc624c276810d8a0d67b0c04991efd054b5feab979a897668"
+    },
+    {
+      "version": 56,
+      "file": "0056_investor_action_review_jobs.sql",
+      "sha256": "5febb75354fc880aebd2ec644121ef9f7833248809f5dd8847f340528f0be016"
+    },
+    {
+      "version": 57,
+      "file": "0057_investor_legacy_transition_workflow.sql",
+      "sha256": "e64f087a90b5123d711f177e7dd87947c79fe6de415d84b3f00c7df6d29e68e6"
     }
   ]
 }

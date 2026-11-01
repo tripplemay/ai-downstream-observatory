@@ -6,6 +6,7 @@ import { modelAssessmentObservation, validateInvestorEvidenceCheckpoint, validat
 import { EvidenceActionRestatement, EvidenceCheckpointLimitRequired, replayEvidenceModel } from "./evidence-model-state";
 import { replayEvidenceAssessment } from "./evidence-model-assessment";
 import { readInvestorMonitorEvidenceSource } from "./monitor-source";
+import { readCheckpointMonitorSource } from "./action-checkpoint-replay";
 import { verifyMonitorCostSettings } from "./monitor-costs";
 import { readEvidenceReference } from "./reference-evidence";
 import { modelWatchSchema, observationSchema, type InvestorObservation } from "./schemas";
@@ -86,7 +87,7 @@ export function readEvidenceCheckpoint(db: Database.Database, workspace: string,
     check(header.sequence === index + 1 && header.previous_hash === (previous ? hash(previous) : null) && time(header.created_at) <= time(now));
     if (time(header.valid_until) <= time(now)) return { checkpoint: null, unavailable_reason: "MONITOR_CHECKPOINT_SOURCE_EXPIRED" };
     if (db.prepare("SELECT 1 FROM investor_monitor_payload_purges WHERE kind='checkpoint' AND entity_id=?").get(header.id)) return { checkpoint: null, unavailable_reason: "MONITOR_CHECKPOINT_PAYLOAD_PURGED" };
-    const source = readInvestorMonitorEvidenceSource(db, workspace, text(model.id), text(header.input_id), now, text(header.created_at));
+    const source = readCheckpointMonitorSource(db, workspace, model, header, now);
     if (!source.projection) return { checkpoint: null, unavailable_reason: source.unavailable_reason };
     verifyMonitorCostSettings(db, workspace, definition, source.document.settings as Obj, text(header.created_at));
     expiry = earliest(expiry, source.document.valid_until);

@@ -1,7 +1,7 @@
 """Fictional standing-rule recovery, never source requests or trading."""
 
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 import json
 import sqlite3
@@ -26,7 +26,7 @@ class ActionRefreshTests(unittest.TestCase):
     next_source_day = fixture.ManagedActionTests.next_source_day
     assert_no_finance = fixture.ManagedActionTests.assert_no_finance
 
-    def model_and_prices(self):
+    def model_and_prices(self, *, audited=False, calendar_end='2026-11-02', explicit_costs=None):
         at = fixture.AT
         fixture.runtime_fixture.InvestorRuntimeTests.save(self, profile('0.30'))
         historical = evidence_fixture.create(self.db, 'w', 'synthetic-investor', now=at,
@@ -56,13 +56,15 @@ class ActionRefreshTests(unittest.TestCase):
             return data_evidence.review_source(self.db, 'w', 'synthetic-investor', source['id'], 'approved', facts,
                 'Explicit fictional test only', '2026-11-10T00:00:00.000Z', now=at)
         day = '2026-10-30'
-        calendar = reviewed('calendar', {'market': 'US', 'range_start': day, 'range_end': '2026-11-02', 'days': [
+        dates = [(datetime.fromisoformat(day) + timedelta(days=offset)).date().isoformat()
+            for offset in range((datetime.fromisoformat(calendar_end) - datetime.fromisoformat(day)).days + 1)]
+        calendar = reviewed('calendar', {'market': 'US', 'range_start': day, 'range_end': calendar_end, 'days': [
             {'date': date, 'kind': 'closed' if date in ('2026-10-31', '2026-11-01') else 'full',
              'close_at': None if date in ('2026-10-31', '2026-11-01') else date + 'T20:00:00Z',
              'available_at': None if date in ('2026-10-31', '2026-11-01') else date + 'T20:01:00Z',
-             'settled_at': None if date in ('2026-10-31', '2026-11-01') else '2026-11-03T21:00:00Z',
+             'settled_at': None if date in ('2026-10-31', '2026-11-01') else ('2026-11-03' if date <= '2026-11-02' else (datetime.fromisoformat(date) + timedelta(days=1)).date().isoformat()) + 'T21:00:00Z',
              'settlement_rule_known_at': None if date in ('2026-10-31', '2026-11-01') else '2026-01-01T00:00:00Z'}
-            for date in (day, '2026-10-31', '2026-11-01', '2026-11-02')]})
+            for date in dates]})
         bnd = reviewed('actions', {'listing_id': 'synthetic-0928', 'range_start': day, 'range_end': '2026-11-02',
             'coverage': 'reviewed_complete', 'tax_assumption': 'Fictional explicit assumption', 'events': []})
         fx = reviewed('fx', {'currency': 'USD', 'unit': 'CNY_per_unit_currency', 'rows': [
@@ -84,8 +86,12 @@ class ActionRefreshTests(unittest.TestCase):
                 captures.append(data_evidence.collect_prices(self.db, 'w', 'synthetic-investor', historical['rights']['id'], listing, calendar['id'], day, day)['id'])
         model, _, _ = monitor_admission.current_monitor_model(self.db, 'w', definition['model_id'], at)
         settings = monitor_bootstrap._settings(self.db, 'w', model, definition, reference, at)
+        if explicit_costs is not None:
+            from copy import deepcopy
+            settings['policy']['costs'] = deepcopy(explicit_costs)
         windows = [{'capture_ids': captures, 'action_review_ids': [publication, bnd['id']], 'fx_review_ids': [fx['id']], 'start_date': day, 'end_date': day}]
-        seed = monitor_admission.admit_monitor_data(self.db, 'w', 'synthetic-investor', definition['model_id'], windows, settings, now=at)
+        seed = monitor_admission.admit_monitor_data(self.db, 'w', 'synthetic-investor', definition['model_id'], windows, settings, now=at,
+            audited_action_knowledge=audited)
         return definition, seed, publication
 
     def test_real_model_rebuilds_new_input_without_reopening_old_control_or_changing_frozen_state(self):

@@ -41,7 +41,7 @@ function mount(t: { after: (fn: () => void) => void }, state = displayState(), v
       "@/components/ui/input": { Input: "Input" }, "@/components/session-boundary": { useSessionBoundary: () => null },
       "@/server/investor/schemas": schemas, "@/server/investor/loss-scenarios": losses, "./research-format": research, "./investor-client": client,
       "@/server/investor/action-maintenance-progress-schemas": { actionMaintenanceProgressRequest },
-      ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel", "history-panel", "monitor-cost-panel"]
+      ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel", "history-panel", "monitor-cost-panel","action-review"]
         .map(name => { const component = "Investor" + name.split("-").map(value => value[0].toUpperCase() + value.slice(1)).join("");
           return ["./investor-" + name, { [component]: component }]; })),
       "./investor-acquisition": { acquisitionDeadlines, InvestorAcquisitionPanel: "InvestorAcquisitionPanel" },
@@ -52,6 +52,18 @@ function mount(t: { after: (fn: () => void) => void }, state = displayState(), v
     headline: () => h.nodes().filter(node => node.type === "h2").map(node => h.words(node)).find(text => ["继续观察", "需要你做决定", "证据不足"].includes(text)),
   };
 }
+
+test("private action review locks sibling commands and parent polling without disabling its own independent status read",async t=>{
+  const h=mount(t,costDisplayState(),"plan");await h.flush();const reviewer=h.node("InvestorActionReview")!;assert.ok(reviewer);assert.equal(reviewer.props.disabled,false);
+  const staleRisk=h.node("InvestorRiskPanel")!.props.onCommand as (intent:unknown)=>void;
+  const staleCost=h.node("InvestorMonitorCostPanel")!.props.onCommand as (intent:unknown)=>void;
+  (reviewer.props.onScopeChange as (value:boolean)=>void)(true);await h.flush();
+  assert.equal(h.node("InvestorActionReview")!.props.disabled,false);assert.equal(h.node("InvestorFundingPanel")!.props.disabled,true);
+  assert.equal(h.node("InvestorMonitorCostPanel")!.props.disabled,true);assert.equal(h.node("InvestorRiskPanel")!.props.disabled,true);
+  staleRisk({action:"fictional-stale-risk"});staleCost({action:"fictional-stale-cost"});await h.flush();assert.equal(h.requests.length,0);
+  await h.advance(before+15000);assert.equal(h.requests.length,0);
+  (reviewer.props.onScopeChange as (value:boolean)=>void)(false);await h.flush();assert.equal(h.node("InvestorMonitorCostPanel")!.props.disabled,false);
+});
 
 test("reference and change cards fold only execution method, retaining cost, risk, counterevidence and dates without commands", async t => {
   const summary = "Fictional costs 12.37 CNY; price buffer 2%; FX buffer 1%.",

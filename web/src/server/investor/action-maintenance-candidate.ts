@@ -1,7 +1,8 @@
 import Decimal from "decimal.js";
 import { hash } from "../ledger/service";
 import { priceInstant } from "../market-price-source";
-import { validateInvestorSourceDocument } from "./kernel-contracts";
+import { validateInvestorActionReviewDocument, validateInvestorSourceDocument } from "./kernel-contracts";
+import { amount as factAmount } from "../ledger/decimal";
 import { actionAddDays, actionCheck as check, actionNyParts, actionText } from "./action-source-parsers";
 import type { ActionDraft, ActionObject as Obj } from "./action-source-parsers";
 
@@ -54,6 +55,10 @@ function anchorNominalDifferences(anchor:ActionSnapshot) {
   }
   return differences;
 }
+
+export function checkActionReportAgreement(current:ActionSnapshot) {
+  return anchorNominalDifferences(current);
+}
 function reviewedOverlap(base:Obj,anchor:ActionSnapshot,start:string,end:string) {
   const dividends=new Map<string,Obj[]>(),splits=new Map<string,Obj>();
   check(Array.isArray(base.events));
@@ -97,4 +102,59 @@ export function checkNoNewActionCandidate(base:Obj,anchor:ActionSnapshot,current
     overlap_distribution_dates:overlap.distributionDates,overlap_split_dates:overlap.splitDates,registered_nominal_difference_count:differences,
     coverage_basis:"selected_two_source_reports_not_objective_absence",authority_and_publication_not_verified:true,old_events_and_tax_assumption_unchanged:true,
     owner_reviewed_today:false,corporate_actions_complete:false,research_admitted:false,trading_permission:false,source_calls:0,database_writes:0,market_values_output:false};
+}
+
+/** Independent pure append comparison; no owner, raw receipt or consent admission. */
+export function checkReviewedActionAppend(before:Obj,after:Obj,previous:ActionSnapshot,current:ActionSnapshot,
+  symbol:string,listingId:string,knowledgeFloor:string,reviewedAt:string) {
+  check(Object.hasOwn(ACTION_TARGETS,symbol));
+  for(const facts of [before,after]) {
+    validateInvestorSourceDocument("facts",{kind:"actions",facts});
+    check(facts.listing_id === listingId && Array.isArray(facts.events));
+    for(const event of facts.events as Obj[]) {
+      const day=actionNyParts(event.at).day;priceInstant(event.published_at);
+      check(actionText(facts.range_start) <= day && day <= actionText(facts.range_end));
+      if(event.type === "dividend")check(priceInstant(event.pay_at) >= priceInstant(event.at)
+        && factAmount(event.tax_per_unit).gte(0) && factAmount(event.tax_per_unit).lte(factAmount(event.gross_per_unit)));
+      else check(factAmount(event.ratio).gt(0));
+    }
+  }
+  check(snapshot(current,symbol) >= snapshot(previous,symbol));
+  for(const value of [previous,current])for(const draft of Object.values(value))priceInstant(draft.source.retrieved_at);
+  checkNoNewActionCandidate(before,previous,previous,symbol,listingId);
+  const oldEnd=actionText(before.range_end),newEnd=actionText(after.range_end);
+  const fixed=(facts:Obj)=>Object.fromEntries(Object.entries(facts).filter(([key])=>!["events","range_end"].includes(key)));
+  const oldEvents=before.events as Obj[],allEvents=after.events as Obj[],added=allEvents.slice(oldEvents.length);
+  check(newEnd > oldEnd && hash(fixed(before)) === hash(fixed(after)) && added.length > 0
+    && hash(allEvents.slice(0,oldEvents.length)) === hash(oldEvents) && new Set(allEvents.map(event=>event.id)).size === allEvents.length);
+  const floor=priceInstant(knowledgeFloor),reviewed=priceInstant(reviewedAt);
+  check(floor <= reviewed && Object.values(current).every(draft=>floor >= priceInstant(draft.source.retrieved_at)));
+  for(const event of added)check(actionNyParts(event.at).day > oldEnd && actionNyParts(event.at).day <= newEnd
+    && priceInstant(event.published_at) >= floor && priceInstant(event.published_at) <= reviewed);
+  for(const [kind,day,fields] of [["issuer","ex_date",["ex_date","issuer_type_code"]],
+    ["dividends","date",["date"]],["splits","date",["date"]]] as const) {
+    const old=previous[kind],next=current[kind];
+    check(actionText(next.source.range_start) >= actionText(old.source.range_start)
+      && actionText(next.source.range_end) >= actionText(old.source.range_end)
+      && priceInstant(next.source.retrieved_at) >= priceInstant(old.source.retrieved_at)
+      && actionText(next.source.range_start) <= actionAddDays(oldEnd,1));
+    const start=maximum([old.source.range_start,next.source.range_start]);
+    check(hash(groups(old.records,day,[...fields],start,oldEnd)) === hash(groups(next.records,day,[...fields],start,oldEnd)));
+    check(actionText(next.source.range_end) >= newEnd && next.records.every(row=>actionText(row[day]) <= newEnd));
+  }
+  anchorNominalDifferences(current);
+  const start=maximum([after.range_start,...Object.values(current).map(draft=>draft.source.range_start)]);
+  check(start <= oldEnd);reviewedOverlap(after,current,start,newEnd);
+  const tail=Object.fromEntries(Object.entries(current).map(([kind,draft])=>[kind,{...draft,
+    records:draft.records.filter(row=>actionText(row[kind === "issuer" ? "ex_date":"date"]) > oldEnd)}])) as ActionSnapshot;
+  const late=added.filter(event=>priceInstant(event.published_at) > priceInstant(event.at)).length;
+  const proof={status:"reviewed_append_prepared_only",previous_facts_hash:hash(before),reviewed_facts_hash:hash(after),
+    previous_snapshot_hash:hash(previous),current_snapshot_hash:hash(current),previous_coverage_end:oldEnd,new_coverage_end:newEnd,
+    added_event_count:added.length,added_dividend_count:added.filter(event=>event.type === "dividend").length,
+    added_split_count:added.filter(event=>event.type === "split").length,new_nominal_difference_count:anchorNominalDifferences(tail),
+    knowledge_basis:"current_complete_report_receipts_only",late_knowledge_event_count:late,continuation_timing_ready:late === 0,
+    requires_separate_knowledge_or_start:late > 0,old_events_and_tax_assumption_unchanged:true,owner_approval_verified:false,
+    source_authority_verified:false,handover_registered:false,research_admitted:false,trading_permission:false,
+    provider_calls:0,database_writes:0,raw_amounts_or_tax_text_output:false};
+  validateInvestorActionReviewDocument("append_proof",proof);return proof;
 }

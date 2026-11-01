@@ -57,11 +57,11 @@ def monitor_evidence_document(db, workspace_id, model_id, input_id, checked):
     return row, document
 
 
-def admit_monitor_data(db, workspace_id, actor_id, model_id, windows, settings, *, now=None):
+def admit_monitor_data(db, workspace_id, actor_id, model_id, windows, settings, *, now=None, audited_action_knowledge=False):
     _owner(db, workspace_id, actor_id)
     checked = _milliseconds(now)
     _, definition, reference = current_monitor_model(db, workspace_id, model_id, checked)
-    candidate = build_monitor_data(db, workspace_id, definition, windows, settings, now=checked)
+    candidate = build_monitor_data(db, workspace_id, definition, windows, settings, now=checked, audited_action_knowledge=audited_action_knowledge)
     check_reference_listing_identity(reference["targets"], candidate["catalog"])
     _assert(not candidate["projection"]["quality_gaps"] and candidate["projection"]["valid_until"] > checked, "INVESTOR_DATA_MONITOR_INPUTS_NOT_CURRENT")
     document, digest = candidate["document"], candidate["content_hash"]

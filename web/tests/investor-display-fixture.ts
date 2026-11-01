@@ -32,6 +32,7 @@ export function mountInvestorDisplay<P>(t: { after: (fn: () => void) => void }, 
     dispatchEvent(event: { type: string }) { for (const fn of windowListeners.get(event.type) ?? []) fn(); return true; } };
   const requests: { url: string; method: string; options: RequestInit; resolve: (value: Response) => void; reject: (error: Error) => void }[] = [];
   const requestWaiters = new Set<(error?: Error) => void>();
+  const renderWaiters = new Set<(error?: Error) => void>();
   const schedule = () => { if (!scheduled && mounted) { scheduled = true; queueMicrotask(() => { scheduled = false; if (mounted) render(); }); } };
   const react = { Fragment: "Fragment", useState(initial: unknown) { const index = cursor++; if (!(index in hooks)) hooks[index] = typeof initial === "function" ? initial() : initial;
     return [hooks[index], (value: unknown) => { const next = typeof value === "function" ? value(hooks[index]) : value;
@@ -76,17 +77,18 @@ export function mountInvestorDisplay<P>(t: { after: (fn: () => void) => void }, 
     "./investor-action-maintenance": load(new URL("../src/components/workbench/investor-action-maintenance.tsx", import.meta.url)),
     "./investor-action-drafts": load(new URL("../src/components/workbench/investor-action-drafts.tsx", import.meta.url)) });
   const component = load(source)[name]; assert.equal(typeof component, "function");
-  function render() { cursor = 0; pending = []; tree = component(props); for (const effect of pending) effect(); }
+  function render() { cursor = 0; pending = []; tree = component(props); for (const effect of pending) effect(); for (const notify of [...renderWaiters]) notify(); }
   render(); const first = tree!;
   const close = () => {
     mounted = false; for (const effect of effects) effect?.cleanup?.(); timers.clear();
     for (const notify of [...requestWaiters]) notify(new Error("Display fixture closed before expected request"));
+    for (const notify of [...renderWaiters]) notify(new Error("Display fixture closed before expected render"));
   };
   t.after(close);
   const flush = () => new Promise<void>(resolve => setImmediate(resolve));
   const expand = (initial: Tree) => {
     let node = initial;
-    while (typeof node.type === "function" && ["Card", "ResearchCost", "ReferencePlanCard", "ModelChange", "ResearchTask", "ModelWatch", "PolicyReview", "Scenario", "FundedComparisonResults", "InvestorActionDrafts", "InvestorActionMaintenance"].includes(node.type.name)) node = node.type(node.props);
+    while (typeof node.type === "function" && ["Card", "ResearchCost", "ReferencePlanCard", "ModelChange", "ResearchTask", "ModelWatch", "PolicyReview", "Scenario", "FundedComparisonResults", "InvestorActionDrafts", "InvestorActionMaintenance", "SourceChanges"].includes(node.type.name)) node = node.type(node.props);
     return node;
   };
   const visit = (value: unknown, found: Tree[]) => { if (Array.isArray(value)) { value.forEach(child => visit(child, found)); return; }
@@ -112,8 +114,20 @@ export function mountInvestorDisplay<P>(t: { after: (fn: () => void) => void }, 
       requestWaiters.add(notify);
     });
   };
+  const waitFor = async (check: () => boolean) => {
+    if (check()) return;
+    await new Promise<void>((resolve, reject) => {
+      const notify = (error?: Error) => {
+        if (!error && !check()) return;
+        clearTimeout(timeout); renderWaiters.delete(notify);
+        if (error) reject(error); else resolve();
+      };
+      const timeout = setTimeout(() => notify(new Error("Expected display state did not render")), 2000);
+      renderWaiters.add(notify);
+    });
+  };
   return { requests, document, timers, windowListeners, documentListeners, first: () => words(first), text: () => words(tree), words, nodes, node, button, flush, close,
-    waitRequests,
+    waitRequests, waitFor,
     click: async (label: string) => { const target = button(label); assert.ok(target, label); assert.equal(!!target.props.disabled, false, label);
       (target.props.onClick as () => void)(); await flush(); },
     change: async (changes: Partial<P>) => { props = { ...props, ...changes }; render(); await flush(); },

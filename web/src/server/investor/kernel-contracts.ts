@@ -35,6 +35,13 @@ import modelSnapshot from "../../../../contracts/v1/investor-model-snapshot.sche
 import modelCheckpoint from "../../../../contracts/v1/investor-model-checkpoint.schema.json";
 import experiment from "../../../../contracts/v1/investor-experiment.schema.json";
 import dataFacts from "../../../../contracts/v1/investor-data-facts.schema.json";
+import actionCrosscheck from "../../../../contracts/v1/investor-action-crosscheck.schema.json";
+import actionSuccessor from "../../../../contracts/v1/investor-action-successor.schema.json";
+import actionReviewDraft from "../../../../contracts/v1/investor-action-review-draft.schema.json";
+import actionReviewWorkflow from "../../../../contracts/v1/investor-action-review-workflow.schema.json";
+import actionReviewJob from "../../../../contracts/v1/investor-action-review-job.schema.json";
+import legacyActionTransitionPreview from "../../../../contracts/v1/investor-legacy-action-transition-preview.schema.json";
+import legacyTransitionWorkflow from "../../../../contracts/v1/investor-legacy-transition-workflow.schema.json";
 import calendarContinuation from "../../../../contracts/v1/investor-calendar-continuation.schema.json";
 import dataSnapshot from "../../../../contracts/v1/investor-data-snapshot.schema.json";
 import evidenceInput from "../../../../contracts/v1/investor-evidence-input.schema.json";
@@ -43,9 +50,13 @@ import referencePlanV2 from "../../../../contracts/v1/investor-reference-plan-v2
 import monitorDataInput from "../../../../contracts/v1/investor-monitor-data-input.schema.json";
 import monitorDataInputV2 from "../../../../contracts/v1/investor-monitor-data-input-v2.schema.json";
 import monitorDataInputV3 from "../../../../contracts/v1/investor-monitor-data-input-v3.schema.json";
+import monitorDataInputV4 from "../../../../contracts/v1/investor-monitor-data-input-v4.schema.json";
+import monitorSourceSnapshotV2 from "../../../../contracts/v1/investor-monitor-source-snapshot-v2.schema.json";
+import monitorSourceDataset from "../../../../contracts/v1/investor-monitor-source-dataset.schema.json";
 import monitorCosts from "../../../../contracts/v1/investor-monitor-costs.schema.json";
 import monitorPriceSnapshot from "../../../../contracts/v1/investor-monitor-price-snapshot.schema.json";
 import monitorDataProjection from "../../../../contracts/v1/investor-monitor-data-projection.schema.json";
+import monitorDataProjectionV2 from "../../../../contracts/v1/investor-monitor-data-projection-v2.schema.json";
 import evidenceCheckpoint from "../../../../contracts/v1/investor-evidence-model-checkpoint.schema.json";
 import evidenceCheckpointV2 from "../../../../contracts/v1/investor-evidence-model-checkpoint-v2.schema.json";
 import evidenceCheckpointV3 from "../../../../contracts/v1/investor-evidence-model-checkpoint-v3.schema.json";
@@ -85,11 +96,14 @@ import { verifyInvestorKernelProof } from "./kernel-read-scope";
 const ajv = new Ajv2020({ strict: true, strictRequired: false });
 addFormats(ajv);
 ajv.addSchema(calendarContinuation);
+for (const schema of [actionCrosscheck, actionSuccessor, actionReviewDraft, actionReviewWorkflow, actionReviewJob]) ajv.addSchema(schema);
+ajv.addSchema(legacyActionTransitionPreview);
+ajv.addSchema(legacyTransitionWorkflow);
 for (const schema of [policyV2, policyV3, policyInput, strategyResultV2, strategyResultV3, settledPlan]) ajv.addSchema(schema);
 ajv.addSchema(boundedPlan); ajv.addSchema(actionAwarePlan); ajv.addSchema(eventReviewPlan); ajv.addSchema(planInput);
 for (const schema of [longHorizonInputV4, longHorizonResultV4, fundedHistoryInputV3, fundedHistoryResultV3]) ajv.addSchema(schema);
 for (const schema of [longHorizonInputV5, longHorizonResultV5, fundedHistoryInputV4, fundedHistoryResultV4]) ajv.addSchema(schema);
-for (const schema of [common, observation, dataset, plan, parameters, fixed, fixedV2, fixedPolicy, rotation, profile, policy, monitor, monitorV2, monitorV3, fixedPolicyState, request, strategyResult, assessment, assessmentV2, modelDefinition, modelDefinitionV2, modelSnapshot, modelCheckpoint, experiment, dataFacts, dataSnapshot, evidenceInput, referencePlan, referencePlanV2, monitorDataInput, monitorDataInputV2, monitorDataInputV3, monitorCosts, monitorPriceSnapshot, monitorDataProjection, evidenceCheckpoint, evidenceCheckpointV2, evidenceCheckpointV3, evidenceMonitor, evidenceMonitorRequestV2, plannedFunding, fundingPlan, longHorizonInput, longHorizonResult, longHorizonInputV2, longHorizonResultV2, longHorizonInputV3, longHorizonResultV3, fundedHistoryInput, fundedHistoryResult, fundedHistoryInputV2, fundedHistoryResultV2]) ajv.addSchema(schema);
+for (const schema of [common, observation, dataset, plan, parameters, fixed, fixedV2, fixedPolicy, rotation, profile, policy, monitor, monitorV2, monitorV3, fixedPolicyState, request, strategyResult, assessment, assessmentV2, modelDefinition, modelDefinitionV2, modelSnapshot, modelCheckpoint, experiment, dataFacts, dataSnapshot, evidenceInput, referencePlan, referencePlanV2, monitorDataInput, monitorDataInputV2, monitorDataInputV3, monitorDataInputV4, monitorSourceSnapshotV2, monitorSourceDataset, monitorCosts, monitorPriceSnapshot, monitorDataProjection, monitorDataProjectionV2, evidenceCheckpoint, evidenceCheckpointV2, evidenceCheckpointV3, evidenceMonitor, evidenceMonitorRequestV2, plannedFunding, fundingPlan, longHorizonInput, longHorizonResult, longHorizonInputV2, longHorizonResultV2, longHorizonInputV3, longHorizonResultV3, fundedHistoryInput, fundedHistoryResult, fundedHistoryInputV2, fundedHistoryResultV2]) ajv.addSchema(schema);
 const validateRequest = ajv.getSchema(request.$id)!, validateStrategy = ajv.getSchema(strategyResult.$id)!, validateAssessment = ajv.getSchema(assessment.$id)!;
 type JsonObject = Record<string, unknown>;
 type Quote = { listing_id: string; market: "CN" | "HK" | "US"; currency: string; close: string; observed_at: string; known_at: string; expected_close_at: string; valid_until: string };
@@ -124,13 +138,28 @@ export function validateInvestorModelDocument(kind: "definition" | "snapshot" | 
 export function validateInvestorTrialDocument(kind: "experiment" | "summary", value: unknown, planVersion = "research-plan-v2") {
   requireTrue(ajv.getSchema(kind === "experiment" ? experiment.$id : (planVersion === "research-plan-v6" ? strategyResultV3.$id : planVersion === "research-plan-v5" ? strategyResultV2.$id : strategyResult.$id) + "#/$defs/summary")!(value));
 }
-export function validateInvestorSourceDocument(kind: "facts" | "snapshot" | "monitor_snapshot" | "input" | "dataset" | "calendar_continuation", value: unknown) {
-  requireTrue(ajv.getSchema({ facts: dataFacts.$id, snapshot: dataSnapshot.$id, monitor_snapshot: monitorPriceSnapshot.$id, input: evidenceInput.$id, dataset: dataset.$id, calendar_continuation: calendarContinuation.$id }[kind])!(value));
+export function validateInvestorSourceDocument(kind: "facts" | "snapshot" | "monitor_snapshot" | "audited_monitor_snapshot" | "monitor_dataset" | "input" | "dataset" | "calendar_continuation", value: unknown) {
+  requireTrue(ajv.getSchema({ facts: dataFacts.$id, snapshot: dataSnapshot.$id, monitor_snapshot: monitorPriceSnapshot.$id,
+    audited_monitor_snapshot: monitorSourceSnapshotV2.$id, monitor_dataset: monitorSourceDataset.$id,
+    input: evidenceInput.$id, dataset: dataset.$id, calendar_continuation: calendarContinuation.$id }[kind])!(value));
+}
+export function validateInvestorActionAvailability(value: unknown) { requireTrue(ajv.getSchema(monitorSourceSnapshotV2.$id + "#/$defs/action_availability")!(value)); }
+export function validateLegacyActionTransitionPreview(value: unknown) { requireTrue(ajv.getSchema(legacyActionTransitionPreview.$id)!(value)); }
+export function validateLegacyTransitionWorkflow(kind: "preview_request" | "preview" | "submit" | "confirmation", value: unknown) {
+  requireTrue(ajv.getSchema(legacyTransitionWorkflow.$id + "#/$defs/" + kind)!(value));
+}
+export function validateInvestorActionReviewDocument(kind: "preview" | "confirmation" | "append_proof" | "preview_request" | "submit", value: unknown) {
+  const schema = kind === "append_proof" ? actionSuccessor : actionReviewWorkflow;
+  requireTrue(ajv.getSchema(schema.$id + "#/$defs/" + kind)!(value));
+}
+export function validateInvestorActionReviewJob(kind: "request" | "result", value: unknown) {
+  requireTrue(ajv.getSchema(actionReviewJob.$id + "#/$defs/" + kind)!(value));
 }
 export function validateInvestorReferenceDocument(value: unknown) { requireTrue(ajv.getSchema((value as JsonObject | null)?.schema_version === "investor-reference-plan-v2" ? referencePlanV2.$id : referencePlan.$id)!(value)); }
 export function validateInvestorMonitorDataDocument(kind: "input" | "projection", value: unknown) {
   const version = (value as JsonObject | null)?.schema_version;
-  requireTrue(ajv.getSchema(kind === "input" ? (version === "investor-monitor-data-input-v3" ? monitorDataInputV3.$id : version === "investor-monitor-data-input-v2" ? monitorDataInputV2.$id : monitorDataInput.$id) : monitorDataProjection.$id)!(value));
+  requireTrue(ajv.getSchema(kind === "input" ? (version === "investor-monitor-data-input-v4" ? monitorDataInputV4.$id : version === "investor-monitor-data-input-v3" ? monitorDataInputV3.$id : version === "investor-monitor-data-input-v2" ? monitorDataInputV2.$id : monitorDataInput.$id)
+    : version === "investor-monitor-data-projection-v2" ? monitorDataProjectionV2.$id : monitorDataProjection.$id)!(value));
 }
 export function validateInvestorMonitorCostRecord(value: unknown) { requireTrue(ajv.getSchema(monitorCosts.$id + "#/$defs/record")!(value)); }
 export function validateInvestorEvidenceCheckpoint(value: unknown) {

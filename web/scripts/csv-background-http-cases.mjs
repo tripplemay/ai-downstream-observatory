@@ -31,26 +31,35 @@ export async function csvBackgroundHttpCases({ check, request, jsonRequest, file
     return jsonRequest(endpoint, { method: 'POST', headers: headers({ Origin: origin, 'X-CSV-Idempotency-Key': key, 'X-CSV-Background-Acknowledged': 'true', ...extra }), body: form });
   };
   // Dispatch only CSV command types. Other HTTP suites may deliberately retain unrelated queued jobs.
-  const worker = expectedRequest => {
+  const worker = (expectedRequest, expectedError = null) => {
+    assert.ok(expectedError === null || expectedError === 'CSV_BACKGROUND_CANCELLED');
     const script = `import json,sys
-from worker.orchestration.db import open_database
+from worker.orchestration.db import WorkbenchError,open_database
 from worker.orchestration.csv_imports import CSV_COMMANDS
 from worker.orchestration.jobs import run_one
 from worker.orchestration.runtime import sync_requests,command_handler
 db=open_database(sys.argv[1])
 try:
     sync_requests(db,command_types=CSV_COMMANDS)
-    job=run_one(db,'synthetic-http-csv',command_handler(db,lease_seconds=300),job_type=CSV_COMMANDS,lease_seconds=300)
+    try:
+        job=run_one(db,'synthetic-http-csv',command_handler(db,lease_seconds=300),job_type=CSV_COMMANDS,lease_seconds=300)
+        assert sys.argv[3]=='success'
+    except WorkbenchError as error:
+        assert sys.argv[3]=='CSV_BACKGROUND_CANCELLED' and str(error)==sys.argv[3]
+        job=db.execute('SELECT * FROM job_runs WHERE command_request_id=?',(sys.argv[2],)).fetchone()
+        assert job is not None and job['status']=='failed' and job['attempt_count']==1
+        attempt=db.execute('SELECT * FROM job_attempts WHERE job_id=? AND attempt=1',(job['id'],)).fetchone()
+        assert attempt['status']=='failed' and json.loads(attempt['error_json'])=={'code':'WorkbenchError','message':sys.argv[3]}
     if job is None or job['command_request_id']!=sys.argv[2]: raise RuntimeError('HTTP_CSV_UNEXPECTED_JOB')
     print(json.dumps({'id':job['id'],'request_id':job['command_request_id'],'status':job['status'],'attempt_count':job['attempt_count'],'result':json.loads(job['result_json'])}))
 finally: db.close()
 `;
-    const result = spawnSync(process.env.WORKBENCH_TEST_PYTHON || process.env.WORKBENCH_PYTHON || 'python3', ['-c', script, filename, expectedRequest], {
+    const result = spawnSync(process.env.WORKBENCH_TEST_PYTHON || process.env.WORKBENCH_PYTHON || 'python3', ['-c', script, filename, expectedRequest, expectedError ?? 'success'], {
       cwd: root, env: { PATH: process.env.PATH, PYTHONPATH: root, PYTHONDONTWRITEBYTECODE: '1', TZ: 'UTC', WORKBENCH_DB_PATH: filename,
         WORKBENCH_DATA_DIR: path.join(directory, 'auth'), WORKBENCH_MODE: 'ledger' }, encoding: 'utf8', timeout: 45000, maxBuffer: 2 * 1024 * 1024,
     });
     assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error)); const job = JSON.parse(result.stdout);
-    assert.equal(job.status, 'succeeded'); assert.equal(job.attempt_count, 1); return job;
+    assert.equal(job.status, expectedError ? 'failed' : 'succeeded'); assert.equal(job.attempt_count, 1); return job;
   };
   try {
     await check('HTTP-CB01', 'CSV background authenticates before parsing, binds the current session and bounds multipart input', async () => {
@@ -162,7 +171,13 @@ finally: db.close()
       const cancelled = await post(endpoint, { action: 'cancel', command: { portfolio_id: portfolio, request_id: pending.json.request_id, reason: 'Explicit cancellation from a new session' } }); assert.equal(cancelled.status, 200, JSON.stringify(cancelled.json));
       const status = await get({ request: pending.json.request_id }); assert.equal(status.json.item.status, 'cancelled'); assert.equal(status.json.item.result, null);
       assert.equal((await get({ request: queued.json.request_id })).json.item.status, 'succeeded');
-      return { durable_completed_after_logout: true, new_session_private_status: true, original_payload_cross_session: 404, old_session: 401, cancelled_request: pending.json.request_id };
+      const beforeCancelledDispatch = counts();
+      worker(pending.json.request_id, 'CSV_BACKGROUND_CANCELLED');
+      const cancelledAfterDispatch = await get({ request: pending.json.request_id });
+      assert.equal(cancelledAfterDispatch.json.item.status, 'cancelled'); assert.equal(cancelledAfterDispatch.json.item.result, null);
+      assert.deepEqual(counts(), beforeCancelledDispatch);
+      return { durable_completed_after_logout: true, new_session_private_status: true, original_payload_cross_session: 404, old_session: 401,
+        cancelled_request: pending.json.request_id, cancelled_dispatch_terminal: true, cancelled_dispatch_financial_writes: false };
     });
     await check('HTTP-CB06', 'recovery mode preserves verified private pages but forbids new authorization and scoped cancellation', async () => {
       const before = counts(), marker = path.join(directory, 'RESTORE_PENDING_REVIEW'); writeFileSync(marker, 'Synthetic CSV HTTP readonly check\n');

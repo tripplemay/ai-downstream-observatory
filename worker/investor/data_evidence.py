@@ -208,6 +208,9 @@ def review_header(db, workspace_id, review_id, *, now=None):
 
 def resolve_review(db, workspace_id, review_id, kind, *, now=None, require_current=True):
     checked = _milliseconds(now)
+    from .action_checkpoint_replay import checkpoint_action_review
+    historical = checkpoint_action_review(db, workspace_id, review_id, kind, checked)
+    if historical is not None: return historical
     if review_id.startswith("managed-actions-review:"):
         _assert(kind == "actions")
         from .managed_actions import resolve_managed_review

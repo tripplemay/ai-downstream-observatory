@@ -9,7 +9,11 @@ import { migrateWorkbench } from "../../scripts/migrate-workbench.mjs";
 import { canonical, hash } from "../src/server/ledger/service";
 
 export const AT="2026-11-01T05:00:03.000Z",LATER="2026-11-02T06:00:03.000Z";
-export function actionPython(filename:string,code:string) {
+export function actionPython(filename:string,code:string,budget:"source"|"core_readmission"|"legacy_transition"="source") {
+  assert.ok(budget==="source"||budget==="core_readmission"||budget==="legacy_transition","UNKNOWN_ACTION_FIXTURE_BUDGET");
+  // Full retained-core replay includes research, callbacks and two checkpoints.
+  // Keep ordinary source probes unchanged and never change a production deadline.
+  const timeout=budget==="source"?30000:120000;
   const child=spawnSync(process.env.WORKBENCH_TEST_PYTHON ?? "python3",["-c",`
 import json,socket,sys
 from pathlib import Path
@@ -20,7 +24,10 @@ db=open_database(sys.argv[1])
 try:
 ${code.split("\n").map(line=>" "+line).join("\n")}
 finally:db.close()
-`,filename],{cwd:new URL("../../",import.meta.url),encoding:"utf8",timeout:30000,env:{PATH:process.env.PATH,NODE_ENV:"test"}});
+`,filename],{cwd:new URL("../../",import.meta.url),encoding:"utf8",timeout,env:{PATH:process.env.PATH,NODE_ENV:"test"}});
+  const failure=child.error as NodeJS.ErrnoException|undefined;
+  assert.ok(!failure,`OFFLINE_ACTION_FIXTURE_${failure?.code??"SPAWN_FAILURE"} deadline_ms=${timeout}`);
+  assert.equal(child.signal,null,"OFFLINE_ACTION_FIXTURE_INTERRUPTED");
   assert.equal(child.status,0,child.stderr);return JSON.parse(child.stdout) as Record<string,unknown>;
 }
 export function actionMaintenanceFixture(t:TestContext,official=true,withSnapshot=false) {

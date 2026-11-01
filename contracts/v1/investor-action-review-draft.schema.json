@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-action-review-draft.schema.json",
+  "type": "object",
+  "required": ["schema_version", "status", "checked_at", "refresh_after", "draft_basis_hash", "authority_id", "authority_hash", "control_id", "control_hash", "rule_enabled", "previous_publication_id", "previous_coverage_end", "candidate_coverage_end", "previous_tax_assumption_hash", "knowledge_not_before", "changes", "source_report", "required_confirmations", "visibility", "confirmation_supported", "approval_performed", "new_review_created", "new_rule_enabled", "quarantine_cleared", "research_admitted", "live_advice_eligible", "trading_permission", "provider_calls", "database_writes"],
+  "properties": {
+    "schema_version": {"const": "investor-action-review-draft-v1"},
+    "status": {"enum": ["no_reported_changes", "new_reported_actions", "historical_correction_required"]},
+    "checked_at": {"$ref": "common.schema.json#/$defs/instant"}, "refresh_after": {"$ref": "common.schema.json#/$defs/instant"},
+    "draft_basis_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "authority_id": {"$ref": "common.schema.json#/$defs/id"}, "authority_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "control_id": {"$ref": "common.schema.json#/$defs/id"}, "control_hash": {"$ref": "common.schema.json#/$defs/hash"}, "rule_enabled": {"type": "boolean"},
+    "previous_publication_id": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/id"}]},
+    "previous_coverage_end": {"$ref": "common.schema.json#/$defs/date"}, "candidate_coverage_end": {"$ref": "common.schema.json#/$defs/date"},
+    "previous_tax_assumption_hash": {"$ref": "common.schema.json#/$defs/hash"}, "knowledge_not_before": {"$ref": "common.schema.json#/$defs/instant"},
+    "changes": {"type": "array", "maxItems": 4096, "items": {"$ref": "#/$defs/change"}},
+    "source_report": {"$ref": "investor-action-crosscheck.schema.json", "type": "object", "properties": {"evidence_mode": {"const": "official_capture_replay"}}},
+    "required_confirmations": {"const": ["ISSUER_AMOUNT_UNIT_AND_CURRENCY", "EFFECTIVE_AND_PAYMENT_INSTANTS", "EXPLICIT_TAX_AMOUNT", "COMPLETE_REPORTED_COVERAGE", "KNOWLEDGE_TIMING_PROTOCOL", "SEPARATE_MAINTENANCE_CONSENT"]},
+    "visibility": {"const": "private_owner_only_not_ai"}, "confirmation_supported": {"const": false}, "approval_performed": {"const": false},
+    "new_review_created": {"const": false}, "new_rule_enabled": {"const": false}, "quarantine_cleared": {"const": false},
+    "research_admitted": {"const": false}, "live_advice_eligible": {"const": false}, "trading_permission": {"const": false},
+    "provider_calls": {"const": 0}, "database_writes": {"const": 0}
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {"if": {"properties": {"status": {"const": "no_reported_changes"}}}, "then": {"properties": {"changes": {"type": "array", "maxItems": 0}}}, "else": {"properties": {"changes": {"type": "array", "minItems": 1}}}},
+    {"if": {"properties": {"status": {"const": "historical_correction_required"}}}, "then": {"properties": {"changes": {"type": "array", "contains": {"type": "object", "properties": {"disposition": {"const": "historical_correction"}}, "required": ["disposition"]}}}},
+      "else": {"properties": {"changes": {"type": "array", "items": {"type": "object", "properties": {"disposition": {"const": "new_report"}}}}}}}
+  ],
+  "$defs": {
+    "nullable_date": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/date"}]},
+    "issuer": {
+      "type": "object", "required": ["ex_date", "issuer_type_code", "distribution_amount", "record_date", "pay_date", "record_hash"],
+      "properties": {
+        "ex_date": {"$ref": "common.schema.json#/$defs/date"}, "issuer_type_code": {"type": "string", "minLength": 1, "maxLength": 32},
+        "distribution_amount": {"$ref": "common.schema.json#/$defs/decimal"}, "record_date": {"$ref": "common.schema.json#/$defs/date"}, "pay_date": {"$ref": "common.schema.json#/$defs/date"}, "record_hash": {"$ref": "common.schema.json#/$defs/hash"}
+      }, "additionalProperties": false
+    },
+    "dividend": {
+      "type": "object", "required": ["date", "value", "unadjusted_value", "reported_currency", "declaration_date", "record_date", "payment_date", "reported_period", "record_hash"],
+      "properties": {
+        "date": {"$ref": "common.schema.json#/$defs/date"}, "value": {"$ref": "common.schema.json#/$defs/decimal"}, "unadjusted_value": {"$ref": "common.schema.json#/$defs/decimal"},
+        "reported_currency": {"$ref": "common.schema.json#/$defs/currency"}, "declaration_date": {"$ref": "#/$defs/nullable_date"}, "record_date": {"$ref": "#/$defs/nullable_date"}, "payment_date": {"$ref": "#/$defs/nullable_date"},
+        "reported_period": {"oneOf": [{"type": "null"}, {"type": "string", "maxLength": 100}]}, "record_hash": {"$ref": "common.schema.json#/$defs/hash"}
+      }, "additionalProperties": false
+    },
+    "split": {
+      "type": "object", "required": ["date", "numerator", "denominator", "record_hash"],
+      "properties": {"date": {"$ref": "common.schema.json#/$defs/date"}, "numerator": {"$ref": "common.schema.json#/$defs/decimal"}, "denominator": {"$ref": "common.schema.json#/$defs/decimal"}, "record_hash": {"$ref": "common.schema.json#/$defs/hash"}}, "additionalProperties": false
+    },
+    "records": {
+      "type": "object", "required": ["issuer", "dividends", "splits"],
+      "properties": {
+        "issuer": {"type": "array", "maxItems": 2048, "items": {"$ref": "#/$defs/issuer"}},
+        "dividends": {"type": "array", "maxItems": 2048, "items": {"$ref": "#/$defs/dividend"}},
+        "splits": {"type": "array", "maxItems": 2048, "items": {"$ref": "#/$defs/split"}}
+      }, "additionalProperties": false
+    },
+    "change": {
+      "type": "object", "required": ["date", "disposition", "outside_common_coverage", "previous", "current", "effective_at", "payment_at", "tax_per_unit"],
+      "properties": {
+        "date": {"$ref": "common.schema.json#/$defs/date"}, "disposition": {"enum": ["new_report", "historical_correction"]}, "outside_common_coverage": {"type": "boolean"},
+        "previous": {"$ref": "#/$defs/records"}, "current": {"$ref": "#/$defs/records"},
+        "effective_at": {"type": "null"}, "payment_at": {"type": "null"}, "tax_per_unit": {"type": "null"}
+      }, "additionalProperties": false
+    }
+  }
+}
