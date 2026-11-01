@@ -263,6 +263,9 @@ def command_handler(connection, clock=None, lease_seconds=300, stop_requested=No
     clock = (lambda: None) if clock is None else clock
     supported = role_commands(role)
     def handle(job, lease):
+        if job["job_type"] == "investor_action_review" and role == "core":
+            from worker.investor.action_review_jobs import prepare_action_review_job
+            return prepare_action_review_job(connection, job, lease, clock=clock, stop_requested=stop_requested)
         if job["job_type"] == "investor_eodhd_capture" and role == "longport":
             from worker.investor.eodhd_sources import prepare_eodhd_capture
             return prepare_eodhd_capture(connection, job, lease, clock=clock, stop_requested=stop_requested)
@@ -414,6 +417,8 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
     if role == "longport" and (type(lease_seconds) is not int or lease_seconds < 180):
         raise WorkbenchError("PRICE_WORKER_LEASE_TOO_SHORT")
     if role == "core":
+        from worker.investor.action_review_jobs import discover_action_review_requests
+        discover_action_review_requests(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         from worker.investor.runtime import sync_research_requests
         from worker.investor.funded_study_runtime import sync_funded_study_requests
         from worker.investor.funded_result_retention import purge_due_funded_results
@@ -455,5 +460,5 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
     sync_requests(connection, now=clock(), command_types=supported)
     # One oldest-ready selection avoids starving periodic jobs behind a busy
     # ingestion stream while still excluding unsupported modules' jobs.
-    types = (*supported, "investor_research", "investor_funded_study", "investor_monitor", "investor_evidence_monitor") if role == "core" else (*supported, "investor_confirmed_watch", "investor_initial_prices", "investor_current_fx", "investor_issuer_capture", "investor_eodhd_capture") if role == "longport" else supported
+    types = (*supported, "investor_research", "investor_funded_study", "investor_monitor", "investor_evidence_monitor", "investor_action_review") if role == "core" else (*supported, "investor_confirmed_watch", "investor_initial_prices", "investor_current_fx", "investor_issuer_capture", "investor_eodhd_capture") if role == "longport" else supported
     return run_one(connection, owner, command_handler(connection, clock, lease_seconds, stop_requested, role), job_type=types, lease_seconds=lease_seconds, clock=clock)

@@ -73,6 +73,8 @@ def _prepare_action_review_draft(db, workspace, actor, authority_id, *, now=None
         authority, policy, control = managed._authority(db, workspace, authority_id, at)
         _check(policy["valid_from"] <= at < policy["valid_until"], "AUTHORITY_EXPIRED")
         anchor = managed._anchor(db, workspace, actor, policy["base_review_id"], policy["listing_review_id"], policy["anchor_captures"], at)
+        from .action_review_workflow import _confirmed_event_origins
+        _confirmed_event_origins(db, workspace, anchor["base"], at)
         _check(anchor["base"]["review"]["content_hash"] == policy["base_review_hash"]
             and anchor["listing"]["review"]["content_hash"] == policy["listing_review_hash"]
             and anchor["listing"]["facts"]["listing_id"] == policy["listing_id"]

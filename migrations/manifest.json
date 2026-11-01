@@ -278,6 +278,11 @@
       "version": 55,
       "file": "0055_investor_action_review_workflow.sql",
       "sha256": "bd61f026456ba32dc624c276810d8a0d67b0c04991efd054b5feab979a897668"
+    },
+    {
+      "version": 56,
+      "file": "0056_investor_action_review_jobs.sql",
+      "sha256": "5febb75354fc880aebd2ec644121ef9f7833248809f5dd8847f340528f0be016"
     }
   ]
 }

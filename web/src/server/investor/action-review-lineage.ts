@@ -31,10 +31,16 @@ function previewHeader(db: Database.Database, workspace: string, actor: unknown,
   check(canonical(doc) === row.document_json && hash(doc) === row.content_hash && row.actor_id === actor && doc.preview_id === row.id);
   for (const key of ["workspace_id", "workspace_revision", "authority_id", "control_id", "request_hash", "created_at", "valid_until"]) check(doc[key] === row[key]);
   check(time(doc.checked_at) <= time(row.created_at) && time(row.created_at) < time(row.valid_until) && time(row.created_at) <= time(now)
-    && time(row.valid_until) - time(doc.checked_at) <= 60000000n && Number.isSafeInteger(row.workspace_revision) && Number(row.workspace_revision) > 0
+    && time(row.valid_until) - time(doc.checked_at) <= (doc.validity_policy === "owner_review_15m" ? 900000000n : 60000000n)
+    && Number.isSafeInteger(row.workspace_revision) && Number(row.workspace_revision) > 0
     && doc.request_hash === hash({ authority_id: row.authority_id, expected_revision: Number(row.workspace_revision) - 1, idempotency_key: row.idempotency_key }));
   actionAudit(db, workspace, row, "investor_preview_action_review", "investor_action_review_preview");
   return doc;
+}
+
+/** Authenticated metadata only; this does not replay or approve source facts. */
+export function readActionReviewPreviewWitness(db: Database.Database, workspace: string, actor: unknown, id: unknown, now: string) {
+  return db.transaction(() => previewHeader(db, workspace, actor, id, now)).deferred();
 }
 function confirmationHeader(db: Database.Database, workspace: string, actor: unknown, id: unknown, now: string) {
   owner(db, workspace, actor);
@@ -51,6 +57,11 @@ function confirmationHeader(db: Database.Database, workspace: string, actor: unk
     && time(preview.created_at) <= time(row.created_at) && time(row.created_at) < time(preview.valid_until) && time(row.created_at) <= time(now));
   actionAudit(db, workspace, row, "investor_confirm_action_review", "investor_action_review_confirmation");
   return { row, doc, request };
+}
+
+/** Historical registration receipt, not current economic/source qualification. */
+export function readActionReviewConfirmationReceipt(db: Database.Database, workspace: string, actor: unknown, id: unknown, now: string) {
+  return db.transaction(() => confirmationHeader(db, workspace, actor, id, now).doc).deferred();
 }
 function changes(previous: ActionSnapshot, current: ActionSnapshot, coverageEnd: string, commonEnd: string) {
   const index = (snapshot: ActionSnapshot) => Object.fromEntries(kinds.map(kind => {

@@ -1,6 +1,7 @@
 """Explicit, witnessed owner review; never a trading or monitor-admission API."""
 
 from copy import deepcopy
+from datetime import timedelta
 from decimal import Decimal, localcontext
 
 from worker.accounting import fact_decimal
@@ -43,7 +44,8 @@ def _preview_header(db, workspace, actor, identifier):
         and doc["preview_id"] == row["id"] and doc["checked_at"] <= doc["created_at"] < doc["valid_until"], "PREVIEW_INVALID")
     _check(doc["request_hash"] == content_hash({"authority_id": row["authority_id"], "expected_revision": row["workspace_revision"] - 1,
         "idempotency_key": row["idempotency_key"]}), "PREVIEW_INVALID")
-    _check((instant(doc["valid_until"]) - instant(doc["checked_at"])).total_seconds() <= 60, "PREVIEW_INVALID")
+    cap = 900 if doc.get("validity_policy") == "owner_review_15m" else 60
+    _check((instant(doc["valid_until"]) - instant(doc["checked_at"])).total_seconds() <= cap, "PREVIEW_INVALID")
     _audit_binding(db, row, "investor_preview_action_review", "investor_action_review_preview", identifier)
     return row, doc
 
@@ -81,20 +83,31 @@ def _check_context(db, workspace, actor, draft, context, at):
     managed._check_capture_headers(db, workspace, [context["anchor"]["report"], context["report"], *context["historical_reports"]], at)
 
 
-def register_action_review_preview(db, workspace, actor, request, *, now=None):
-    """Persist only an unapproved server-time witness, never source facts or consent."""
+def prepare_action_review_preview(db, workspace, actor, request, *, now=None, clock=None, owner_interaction=False):
+    """Prepare outside a job writer; return a connection-bound commit closure."""
     assert_writable(db); _owner(db, workspace, actor); _validate(request, "preview_request")
+    _check(type(owner_interaction) is bool, "PREVIEW_POLICY_INVALID")
     request = _object(canonical_json(request))
-    digest, at = content_hash(request), _clock(now)
+    digest, at = content_hash(request), _clock(clock() if clock else now)
     old = db.execute("SELECT id,request_hash FROM investor_action_review_previews WHERE workspace_id=? AND idempotency_key=?", (workspace, request["idempotency_key"])).fetchone()
     if old:
         _check(old["request_hash"] == digest, "DUPLICATE_CONFLICT")
-        return _preview_header(db, workspace, actor, old["id"])[1]
+        def replay(connection):
+            _check(connection is db, "PREPARED_CONNECTION_CHANGED")
+            return _preview_header(db, workspace, actor, old["id"])[1]
+        return replay
     _revision(db, workspace, actor, request["expected_revision"])
     _check(not _retired(db, workspace, request["authority_id"]), "RULE_RETIRED")
     draft, context = _prepare_action_review_draft(db, workspace, actor, request["authority_id"], now=at)
+    def commit(connection):
+        _check(connection is db, "PREPARED_CONNECTION_CHANGED")
+        return _commit_preview(db, workspace, actor, request, draft, context, digest, now, clock, owner_interaction)
+    return commit
+
+
+def _commit_preview(db, workspace, actor, request, draft, context, digest, now, clock, owner_interaction):
     with transaction(db):
-        current = _clock(now)
+        current = _clock(clock() if clock else now)
         concurrent = db.execute("SELECT id,request_hash FROM investor_action_review_previews WHERE workspace_id=? AND idempotency_key=?", (workspace, request["idempotency_key"])).fetchone()
         if concurrent:
             _check(concurrent["request_hash"] == digest, "DUPLICATE_CONFLICT")
@@ -106,12 +119,20 @@ def register_action_review_preview(db, workspace, actor, request, *, now=None):
             **{key: draft[key] for key in ("authority_id", "authority_hash", "control_id", "control_hash", "draft_basis_hash")},
             "checked_at": draft["checked_at"], "created_at": current, "valid_until": draft["refresh_after"],
             "approval_performed": False, "provider_calls": 0, "research_admitted": False, "trading_permission": False}
+        if owner_interaction:
+            doc.update(validity_policy="owner_review_15m", valid_until=_clock(min(instant(draft["checked_at"]) + timedelta(minutes=15),
+                instant(context["maximum_valid_until"]), instant(managed._deadline(draft["checked_at"], context["policy"])))))
         _validate(doc, "preview"); hashed = content_hash(doc)
         audit = _audit(db, actor, "investor_preview_action_review", "investor_action_review_preview", identifier, {"content_hash": hashed}, current)
         db.execute("INSERT INTO investor_action_review_previews VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (identifier, workspace, request["authority_id"],
             draft["control_id"], doc["workspace_revision"], request["idempotency_key"], digest, canonical_json(doc), hashed, actor, current, doc["valid_until"], audit))
         db.execute("UPDATE investor_workspaces SET revision=revision+1 WHERE id=?", (workspace,))
         return doc
+
+
+def register_action_review_preview(db, workspace, actor, request, *, now=None, owner_interaction=False):
+    """Persist only an unapproved server-time witness, never source facts or consent."""
+    return prepare_action_review_preview(db, workspace, actor, request, now=now, owner_interaction=owner_interaction)(db)
 
 
 def _verified_confirmation(db, workspace, actor, identifier, at):
@@ -239,15 +260,18 @@ def _new_facts(context, answers, preview_id, floor):
     return facts
 
 
-def confirm_action_review(db, workspace, actor, request, *, now=None):
-    """Explicit answers -> one atomic approval/retirement/lineage, never execution."""
+def prepare_action_review_confirmation(db, workspace, actor, request, *, now=None, clock=None):
+    """Prepare exact answers before the fenced writer, never commit on prepare."""
     assert_writable(db); _owner(db, workspace, actor); _validate(request, "submit")
     request = _object(canonical_json(request))
-    request_hash, at = content_hash(request), _clock(now)
+    request_hash, at = content_hash(request), _clock(clock() if clock else now)
     old = db.execute("SELECT id,request_hash FROM investor_action_review_confirmations WHERE workspace_id=? AND idempotency_key=?", (workspace, request["idempotency_key"])).fetchone()
     if old:
         _check(old["request_hash"] == request_hash, "DUPLICATE_CONFLICT")
-        return _confirmation_header(db, workspace, actor, old["id"])[1]
+        def replay(connection):
+            _check(connection is db, "PREPARED_CONNECTION_CHANGED")
+            return _confirmation_header(db, workspace, actor, old["id"])[1]
+        return replay
     with transaction(db, immediate=False), _fact_validation_scope():
         _, witness = _preview_header(db, workspace, actor, request["preview_id"])
         _revision(db, workspace, actor, request["expected_revision"])
@@ -259,8 +283,15 @@ def confirm_action_review(db, workspace, actor, request, *, now=None):
         facts = _new_facts(context, request["new_events"], witness["preview_id"], draft["knowledge_not_before"])
         proof = check_reviewed_action_append(context["prior"]["facts"], facts, context["previous"], context["current"],
             symbol=context["policy"]["provider_symbol"], listing_id=context["policy"]["listing_id"], knowledge_floor=draft["knowledge_not_before"], reviewed_at=at)
+    def commit(connection):
+        _check(connection is db, "PREPARED_CONNECTION_CHANGED")
+        return _commit_confirmation(db, workspace, actor, request, request_hash, witness, draft, context, facts, proof, now, clock)
+    return commit
+
+
+def _commit_confirmation(db, workspace, actor, request, request_hash, witness, draft, context, facts, proof, now, clock):
     with transaction(db), _fact_validation_scope():
-        current = _clock(now)
+        current = _clock(clock() if clock else now)
         concurrent = db.execute("SELECT id,request_hash FROM investor_action_review_confirmations WHERE workspace_id=? AND idempotency_key=?", (workspace, request["idempotency_key"])).fetchone()
         if concurrent:
             _check(concurrent["request_hash"] == request_hash, "DUPLICATE_CONFLICT")
@@ -294,6 +325,11 @@ def confirm_action_review(db, workspace, actor, request, *, now=None):
         db.execute("INSERT INTO investor_action_review_confirmations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (identifier, workspace, request["preview_id"],
             doc["previous_authority_id"], doc["new_authority_id"], review["id"], doc["workspace_revision"], request["idempotency_key"], request_hash,
             canonical_json(doc), digest, actor, current, audit))
-        _check(_clock(now) < witness["valid_until"], "PREVIEW_EXPIRED")
+        _check(_clock(clock() if clock else now) < witness["valid_until"], "PREVIEW_EXPIRED")
         db.execute("UPDATE investor_workspaces SET revision=revision+1 WHERE id=?", (workspace,))
         return doc
+
+
+def confirm_action_review(db, workspace, actor, request, *, now=None):
+    """Explicit answers -> one atomic approval/retirement/lineage, never execution."""
+    return prepare_action_review_confirmation(db, workspace, actor, request, now=now)(db)
