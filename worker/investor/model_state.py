@@ -42,7 +42,7 @@ def advance_evidence_model(definition, projection, previous, now, *, input_hash,
     distinct contracts prevents a real source from entering a synthetic path.
     """
     validate_definition(definition)
-    validate_contract(projection, "investor-monitor-data-projection.schema.json")
+    validate_contract(projection, "investor-monitor-data-projection-v2.schema.json" if projection.get("schema_version") == "investor-monitor-data-projection-v2" else "investor-monitor-data-projection.schema.json")
     if definition["data_mode"] != "reconstructed" or not re.fullmatch(r"[a-f0-9]{64}", input_hash): _error("SOURCE_MODE_UNSUPPORTED")
     if not instant(projection["created_at"]) <= instant(now) < instant(projection["valid_until"]): _error("PROJECTION_EXPIRED_OR_FUTURE")
     if type(sparse) is not bool: _error("CHECKPOINT_POLICY_INVALID")

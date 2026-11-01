@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-monitor-source-dataset.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "mode", "created_at", "use_scope", "action_knowledge_basis", "source_evidence", "license_scope", "historical_archive_verified", "corporate_actions_complete", "publication_refs", "assets", "sessions", "settlements", "observations", "reviewed_actions"],
+  "properties": {
+    "schema_version": {"const": "investor-monitor-source-dataset-v1"}, "mode": {"const": "reconstructed"},
+    "created_at": {"$ref": "investor-reference-plan.schema.json#/$defs/instant"}, "use_scope": {"const": "monitor_only"},
+    "action_knowledge_basis": {"const": "audited_owner_review_not_provider_publication"},
+    "source_evidence": {"$ref": "research-dataset.schema.json#/properties/source_evidence"}, "license_scope": {"$ref": "research-dataset.schema.json#/properties/license_scope"},
+    "historical_archive_verified": {"const": false}, "corporate_actions_complete": {"const": true},
+    "publication_refs": {"type": "array", "maxItems": 0},
+    "assets": {"$ref": "research-dataset.schema.json#/properties/assets"}, "sessions": {"$ref": "research-dataset.schema.json#/properties/sessions"},
+    "settlements": {"$ref": "research-dataset.schema.json#/properties/settlements"}, "observations": {"$ref": "research-dataset.schema.json#/properties/observations"},
+    "reviewed_actions": {"type": "array", "maxItems": 10000, "items": {
+      "type": "object", "additionalProperties": false, "required": ["fact", "availability"],
+      "properties": {"fact": {"$ref": "research-dataset.schema.json#/properties/actions/items"}, "availability": {"$ref": "investor-monitor-source-snapshot-v2.schema.json#/$defs/action_availability"}}
+    }}
+  }
+}

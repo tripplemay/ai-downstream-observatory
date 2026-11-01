@@ -10,6 +10,7 @@ import { readInvestorConfirmedCapture } from "./confirmed-source";
 import { managedFxReviewUnavailable, verifyManagedFxReview } from "./managed-fx-source";
 import { currentCalendarReview } from "./calendar-continuation";
 import { MANAGED_ACTION_PREFIX, managedActionReviewUnavailable, readManagedActionReview } from "./managed-action-source";
+import { actionAvailabilityRefs, indexActionAvailability } from "./monitor-action-knowledge";
 
 type Obj = Record<string, unknown>;
 type Row = { id: string; workspace_id: string; document_json: string; content_hash: string; created_at: string; actor_id: string; audit_id: string; valid_until: string; source_qualification: string };
@@ -117,7 +118,7 @@ function unavailable(db: Database.Database, workspace: string, document: Obj, no
     const managed = managedFxReviewUnavailable(db, workspace, row.id, now); if (managed) return managed;
   }
   for (const ref of list(snapshot.capture_refs, 1000)) {
-    const versioned = snapshot.schema_version === "investor-monitor-price-snapshot-v1";
+    const versioned = ["investor-monitor-price-snapshot-v1", "investor-monitor-source-snapshot-v2"].includes(snapshot.schema_version as string);
     check(versioned ? ["historical_sdk", "confirmed_sdk"].includes(ref.kind as string) : !Object.hasOwn(ref, "kind"));
     const confirmed = versioned && ref.kind === "confirmed_sdk", prefix = confirmed ? "investor_confirmed" : "investor_price", digest = confirmed ? "payload_sha256" : "projection_sha256";
     const row = db.prepare(`SELECT id,receipt_hash,${digest},retain_until FROM ${prefix}_captures WHERE id=? AND workspace_id=?`).get(ref.capture_id, workspace) as Obj | undefined;
@@ -162,10 +163,14 @@ export function readInvestorMonitorPriceSnapshot(db: Database.Database, workspac
   return readSnapshot(db, workspace, document, now, true);
 }
 
-function readSnapshot(db: Database.Database, workspace: string, document: Obj, now: string, confirmedSnapshot: boolean) {
+export function readInvestorAuditedMonitorSnapshot(db: Database.Database, workspace: string, document: Obj, now: string) {
+  return readSnapshot(db, workspace, document, now, true, true);
+}
+
+function readSnapshot(db: Database.Database, workspace: string, document: Obj, now: string, confirmedSnapshot: boolean, auditedActions = false) {
   try {
     const snapshot = obj(document.snapshot), frozen = document.created_at as string, start = snapshot.range_start as string, end = snapshot.range_end as string;
-    validateInvestorSourceDocument(confirmedSnapshot ? "monitor_snapshot" : "snapshot", snapshot);
+    validateInvestorSourceDocument(auditedActions ? "audited_monitor_snapshot" : confirmedSnapshot ? "monitor_snapshot" : "snapshot", snapshot);
     check(investorInstant.safeParse(frozen).success && frozen <= now && investorInstant.safeParse(document.valid_until).success
       && snapshot.created_at === frozen && snapshot.mode === "reconstructed" && snapshot.workspace_id === workspace);
     const reason = unavailable(db, workspace, document, now);
@@ -178,6 +183,10 @@ function readSnapshot(db: Database.Database, workspace: string, document: Obj, n
       check(!reviews.has(ref.review_id as string)); const value = review(db, workspace, ref, now); check(value.row.created_at <= frozen);
       reviews.set(ref.review_id as string, value);
     }
+    const actionReviews = [...reviews.values()].filter(value => value.source.kind === "actions");
+    const availability = auditedActions ? actionAvailabilityRefs(db, workspace, actionReviews, now, frozen) : null;
+    if (availability) eq(snapshot.action_availability_refs, availability);
+    const available = availability ? indexActionAvailability(actionReviews, availability, frozen) : null;
     const assets = new Map<string, Review>(), calendars = new Map<string, Review>();
     const quotes = new Map<string, { capture: Obj; record: Obj }>(), used = new Set<string>();
     const deadlines = [...reviews.values()].map(value => value.row.valid_until);
@@ -256,7 +265,7 @@ function readSnapshot(db: Database.Database, workspace: string, document: Obj, n
     for (const [identity, value] of actions) check(assets.has(identity) && (value.facts.range_start as string) <= start && end <= (value.facts.range_end as string));
     const currencies = new Set([...assets.values()].map(value => value.facts.currency as string).filter(currency => currency !== "CNY"));
     eq([...rates.keys()].sort(), [...currencies].sort());
-    const sessions: Obj[] = [], settlements: Obj[] = [], observations: Obj[] = [], events: Obj[] = [], expectedKeys = new Set<string>();
+    const sessions: Obj[] = [], settlements: Obj[] = [], observations: Obj[] = [], events: Obj[] = [], journal: Obj[] = [], expectedKeys = new Set<string>();
     for (const [market, value] of [...calendars].sort(([a],[b]) => cmp(a,b))) {
       const days = list(value.facts.days, 3660), rangeStart = value.facts.range_start as string, rangeEnd = value.facts.range_end as string;
       const count = (Date.parse(rangeEnd + "T00:00:00Z") - Date.parse(rangeStart + "T00:00:00Z")) / 86400000 + 1;
@@ -300,26 +309,31 @@ function readSnapshot(db: Database.Database, workspace: string, document: Obj, n
     for (const [identity, value] of actions) for (const event of list(value.facts.events)) {
       const day = localDate(event.at, zones[assets.get(identity)!.facts.market as string]);
       check(event.listing_id === identity && (value.facts.range_start as string) <= day && day <= (value.facts.range_end as string)
-        && priceInstant(event.published_at) <= priceInstant(event.at));
+        && (auditedActions || priceInstant(event.published_at) <= priceInstant(event.at)));
       if (event.type === "split") check(amount(event.ratio as string).gt(0));
       else check(amount(event.gross_per_unit as string).gte(0) && amount(event.tax_per_unit as string).gte(0)
         && amount(event.tax_per_unit as string).lte(amount(event.gross_per_unit as string)) && priceInstant(event.pay_at) >= priceInstant(event.at));
       if (start <= day && day <= end) {
         check(!actionIds.has(event.id as string)); actionIds.add(event.id as string);
         events.push({ ...event, source_evidence: "review:" + value.row.id });
+        if (available) journal.push({ fact: { ...event }, availability: available(value.row.id, event.id) });
       }
     }
     const catalog = Object.fromEntries([...assets].sort(([a],[b]) => cmp(a,b)).map(([id,value]) => [id,value.facts]));
-    const dataset = { schema_version: "research-dataset-v2", mode: "reconstructed", source_evidence: "investor-data-snapshot:" + hash(snapshot),
+    const commonDataset = { mode: "reconstructed", source_evidence: "investor-data-snapshot:" + hash(snapshot),
       license_scope: "Recorded private research/retention/display/backup only; owner-reviewed sources, not provider certification; no external AI authority inferred",
       historical_archive_verified: false, corporate_actions_complete: true, publication_refs: [],
       assets: [...assets].sort(([a],[b]) => cmp(a,b)).map(([identity,value]) => ({ listing_id: identity, market: value.facts.market, currency: value.facts.currency,
         quantity_step: value.facts.quantity_step, tradable_from: value.facts.tradable_from, ...(value.facts.tradable_until ? { tradable_until: value.facts.tradable_until } : {}), source_evidence: "review:" + value.row.id })),
       sessions: sessions.sort((a,b) => cmp(a.close_at as string,b.close_at as string) || cmp(a.market as string,b.market as string)),
       settlements: settlements.sort((a,b) => cmp(a.session_date as string,b.session_date as string) || cmp(a.market as string,b.market as string)),
-      observations: observations.sort((a,b) => cmp(a.id as string,b.id as string)), actions: events.sort((a,b) => cmp(a.at as string,b.at as string) || cmp(a.id as string,b.id as string)) };
+      observations: observations.sort((a,b) => cmp(a.id as string,b.id as string)) };
+    const dataset = auditedActions ? { ...commonDataset, schema_version: "investor-monitor-source-dataset-v1", created_at: frozen,
+      use_scope: "monitor_only", action_knowledge_basis: "audited_owner_review_not_provider_publication",
+      reviewed_actions: journal.sort((a,b) => cmp(obj(a.fact).at as string,obj(b.fact).at as string) || cmp(obj(a.fact).id as string,obj(b.fact).id as string)) }
+      : { ...commonDataset, schema_version: "research-dataset-v2", actions: events.sort((a,b) => cmp(a.at as string,b.at as string) || cmp(a.id as string,b.id as string)) };
     check(observations.length <= 100000 && Buffer.byteLength(canonical(dataset)) + Buffer.byteLength(canonical(snapshot)) <= 16777216);
-    validateInvestorSourceDocument("dataset", dataset);
+    validateInvestorSourceDocument(auditedActions ? "monitor_dataset" : "dataset", dataset);
     check(hash(dataset) === document.dataset_hash && hash(catalog) === document.catalog_hash && [...deadlines].sort()[0] === document.valid_until);
     return { dataset, catalog, reviews: [...reviews.values()], valid_until: document.valid_until as string, unavailable_reason: null };
   } catch { throw new Error("INVESTOR_EVIDENCE_INVALID"); }

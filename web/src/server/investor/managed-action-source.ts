@@ -224,3 +224,12 @@ export function readManagedActionReview(db:Database.Database,workspace:string,id
     return value;
   }).deferred();
 }
+
+/** Internal: the caller already used the normal original-byte review resolver. */
+export function readManagedActionOrigin(db:Database.Database,workspace:string,value:VerifiedSourceReview,now:string):VerifiedSourceReview {
+  const {row,grant}=publication(db,workspace,value.row.id,now),{base}=baseline(db,workspace,grant,now);
+  check(row.status === "published" && row.review_hash === value.row.content_hash
+    && hash(base.facts.events) === hash(value.facts.events) && base.facts.listing_id === value.facts.listing_id
+    && base.facts.tax_assumption === value.facts.tax_assumption && time(base.row.created_at) <= time(value.row.created_at));
+  return base as unknown as VerifiedSourceReview;
+}

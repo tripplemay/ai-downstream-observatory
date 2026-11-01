@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-monitor-data-projection-v2.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "model_id", "source_qualification", "quotes", "fx", "corporate_action_coverage", "corporate_actions", "funding_intent", "policy", "quality_gaps", "created_at", "valid_until", "live_advice_eligible"],
+  "properties": {
+    "schema_version": {"const": "investor-monitor-data-projection-v2"}, "model_id": {"$ref": "common.schema.json#/$defs/id"}, "source_qualification": {"const": "owner_reviewed_reconstructed"},
+    "quotes": {"$ref": "investor-monitor-data-projection.schema.json#/properties/quotes"}, "fx": {"$ref": "investor-monitor-data-projection.schema.json#/properties/fx"},
+    "corporate_action_coverage": {"$ref": "investor-monitor-data-projection.schema.json#/properties/corporate_action_coverage"}, "corporate_actions": {"$ref": "investor-monitor-data-projection.schema.json#/properties/corporate_actions"},
+    "funding_intent": {"$ref": "investor-monitor-data-projection.schema.json#/properties/funding_intent"}, "policy": {"$ref": "investor-monitor-data-projection.schema.json#/properties/policy"},
+    "quality_gaps": {"$ref": "investor-monitor-data-projection.schema.json#/properties/quality_gaps"}, "created_at": {"$ref": "investor-reference-plan.schema.json#/$defs/instant"},
+    "valid_until": {"$ref": "investor-reference-plan.schema.json#/$defs/instant"}, "live_advice_eligible": {"const": false}
+  }
+}

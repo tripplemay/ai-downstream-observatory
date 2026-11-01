@@ -28,8 +28,17 @@ def build_monitor_dataset(db, workspace_id, capture_ids, confirmed_capture_ids, 
             now=now, snapshot_at=snapshot_at, confirmed_capture_ids=confirmed_capture_ids)
 
 
-def _build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_ids, start_date, end_date, *, now=None, allow_synthetic=False, snapshot_at=None, confirmed_capture_ids=None):
+def build_audited_monitor_dataset(db, workspace_id, capture_ids, confirmed_capture_ids, action_review_ids, fx_review_ids, start_date, end_date, *, now=None, snapshot_at=None):
+    _assert(type(confirmed_capture_ids) is list and len(confirmed_capture_ids) <= 1000
+        and all(type(value) is str and value for value in confirmed_capture_ids) and len(set(confirmed_capture_ids)) == len(confirmed_capture_ids))
+    with transaction(db, immediate=False), _fact_validation_scope():
+        return _build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_ids, start_date, end_date,
+            now=now, snapshot_at=snapshot_at, confirmed_capture_ids=confirmed_capture_ids, audited_action_knowledge=True)
+
+
+def _build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_ids, start_date, end_date, *, now=None, allow_synthetic=False, snapshot_at=None, confirmed_capture_ids=None, audited_action_knowledge=False):
     _assert(type(allow_synthetic) is bool)
+    _assert(type(audited_action_knowledge) is bool and not (audited_action_knowledge and allow_synthetic))
     for rows, maximum in ((capture_ids, 1000), (action_review_ids, 20), (fx_review_ids, 2)):
         _assert(type(rows) is list and len(rows) <= maximum and all(type(value) is str and value for value in rows) and len(rows) == len(set(rows)))
     _assert(capture_ids or confirmed_capture_ids)
@@ -137,7 +146,12 @@ def _build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_i
                 "assumed_available_at": rate["assumed_available_at"], "ingested_at": row["review"]["created_at"], "source_timezone": "UTC",
                 "time_precision": "second", "price_basis": "not_applicable", "revision_id": row["review"]["id"],
                 "raw_hash": row["source"]["content_hash"], "parser_version": PARSER, "provenance": "reconstructed"})
-    events = []
+    events, journal = [], []
+    availability = []
+    if audited_action_knowledge:
+        from .monitor_action_knowledge import _availability_refs
+        availability = _availability_refs(db, workspace_id, actions, checked, frozen_at)
+    by_event = {(row["review_id"], row["event_id"]): row for row in availability}
     for identity, row in sorted(action_by_listing.items()):
         zone = ZoneInfo(longport._MARKETS[assets[identity]["facts"]["market"]][0])
         for event in row["facts"]["events"]:
@@ -145,13 +159,15 @@ def _build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_i
             _assert(row["facts"]["range_start"] <= event_date <= row["facts"]["range_end"])
             if start_date <= event_date <= end_date:
                 events.append({**event, "source_evidence": "review:" + row["review"]["id"]})
+                if audited_action_knowledge:
+                    journal.append({"fact": {**event}, "availability": by_event[(row["review"]["id"], event["id"])]})
     manifest = {"schema_version": "investor-data-snapshot-v1", "workspace_id": workspace_id, "created_at": frozen_at,
         "range_start": start_date, "range_end": end_date, "mode": "synthetic" if synthetic else "reconstructed",
         "capture_refs": sorted(({"capture_id": row["capture"]["id"], "receipt_hash": row["capture"]["receipt_hash"], "projection_sha256": row["capture"]["projection_sha256"]} for row in captures), key=lambda row: row["capture_id"]),
         "review_refs": sorted(({"review_id": identity, "review_hash": row["review"]["content_hash"], "source_id": row["source"]["id"], "source_hash": row["source"]["content_hash"]} for identity, row in reviews.items()), key=lambda row: row["review_id"]),
         "publication_times": "reconstructed_assumptions_not_provider_published_at", "universe_basis": "retrospectively_selected_not_survivorship_free",
         "review_basis": "owner_reviewed_not_provider_certified", "external_ai_authorized": False, "live_advice_eligible": False}
-    if confirmed_capture_ids:
+    if confirmed_capture_ids or audited_action_knowledge:
         refs = {}
         for row in captures:
             source, kind = row["capture"], row["capture_kind"]
@@ -161,7 +177,11 @@ def _build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_i
         manifest.update(schema_version="investor-monitor-price-snapshot-v1", use_scope="monitor_only",
             capture_refs=sorted(refs.values(), key=lambda row: row["capture_id"]),
             publication_times="mixed_assumptions_and_sdk_callback_receipt_not_provider_published_at")
-    validate_contract(manifest, "investor-monitor-price-snapshot.schema.json" if confirmed_capture_ids else "investor-data-snapshot.schema.json")
+    if audited_action_knowledge:
+        manifest.update(schema_version="investor-monitor-source-snapshot-v2", action_availability_refs=availability,
+            publication_times="reconstructed_prices_and_audited_action_review_times_not_point_in_time")
+    schema = "investor-monitor-source-snapshot-v2.schema.json" if audited_action_knowledge else "investor-monitor-price-snapshot.schema.json" if confirmed_capture_ids else "investor-data-snapshot.schema.json"
+    validate_contract(manifest, schema)
     manifest_hash = content_hash(manifest)
     dataset = {"schema_version": "research-dataset-v2", "mode": manifest["mode"], "source_evidence": "investor-data-snapshot:" + manifest_hash,
         "license_scope": "Recorded private research/retention/display/backup only; owner-reviewed sources, not provider certification; no external AI authority inferred",
@@ -171,10 +191,19 @@ def _build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_i
             "source_evidence": "review:" + row["review"]["id"]} for identity, row in sorted(assets.items())],
         "sessions": sorted(sessions, key=lambda row: (row["close_at"], row["market"])), "settlements": sorted(settlements, key=lambda row: (row["session_date"], row["market"])),
         "observations": sorted(observations, key=lambda row: row["id"]), "actions": sorted(events, key=lambda row: (row["at"], row["id"]))}
+    if audited_action_knowledge:
+        del dataset["actions"]
+        dataset.update(schema_version="investor-monitor-source-dataset-v1", created_at=frozen_at, use_scope="monitor_only",
+            action_knowledge_basis="audited_owner_review_not_provider_publication",
+            reviewed_actions=sorted(journal, key=lambda row: (row["fact"]["at"], row["fact"]["id"])))
     _assert(len(observations) <= 100000)
     _assert(len(canonical_json(dataset).encode()) + len(canonical_json(manifest).encode()) <= 16 * 1024 * 1024,
         "INVESTOR_DATA_SNAPSHOT_LIMIT")
-    validate_dataset(dataset)
+    if audited_action_knowledge:
+        from .monitor_action_knowledge import validate_monitor_source_dataset
+        validate_monitor_source_dataset(dataset)
+    else:
+        validate_dataset(dataset)
     return {"dataset": dataset, "manifest": manifest, "manifest_hash": manifest_hash, "dataset_hash": content_hash(dataset),
         "valid_until": min([row["review"]["valid_until"] for row in reviews.values()] + [row["capture"]["retain_until"] for row in captures]),
         "catalog": {identity: row["facts"] for identity, row in sorted(assets.items())}, "live_advice_eligible": False}

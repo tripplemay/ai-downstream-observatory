@@ -34,7 +34,7 @@ def _snapshot_reason(db, workspace, snapshot, valid_until, now):
         latest_document = _review_receipt(db, workspace, latest, now)
         _assert(latest_document["source_hash"] == source["content_hash"] and latest_document["kind"] == source["kind"])
     for ref in snapshot["capture_refs"]:
-        confirmed = snapshot["schema_version"] == "investor-monitor-price-snapshot-v1" and ref.get("kind") == "confirmed_sdk"
+        confirmed = snapshot["schema_version"] in ("investor-monitor-price-snapshot-v1", "investor-monitor-source-snapshot-v2") and ref.get("kind") == "confirmed_sdk"
         prefix = "investor_confirmed" if confirmed else "investor_price"
         purge = db.execute("SELECT p.*,c.workspace_id FROM " + prefix + "_purges p JOIN " + prefix + "_captures c ON c.id=p.capture_id WHERE p.capture_id=?", (ref["capture_id"],)).fetchone()
         if purge:

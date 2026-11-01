@@ -147,7 +147,7 @@ def source_unavailable_reason(db, workspace_id, document, now):
         if managed:
             return managed
     for ref in document["snapshot"]["capture_refs"]:
-        versioned = document["snapshot"]["schema_version"] == "investor-monitor-price-snapshot-v1"
+        versioned = document["snapshot"]["schema_version"] in ("investor-monitor-price-snapshot-v1", "investor-monitor-source-snapshot-v2")
         _assert(ref.get("kind") in ("historical_sdk", "confirmed_sdk") if versioned else "kind" not in ref)
         confirmed = versioned and ref["kind"] == "confirmed_sdk"
         table, digest = ("investor_confirmed_captures", "payload_sha256") if confirmed else ("investor_price_captures", "projection_sha256")

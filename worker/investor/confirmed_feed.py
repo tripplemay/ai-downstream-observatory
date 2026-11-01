@@ -320,7 +320,7 @@ def prepare_confirmed_watch(db, job, lease, *, clock=None, lease_seconds=300, st
 def _windows(db, workspace, document):
     values = []
     for segment in document["segments"]:
-        snapshot = segment["snapshot"]; confirmed = snapshot["schema_version"] == "investor-monitor-price-snapshot-v1"
+        snapshot = segment["snapshot"]; confirmed = snapshot["schema_version"] in ("investor-monitor-price-snapshot-v1", "investor-monitor-source-snapshot-v2")
         window = {"capture_ids": [ref["capture_id"] for ref in snapshot["capture_refs"] if not confirmed or ref["kind"] == "historical_sdk"],
             "action_review_ids": _snapshot_ids(db, workspace, snapshot, "actions"), "fx_review_ids": _snapshot_ids(db, workspace, snapshot, "fx"),
             "start_date": snapshot["range_start"], "end_date": snapshot["range_end"]}
@@ -392,7 +392,8 @@ def _admit_windows(db, workspace, actor, model_id, context, windows, at, stop_re
     from .monitor_costs import current_settings
     if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
     settings = current_settings(db, workspace, context[1], context[5]["settings"], at)
-    admitted = admit_monitor_data(db, workspace, actor, model_id, [window for _,window in windows], settings, now=at)
+    knowledge = {"audited_action_knowledge": True} if context[5]["schema_version"] == "investor-monitor-data-input-v4" else {}
+    admitted = admit_monitor_data(db, workspace, actor, model_id, [window for _,window in windows], settings, now=at, **knowledge)
     _check_fx_selection(db, workspace, context[1], [window for _,window in windows], settings, at)
     _check_action_selection(db, workspace, context[1], [window for _,window in windows], at)
     if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
