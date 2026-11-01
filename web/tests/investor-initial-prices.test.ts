@@ -30,7 +30,7 @@ test("default provider acquires missing prices and core seeds both saved model v
       assert.equal(collected.stubbed_sdk_calls, 2); assert.equal(collected.real_provider_called, false); assert.equal(collected.real_gateway_called, false);
       const value = helper(f, "tests.investor.initial_price_fixture", ["--mode", "bootstrap"]);
       assert.equal(value.stubbed_sdk_calls, 0); assert.equal(value.real_provider_called, false); assert.equal(value.real_gateway_called, false);
-      assert.equal(value.document.schema_version, "investor-monitor-data-input-v1");
+      assert.equal(value.document.schema_version, "investor-monitor-data-input-v4");
       const current = "2026-01-03T12:00:04.000Z", before = f.db.prepare("SELECT total_changes() n").get();
       const source = readInvestorMonitorEvidenceSource(f.db, saved.workspace_id!, saved.model_watch!.id, value.registered_input_id, current);
       assert.equal(source.unavailable_reason, null); assert.deepEqual(source.projection, value.projection);

@@ -23,7 +23,7 @@ function snapshot(db: Database.Database) {
   return names.map(name => ({ name, rows: db.prepare(`SELECT rowid _preserved_rowid,* FROM "${name}" ORDER BY rowid`).all() }));
 }
 
-test("populated cost receipts, v3 evidence and checkpoints survive one encrypted temporary restore with independent read-only replay", async () => {
+for (const legacy of [true,false]) test(`populated cost receipts, ${legacy?"legacy v3":"default v4"} evidence and checkpoints survive one encrypted temporary restore with independent read-only replay`, async () => {
   const { backupWorkbench } = await import("../../scripts/backup-workbench.mjs");
   const { restoreWorkbench } = await import("../../scripts/restore-workbench.mjs");
   const f = investorFixture();
@@ -34,7 +34,7 @@ test("populated cost receipts, v3 evidence and checkpoints survive one encrypted
     const first = getInvestorState(f.db, actor, "2026-01-02T12:00:04.000Z"); assert.ok(first.plan);
     executeInvestorCommand(f.db, actor, { action: "save_plan", plan_id: first.plan.id, expected_revision: first.revision,
       idempotency_key: "fictional-recovery-model" }, "2026-01-02T12:00:04.000Z");
-    python(f.filename, "tests.investor.managed_fx_monitor_fixture", ["--stage", "seed"]);
+    python(f.filename, "tests.investor.managed_fx_monitor_fixture", ["--stage", "seed", ...(legacy?["--legacy-monitor-input"]:[])]);
     const initial = getInvestorState(f.db, actor, at); assert.ok(initial.monitor_costs);
     executeInvestorCommand(f.db, actor, { action: "set_monitor_costs", model_id: initial.model_watch!.id,
       model_hash: initial.monitor_costs.model_hash, expected_cost_version: 0, expected_revision: initial.revision,
@@ -43,7 +43,7 @@ test("populated cost receipts, v3 evidence and checkpoints survive one encrypted
     python(f.filename, "tests.investor.queue_fixture", ["--mode", "core", "--now", appliedAt]);
     const known = getInvestorState(f.db, actor, appliedAt); assert.equal(known.monitor_costs?.status, "known");
     const input = f.db.prepare("SELECT * FROM investor_monitor_evidence_inputs ORDER BY created_at DESC,rowid DESC LIMIT 1").get() as Obj;
-    assert.equal(JSON.parse(input.document_json as string).schema_version, "investor-monitor-data-input-v3");
+    assert.equal(JSON.parse(input.document_json as string).schema_version, legacy?"investor-monitor-data-input-v3":"investor-monitor-data-input-v4");
     assert.equal((f.db.prepare("SELECT count(*) n FROM investor_monitor_cost_assumptions").get() as { n: number }).n, 1);
     assert.ok((f.db.prepare("SELECT count(*) n FROM investor_evidence_model_checkpoints").get() as { n: number }).n > 0);
     const original = readInvestorMonitorEvidenceSource(f.db, known.workspace_id!, known.model_watch!.id, input.id as string, appliedAt);

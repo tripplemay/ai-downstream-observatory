@@ -65,7 +65,7 @@ test("explicit owner costs cross normal command/core and independent replay; exp
     assert.notEqual(known.model_watch?.model_nav_cny, null); assert.deepEqual(parseInvestorState({ ...known, session_binding: binding }, binding), known);
     const source = f.db.prepare("SELECT * FROM investor_monitor_evidence_inputs ORDER BY created_at DESC,rowid DESC LIMIT 1").get() as Obj;
     const document = JSON.parse(source.document_json as string), model = f.db.prepare("SELECT document_json FROM investor_models").get() as Obj;
-    assert.equal(document.schema_version, "investor-monitor-data-input-v3"); assert.ok(document.settings.cost_assumptions);
+    assert.equal(document.schema_version, "investor-monitor-data-input-v4"); assert.ok(document.settings.cost_assumptions);
     assert.ok((source.valid_until as string) > known.monitor_costs!.valid_until!);
     const checkpoint = f.db.prepare("SELECT * FROM investor_evidence_model_checkpoints").get() as Obj;
     assert.ok((checkpoint.valid_until as string) > known.monitor_costs!.valid_until!);
