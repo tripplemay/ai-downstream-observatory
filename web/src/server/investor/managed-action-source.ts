@@ -199,6 +199,49 @@ function captures(db:Database.Database,workspace:string,refs:Obj,symbol:string,n
   return {values,bindings,snapshots,limits,day:[...days][0]};
 }
 
+/** Current source-qualified anchor, not permission to resume a retired rule. */
+export function readManagedActionAnchorContext(db:Database.Database,workspace:string,id:unknown,now:string) {
+  const grant=authority(db,workspace,id,now),{base,listing}=baseline(db,workspace,grant,now),policy=grant.doc;
+  for(const value of [base,listing])check(latestManual(db,value.row) && time(now) < time(value.row.valid_until)
+    && canonical(actionJson(value.row.document_json,8388608)) === value.row.document_json
+    && canonical(actionJson(value.source.document_json,131072)) === value.source.document_json);
+  check(listing.facts.market === "US" && listing.facts.currency === "USD" && Object.hasOwn(ACTION_TARGETS,actionText(policy.provider_symbol))
+    && time(listing.facts.tradable_from) <= time(now) && (listing.facts.tradable_until === null || time(now) < time(listing.facts.tradable_until)));
+  const anchor=captures(db,workspace,object(policy.anchor_captures),actionText(policy.provider_symbol),now);
+  for(const value of Object.values(anchor.values))check(time(value.row.created_at) <= time(grant.row.created_at));
+  checkNoNewActionCandidate(base.facts,anchor.snapshots,anchor.snapshots,actionText(policy.provider_symbol),actionText(policy.listing_id));
+  const bindingHash=hash({base_review_hash:base.row.content_hash,listing_review_hash:listing.row.content_hash,bindings:anchor.bindings});
+  const limits=[...anchor.limits,base.row.valid_until,listing.row.valid_until];
+  if(listing.facts.tradable_until !== null)limits.push(listing.facts.tradable_until);
+  check(bindingHash === policy.anchor_binding_hash && time(policy.valid_until) <= minimum(limits));
+  return {grant,base:base as unknown as VerifiedSourceReview,listing:listing as unknown as VerifiedSourceReview,anchor,bindingHash,limits};
+}
+
+/** Historical comparison only: quarantine/retirement is NOT cleared or admitted. */
+export function readManagedActionComparisonBasis(db:Database.Database,workspace:string,id:unknown,now:string) {
+  const context=readManagedActionAnchorContext(db,workspace,id,now),{grant,anchor,base,limits,bindingHash}=context,policy=grant.doc;
+  const head=db.prepare("SELECT id FROM investor_action_publications WHERE workspace_id=? AND authority_id=? AND status='published' ORDER BY sequence DESC LIMIT 1")
+    .get(workspace,id) as Obj|undefined;
+  if(!head)return {...context,prior:base,previous:anchor.snapshots,publicationId:null,historicalLimits:anchor.limits};
+  const {row,doc}=publication(db,workspace,head.id,now),prior=readManagedActionHeader(db,workspace,head.id,now);
+  const current=captures(db,workspace,object(doc.capture_refs),actionText(policy.provider_symbol),now);
+  for(const value of Object.values(current.values))check(time(value.row.created_at) <= time(row.created_at));
+  for(const kind of Object.keys(anchor.bindings))for(const field of ["authority_id","authority_hash","control_id","control_hash"])
+    check(object(anchor.bindings[kind])[field] === object(current.bindings[kind])[field]);
+  const candidate=checkNoNewActionCandidate(base.facts,anchor.snapshots,current.snapshots,actionText(policy.provider_symbol),actionText(policy.listing_id));
+  const validUntil=new Date(Number(minimum([policy.valid_until,...limits,...current.limits])/1000n)).toISOString();
+  check(time(now) < time(row.valid_until) && current.day === row.source_day && validUntil === row.valid_until
+    && candidate.candidate_range_end === row.coverage_end && candidate.candidate_facts_hash === doc.candidate_facts_hash
+    && hash({authority_input:policy,anchor_binding_hash:bindingHash,current_bindings:current.bindings,candidate}) === doc.checked_input_hash);
+  return {...context,prior,previous:current.snapshots,publicationId:actionText(head.id),historicalLimits:current.limits};
+}
+
+/** Authenticate an immutable control witness without treating it as current. */
+export function readManagedActionControlWitness(db:Database.Database,workspace:string,authorityId:unknown,id:unknown,now:string) {
+  const grant=authority(db,workspace,authorityId,now),row=actionRead(db,"investor_action_controls",id,workspace);
+  control(db,workspace,row,grant.row,now);return row;
+}
+
 /** Independent original-byte replay, standing-rule proof and complete virtual review binding. */
 export function readManagedActionReview(db:Database.Database,workspace:string,id:unknown,now:string):VerifiedSourceReview {
   return db.transaction(()=>{

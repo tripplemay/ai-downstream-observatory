@@ -217,6 +217,17 @@ class ActionReviewWorkflowTests(unittest.TestCase):
         self.assertEqual(by_id[current["facts"]["events"][-1]["id"]]["known_at"], confirm_at)
         self.assertEqual(len(refs), 3); self.assertEqual(unchanged, list(self.db.iterdump())); self.assert_no_finance()
 
+    def test_resealed_preview_cannot_claim_another_original_authority_hash(self):
+        self.retained_reports(); self.witness(); value = self.confirm()
+        self.db.execute("DROP TRIGGER investor_action_review_preview_update"); self.db.execute("DROP TRIGGER audit_events_no_update")
+        row = self.db.execute("SELECT * FROM investor_action_review_previews").fetchone()
+        document = json.loads(row["document_json"]); document["authority_hash"] = "0" * 64; digest = content_hash(document)
+        self.db.execute("UPDATE investor_action_review_previews SET document_json=?,content_hash=?", (canonical_json(document), digest))
+        self.db.execute("UPDATE audit_events SET payload_json=? WHERE id=?", (canonical_json({"content_hash": digest}), row["audit_id"]))
+        with self.assertRaisesRegex(WorkbenchError, "CONFIRMATION_INVALID"):
+            workflow.resolve_action_review_confirmation(self.db, "w", "synthetic-investor", value["confirmation_id"], now=CONFIRM)
+        self.assert_no_finance()
+
     def test_invalid_time_tax_or_incomplete_event_answers_never_mutate(self):
         self.retained_reports(); self.witness(); before = list(self.db.iterdump())
         for mode in ("wrong-local-day", "wrong-pay-day", "negative-tax", "excess-tax", "trailing-tax", "submicro-pay", "missing-event", "duplicate-event"):

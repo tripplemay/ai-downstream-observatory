@@ -164,7 +164,7 @@ export function readInvestorMonitorPriceSnapshot(db: Database.Database, workspac
 }
 
 export function readInvestorAuditedMonitorSnapshot(db: Database.Database, workspace: string, document: Obj, now: string) {
-  return readSnapshot(db, workspace, document, now, true, true);
+  return db.transaction(() => readSnapshot(db, workspace, document, now, true, true)).deferred();
 }
 
 function readSnapshot(db: Database.Database, workspace: string, document: Obj, now: string, confirmedSnapshot: boolean, auditedActions = false) {

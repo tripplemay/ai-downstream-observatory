@@ -35,6 +35,10 @@ import modelSnapshot from "../../../../contracts/v1/investor-model-snapshot.sche
 import modelCheckpoint from "../../../../contracts/v1/investor-model-checkpoint.schema.json";
 import experiment from "../../../../contracts/v1/investor-experiment.schema.json";
 import dataFacts from "../../../../contracts/v1/investor-data-facts.schema.json";
+import actionCrosscheck from "../../../../contracts/v1/investor-action-crosscheck.schema.json";
+import actionSuccessor from "../../../../contracts/v1/investor-action-successor.schema.json";
+import actionReviewDraft from "../../../../contracts/v1/investor-action-review-draft.schema.json";
+import actionReviewWorkflow from "../../../../contracts/v1/investor-action-review-workflow.schema.json";
 import calendarContinuation from "../../../../contracts/v1/investor-calendar-continuation.schema.json";
 import dataSnapshot from "../../../../contracts/v1/investor-data-snapshot.schema.json";
 import evidenceInput from "../../../../contracts/v1/investor-evidence-input.schema.json";
@@ -89,6 +93,7 @@ import { verifyInvestorKernelProof } from "./kernel-read-scope";
 const ajv = new Ajv2020({ strict: true, strictRequired: false });
 addFormats(ajv);
 ajv.addSchema(calendarContinuation);
+for (const schema of [actionCrosscheck, actionSuccessor, actionReviewDraft, actionReviewWorkflow]) ajv.addSchema(schema);
 for (const schema of [policyV2, policyV3, policyInput, strategyResultV2, strategyResultV3, settledPlan]) ajv.addSchema(schema);
 ajv.addSchema(boundedPlan); ajv.addSchema(actionAwarePlan); ajv.addSchema(eventReviewPlan); ajv.addSchema(planInput);
 for (const schema of [longHorizonInputV4, longHorizonResultV4, fundedHistoryInputV3, fundedHistoryResultV3]) ajv.addSchema(schema);
@@ -134,6 +139,10 @@ export function validateInvestorSourceDocument(kind: "facts" | "snapshot" | "mon
     input: evidenceInput.$id, dataset: dataset.$id, calendar_continuation: calendarContinuation.$id }[kind])!(value));
 }
 export function validateInvestorActionAvailability(value: unknown) { requireTrue(ajv.getSchema(monitorSourceSnapshotV2.$id + "#/$defs/action_availability")!(value)); }
+export function validateInvestorActionReviewDocument(kind: "preview" | "confirmation" | "append_proof", value: unknown) {
+  const schema = kind === "append_proof" ? actionSuccessor : actionReviewWorkflow;
+  requireTrue(ajv.getSchema(schema.$id + "#/$defs/" + kind)!(value));
+}
 export function validateInvestorReferenceDocument(value: unknown) { requireTrue(ajv.getSchema((value as JsonObject | null)?.schema_version === "investor-reference-plan-v2" ? referencePlanV2.$id : referencePlan.$id)!(value)); }
 export function validateInvestorMonitorDataDocument(kind: "input" | "projection", value: unknown) {
   const version = (value as JsonObject | null)?.schema_version;

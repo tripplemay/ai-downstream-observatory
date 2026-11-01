@@ -3,6 +3,7 @@ import { hash } from "../ledger/service";
 import { priceInstant } from "../market-price-source";
 import { validateInvestorActionAvailability } from "./kernel-contracts";
 import { MANAGED_ACTION_PREFIX, readManagedActionOrigin } from "./managed-action-source";
+import { confirmedEventOrigins } from "./action-review-lineage";
 import type { VerifiedSourceReview } from "./source-inputs";
 
 type Obj = Record<string, unknown>;
@@ -17,8 +18,12 @@ export function actionAvailabilityRefs(db: Database.Database, workspace: string,
   for (const review of reviews) {
     const origin = review.row.id.startsWith(MANAGED_ACTION_PREFIX) ? readManagedActionOrigin(db, workspace, review, now) : review;
     check(priceInstant(origin.row.created_at) <= priceInstant(review.row.created_at) && priceInstant(review.row.created_at) <= priceInstant(frozen));
-    for (const event of events(review.facts.events)) result.push({ review_id: review.row.id, review_hash: review.row.content_hash,
-      event_id: event.id, event_hash: hash(event), original_review_id: origin.row.id, original_review_hash: origin.row.content_hash, known_at: origin.row.created_at });
+    const origins = confirmedEventOrigins(db, workspace, origin, now);
+    for (const event of events(review.facts.events)) {
+      const original = origins.get(text(event.id)); check(original);
+      check(priceInstant(original.known_at) <= priceInstant(review.row.created_at));
+      result.push({ review_id: review.row.id, review_hash: review.row.content_hash, event_id: event.id, event_hash: hash(event), ...original });
+    }
   }
   check(result.length <= 10000);
   result.sort((a,b) => cmp(text(a.review_id),text(b.review_id)) || cmp(text(a.event_id),text(b.event_id)));

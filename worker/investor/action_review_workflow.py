@@ -60,7 +60,8 @@ def _confirmation_header(db, workspace, actor, identifier):
     _audit_binding(db, row, "investor_confirm_action_review", "investor_action_review_confirmation", identifier)
     _, preview = _preview_header(db, workspace, actor, row["preview_id"])
     _check(preview["workspace_revision"] == doc["request"]["expected_revision"] == doc["workspace_revision"] - 1
-        and preview["authority_id"] == doc["previous_authority_id"] and preview["draft_basis_hash"] == doc["draft_basis_hash"]
+        and preview["authority_id"] == doc["previous_authority_id"] and preview["authority_hash"] == doc["previous_authority_hash"]
+        and preview["draft_basis_hash"] == doc["draft_basis_hash"]
         and preview["control_id"] == doc["previous_control_id"] and preview["control_hash"] == doc["previous_control_hash"]
         and preview["created_at"] <= doc["created_at"] < preview["valid_until"], "CONFIRMATION_INVALID")
     return row, doc
@@ -151,6 +152,8 @@ def _verified_confirmation(db, workspace, actor, identifier, at):
         and prior["review"]["content_hash"] == doc["previous_review_hash"], "CONFIRMATION_INPUTS_CHANGED")
     floor = max((value for capture in after["values"].values() for value in (capture["capture"]["created_at"], capture["draft"]["source"]["retrieved_at"])), key=instant)
     maximum = _clock(min([instant(policy["valid_until"]), *before["limits"], *after["limits"], *limits]))
+    _check(next_policy["valid_from"] == doc["created_at"] and next_policy["valid_until"] == maximum
+        and after["base"]["review"]["valid_until"] == maximum, "CONFIRMATION_INPUTS_CHANGED")
     context = {"prior": prior, "current": after["snapshots"], "report": after["report"]}
     expected_facts = _new_facts(context, doc["request"]["new_events"], doc["preview_id"], floor)
     _check(expected_facts == after["base"]["facts"], "CONFIRMATION_FACTS_CHANGED")
