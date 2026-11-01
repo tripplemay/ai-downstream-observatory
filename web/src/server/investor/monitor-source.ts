@@ -89,7 +89,21 @@ export function replayInvestorMonitorData(db: Database.Database, workspace: stri
   return db.transaction(() => replay(db, workspace, rawDefinition, referenceTargets, rawDocument, now, evaluatedAt)).deferred();
 }
 
-function replay(db: Database.Database, workspace: string, rawDefinition: unknown, referenceTargets: Obj[], rawDocument: unknown, now: string, evaluatedAt: string) {
+/** Verified comparison facts only; normal readers still hide expired projections. */
+export function compareInvestorMonitorData(db: Database.Database, workspace: string, definition: unknown,
+  targets: Obj[], document: unknown, now: string) {
+  return db.transaction(() => {
+    const evidence: { projection?: Obj; catalog?: Record<string, Obj> } = {};
+    const current = replay(db, workspace, definition, targets, document, now, now, (projection, catalog) => {
+      evidence.projection = projection; evidence.catalog = catalog;
+    });
+    check(evidence.projection && evidence.catalog);
+    return { comparison_projection: evidence.projection, comparison_catalog: evidence.catalog, unavailable_reason: current.unavailable_reason };
+  }).deferred();
+}
+
+function replay(db: Database.Database, workspace: string, rawDefinition: unknown, referenceTargets: Obj[], rawDocument: unknown, now: string, evaluatedAt: string,
+  comparison?: (projection: Obj, catalog: Record<string, Obj>) => void) {
   try {
     validateInvestorModelDocument("definition", rawDefinition); validateInvestorMonitorDataDocument("input", rawDocument);
     const definition = obj(rawDefinition), document = obj(rawDocument), created = text(document.created_at), at = time(created);
@@ -210,6 +224,7 @@ function replay(db: Database.Database, workspace: string, rawDefinition: unknown
       corporate_actions: events.sort((a,b) => cmp(text(a.effective_at),text(b.effective_at)) || cmp(text(a.kind),text(b.kind)) || cmp(text(a.id),text(b.id))),
       funding_intent: settings.funding_intent, policy, quality_gaps: [...new Set(gaps)].sort(), created_at: created, valid_until: milliseconds(min(deadlines)), live_advice_eligible: false };
     validateInvestorMonitorDataDocument("projection", projection); check(hash(projection) === document.projection_hash);
+    comparison?.(projection, catalog);
     if (time(projection.valid_until) <= time(evaluatedAt)) return { projection: null, catalog: null, unavailable_reason: "MONITOR_DATA_PROJECTION_EXPIRED" };
     return { projection, catalog, unavailable_reason: null };
   } catch { throw new Error("INVESTOR_EVIDENCE_INVALID"); }

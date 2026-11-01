@@ -9,11 +9,11 @@ import { migrateWorkbench } from "../../scripts/migrate-workbench.mjs";
 import { canonical, hash } from "../src/server/ledger/service";
 
 export const AT="2026-11-01T05:00:03.000Z",LATER="2026-11-02T06:00:03.000Z";
-export function actionPython(filename:string,code:string,budget:"source"|"core_readmission"="source") {
-  assert.ok(budget==="source"||budget==="core_readmission","UNKNOWN_ACTION_FIXTURE_BUDGET");
+export function actionPython(filename:string,code:string,budget:"source"|"core_readmission"|"legacy_transition"="source") {
+  assert.ok(budget==="source"||budget==="core_readmission"||budget==="legacy_transition","UNKNOWN_ACTION_FIXTURE_BUDGET");
   // Full retained-core replay includes research, callbacks and two checkpoints.
   // Keep ordinary source probes unchanged and never change a production deadline.
-  const timeout=budget==="core_readmission"?120000:30000;
+  const timeout=budget==="source"?30000:120000;
   const child=spawnSync(process.env.WORKBENCH_TEST_PYTHON ?? "python3",["-c",`
 import json,socket,sys
 from pathlib import Path

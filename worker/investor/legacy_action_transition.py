@@ -1,7 +1,5 @@
 """Read-only legacy transition evidence, never a monitoring input or approval."""
 
-from copy import deepcopy
-
 from worker.accounting.decimal_math import canonical, decimal, financial
 from worker.market.contracts import validate_contract
 from worker.orchestration.db import content_hash, instant, transaction
@@ -143,9 +141,10 @@ def _check_unprocessed_history(definition, previous, ledger, audited):
             "LEGACY_TRANSITION_ACTION_RESTATEMENT_REQUIRED")
 
 
-def preview_legacy_action_transition(db, workspace, actor, model_id, *, now=None, stop_requested=None):
-    """Reconstruct comparison evidence only; a future explicit protocol is required."""
+def _prepare_legacy_action_transition(db, workspace, actor, model_id, *, now=None, stop_requested=None):
+    """Return an unapproved candidate for independent replay, never admission."""
     from .confirmed_feed import _refresh_action_windows, _windows
+    from .monitor_costs import current_settings, verify_settings
     at = _clock(now)
     with transaction(db, immediate=False), _fact_validation_scope():
         _owner(db, workspace, actor); _stop(stop_requested)
@@ -161,20 +160,28 @@ def preview_legacy_action_transition(db, workspace, actor, model_id, *, now=None
         _assert(original["unavailable_reason"] is None, original["unavailable_reason"] or "LEGACY_TRANSITION_ORIGINAL_INPUT_CHANGED")
         windows = _windows(db, workspace, document)
         _refresh_action_windows(db, workspace, definition, windows, at); _stop(stop_requested)
-        candidate = build_monitor_data(db, workspace, definition, [window for _, window in windows], deepcopy(document["settings"]),
+        settings = current_settings(db, workspace, definition, document["settings"], at)
+        candidate = build_monitor_data(db, workspace, definition, [window for _, window in windows], settings,
             now=at, audited_action_knowledge=True)
+        cost_deadline = verify_settings(db, workspace, definition, settings, at)
         check_reference_listing_identity(reference["targets"], candidate["catalog"])
         audited = _audited_actions(db, workspace, definition, candidate["document"], at)
         carry = _carry_actions(ledger, audited)
         _check_unprocessed_history(definition, previous, ledger, audited)
         result = {"schema_version": "investor-legacy-action-transition-preview-v1", "workspace_id": workspace, "model_id": model_id,
             "model_hash": model["content_hash"], "control_hash": content_hash(dict(control)), "legacy_input_id": source["id"],
-            "legacy_input_hash": source["content_hash"], "settings_hash": content_hash(document["settings"]),
+            "legacy_input_hash": source["content_hash"], "settings_hash": content_hash(settings),
             "checkpoint": {"id": bindings[-1]["id"], "sequence": previous["sequence"], "content_hash": content_hash(previous),
                 "chain_hash": content_hash(bindings), "processed_actions_hash": content_hash(previous["processed_actions"])},
             "audited_document_hash": candidate["content_hash"], "audited_projection_hash": content_hash(candidate["projection"]),
             "carry_forward": carry, "projection_quality_gaps": candidate["projection"]["quality_gaps"],
-            "checked_at": at, "source_valid_until": min(bindings[-1]["valid_until"], document["valid_until"], candidate["document"]["valid_until"], definition["valid_until"]),
+            "checked_at": at, "source_valid_until": min([bindings[-1]["valid_until"], document["valid_until"], candidate["document"]["valid_until"], definition["valid_until"],
+                *([cost_deadline] if cost_deadline is not None else [])]),
             "status": "awaiting_explicit_protocol_confirmation", "admission_performed": False, "live_advice_eligible": False}
         validate_contract(result, SCHEMA); _stop(stop_requested)
-        return result
+        return {"preview": result, "candidate": candidate["document"]}
+
+
+def preview_legacy_action_transition(db, workspace, actor, model_id, *, now=None, stop_requested=None):
+    """Reconstruct comparison evidence only; a future explicit protocol is required."""
+    return _prepare_legacy_action_transition(db, workspace, actor, model_id, now=now, stop_requested=stop_requested)["preview"]

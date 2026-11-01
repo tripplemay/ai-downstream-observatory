@@ -14,6 +14,26 @@ export function checkpointActionReview(db:Database.Database,workspace:string,id:
   const review=value.reviews.get(id);return review?structuredClone(review):null;
 }
 
+/** Read-only migration comparison, not current admission or ordinary checkpoint replay. */
+export function readLegacyTransitionInput(db:Database.Database,actor:{id:string},workspace:string,modelId:string,inputId:string,now:string) {
+  return db.transaction(()=>scope.run({db,workspace,now,reviews:new Map()},()=>{
+    const owner=db.prepare("SELECT owner_id FROM investor_workspaces WHERE id=?").get(workspace) as {owner_id:string}|undefined;
+    const input=db.prepare("SELECT created_at FROM investor_monitor_evidence_inputs WHERE id=? AND workspace_id=? AND model_id=?").get(inputId,workspace,modelId) as {created_at:string}|undefined;
+    check(owner?.owner_id===actor.id&&input);
+    const original=readInvestorMonitorEvidenceSource(db,workspace,modelId,inputId,now,input.created_at);
+    check(["investor-monitor-data-input-v1","investor-monitor-data-input-v2","investor-monitor-data-input-v3"].includes(original.document.schema_version as string));
+    if(original.unavailable_reason!=="REFERENCE_SOURCE_NO_LONGER_CURRENT")return original;
+    const reviews=new Map<string,VerifiedSourceReview>();
+    for(const segment of original.document.segments as Obj[]) {
+      const snapshot=segment.snapshot as Obj;
+      for(const ref of snapshot.review_refs as Obj[])if(checkpointActionReviewNeedsReplay(db,workspace,ref.review_id,now))
+        reviews.set(ref.review_id as string,checkpointPredecessorReview(db,workspace,ref,snapshot.range_start as string,snapshot.range_end as string,now));
+    }
+    if(!reviews.size)return original;
+    return scope.run({db,workspace,now,reviews},()=>readInvestorMonitorEvidenceSource(db,workspace,modelId,inputId,now,input.created_at));
+  })).deferred();
+}
+
 /** Historical projection only, still bound to a real immutable v4 checkpoint. */
 export function readCheckpointMonitorSource(db:Database.Database,workspace:string,model:Obj,checkpoint:Obj,now:string) {
   return db.transaction(()=>{

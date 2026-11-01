@@ -95,6 +95,27 @@ function currentSuccessions(db:Database.Database,workspace:string,identity:unkno
   check(candidates.length===1);return {current:candidates[0],byNew,terminals};
 }
 
+/** Select only a proven extension; unrelated equal or newer facts remain ambiguous. */
+export function transitionActionReview(db:Database.Database,workspace:string,ref:Obj,start:string,end:string,now:string) {
+  const id=ref.review_id;check(typeof id==="string");
+  const previous=id.startsWith(MANAGED_ACTION_PREFIX)?readManagedActionHistoricalReview(db,workspace,id,now):readInvestorSourceReview(db,workspace,ref,now);
+  check(previous.row.content_hash===ref.review_hash&&previous.source.id===ref.source_id&&previous.source.content_hash===ref.source_hash);
+  const {current}=currentSuccessions(db,workspace,previous.facts.listing_id,start,end,now);
+  if(current.row.id===id)return current;
+  if(checkpointActionReviewNeedsReplay(db,workspace,id,now)) {
+    checkpointPredecessorReview(db,workspace,ref,start,end,now);return current;
+  }
+  check(id.startsWith(MANAGED_ACTION_PREFIX)&&current.row.id.startsWith(MANAGED_ACTION_PREFIX));
+  const before=db.prepare("SELECT * FROM investor_action_publications WHERE workspace_id=? AND id=?").get(workspace,id) as Obj|undefined;
+  const after=db.prepare("SELECT * FROM investor_action_publications WHERE workspace_id=? AND id=?").get(workspace,current.row.id) as Obj|undefined;
+  check(before&&after&&before.authority_id===after.authority_id&&Number(before.sequence)<Number(after.sequence));
+  const beforeDoc=JSON.parse(before.document_json as string) as Obj,afterDoc=JSON.parse(after.document_json as string) as Obj;
+  const basis=(value:Obj)=>Object.fromEntries(Object.entries(value).filter(([key])=>key!=="range_end"));
+  check(beforeDoc.control_id===afterDoc.control_id&&(previous.facts.range_end as string)<=(current.facts.range_end as string)
+    &&hash(basis(previous.facts))===hash(basis(current.facts)));
+  return current;
+}
+
 /** Only a verified linked predecessor can replay an existing checkpoint. */
 export function checkpointPredecessorReview(db:Database.Database,workspace:string,ref:Obj,start:string,end:string,now:string) {
   const id=ref.review_id;check(typeof id === "string");
