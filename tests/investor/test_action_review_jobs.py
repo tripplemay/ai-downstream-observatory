@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from tests.investor import test_action_review_workflow as fixture
-from worker.investor import action_review_jobs as jobs, action_review_workflow as workflow, eodhd_sources
+from worker.investor import action_review_jobs as jobs, action_review_workflow as workflow, eodhd_sources, managed_actions
 from worker.orchestration.db import WorkbenchError, instant, open_database
 from worker.orchestration.jobs import claim_job, complete_job, run_one
 from worker.orchestration.runtime import command_handler, run_pending_once
@@ -142,6 +142,23 @@ class ActionReviewJobTests(unittest.TestCase):
         result = json.loads(self.db.execute("SELECT document_json FROM investor_action_review_job_results WHERE request_id=?", (request["request_id"],)).fetchone()[0])
         self.assertEqual(result["code"], "ACTION_REVIEW_REQUEST_EXPIRED"); self.assertEqual(result["outcome"], "rejected")
         self.assertEqual(self.revision(), before); self.assertEqual(self.db.execute("SELECT count(*) FROM investor_action_review_previews").fetchone()[0], 0)
+
+    def test_unrelated_rule_after_prepare_is_not_a_successor_and_blocks_commit_without_approving_sources(self):
+        self.retained_reports(); request = self.preview_request(); jobs.discover_action_review_requests(self.db, now=AT)
+        lease = claim_job(self.db, "fictional-rule-race", job_type=jobs.JOB_TYPE, lease_seconds=300, now=AT)
+        job = dict(self.db.execute("SELECT * FROM job_runs WHERE id=?", (lease.job_id,)).fetchone())
+        descriptor = jobs.prepare_action_review_job(self.db, job, lease, clock=lambda: AT)
+        policy = json.loads(self.db.execute("SELECT document_json FROM investor_action_authorities WHERE id=?", (self.authority["id"],)).fetchone()[0])
+        policy["valid_until"] = "2026-11-09T00:00:00.000Z"
+        other = open_database(self.path)
+        try: managed_actions.register_authority(other, "w", "synthetic-investor", policy, now=AT)
+        finally: other.close()
+        before = self.revision(); reviews = self.db.execute("SELECT count(*) FROM investor_data_reviews").fetchone()[0]
+        complete_job(self.db, lease, {}, effect=descriptor["effect"], now=AT, clock=lambda: AT)
+        result = json.loads(self.db.execute("SELECT document_json FROM investor_action_review_job_results WHERE request_id=?", (request["request_id"],)).fetchone()[0])
+        self.assertEqual((result["outcome"], result["code"]), ("rejected", "ACTION_REVIEW_SCOPE_CHANGED"))
+        self.assertEqual(self.revision(), before); self.assertEqual(self.db.execute("SELECT count(*) FROM investor_data_reviews").fetchone()[0], reviews)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM investor_action_review_previews").fetchone()[0], 0); self.assert_no_finance()
 
     def test_final_lease_loss_rolls_back_domain_and_result_and_cannot_auto_retry(self):
         self.retained_reports(); self.preview_request(); jobs.discover_action_review_requests(self.db, now=AT)

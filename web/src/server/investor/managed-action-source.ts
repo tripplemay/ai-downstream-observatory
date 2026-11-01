@@ -199,6 +199,21 @@ function captures(db:Database.Database,workspace:string,refs:Obj,symbol:string,n
   return {values,bindings,snapshots,limits,day:[...days][0]};
 }
 
+/** Only today's normal retained batches; never fetch, retry or substitute yesterday. */
+export function readManagedActionCurrentCaptures(db:Database.Database,workspace:string,id:unknown,now:string) {
+  const grant=authority(db,workspace,id,now),symbol=actionText(grant.doc.provider_symbol),day=actionNyParts(now).day,refs:Obj={};
+  for(const kind of ["issuer","dividends","splits"]) {
+    const rows=(kind === "issuer" ? db.prepare(`SELECT c.id,c.content_hash FROM investor_issuer_requests r JOIN investor_issuer_captures c
+      ON c.request_id=r.id AND c.workspace_id=r.workspace_id WHERE r.workspace_id=? AND r.issuer_day=? AND r.fund_id=? LIMIT 2`)
+      .all(workspace,day,ACTION_TARGETS[symbol]) : db.prepare(`SELECT c.id,c.content_hash FROM investor_eodhd_requests r JOIN investor_eodhd_captures c
+      ON c.request_id=r.id AND c.workspace_id=r.workspace_id WHERE r.workspace_id=? AND r.source_day=? AND r.symbol=? AND r.kind=? LIMIT 2`)
+      .all(workspace,day,symbol,kind === "dividends" ? "div":"splits")) as Obj[];
+    if(rows.length !== 1)throw new Error("ACTION_REVIEW_CURRENT_REPORTS_UNAVAILABLE");
+    refs[kind]={capture_id:rows[0].id,capture_hash:rows[0].content_hash};
+  }
+  const value=captures(db,workspace,refs,symbol,now);check(value.day === day);return value;
+}
+
 /** Current source-qualified anchor, not permission to resume a retired rule. */
 export function readManagedActionAnchorContext(db:Database.Database,workspace:string,id:unknown,now:string) {
   const grant=authority(db,workspace,id,now),{base,listing}=baseline(db,workspace,grant,now),policy=grant.doc;

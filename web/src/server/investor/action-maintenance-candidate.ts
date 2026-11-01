@@ -55,6 +55,10 @@ function anchorNominalDifferences(anchor:ActionSnapshot) {
   }
   return differences;
 }
+
+export function checkActionReportAgreement(current:ActionSnapshot) {
+  return anchorNominalDifferences(current);
+}
 function reviewedOverlap(base:Obj,anchor:ActionSnapshot,start:string,end:string) {
   const dividends=new Map<string,Obj[]>(),splits=new Map<string,Obj>();
   check(Array.isArray(base.events));

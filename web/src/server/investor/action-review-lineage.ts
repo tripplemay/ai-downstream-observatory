@@ -6,9 +6,11 @@ import { priceInstant as time } from "../market-price-source";
 import { actionCheck as check, actionNyParts, actionObject as object, actionText as text } from "./action-source-parsers";
 import type { ActionObject as Obj } from "./action-source-parsers";
 import { actionAudit, actionJson, actionRead } from "./action-source-proof";
-import { checkReviewedActionAppend, type ActionSnapshot } from "./action-maintenance-candidate";
-import { readManagedActionAnchorContext, readManagedActionComparisonBasis, readManagedActionControlWitness } from "./managed-action-source";
+import { checkActionReportAgreement, checkReviewedActionAppend, type ActionSnapshot } from "./action-maintenance-candidate";
+import { readManagedActionAnchorContext, readManagedActionComparisonBasis, readManagedActionControlWitness, readManagedActionCurrentCaptures } from "./managed-action-source";
 import { validateInvestorActionReviewDocument } from "./kernel-contracts";
+import { actionReviewViewSchema } from "./action-review-schemas";
+import { actionAddDays } from "./action-source-parsers";
 import type { VerifiedSourceReview } from "./source-inputs";
 
 const Exact = Decimal.clone({ precision: 128, rounding: Decimal.ROUND_HALF_EVEN });
@@ -182,4 +184,50 @@ function eventOrigins(db: Database.Database, workspace: string, review: Verified
 
 export function confirmedEventOrigins(db: Database.Database, workspace: string, review: VerifiedSourceReview, now: string) {
   return db.transaction(() => eventOrigins(db, workspace, review, now, new Set())).deferred();
+}
+
+/** Current private view, independently rebuilt; a registered witness alone is insufficient. */
+export function readActionReviewPreview(db: Database.Database, workspace: string, actor: unknown, id: unknown, now: string) {
+  return db.transaction(() => {
+    const witness=previewHeader(db,workspace,actor,id,now);
+    const changed=()=>{throw new Error("ACTION_REVIEW_VIEW_CHANGED");};
+    const ws=db.prepare("SELECT revision FROM investor_workspaces WHERE id=?").get(workspace) as Obj|undefined;
+    if(time(now) >= time(witness.valid_until) || ws?.revision !== witness.workspace_revision)changed();
+    if(db.prepare("SELECT 1 FROM investor_action_review_confirmations WHERE workspace_id=? AND previous_authority_id=?").get(workspace,witness.authority_id))changed();
+    const before=readManagedActionComparisonBasis(db,workspace,witness.authority_id,now),{grant}=before;
+    const leaves=db.prepare(`SELECT a.id FROM investor_action_authorities a WHERE a.workspace_id=? AND json_extract(a.document_json,'$.provider_symbol')=?
+      AND NOT EXISTS(SELECT 1 FROM investor_action_review_confirmations c WHERE c.previous_authority_id=a.id) LIMIT 2`).all(workspace,grant.doc.provider_symbol) as Obj[];
+    if(leaves.length !== 1 || leaves[0].id !== grant.row.id)changed();
+    if(grant.row.content_hash !== witness.authority_hash || grant.current.id !== witness.control_id || grant.current.content_hash !== witness.control_hash)changed();
+    check(time(grant.doc.valid_from) <= time(now) && time(now) < time(grant.doc.valid_until));
+    eventOrigins(db,workspace,before.base,now,new Set());
+    const current=readManagedActionCurrentCaptures(db,workspace,grant.row.id,now),previous=before.previous,next=current.snapshots;
+    for(const kind of kinds) {
+      for(const key of ["authority_id","authority_hash","control_id","control_hash"])check(object(before.anchor.bindings[kind])[key] === object(current.bindings[kind])[key]);
+      const a=previous[kind].source,b=next[kind].source;
+      check(text(b.range_start) >= text(a.range_start) && text(b.range_end) >= text(a.range_end)
+        && time(b.retrieved_at) >= time(a.retrieved_at) && text(b.range_start) <= actionAddDays(before.prior.facts.range_end,1));
+    }
+    const start=kinds.map(kind=>text(next[kind].source.range_start)).sort().at(-1)!,end=kinds.map(kind=>text(next[kind].source.range_end)).sort()[0];
+    check(start <= end && start <= text(before.prior.facts.range_end));
+    const receipts=Object.values(current.values).flatMap(value=>[text(value.row.created_at),text(value.draft.source.retrieved_at)]);
+    const floor=receipts.reduce((a,b)=>time(a) >= time(b) ? a:b);check(time(floor) <= time(now));
+    const maximum=millis([grant.doc.valid_until,...before.limits,...before.historicalLimits,...current.limits].map(time).reduce((a,b)=>a < b ? a:b));
+    const rows=changes(previous,next,text(before.prior.facts.range_end),end);
+    const basis={workspace,owner:actor,authority_id:grant.row.id,authority_hash:grant.row.content_hash,control_id:grant.current.id,control_hash:grant.current.content_hash,
+      publication_id:before.publicationId,previous_review_hash:before.prior.row.content_hash,previous_facts_hash:hash(before.prior.facts),
+      previous_snapshot_hash:hash(previous),current_snapshot_hash:hash(next),current_bindings:current.bindings,changes:rows,
+      knowledge_not_before:floor,maximum_valid_until:maximum};
+    if(hash(basis) !== witness.draft_basis_hash)changed();
+    let agreement=true;try{checkActionReportAgreement(next);}catch{agreement=false;}
+    const historical=rows.some(row=>row.disposition === "historical_correction");
+    const supported=agreement && !historical && rows.length > 0 && rows.every(row=>!row.outside_common_coverage);
+    const status=historical ? "historical_correction_required":!agreement || rows.some(row=>row.outside_common_coverage) ? "source_review_required":rows.length ? "new_reported_actions":"no_reported_changes";
+    const until=millis([time(now)+60000000n,time(witness.valid_until),time(maximum)].reduce((a,b)=>a < b ? a:b));check(time(now) < time(until));
+    const view=actionReviewViewSchema.parse({schema_version:"investor-action-review-view-v1",preview:witness,provider_symbol:grant.doc.provider_symbol,
+      source_day:current.day,status,previous_coverage_end:before.prior.facts.range_end,candidate_coverage_end:end,knowledge_not_before:floor,
+      unchanged_tax_assumption:before.prior.facts.tax_assumption,changes:rows,confirmation_supported:supported,checked_at:now,refresh_after:until,
+      visibility:"private_owner_only_not_ai",provider_calls:0,research_admitted:false,trading_permission:false});
+    check(Buffer.byteLength(canonical(view)) <= 4194304);return view;
+  }).deferred();
 }

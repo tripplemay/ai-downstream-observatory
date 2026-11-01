@@ -27,6 +27,7 @@ import { InvestorMonitorCostPanel } from "./investor-monitor-cost-panel";
 import { InvestorActionDrafts } from "./investor-action-drafts";
 import { actionMaintenanceProgressRequest } from "@/server/investor/action-maintenance-progress-schemas";
 import { InvestorActionMaintenance } from "./investor-action-maintenance";
+import { InvestorActionReview } from "./investor-action-review";
 import type { ResearchExecutionReview, ResearchCashIntentReview } from "@/server/investor/research-execution";
 
 export type InvestorView = "overview" | "plan" | "observations" | "accounts";
@@ -281,13 +282,14 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
   const [pending, setPending] = useState<{ body: string; binding: string; workspace: string | null } | null>(null);
   const alive = useRef(true), invalidated = useRef(false), generation = useRef(0), refreshInFlight = useRef(false);
   const accountScope = useRef(false), [accountScopeLocked, setAccountScopeLocked] = useState(false);
-  const scopeLocks = useRef({ account: false, costs: false }), [scopeState, setScopeState] = useState({ account: false, costs: false });
-  const lockScope = useCallback((scope: "account" | "costs", value: boolean) => {
+  const scopeLocks = useRef({ account: false, costs: false, reviews:false }), [scopeState, setScopeState] = useState({ account: false, costs: false,reviews:false });
+  const lockScope = useCallback((scope: "account" | "costs" | "reviews", value: boolean) => {
     const next = { ...scopeLocks.current, [scope]: value }; scopeLocks.current = next;
-    accountScope.current = next.account || next.costs; setAccountScopeLocked(accountScope.current); setScopeState(next);
+    accountScope.current = next.account || next.costs || next.reviews; setAccountScopeLocked(accountScope.current); setScopeState(next);
   }, []);
   const lockAccountScope = useCallback((value: boolean) => lockScope("account", value), [lockScope]);
   const lockCostScope = useCallback((value: boolean) => lockScope("costs", value), [lockScope]);
+  const lockReviewScope = useCallback((value:boolean)=>lockScope("reviews",value),[lockScope]);
   const note = useRef<HTMLTextAreaElement>(null);
   function invalidate() { invalidated.current = true; generation.current++; setData(null); setPending(null); setError("SESSION_CHANGED"); setBusy(false); }
   useEffect(() => {
@@ -376,7 +378,8 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
     finally { if (alive.current && sequence === generation.current) setBusy(false); }
   }
   function command(intent: Record<string, unknown>, fromAccounts: boolean | "costs" = false) {
-    if ((fromAccounts === "costs" ? baseLocked || scopeState.account : fromAccounts ? baseLocked || scopeState.costs : locked) || !data) return;
+    if (scopeLocks.current.reviews) return;
+    if ((fromAccounts === "costs" ? baseLocked || scopeState.account || scopeState.reviews : fromAccounts ? baseLocked || scopeState.costs || scopeState.reviews : locked) || !data) return;
     if (intent.action === "review" && currentInvestorDisplay(data, Math.max(displayClock.current, Date.now())).outcome !== "decision_required") {
       setError("INVESTOR_OBSERVATION_NOT_CURRENT"); return;
     }
@@ -404,8 +407,8 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
   const researchDetails = data && profile && <>
     <InvestorFundingPanel key={`${profile.id}:${data.funding.plan?.id ?? data.funding.status}`} state={data.funding} profile={profile}
       study={data.funded_study} studyUnavailable={data.funded_study_unavailable}
-      disabled={baseLocked || editing || scopeState.costs} onCommand={intent => command(intent, true)} onEditingChange={lockAccountScope} />
-    <InvestorFundedComparisonPanel state={data} binding={initialSessionBinding} disabled={baseLocked || editing || scopeState.costs} scopeLocked={comparisonScopeLocked || accountScopeLocked} />
+      disabled={baseLocked || editing || scopeState.costs || scopeState.reviews} onCommand={intent => command(intent, true)} onEditingChange={lockAccountScope} />
+    <InvestorFundedComparisonPanel state={data} binding={initialSessionBinding} disabled={baseLocked || editing || scopeState.costs || scopeState.reviews} scopeLocked={comparisonScopeLocked || accountScopeLocked} />
     {data.research_task && <ResearchTask task={data.research_task} nowMs={displayNow} />}
   </>;
   const evidenceGaps = display && display.gaps.length > 0 && <Card title="还缺哪些证据"><div className="grid gap-3 lg:grid-cols-2">{display.gaps.map(gap => <div key={gap.code} className="rounded-xl border p-4"><h3 className="flex items-center gap-2 text-sm font-semibold"><CircleHelp className="h-4 w-4 shrink-0 text-amber-600" />{gap.title}</h3><p className="mt-2 text-sm text-muted-foreground">{gap.detail}</p><p className="mt-3 text-xs">下一步：{gap.action}</p>{gap.affected_markets.length > 0 && <p className="mt-2 text-xs text-muted-foreground">影响：{gap.affected_markets.map(m => marketLabels[m]).join(" / ")}</p>}</div>)}</div></Card>;
@@ -446,9 +449,11 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
         {data.action_maintenance ? <InvestorActionMaintenance value={data.action_maintenance} nowMs={displayNow}>
           {data.action_drafts && <InvestorActionDrafts value={data.action_drafts} nowMs={displayNow} />}
         </InvestorActionMaintenance> : data.action_drafts && <InvestorActionDrafts value={data.action_drafts} nowMs={displayNow} />}
+        {data.workspace_id&&<InvestorActionReview key={`${initialSessionBinding}:${data.workspace_id}`} workspaceId={data.workspace_id} binding={initialSessionBinding}
+          disabled={baseLocked||editing||scopeState.account||scopeState.costs} onScopeChange={lockReviewScope} onRefresh={()=>void refresh(false)}/>}
         {data.monitor_costs && (data.monitor_costs.editable || data.monitor_costs.version > 0) && <InvestorMonitorCostPanel
           key={`${data.monitor_costs.model_id}:${data.monitor_costs.version}`} state={data.monitor_costs} nowMs={displayNow}
-          disabled={baseLocked || editing || scopeState.account} onCommand={intent => command(intent, "costs")} onEditingChange={lockCostScope} />}
+          disabled={baseLocked || editing || scopeState.account || scopeState.reviews} onCommand={intent => command(intent, "costs")} onEditingChange={lockCostScope} />}
         {view !== "overview" && evidenceGaps}
         <div className="grid gap-6 lg:grid-cols-2"><Card title="你的研究边界"><dl className="space-y-3 text-sm"><div className="flex justify-between gap-3"><dt className="text-muted-foreground">投资期限</dt><dd>{profile.document.horizon_years} 年</dd></div><div className="flex justify-between gap-3"><dt className="text-muted-foreground">损失承受范围</dt><dd>{profile.document.loss_tolerance ? `约 ${Number(profile.document.loss_tolerance) * 100}%` : "尚未确认"}</dd></div><div className="flex justify-between gap-3"><dt className="text-muted-foreground">研究市场</dt><dd>{profile.document.markets.map(m => marketLabels[m]).join(" / ")}</dd></div><div className="flex justify-between gap-3"><dt className="text-muted-foreground">计划初始预算</dt><dd>{profile.document.illustrative_budget_cny ? `${profile.document.illustrative_budget_cny} CNY（非现金）` : "未填写"}</dd></div></dl><Button className="mt-4" variant="outline" disabled={locked} onClick={() => setEditing(value => !value)}>{editing ? "收起编辑" : "修改研究偏好"}</Button></Card>
           <Card title="下一次复核"><div className="flex items-start gap-3"><Clock3 className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" /><div className="space-y-2 text-sm">{display?.stale ? <><p role="status">已知期限已到，等待核对新评估。请刷新状态；旧观察仅作历史记录。</p><p className="text-xs text-muted-foreground">没有成功核对的新结果，不代表后台已完成复核或无需调整。</p></> : <>{display?.researchBlocker ? <p>{display.researchBlocker.action}</p> : latest?.document.next_conditions.map((condition, i) => <p key={i}>{condition}</p>)}<p className="text-xs text-muted-foreground">{latest?.document.monitoring === "active" ? `持续监测 · ${latest.document.next_review_at ?? "等待数据更新"}` : "持续监测尚未启用，不把手动检查当作后台已运行。"}</p></>}</div></div></Card>

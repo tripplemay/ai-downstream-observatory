@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { z } from "zod";
 import { assertWritableDatabase } from "../workbench-db";
 import { canonical, hash } from "../ledger/service";
 import { priceInstant as time } from "../market-price-source";
-import { investorId } from "./schemas";
+import { actionReviewInputSchema } from "./action-review-schemas";
 import { actionAudit, actionJson, actionRead } from "./action-source-proof";
 import { readManagedActionProgressRecord } from "./managed-action-source";
 import { readActionReviewConfirmationReceipt, readActionReviewPreviewWitness } from "./action-review-lineage";
@@ -12,11 +11,6 @@ import { validateInvestorActionReviewDocument, validateInvestorActionReviewJob }
 
 type Obj = Record<string, unknown>;
 const JOB = "investor_action_review";
-const inputSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("preview"), symbol: z.enum(["VT.US", "BND.US"]),
-    expected_revision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), idempotency_key: investorId }).strict(),
-  z.object({ kind: z.literal("confirmation"), body: z.record(z.string(), z.unknown()) }).strict(),
-]);
 function check(value: unknown, code = "INVALID"): asserts value { if (!value) throw new Error("ACTION_REVIEW_JOB_" + code); }
 function workspace(db: Database.Database, actor: { id: string }) {
   const row = db.prepare("SELECT * FROM investor_workspaces WHERE owner_id=?").get(actor.id) as Obj | undefined;
@@ -44,7 +38,7 @@ function header(db: Database.Database, ws: Obj, actor: { id: string }, id: unkno
 
 /** Persist only explicit owner intent. The worker, not enqueueing, advances CAS. */
 export function enqueueActionReviewJob(db: Database.Database, actor: { id: string }, raw: unknown, now = new Date().toISOString()) {
-  const input = inputSchema.parse(raw); time(now); assertWritableDatabase(db);
+  const input = actionReviewInputSchema.parse(raw); time(now); assertWritableDatabase(db);
   if (input.kind === "confirmation") validateInvestorActionReviewDocument("submit", input.body);
   return db.transaction(() => {
     assertWritableDatabase(db); const ws = workspace(db, actor);
@@ -79,6 +73,9 @@ export function enqueueActionReviewJob(db: Database.Database, actor: { id: strin
     }
     check(!db.prepare("SELECT 1 FROM investor_action_review_confirmations WHERE workspace_id=? AND previous_authority_id=?").get(ws.id, authorityId), "RULE_RETIRED");
     const grant = readManagedActionProgressRecord(db, ws.id as string, authorityId as string, now).grant;
+    const leaves=db.prepare(`SELECT a.id FROM investor_action_authorities a WHERE a.workspace_id=? AND json_extract(a.document_json,'$.provider_symbol')=?
+      AND NOT EXISTS(SELECT 1 FROM investor_action_review_confirmations c WHERE c.previous_authority_id=a.id) LIMIT 2`).all(ws.id,grant.doc.provider_symbol) as Obj[];
+    check(leaves.length === 1 && leaves[0].id === authorityId,"RULE_UNAVAILABLE");
     const id = randomUUID(), digest = hash(body), audit = randomUUID();
     const doc = { schema_version: "investor-action-review-job-request-v1", request_id: id, workspace_id: ws.id,
       provider_symbol: grant.doc.provider_symbol, kind: input.kind, body, request_hash: digest, created_at: now, valid_until: until };
@@ -92,11 +89,24 @@ export function enqueueActionReviewJob(db: Database.Database, actor: { id: strin
   }).immediate();
 }
 
+/** Header-only symbol discovery; ambiguity is not resolved by newest-wins. */
+export function actionReviewSymbols(db:Database.Database,actor:{id:string},now=new Date().toISOString()) {
+  const ws=workspace(db,actor);
+  const rows=db.prepare(`SELECT a.id FROM investor_action_authorities a WHERE a.workspace_id=?
+    AND NOT EXISTS(SELECT 1 FROM investor_action_review_confirmations c WHERE c.previous_authority_id=a.id) ORDER BY a.id LIMIT 1001`).all(ws.id) as Obj[];
+  check(rows.length <= 1000);const groups=new Map<string,string[]>();
+  for(const row of rows) {
+    const symbol=readManagedActionProgressRecord(db,ws.id as string,row.id as string,now).grant.doc.provider_symbol as string;
+    groups.set(symbol,[...(groups.get(symbol)??[]),row.id as string]);
+  }
+  return (["VT.US","BND.US"] as const).filter(symbol=>groups.get(symbol)?.length === 1);
+}
+
 /** Metadata-only durable status; preview facts/current admission are separate. */
-export function readActionReviewJobStatus(db: Database.Database, actor: { id: string }, id: string | null = null, now = new Date().toISOString()) {
+export function readActionReviewJobStatus(db: Database.Database, actor: { id: string }, id: string | null = null, now = new Date().toISOString(), latest=true) {
   time(now);
   return db.transaction(() => {
-    const ws = workspace(db, actor), selected = id ? { id } : db.prepare("SELECT id FROM investor_action_review_job_requests WHERE workspace_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1").get(ws.id) as Obj | undefined;
+    const ws = workspace(db, actor), selected = id ? { id } : latest ? db.prepare("SELECT id FROM investor_action_review_job_requests WHERE workspace_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1").get(ws.id) as Obj | undefined : undefined;
     const base = { workspace_id: ws.id, workspace_revision: ws.revision, checked_at: now, research_admitted: false, trading_permission: false, provider_calls: 0 };
     if (!selected) return { ...base, request: null };
     const { row, doc } = header(db, ws, actor, selected.id, now);
@@ -136,7 +146,14 @@ export function readActionReviewJobStatus(db: Database.Database, actor: { id: st
     } else {
       check(["failed", "cancelled", "skipped"].includes(job.status as string)); status = "unknown";
     }
-    return { ...base, request: { id: row.id, kind: row.kind, symbol: doc.provider_symbol, created_at: row.created_at,
+    const clientInput=row.kind === "preview" ? {kind:"preview",symbol:doc.provider_symbol,expected_revision:row.expected_revision,idempotency_key:row.idempotency_key}
+      : {kind:"confirmation",body:doc.body};
+    return { ...base, request: { id: row.id, kind: row.kind, symbol: doc.provider_symbol, intent_hash:hash(clientInput),created_at: row.created_at,
       valid_until: row.valid_until, status, code, resource_id: resourceId, resource_hash: resourceHash, resource_valid_until: resourceUntil } };
   }).deferred();
+}
+
+export function findActionReviewRequest(db:Database.Database,actor:{id:string},nonce:string) {
+  const ws=workspace(db,actor),row=db.prepare("SELECT id FROM investor_action_review_job_requests WHERE workspace_id=? AND idempotency_key=?").get(ws.id,nonce) as Obj|undefined;
+  return row?.id as string|undefined;
 }

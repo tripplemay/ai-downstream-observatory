@@ -106,8 +106,16 @@ def _error(error):
     if "REQUEST_EXPIRED" in code: return "ACTION_REVIEW_REQUEST_EXPIRED"
     if "HISTORICAL" in code: return "ACTION_REVIEW_HISTORICAL_REVIEW_REQUIRED"
     if "RETIRED" in code: return "ACTION_REVIEW_RULE_RETIRED"
+    if "AUTHORITY_SELECTION_CHANGED" in code: return "ACTION_REVIEW_SCOPE_CHANGED"
     if any(key in code for key in ("TAX", "PAYMENT", "EVENT_ANSWERS", "EVENT_DATE", "decimal", "SPLIT_RATIO")): return "ACTION_REVIEW_INVALID_ANSWERS"
     return "ACTION_REVIEW_SOURCE_UNAVAILABLE"
+
+
+def _selection(db, row, doc):
+    leaves = db.execute("""SELECT a.id FROM investor_action_authorities a WHERE a.workspace_id=? AND json_extract(a.document_json,'$.provider_symbol')=?
+      AND NOT EXISTS(SELECT 1 FROM investor_action_review_confirmations c WHERE c.previous_authority_id=a.id) LIMIT 2""",
+        (row["workspace_id"], doc["provider_symbol"])).fetchall()
+    _check(len(leaves) == 1 and leaves[0]["id"] == row["authority_id"], "AUTHORITY_SELECTION_CHANGED")
 
 
 def prepare_action_review_job(db, job, lease, *, clock=None, stop_requested=None):
@@ -121,6 +129,7 @@ def prepare_action_review_job(db, job, lease, *, clock=None, stop_requested=None
     prepared, failure = None, None
     try:
         _check(at < row["valid_until"], "REQUEST_EXPIRED")
+        _selection(db, row, doc)
         if row["kind"] == "preview":
             prepared = workflow.prepare_action_review_preview(db, row["workspace_id"], row["actor_id"], doc["body"], clock=clock, owner_interaction=True)
         else:
@@ -137,6 +146,7 @@ def prepare_action_review_job(db, job, lease, *, clock=None, stop_requested=None
             try:
                 with transaction(db):
                     _check(current < row["valid_until"], "REQUEST_EXPIRED")
+                    _selection(db, row, doc)
                     resource = prepared(db)
                     managed._stopped(db, stop_requested); current = _clock(clock()); assert_lease(db, lease, current)
                     _check(current < row["valid_until"], "REQUEST_EXPIRED")
