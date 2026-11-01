@@ -68,14 +68,16 @@ def assert_writable(connection):
         raise WorkbenchError("RESTORE_PENDING_REVIEW")
 
 
-def open_database(database_path):
+def open_database(database_path, *, read_only=False):
+    if type(read_only) is not bool:
+        raise WorkbenchError("WORKBENCH_DB_READ_ONLY_FLAG_INVALID")
     path = Path(database_path)
     if not path.is_absolute():
         raise WorkbenchError("WORKBENCH_DB_PATH_MUST_BE_ABSOLUTE")
     path = path.resolve(strict=True)
     if not path.is_file() or path.name.lower() == "observatory.db":
         raise WorkbenchError("LEGACY_DATABASE_NOT_ALLOWED")
-    connection = sqlite3.connect(path.as_uri() + "?mode=rw", uri=True, isolation_level=None, timeout=5)
+    connection = sqlite3.connect(path.as_uri() + ("?mode=ro" if read_only else "?mode=rw"), uri=True, isolation_level=None, timeout=5)
     connection.row_factory = sqlite3.Row
     try:
         connection.execute("PRAGMA foreign_keys=ON")
@@ -93,6 +95,8 @@ def open_database(database_path):
         for item in expected:
             if sha256((ROOT / "migrations" / item["file"]).read_bytes()).hexdigest() != item["sha256"]:
                 raise WorkbenchError("MIGRATION_MANIFEST_MISMATCH")
+        if read_only:
+            connection.execute("PRAGMA query_only=ON")
         return connection
     except Exception:
         connection.close()
