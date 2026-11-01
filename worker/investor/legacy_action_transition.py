@@ -53,11 +53,15 @@ def _compare_original_input(db, workspace, definition, source, document, at):
     finally: _SCOPE.reset(token)
 
 
-def _original_chain(db, workspace, definition, at, stop_requested):
+def _original_chain(db, workspace, definition, at, stop_requested, *, through_sequence=None):
     from .monitor_costs import verify_settings
-    headers = db.execute("SELECT * FROM investor_evidence_model_checkpoints WHERE workspace_id=? AND model_id=? ORDER BY sequence LIMIT 1001",
-        (workspace, definition["model_id"])).fetchall()
+    _assert(through_sequence is None or type(through_sequence) is int and 1 <= through_sequence <= 1000,
+        "LEGACY_TRANSITION_CHECKPOINT_CHAIN_REQUIRED")
+    headers = db.execute("SELECT * FROM investor_evidence_model_checkpoints WHERE workspace_id=? AND model_id=? AND (? IS NULL OR sequence<=?) ORDER BY sequence LIMIT 1001",
+        (workspace, definition["model_id"], through_sequence, through_sequence)).fetchall()
     _assert(0 < len(headers) <= 1000, "LEGACY_TRANSITION_CHECKPOINT_CHAIN_REQUIRED")
+    if through_sequence is not None:
+        _assert(len(headers) == through_sequence, "LEGACY_TRANSITION_CHECKPOINT_CHAIN_CHANGED")
     previous, ledger, bindings, expiry = None, {}, [], definition["valid_until"]
     for sequence, header in enumerate(headers, 1):
         _stop(stop_requested)

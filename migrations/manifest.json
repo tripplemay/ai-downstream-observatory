@@ -283,6 +283,11 @@
       "version": 56,
       "file": "0056_investor_action_review_jobs.sql",
       "sha256": "5febb75354fc880aebd2ec644121ef9f7833248809f5dd8847f340528f0be016"
+    },
+    {
+      "version": 57,
+      "file": "0057_investor_legacy_transition_workflow.sql",
+      "sha256": "e64f087a90b5123d711f177e7dd87947c79fe6de415d84b3f00c7df6d29e68e6"
     }
   ]
 }

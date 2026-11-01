@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-legacy-transition-workflow.schema.json",
+  "$defs": {
+    "revision": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+    "instant": {"$ref": "investor-action-review-workflow.schema.json#/$defs/instant"},
+    "preview_request": {
+      "type": "object", "additionalProperties": false, "required": ["model_id", "expected_revision", "idempotency_key"],
+      "properties": {"model_id": {"$ref": "common.schema.json#/$defs/id"}, "expected_revision": {"$ref": "#/$defs/revision"}, "idempotency_key": {"$ref": "common.schema.json#/$defs/id"}}
+    },
+    "proof": {
+      "type": "object", "additionalProperties": false,
+      "required": ["model_hash", "control_hash", "legacy_input_id", "legacy_input_hash", "settings_hash", "checkpoint", "audited_document_hash", "audited_projection_hash", "carry_hash", "carry_count", "projection_quality_gaps", "source_valid_until"],
+      "properties": {
+        "model_hash": {"$ref": "common.schema.json#/$defs/hash"}, "control_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "legacy_input_id": {"$ref": "common.schema.json#/$defs/id"}, "legacy_input_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "settings_hash": {"$ref": "common.schema.json#/$defs/hash"}, "checkpoint": {"$ref": "investor-legacy-action-transition-preview.schema.json#/properties/checkpoint"},
+        "audited_document_hash": {"$ref": "common.schema.json#/$defs/hash"}, "audited_projection_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "carry_hash": {"$ref": "common.schema.json#/$defs/hash"}, "carry_count": {"type": "integer", "minimum": 0, "maximum": 20000},
+        "projection_quality_gaps": {"$ref": "investor-monitor-data-projection.schema.json#/properties/quality_gaps"}, "source_valid_until": {"$ref": "#/$defs/instant"}
+      }
+    },
+    "preview": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "preview_id", "workspace_id", "workspace_revision", "model_id", "control_id", "request_hash", "comparison_hash", "basis_hash", "proof", "checked_at", "created_at", "valid_until", "approval_performed", "research_admitted", "trading_permission", "provider_calls"],
+      "properties": {
+        "schema_version": {"const": "investor-legacy-transition-witness-v1"}, "preview_id": {"$ref": "common.schema.json#/$defs/id"}, "workspace_id": {"$ref": "common.schema.json#/$defs/id"},
+        "workspace_revision": {"$ref": "#/$defs/revision"}, "model_id": {"$ref": "common.schema.json#/$defs/id"}, "control_id": {"$ref": "common.schema.json#/$defs/id"},
+        "request_hash": {"$ref": "common.schema.json#/$defs/hash"}, "comparison_hash": {"$ref": "common.schema.json#/$defs/hash"}, "basis_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "proof": {"$ref": "#/$defs/proof"}, "checked_at": {"$ref": "#/$defs/instant"}, "created_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"},
+        "approval_performed": {"const": false}, "research_admitted": {"const": false}, "trading_permission": {"const": false}, "provider_calls": {"const": 0}
+      }
+    },
+    "acknowledgements": {
+      "type": "object", "additionalProperties": false,
+      "required": ["preserve_original_accounting_and_knowledge", "revalidate_current_sources_on_every_use", "new_actions_keep_audited_knowledge", "quality_gaps_are_not_current_advice", "research_only_no_trading"],
+      "properties": {"preserve_original_accounting_and_knowledge": {"const": true}, "revalidate_current_sources_on_every_use": {"const": true}, "new_actions_keep_audited_knowledge": {"const": true}, "quality_gaps_are_not_current_advice": {"const": true}, "research_only_no_trading": {"const": true}}
+    },
+    "submit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "preview_id", "expected_preview_hash", "expected_revision", "idempotency_key", "acknowledgements"],
+      "properties": {"schema_version": {"const": "investor-legacy-transition-submit-v1"}, "preview_id": {"$ref": "common.schema.json#/$defs/id"}, "expected_preview_hash": {"$ref": "common.schema.json#/$defs/hash"}, "expected_revision": {"$ref": "#/$defs/revision"}, "idempotency_key": {"$ref": "common.schema.json#/$defs/id"}, "acknowledgements": {"$ref": "#/$defs/acknowledgements"}}
+    },
+    "confirmation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "confirmation_id", "workspace_id", "workspace_revision", "model_id", "model_hash", "preview_id", "preview_hash", "control_id", "control_hash", "legacy_input_id", "legacy_input_hash", "checkpoint", "carry_hash", "carry_count", "protocol", "request", "request_hash", "created_at", "valid_until", "monitor_data_readmission_required", "research_admitted", "monitoring_activated", "trading_permission", "raw_ai_sharing", "provider_calls"],
+      "properties": {
+        "schema_version": {"const": "investor-legacy-transition-confirmation-v1"}, "confirmation_id": {"$ref": "common.schema.json#/$defs/id"}, "workspace_id": {"$ref": "common.schema.json#/$defs/id"},
+        "workspace_revision": {"$ref": "#/$defs/revision"}, "model_id": {"$ref": "common.schema.json#/$defs/id"}, "model_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "preview_id": {"$ref": "common.schema.json#/$defs/id"}, "preview_hash": {"$ref": "common.schema.json#/$defs/hash"}, "control_id": {"$ref": "common.schema.json#/$defs/id"}, "control_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "legacy_input_id": {"$ref": "common.schema.json#/$defs/id"}, "legacy_input_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "checkpoint": {"$ref": "investor-legacy-action-transition-preview.schema.json#/properties/checkpoint"}, "carry_hash": {"$ref": "common.schema.json#/$defs/hash"}, "carry_count": {"type": "integer", "minimum": 0, "maximum": 20000},
+        "protocol": {"const": "preserve_original_processed_action_knowledge_v1"}, "request": {"$ref": "#/$defs/submit"}, "request_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "created_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"}, "monitor_data_readmission_required": {"const": true},
+        "research_admitted": {"const": false}, "monitoring_activated": {"const": false}, "trading_permission": {"const": false}, "raw_ai_sharing": {"const": false}, "provider_calls": {"const": 0}
+      }
+    }
+  }
+}

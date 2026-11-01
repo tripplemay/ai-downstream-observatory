@@ -41,6 +41,7 @@ import actionReviewDraft from "../../../../contracts/v1/investor-action-review-d
 import actionReviewWorkflow from "../../../../contracts/v1/investor-action-review-workflow.schema.json";
 import actionReviewJob from "../../../../contracts/v1/investor-action-review-job.schema.json";
 import legacyActionTransitionPreview from "../../../../contracts/v1/investor-legacy-action-transition-preview.schema.json";
+import legacyTransitionWorkflow from "../../../../contracts/v1/investor-legacy-transition-workflow.schema.json";
 import calendarContinuation from "../../../../contracts/v1/investor-calendar-continuation.schema.json";
 import dataSnapshot from "../../../../contracts/v1/investor-data-snapshot.schema.json";
 import evidenceInput from "../../../../contracts/v1/investor-evidence-input.schema.json";
@@ -97,6 +98,7 @@ addFormats(ajv);
 ajv.addSchema(calendarContinuation);
 for (const schema of [actionCrosscheck, actionSuccessor, actionReviewDraft, actionReviewWorkflow, actionReviewJob]) ajv.addSchema(schema);
 ajv.addSchema(legacyActionTransitionPreview);
+ajv.addSchema(legacyTransitionWorkflow);
 for (const schema of [policyV2, policyV3, policyInput, strategyResultV2, strategyResultV3, settledPlan]) ajv.addSchema(schema);
 ajv.addSchema(boundedPlan); ajv.addSchema(actionAwarePlan); ajv.addSchema(eventReviewPlan); ajv.addSchema(planInput);
 for (const schema of [longHorizonInputV4, longHorizonResultV4, fundedHistoryInputV3, fundedHistoryResultV3]) ajv.addSchema(schema);
@@ -143,6 +145,9 @@ export function validateInvestorSourceDocument(kind: "facts" | "snapshot" | "mon
 }
 export function validateInvestorActionAvailability(value: unknown) { requireTrue(ajv.getSchema(monitorSourceSnapshotV2.$id + "#/$defs/action_availability")!(value)); }
 export function validateLegacyActionTransitionPreview(value: unknown) { requireTrue(ajv.getSchema(legacyActionTransitionPreview.$id)!(value)); }
+export function validateLegacyTransitionWorkflow(kind: "preview_request" | "preview" | "submit" | "confirmation", value: unknown) {
+  requireTrue(ajv.getSchema(legacyTransitionWorkflow.$id + "#/$defs/" + kind)!(value));
+}
 export function validateInvestorActionReviewDocument(kind: "preview" | "confirmation" | "append_proof" | "preview_request" | "submit", value: unknown) {
   const schema = kind === "append_proof" ? actionSuccessor : actionReviewWorkflow;
   requireTrue(ajv.getSchema(schema.$id + "#/$defs/" + kind)!(value));
