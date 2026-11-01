@@ -76,6 +76,39 @@ test("monitor-only journal cannot be admitted as a historical research dataset",
   } finally { f.close(); }
 });
 
+test("independent Node rejects an after-close ex event despite consistent fictional receipts and hashes", () => {
+  const f = investorFixture();
+  try {
+    const invalid = actionPython(f.filename, `
+from unittest.mock import patch
+from tests.investor.test_monitor_data import InvestorMonitorDataTests,NOW
+from tests.investor.monitor_data_fixture import late_action_receipts
+from worker.investor.data_evidence import review_source
+from worker.investor.data_snapshot import build_audited_monitor_dataset
+from worker.orchestration.db import canonical_json,content_hash
+db.execute("INSERT INTO investor_workspaces VALUES('w','synthetic-investor',0,?)",(NOW,))
+case=InvestorMonitorDataTests();case.db=db
+_,windows,_,refs=case.fixture(markets=('CN',),events=True)
+late_action_receipts(db,'w',windows,refs)
+old=refs[0]['actions'];facts=json.loads(old['document_json'])['facts']
+facts['events'][0]['at']='2026-01-01T08:00:00Z'
+updated=review_source(db,'w','synthetic-investor',old['source_id'],'approved',facts,
+ 'FICTIONAL invalid ex-session timing; independent consumer must reject',old['valid_until'],now=NOW)
+window=windows[0]
+ids=[updated['id'] if value==old['id'] else value for value in window['action_review_ids']]
+# Negative construction only: bypass the producer's timing validation to test
+# the independent Node reader, not to claim that the producer admitted this.
+with patch('worker.investor.monitor_action_knowledge.validate_monitor_source_dataset'):
+ result=build_audited_monitor_dataset(db,'w',window['capture_ids'],[],ids,window['fx_review_ids'],window['start_date'],window['end_date'],now=NOW)
+print(canonical_json({'snapshot':result['manifest'],'dataset_hash':result['dataset_hash'],
+ 'catalog_hash':content_hash(result['catalog']),'created_at':NOW,'valid_until':result['valid_until']}))
+`);
+    const before = f.db.prepare("SELECT total_changes() n").get();
+    assert.throws(() => readInvestorAuditedMonitorSnapshot(f.db, "w", invalid, now), /INVESTOR_EVIDENCE_INVALID/);
+    assert.deepEqual(f.db.prepare("SELECT total_changes() n").get(), before); noFinance(f);
+  } finally { f.close(); }
+});
+
 test("a resealed projection cannot hide corrupted retained price bytes", () => {
   const f = investorFixture();
   try {

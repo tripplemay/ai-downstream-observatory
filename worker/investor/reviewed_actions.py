@@ -1,9 +1,9 @@
 """Prepare an explicitly reviewed append; never authorize or publish a successor."""
 
 from datetime import date, timedelta
-from decimal import Decimal
 import re
 
+from worker.accounting import fact_decimal
 from worker.market.contracts import validate_contract
 from worker.orchestration.db import WorkbenchError, content_hash, instant, transaction
 from .action_reconciliation import TARGETS, _compare
@@ -37,11 +37,15 @@ def _source_history(previous, current, coverage_end):
 
 def _fact_events(facts):
     for event in facts["events"]:
-        day = instant(event["at"]).astimezone(ZONE).date().isoformat()
+        effective = _time(event["at"])
+        _time(event["published_at"])
+        day = effective.astimezone(ZONE).date().isoformat()
         _check(facts["range_start"] <= day <= facts["range_end"], "FACT_EVENT_OUTSIDE_REVIEW_RANGE")
         if event["type"] == "dividend":
-            _check(instant(event["pay_at"]) >= instant(event["at"]), "PAYMENT_PRECEDES_ENTITLEMENT")
-            _check(Decimal(0) <= Decimal(event["tax_per_unit"]) <= Decimal(event["gross_per_unit"]), "TAX_AMOUNT_INVALID")
+            _check(_time(event["pay_at"]) >= effective, "PAYMENT_PRECEDES_ENTITLEMENT")
+            _check(0 <= fact_decimal(event["tax_per_unit"]) <= fact_decimal(event["gross_per_unit"]), "TAX_AMOUNT_INVALID")
+        else:
+            _check(fact_decimal(event["ratio"]) > 0, "SPLIT_RATIO_INVALID")
 
 
 def check_reviewed_action_append(previous_facts, reviewed_facts, previous, current, *, symbol, listing_id, knowledge_floor, reviewed_at):
@@ -112,12 +116,13 @@ def check_reviewed_action_append(previous_facts, reviewed_facts, previous, curre
     return result
 
 
-def _historical_basis(db, workspace, actor, authority, policy, anchor, at):
+def _historical_basis(db, workspace, actor, authority, policy, anchor, at, *, capture_reports=None):
     """A quarantined rule may be authenticated for comparison, never current admission."""
     from . import managed_actions as managed
     head = db.execute("SELECT id FROM investor_action_publications WHERE authority_id=? AND status='published' ORDER BY sequence DESC LIMIT 1",
         (authority["id"],)).fetchone()
     if head is None:
+        if capture_reports is not None: capture_reports.append(anchor["report"])
         return anchor["base"], anchor["snapshots"], None, anchor["limits"]
     row, doc = managed._publication_header(db, workspace, head[0], at)
     prepared = managed._inputs(db, workspace, actor, policy, doc["capture_refs"], at)
@@ -130,6 +135,7 @@ def _historical_basis(db, workspace, actor, authority, policy, anchor, at):
         "HISTORICAL_PUBLICATION_INVALID")
     values, report, limits = managed._captures(db, workspace, actor, policy["listing_review_id"], doc["capture_refs"], at)
     _check(report == prepared["report"], "HISTORICAL_PUBLICATION_INVALID")
+    if capture_reports is not None: capture_reports.append(report)
     return managed.managed_review_header(db, workspace, head[0], at), {key:value["draft"] for key,value in values.items()}, head[0], limits
 
 

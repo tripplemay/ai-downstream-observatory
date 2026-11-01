@@ -121,6 +121,27 @@ class MonitorActionKnowledgeTests(unittest.TestCase):
             with self.assertRaises(WorkbenchError):
                 build_monitor_data(self.db, "w", self.definition, self.windows, self.settings, now=fixture.NOW, audited_action_knowledge=flag)
 
+    def test_after_close_ex_event_cannot_enter_a_same_day_unadjusted_close_dataset(self):
+        self.prepare(); dataset = self.source()["dataset"]
+        for index in range(len(dataset["reviewed_actions"])):
+            value = deepcopy(dataset); entry = value["reviewed_actions"][index]
+            entry["fact"]["at"] = entry["fact"]["at"][:10] + "T08:00:00Z"
+            entry["availability"]["event_hash"] = content_hash(entry["fact"])
+            with self.subTest(kind=entry["fact"]["type"]), self.assertRaisesRegex(WorkbenchError, "ACTION_SESSION_TIMING"):
+                validate_monitor_source_dataset(value)
+
+    def test_ex_event_requires_a_matching_session_but_payment_does_not(self):
+        self.prepare(); dataset = self.source()["dataset"]
+        value = deepcopy(dataset); entry = value["reviewed_actions"][0]
+        entry["fact"]["at"] = "2026-01-01T07:00:00Z"
+        entry["fact"]["pay_at"] = "2026-01-04T08:00:00Z"
+        entry["availability"]["event_hash"] = content_hash(entry["fact"])
+        validate_monitor_source_dataset(value)
+        entry["fact"]["at"] = "2025-12-31T03:00:00Z"
+        entry["availability"]["event_hash"] = content_hash(entry["fact"])
+        with self.assertRaisesRegex(WorkbenchError, "ACTION_SESSION_TIMING"):
+            validate_monitor_source_dataset(value)
+
 
 class ManagedActionKnowledgeTests(unittest.TestCase):
     setUp = managed_fixture.ManagedActionTests.setUp

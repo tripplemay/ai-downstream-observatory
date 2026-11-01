@@ -52,8 +52,21 @@ def _changes(previous, current, coverage_end, common_end):
     return result
 
 
+def _draft_binding_hash(workspace, actor, authority, control, prior, previous, current, report, publication_id, floor, maximum_until, changes):
+    return content_hash({"workspace": workspace, "owner": actor, "authority_id": authority["id"], "authority_hash": authority["content_hash"],
+        "control_id": control["id"], "control_hash": control["content_hash"], "publication_id": publication_id,
+        "previous_review_hash": prior["review"]["content_hash"], "previous_facts_hash": content_hash(prior["facts"]),
+        "previous_snapshot_hash": content_hash(previous), "current_snapshot_hash": content_hash(current),
+        "current_bindings": report["bindings"], "changes": changes, "knowledge_not_before": floor, "maximum_valid_until": maximum_until})
+
+
 def preview_action_review_draft(db, workspace, actor, authority_id, *, now=None):
     """Owner-only inspection. It must not require creating an approved review first."""
+    return _prepare_action_review_draft(db, workspace, actor, authority_id, now=now)[0]
+
+
+def _prepare_action_review_draft(db, workspace, actor, authority_id, *, now=None):
+    """Internal full resolver context; never accept this as a caller-prepared result."""
     at = _clock(now)
     with transaction(db, immediate=False), _fact_validation_scope():
         _owner(db, workspace, actor)
@@ -68,7 +81,8 @@ def preview_action_review_draft(db, workspace, actor, authority_id, *, now=None)
             and instant(anchor["base"]["review"]["created_at"]) <= instant(authority["created_at"])
             and all(instant(value["capture"]["created_at"]) <= instant(authority["created_at"]) for value in anchor["values"].values()),
             "AUTHORITY_INPUTS_CHANGED")
-        prior, previous, publication_id, limits = _historical_basis(db, workspace, actor, authority, policy, anchor, at)
+        historical_reports = []
+        prior, previous, publication_id, limits = _historical_basis(db, workspace, actor, authority, policy, anchor, at, capture_reports=historical_reports)
         day = instant(at).astimezone(managed.ZONE).date().isoformat()
         refs, failure = managed._current_refs(db, workspace, policy, day, at)
         _check(failure is None, "SOURCE_CAPTURE_TERMINAL_FAILURE")
@@ -103,13 +117,9 @@ def preview_action_review_draft(db, workspace, actor, authority_id, *, now=None)
         maximum_until = _clock(min([instant(policy["valid_until"]), *anchor["limits"], *limits, *current_limits]))
         deadline = _clock(min(instant(at) + timedelta(seconds=60), instant(maximum_until)))
         _check(at < deadline, "DRAFT_EXPIRED")
-        basis = {"workspace": workspace, "owner": actor, "authority_id": authority_id, "authority_hash": authority["content_hash"],
-            "control_id": control["id"], "control_hash": control["content_hash"], "publication_id": publication_id,
-            "previous_review_hash": prior["review"]["content_hash"], "previous_facts_hash": content_hash(prior["facts"]),
-            "previous_snapshot_hash": content_hash(previous), "current_snapshot_hash": content_hash(current),
-            "current_bindings": report["bindings"], "changes": changes, "knowledge_not_before": floor, "maximum_valid_until": maximum_until}
         result = {"schema_version": "investor-action-review-draft-v1", "status": status, "checked_at": at, "refresh_after": deadline,
-            "draft_basis_hash": content_hash(basis), "authority_id": authority_id, "authority_hash": authority["content_hash"],
+            "draft_basis_hash": _draft_binding_hash(workspace, actor, authority, control, prior, previous, current, report, publication_id, floor, maximum_until, changes),
+            "authority_id": authority_id, "authority_hash": authority["content_hash"],
             "control_id": control["id"], "control_hash": control["content_hash"], "rule_enabled": bool(control["enabled"]),
             "previous_publication_id": publication_id, "previous_coverage_end": old_end, "candidate_coverage_end": common["range_end"],
             "previous_tax_assumption_hash": content_hash({"tax_assumption": prior["facts"]["tax_assumption"]}),
@@ -120,4 +130,6 @@ def preview_action_review_draft(db, workspace, actor, authority_id, *, now=None)
             "new_review_created": False, "new_rule_enabled": False, "quarantine_cleared": False,
             "research_admitted": False, "live_advice_eligible": False, "trading_permission": False, "provider_calls": 0, "database_writes": 0}
         validate_contract(result, "investor-action-review-draft.schema.json")
-        return result
+        return result, {"authority": authority, "policy": policy, "control": control, "anchor": anchor, "prior": prior,
+            "previous": previous, "current": current, "report": report, "refs": refs, "maximum_valid_until": maximum_until,
+            "historical_reports": historical_reports}

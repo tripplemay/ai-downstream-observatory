@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-action-review-workflow.schema.json",
+  "$defs": {
+    "revision": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+    "instant": {"$ref": "investor-monitor-source-snapshot-v2.schema.json#/$defs/action_availability/properties/known_at"},
+    "preview_request": {
+      "type": "object", "additionalProperties": false, "required": ["authority_id", "expected_revision", "idempotency_key"],
+      "properties": {"authority_id": {"$ref": "common.schema.json#/$defs/id"}, "expected_revision": {"$ref": "#/$defs/revision"}, "idempotency_key": {"$ref": "common.schema.json#/$defs/id"}}
+    },
+    "preview": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "preview_id", "workspace_id", "workspace_revision", "request_hash", "authority_id", "authority_hash", "control_id", "control_hash", "draft_basis_hash", "checked_at", "created_at", "valid_until", "approval_performed", "provider_calls", "research_admitted", "trading_permission"],
+      "properties": {
+        "schema_version": {"const": "investor-action-review-preview-v1"}, "preview_id": {"$ref": "common.schema.json#/$defs/id"}, "workspace_id": {"$ref": "common.schema.json#/$defs/id"},
+        "workspace_revision": {"$ref": "#/$defs/revision"}, "request_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "authority_id": {"$ref": "common.schema.json#/$defs/id"}, "authority_hash": {"$ref": "common.schema.json#/$defs/hash"}, "control_id": {"$ref": "common.schema.json#/$defs/id"}, "control_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "draft_basis_hash": {"$ref": "common.schema.json#/$defs/hash"}, "checked_at": {"$ref": "#/$defs/instant"}, "created_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"},
+        "approval_performed": {"const": false}, "provider_calls": {"const": 0}, "research_admitted": {"const": false}, "trading_permission": {"const": false}
+      }
+    },
+    "preview_view": {
+      "type": "object", "additionalProperties": false, "required": ["preview", "draft", "unchanged_tax_assumption", "visibility"],
+      "properties": {"preview": {"$ref": "#/$defs/preview"}, "draft": {"$ref": "investor-action-review-draft.schema.json"},
+        "unchanged_tax_assumption": {"$ref": "investor-data-facts.schema.json#/$defs/actions/properties/tax_assumption"}, "visibility": {"const": "private_owner_only_not_ai"}}
+    },
+    "event_answer": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["type", "date", "at", "pay_at", "tax_per_unit"], "properties": {
+          "type": {"const": "dividend"}, "date": {"$ref": "common.schema.json#/$defs/date"}, "at": {"$ref": "#/$defs/instant"}, "pay_at": {"$ref": "#/$defs/instant"}, "tax_per_unit": {"$ref": "common.schema.json#/$defs/decimal"}
+        }},
+        {"type": "object", "additionalProperties": false, "required": ["type", "date", "at"], "properties": {"type": {"const": "split"}, "date": {"$ref": "common.schema.json#/$defs/date"}, "at": {"$ref": "#/$defs/instant"}}}
+      ]
+    },
+    "acknowledgements": {
+      "type": "object", "additionalProperties": false,
+      "required": ["issuer_amount_unit_and_currency", "reported_differences_seen", "explicit_research_instants", "explicit_tax_amounts", "unchanged_tax_assumption_applies", "reported_coverage_not_objective_absence", "no_historical_restatement", "register_new_default_off_rule"],
+      "properties": {"issuer_amount_unit_and_currency": {"const": true}, "reported_differences_seen": {"const": true}, "explicit_research_instants": {"const": true}, "explicit_tax_amounts": {"const": true}, "unchanged_tax_assumption_applies": {"const": true}, "reported_coverage_not_objective_absence": {"const": true}, "no_historical_restatement": {"const": true}, "register_new_default_off_rule": {"const": true}}
+    },
+    "submit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "preview_id", "expected_revision", "idempotency_key", "new_events", "acknowledgements", "enable_rule"],
+      "properties": {
+        "schema_version": {"const": "investor-action-review-submit-v1"}, "preview_id": {"$ref": "common.schema.json#/$defs/id"}, "expected_revision": {"$ref": "#/$defs/revision"}, "idempotency_key": {"$ref": "common.schema.json#/$defs/id"},
+        "new_events": {"type": "array", "minItems": 1, "maxItems": 1000, "items": {"$ref": "#/$defs/event_answer"}}, "acknowledgements": {"$ref": "#/$defs/acknowledgements"}, "enable_rule": {"type": "boolean"}
+      }
+    },
+    "confirmation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "confirmation_id", "workspace_id", "workspace_revision", "preview_id", "request", "request_hash", "draft_basis_hash", "previous_authority_id", "previous_authority_hash", "previous_control_id", "previous_control_hash", "retired_control_id", "retired_control_hash", "previous_publication_id", "previous_review_id", "previous_review_hash", "new_review_id", "new_review_hash", "new_authority_id", "new_authority_hash", "new_control_id", "new_control_hash", "append_proof", "created_at", "monitor_data_readmission_required", "quarantine_cleared", "research_admitted", "trading_permission", "raw_ai_sharing", "provider_calls"],
+      "properties": {
+        "schema_version": {"const": "investor-action-review-confirmation-v1"}, "confirmation_id": {"$ref": "common.schema.json#/$defs/id"}, "workspace_id": {"$ref": "common.schema.json#/$defs/id"}, "workspace_revision": {"$ref": "#/$defs/revision"},
+        "preview_id": {"$ref": "common.schema.json#/$defs/id"}, "request": {"$ref": "#/$defs/submit"}, "request_hash": {"$ref": "common.schema.json#/$defs/hash"}, "draft_basis_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "previous_authority_id": {"$ref": "common.schema.json#/$defs/id"}, "previous_authority_hash": {"$ref": "common.schema.json#/$defs/hash"}, "previous_control_id": {"$ref": "common.schema.json#/$defs/id"}, "previous_control_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "retired_control_id": {"$ref": "common.schema.json#/$defs/id"}, "retired_control_hash": {"$ref": "common.schema.json#/$defs/hash"}, "previous_publication_id": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/id"}]},
+        "previous_review_id": {"$ref": "common.schema.json#/$defs/id"}, "previous_review_hash": {"$ref": "common.schema.json#/$defs/hash"}, "new_review_id": {"$ref": "common.schema.json#/$defs/id"}, "new_review_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "new_authority_id": {"$ref": "common.schema.json#/$defs/id"}, "new_authority_hash": {"$ref": "common.schema.json#/$defs/hash"}, "new_control_id": {"$ref": "common.schema.json#/$defs/id"}, "new_control_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "append_proof": {"$ref": "investor-action-successor.schema.json#/$defs/append_proof"}, "created_at": {"$ref": "#/$defs/instant"},
+        "monitor_data_readmission_required": {"const": true}, "quarantine_cleared": {"const": false}, "research_admitted": {"const": false}, "trading_permission": {"const": false}, "raw_ai_sharing": {"const": false}, "provider_calls": {"const": 0}
+      }
+    }
+  }
+}

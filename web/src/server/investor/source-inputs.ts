@@ -314,6 +314,10 @@ function readSnapshot(db: Database.Database, workspace: string, document: Obj, n
       else check(amount(event.gross_per_unit as string).gte(0) && amount(event.tax_per_unit as string).gte(0)
         && amount(event.tax_per_unit as string).lte(amount(event.gross_per_unit as string)) && priceInstant(event.pay_at) >= priceInstant(event.at));
       if (start <= day && day <= end) {
+        if (auditedActions) {
+          const session = sessions.find(row => row.market === assets.get(identity)!.facts.market && row.session_date === day);
+          check(session !== undefined && priceInstant(event.at) <= priceInstant(session.close_at));
+        }
         check(!actionIds.has(event.id as string)); actionIds.add(event.id as string);
         events.push({ ...event, source_evidence: "review:" + value.row.id });
         if (available) journal.push({ fact: { ...event }, availability: available(value.row.id, event.id) });

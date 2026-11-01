@@ -216,6 +216,7 @@ def set_authority_enabled(db, workspace, actor, identifier, enabled, *, now=None
         _owner(db, workspace, actor)
         authority, policy, old = _authority(db, workspace, identifier, at)
         if enabled:
+            _check(not db.execute("SELECT 1 FROM investor_action_review_confirmations WHERE workspace_id=? AND previous_authority_id=?", (workspace, identifier)).fetchone(), "AUTHORITY_RETIRED")
             _check(policy["valid_from"] <= at < policy["valid_until"], "AUTHORITY_EXPIRED")
             _check(not _quarantined(db, workspace, identifier, at), "SOURCE_QUARANTINED")
         if old["enabled"] == int(enabled): return dict(old)

@@ -1,6 +1,7 @@
 """Audited action availability for a distinct monitor-only, non-PIT protocol."""
 
 import re
+from zoneinfo import ZoneInfo
 
 from worker.accounting import fact_decimal
 from worker.market.contracts import validate_contract
@@ -23,6 +24,7 @@ def _instant(value):
 def _availability_refs(db, workspace, resolved_reviews, checked, frozen):
     """Internal builder input must be normal resolver results, not caller objects."""
     from . import managed_actions as managed
+    from .action_review_workflow import _confirmed_event_origins
     result = []
     for review in resolved_reviews:
         origin = review
@@ -34,13 +36,13 @@ def _availability_refs(db, workspace, resolved_reviews, checked, frozen):
                 and origin["facts"]["events"] == review["facts"]["events"]
                 and origin["facts"]["listing_id"] == review["facts"]["listing_id"]
                 and origin["facts"]["tax_assumption"] == review["facts"]["tax_assumption"], "INVESTOR_MONITOR_ACTION_ORIGIN_CHANGED")
-        known = origin["review"]["created_at"]
-        _assert(_instant(known) <= _instant(review["review"]["created_at"]) <= _instant(frozen),
-            "INVESTOR_MONITOR_ACTION_KNOWLEDGE_AFTER_SNAPSHOT")
+        origins = _confirmed_event_origins(db, workspace, origin, checked)
         for event in review["facts"]["events"]:
+            original = origins[event["id"]]
+            _assert(_instant(original["known_at"]) <= _instant(review["review"]["created_at"]) <= _instant(frozen),
+                "INVESTOR_MONITOR_ACTION_KNOWLEDGE_AFTER_SNAPSHOT")
             result.append({"review_id": review["review"]["id"], "review_hash": review["review"]["content_hash"],
-                "event_id": event["id"], "event_hash": content_hash(event), "original_review_id": origin["review"]["id"],
-                "original_review_hash": origin["review"]["content_hash"], "known_at": known})
+                "event_id": event["id"], "event_hash": content_hash(event), **original})
     _assert(len(result) <= 10000, "INVESTOR_MONITOR_ACTION_KNOWLEDGE_LIMIT")
     result.sort(key=lambda row: (row["review_id"], row["event_id"]))
     index_availability(resolved_reviews, result, frozen)
@@ -81,10 +83,17 @@ def validate_monitor_source_dataset(dataset):
     market.update(schema_version="research-dataset-v2", corporate_actions_complete=False, actions=[])
     validate_dataset(market)
     assets, ids = {row["listing_id"]: row for row in dataset["assets"]}, set()
+    sessions = {(row["market"], row["session_date"]): row for row in dataset["sessions"]}
+    zones = {"CN": ZoneInfo("Asia/Shanghai"), "HK": ZoneInfo("Asia/Hong_Kong"), "US": ZoneInfo("America/New_York")}
     for entry in dataset["reviewed_actions"]:
         event, ref = entry["fact"], entry["availability"]
         _assert(event["id"] not in ids and event["listing_id"] in assets, "INVESTOR_MONITOR_ACTION_IDENTITY")
         ids.add(event["id"])
+        market = assets[event["listing_id"]]["market"]
+        effective = _instant(event["at"])
+        session = sessions.get((market, effective.astimezone(zones[market]).date().isoformat()))
+        # An ex/split event must already apply to that day's unadjusted close.
+        _assert(session is not None and effective <= _instant(session["close_at"]), "INVESTOR_MONITOR_ACTION_SESSION_TIMING")
         _assert(ref["event_id"] == event["id"] and ref["event_hash"] == content_hash(event), "INVESTOR_MONITOR_ACTION_KNOWLEDGE_BINDING")
         _assert(_instant(event["published_at"]) <= _instant(ref["known_at"]) <= _instant(dataset["created_at"]),
             "INVESTOR_MONITOR_ACTION_KNOWLEDGE_AFTER_SNAPSHOT")

@@ -273,6 +273,11 @@
       "file": "0054_investor_monitor_action_knowledge.sql",
       "sha256": "122debdb9123311fc30cf5754a1d27fbb45e655374a931da79908c2b58a93d59",
       "foreign_key_rebuild": true
+    },
+    {
+      "version": 55,
+      "file": "0055_investor_action_review_workflow.sql",
+      "sha256": "bd61f026456ba32dc624c276810d8a0d67b0c04991efd054b5feab979a897668"
     }
   ]
 }
