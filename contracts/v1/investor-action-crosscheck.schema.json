@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-action-crosscheck.schema.json",
+  "type": "object",
+  "required": ["schema_version", "checked_at", "refresh_after", "listing_id", "listing_review_id", "listing_review_hash", "provider_symbol", "requested_fund_id", "source_day", "bindings", "comparison", "evidence_mode", "review_requirements", "empty_split_list_is_absence_proof", "owner_reviewed", "corporate_actions_complete", "research_admitted", "live_advice_eligible", "trading_permission", "market_values_output", "source_calls", "database_writes"],
+  "properties": {
+    "schema_version": {"const": "investor-action-crosscheck-v1"},
+    "checked_at": {"$ref": "common.schema.json#/$defs/instant"},
+    "refresh_after": {"$ref": "common.schema.json#/$defs/instant"},
+    "listing_id": {"$ref": "common.schema.json#/$defs/id"},
+    "listing_review_id": {"$ref": "common.schema.json#/$defs/id"},
+    "listing_review_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "provider_symbol": {"enum": ["VT.US", "BND.US"]},
+    "requested_fund_id": {"enum": ["3141", "0928"]},
+    "source_day": {"$ref": "common.schema.json#/$defs/date"},
+    "bindings": {
+      "type": "object", "required": ["issuer", "dividends", "splits"],
+      "properties": {
+        "issuer": {"$ref": "#/$defs/binding", "type": "object", "properties": {"qualification": {"enum": ["isolated_fixed_issuer_https", "injected_test_issuer"]}}},
+        "dividends": {"$ref": "#/$defs/binding", "type": "object", "properties": {"qualification": {"enum": ["isolated_fixed_eodhd_https", "injected_test_eodhd"]}}},
+        "splits": {"$ref": "#/$defs/binding", "type": "object", "properties": {"qualification": {"enum": ["isolated_fixed_eodhd_https", "injected_test_eodhd"]}}}
+      },
+      "additionalProperties": false
+    },
+    "comparison": {
+      "type": "object", "required": ["status", "common_window", "counts", "precision"],
+      "properties": {
+        "status": {"enum": ["no_common_window", "no_matched_events_not_absence_proof", "reported_differences_require_review", "reported_nominal_fields_match_not_approval"]},
+        "common_window": {"oneOf": [{"type": "null"}, {
+          "type": "object", "required": ["range_start", "range_end"],
+          "properties": {"range_start": {"$ref": "common.schema.json#/$defs/date"}, "range_end": {"$ref": "common.schema.json#/$defs/date"}},
+          "additionalProperties": false
+        }]},
+        "counts": {"$ref": "#/$defs/counts"},
+        "precision": {"$ref": "#/$defs/precision"}
+      }, "additionalProperties": false
+    },
+    "evidence_mode": {"enum": ["official_capture_replay", "synthetic_test_only"]},
+    "review_requirements": {"const": ["INSTRUMENT_IDENTITY_BINDING", "ISSUER_CURRENCY_AND_AMOUNT_UNIT", "COMPLETE_ACTION_AND_ABSENCE_COVERAGE", "ANNOUNCEMENT_AND_EFFECTIVE_INSTANTS", "EXPLICIT_TAX_ASSUMPTION"]},
+    "empty_split_list_is_absence_proof": {"const": false},
+    "owner_reviewed": {"const": false}, "corporate_actions_complete": {"const": false},
+    "research_admitted": {"const": false}, "live_advice_eligible": {"const": false}, "trading_permission": {"const": false},
+    "market_values_output": {"const": false}, "source_calls": {"const": 0}, "database_writes": {"const": 0}
+  },
+  "allOf": [
+    {"if": {"properties": {"provider_symbol": {"const": "VT.US"}}}, "then": {"properties": {"requested_fund_id": {"const": "3141"}}}, "else": {"properties": {"requested_fund_id": {"const": "0928"}}}},
+    {"if": {"properties": {"evidence_mode": {"const": "official_capture_replay"}}}, "then": {
+      "properties": {"bindings": {"type": "object", "properties": {
+        "issuer": {"type": "object", "properties": {"qualification": {"const": "isolated_fixed_issuer_https"}}},
+        "dividends": {"type": "object", "properties": {"qualification": {"const": "isolated_fixed_eodhd_https"}}},
+        "splits": {"type": "object", "properties": {"qualification": {"const": "isolated_fixed_eodhd_https"}}}
+      }}}
+    }}
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "count": {"type": "integer", "minimum": 0, "maximum": 2048},
+    "binding": {
+      "type": "object", "required": ["capture_id", "capture_hash", "raw_sha256", "raw_bytes", "qualification", "retain_until", "authority_id", "authority_hash", "control_id", "control_hash"],
+      "properties": {
+        "capture_id": {"$ref": "common.schema.json#/$defs/id"}, "capture_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "raw_sha256": {"$ref": "common.schema.json#/$defs/hash"}, "raw_bytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "qualification": {"enum": ["isolated_fixed_issuer_https", "isolated_fixed_eodhd_https", "injected_test_issuer", "injected_test_eodhd"]},
+        "retain_until": {"$ref": "common.schema.json#/$defs/instant"},
+        "authority_id": {"$ref": "common.schema.json#/$defs/id"}, "authority_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "control_id": {"$ref": "common.schema.json#/$defs/id"}, "control_hash": {"$ref": "common.schema.json#/$defs/hash"}
+      }, "additionalProperties": false
+    },
+    "counts": {
+      "type": "object",
+      "required": ["matched_dates", "nominal_amount_matches", "nominal_amount_differences", "record_date_matches", "record_date_differences", "record_date_unknown", "payment_date_matches", "payment_date_differences", "payment_date_unknown", "ambiguous_issuer_groups", "unsupported_issuer_groups", "reported_currency_mismatches", "issuer_only_dates", "provider_only_dates", "issuer_input_records", "provider_dividend_input_records", "provider_split_input_records", "issuer_window_records", "provider_dividend_window_records", "provider_split_window_records"],
+      "properties": {
+        "matched_dates": {"$ref": "#/$defs/count"}, "nominal_amount_matches": {"$ref": "#/$defs/count"}, "nominal_amount_differences": {"$ref": "#/$defs/count"},
+        "record_date_matches": {"$ref": "#/$defs/count"}, "record_date_differences": {"$ref": "#/$defs/count"}, "record_date_unknown": {"$ref": "#/$defs/count"},
+        "payment_date_matches": {"$ref": "#/$defs/count"}, "payment_date_differences": {"$ref": "#/$defs/count"}, "payment_date_unknown": {"$ref": "#/$defs/count"},
+        "ambiguous_issuer_groups": {"$ref": "#/$defs/count"}, "unsupported_issuer_groups": {"$ref": "#/$defs/count"}, "reported_currency_mismatches": {"$ref": "#/$defs/count"},
+        "issuer_only_dates": {"$ref": "#/$defs/count"}, "provider_only_dates": {"$ref": "#/$defs/count"},
+        "issuer_input_records": {"$ref": "#/$defs/count"}, "provider_dividend_input_records": {"$ref": "#/$defs/count"}, "provider_split_input_records": {"$ref": "#/$defs/count"},
+        "issuer_window_records": {"$ref": "#/$defs/count"}, "provider_dividend_window_records": {"$ref": "#/$defs/count"}, "provider_split_window_records": {"$ref": "#/$defs/count"}
+      }, "additionalProperties": false
+    },
+    "fraction_histogram": {
+      "type": "object", "maxProperties": 19, "propertyNames": {"pattern": "^(?:[0-9]|1[0-8])$"},
+      "additionalProperties": {"$ref": "#/$defs/count"}
+    },
+    "precision": {
+      "type": "object",
+      "required": ["differing_pair_count", "issuer_canonical_fraction_digits", "provider_canonical_fraction_digits", "provider_adjusted_field_equals_issuer", "quantization_relationships", "acceptance_tolerance_applied", "supplier_precision_contract_verified"],
+      "properties": {
+        "differing_pair_count": {"$ref": "#/$defs/count"}, "provider_adjusted_field_equals_issuer": {"$ref": "#/$defs/count"},
+        "issuer_canonical_fraction_digits": {"$ref": "#/$defs/fraction_histogram"}, "provider_canonical_fraction_digits": {"$ref": "#/$defs/fraction_histogram"},
+        "quantization_relationships": {
+          "type": "array", "maxItems": 57, "items": {
+            "type": "object", "required": ["fraction_places", "mode", "provider_equals_issuer_quantized", "issuer_equals_provider_quantized"],
+            "properties": {
+              "fraction_places": {"type": "integer", "minimum": 0, "maximum": 18}, "mode": {"enum": ["half_up", "half_even", "toward_zero"]},
+              "provider_equals_issuer_quantized": {"$ref": "#/$defs/count"}, "issuer_equals_provider_quantized": {"$ref": "#/$defs/count"}
+            }, "additionalProperties": false
+          }
+        },
+        "acceptance_tolerance_applied": {"const": false}, "supplier_precision_contract_verified": {"const": false}
+      }, "additionalProperties": false
+    }
+  }
+}

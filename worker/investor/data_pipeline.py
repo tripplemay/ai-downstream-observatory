@@ -15,7 +15,7 @@ from .monitor_data import build_monitor_data, check_reference_listing_identity
 from .monitor_admission import admit_monitor_data, current_monitor_model
 from .history_collection import plan_history, collect_history, MAX_BATCH_CALLS
 from .confirmed_capture import collect_confirmed_prices, resolve_confirmed_capture, purge_confirmed_payload
-from . import issuer_sources, managed_fx, issuer_schedule, eodhd_sources
+from . import issuer_sources, managed_fx, issuer_schedule, eodhd_sources, action_reconciliation
 
 
 def _private_descriptor(value):
@@ -133,6 +133,9 @@ def _parser():
     commands.add_parser("inspect-eodhd-request").add_argument("--request", required=True)
     for command in ("check-eodhd-capture", "purge-eodhd-capture"):
         commands.add_parser(command).add_argument("--capture", required=True)
+    crosscheck = commands.add_parser("check-action-crosscheck")
+    for name in ("listing-review", "issuer-capture", "dividend-capture", "split-capture"):
+        crosscheck.add_argument("--" + name, required=True)
     return parser
 
 
@@ -142,9 +145,12 @@ def main(argv=None):
     try:
         descriptor, path = _private_descriptor(args.db)
         os.close(descriptor)
-        db = open_database(path)
+        db = open_database(path, read_only=True) if args.command == "check-action-crosscheck" else open_database(path)
         _owner(db, args.workspace, args.actor)
-        if args.command == "store-source":
+        if args.command == "check-action-crosscheck":
+            result = action_reconciliation.check_action_crosscheck(db, args.workspace, args.actor,
+                args.listing_review, args.issuer_capture, args.dividend_capture, args.split_capture)
+        elif args.command == "store-source":
             row = store_source(db, args.workspace, args.actor, args.kind, _read_private_json(args.file, 131072))
             result = {"source_id": row["id"], "kind": row["kind"], "content_hash": row["content_hash"]}
         elif args.command == "register-eodhd-authority":

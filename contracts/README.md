@@ -84,6 +84,13 @@ See [the settled-cash lifecycle](../docs/61-settled-cash-intent-lifecycle.md).
 
 ## Dividend and corporate-action quality
 
+`investor-action-crosscheck-v1` is a closed, read-only comparison of retained issuer,
+dividend and split captures. It binds the current listing review and source controls,
+reports exact nominal/date comparisons and optional quantization diagnostics, and
+never grants owner review, complete coverage, research admission or trading rights.
+No event amounts, raw bodies, tax assumptions or credentials are returned. Empty split
+lists and fitting rounding relationships are not approval. See [source cross-checking](../docs/79-action-source-crosscheck.md).
+
 `ledger-fact` preserves legacy dividend facts with omitted tax, but omission is unknown tax, never confirmed zero. New direct dividends require confirmed explicit tax at the command boundary. Actual net receipts, gross/tax breakdown, cumulative tax assessments and actual additional withholding are different facts: assessments and breakdown do not create cash. Migration 0012 adds the signed `dividend_tax_payable` liability without rewriting prior postings. See [the locked accounting rules](../docs/dividends-and-corporate-actions.md).
 
 `ledger-fact-quality` binds independent NAV, after-tax performance and attribution quality to full immutable event-row hashes, economic cutoffs, ledger revision and knowledge time. Recompute it from the full portfolio event set, including applicable reversals and resolution dependencies; a claimed binding hash alone is not verification. Point evidence has `period_start: null`. Period evidence retains interval-eligible end-state arrays while its top-level qualities, issues and event hashes cover all intermediate quality boundaries. Ordinary date-only dividend facts can make an actual intraday snapshot provisional; internally generated period boundaries must not invent precise intraday event timing. A date-only notice blocks from local midnight; a date-only resolution clears only at the following local midnight.
