@@ -362,16 +362,19 @@ try:
     elif sys.argv[2] in ('monitor','funding'):
         from tests.investor.live_monitor_fixture import create as monitor_create
         from worker.investor.evidence_monitor_runtime import discover_evidence_monitor_requests
-        from worker.orchestration.runtime import run_pending_once
+        from tests.investor.http_bootstrap_queue import run_bootstrap_core
         model=db.execute('SELECT m.id FROM investor_models m JOIN investor_profiles p ON p.id=m.profile_id WHERE m.workspace_id=? ORDER BY p.version DESC,m.rowid DESC LIMIT 1',(workspace,)).fetchone()
         assert model is not None
         if sys.argv[2]=='monitor':
             assert db.execute('SELECT count(*) FROM investor_monitor_evidence_inputs WHERE model_id=?',(model['id'],)).fetchone()[0]==0
             monitor_create(db,workspace,actor,model['id'],now,receipts_only=True)
-            result=run_pending_once(db,'http-fictional-bootstrap-core',clock=lambda:now)
+            bootstrap=run_bootstrap_core(db,workspace,model['id'])
+            result=bootstrap['job']
             source=db.execute('SELECT document_json FROM investor_monitor_evidence_inputs WHERE model_id=?',(model['id'],)).fetchone()
             import json
             assert source and json.loads(source[0])['schema_version']=='investor-monitor-data-input-v4'
+            print(json.dumps({'selected_types':bootstrap['selected_types'],'fixture_legacy_downloads':bootstrap['fixture_legacy_downloads'],
+                'real_provider_calls':bootstrap['real_provider_calls']}))
         else:
             from copy import deepcopy
             from worker.investor.monitor_admission import admit_monitor_data,latest_monitor_evidence
@@ -396,9 +399,14 @@ finally:
 `, filename, mode], { cwd: fileURLToPath(new URL('../../', import.meta.url)), timeout: 60000, encoding: 'utf8', maxBuffer: 65536,
         env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, WORKBENCH_DATA_DIR: path.join(directory, 'auth') } });
       const diagnostic = (worker.stderr ?? '').split(/\r?\n/).map(line => line.trim())
-        .filter(line => /^(?:(?:[A-Za-z0-9_]+\.)*WorkbenchError: [A-Z][A-Z0-9_]{0,119}|AssertionError: (?:NO_JOB|skipped|failed|retry_queued|cancelled))$/.test(line)).at(-1)
+        .filter(line => /^(?:(?:[A-Za-z0-9_]+\.)*WorkbenchError: [A-Z][A-Z0-9_]{0,119}|AssertionError: (?:NO_JOB|skipped|failed|retry_queued|cancelled|(?:HTTP_BOOTSTRAP_|HTTP_FIXTURE_|UNEXPECTED_HTTP_|AMBIGUOUS_HTTP_|CHANGED_HTTP_)[A-Z0-9_]{1,80}))$/.test(line)).at(-1)
         ?? (worker.error?.code === 'ETIMEDOUT' ? 'ETIMEDOUT' : 'NO_SAFE_DIAGNOSTIC');
+      if (worker.status !== 0 && diagnosticsDirectory) {
+        mkdirSync(diagnosticsDirectory, { recursive: true, mode: 0o700 });
+        writeFileSync(path.join(diagnosticsDirectory, `bootstrap-${mode}.stderr`), worker.stderr ?? '', { mode: 0o600 });
+      }
       assert.equal(worker.status, 0, `Fictional evidence fixture did not complete (${mode}): ${diagnostic}`);
+      return worker.stdout.trim() ? JSON.parse(worker.stdout) : null;
     };
     await invoke('admit');
     let state = await get(); assert.equal(state.status, 200); assert.equal(state.json.research_task.status, 'calculated');
@@ -434,7 +442,9 @@ finally:
         costs:{commission_bps:'1',minimum_fee_cny:'1',fx_bps:'2',slippage_bps:'3',maximum_cost_fraction:'0.01'},
         validity_days:7,acknowledged_research_only:true});
       assert.equal(declared.status,200);
-      await invoke('monitor'); state = await get(); assert.equal(state.status, 200);
+      const bootstrap=await invoke('monitor'); state = await get(); assert.equal(state.status, 200);
+      assert.equal(bootstrap.real_provider_calls,0);
+      assert.deepEqual(bootstrap.selected_types,bootstrap.fixture_legacy_downloads===1?['market_collect','investor_evidence_monitor']:['investor_evidence_monitor']);
       assert.equal(state.json.model_watch.status, 'research_observe'); assert.equal(state.json.effective_outcome, 'observe');
       assert.equal(state.json.model_watch.model_nav_cny, '10000'); assert.equal(state.json.model_watch.checkpoint_sequence, 1);
       assert.equal(state.json.latest.document.monitoring, 'active');
@@ -464,6 +474,7 @@ finally:
       assert.deepEqual(read(db => db.prepare('SELECT payload FROM investor_evidence_checkpoint_payloads ORDER BY rowid').all()), unitState);
       assert.deepEqual(financial(), initialFinancial);
       return { stub_transport_only: true, real_provider_called: false, ordinary_cost_declaration:true, automatic_first_input_protocol:'investor-monitor-data-input-v4',
+        default_core_selected_types:bootstrap.selected_types,known_prior_fixture_downloads:bootstrap.fixture_legacy_downloads,
         independent_model_and_cost_replay: true, unchanged_state_reused: true, review_changes_holdings: false };
     });
     await invoke('withdraw'); state = await get(); assert.equal(state.status, 200);
