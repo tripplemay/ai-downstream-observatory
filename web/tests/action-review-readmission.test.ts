@@ -26,7 +26,7 @@ latest=monitor_admission.latest_monitor_evidence(db,'w',case.definition['model_i
 projection=monitor_data.resolve_monitor_data(db,'w',case.definition,doc,now=CONFIRM)['projection']
 states=[json.loads(row[0]) for row in db.execute('SELECT p.payload FROM investor_evidence_model_checkpoints c JOIN investor_evidence_checkpoint_payloads p ON p.checkpoint_id=c.id ORDER BY c.sequence')]
 print(canonical_json({'definition':case.definition,'old_id':case.seed['id'],'id':latest['id'],'projection':projection,'confirmation':case.confirmed,'states':states}))
-`);
+`,"core_readmission");
   const model=f.db.prepare("SELECT * FROM investor_models").get() as Obj,headers=f.db.prepare("SELECT * FROM investor_evidence_model_checkpoints ORDER BY sequence").all() as Obj[];
   return {...f,value,model,headers,definition:value.definition as Obj,confirmed:value.confirmation as Obj};
 }
