@@ -248,7 +248,7 @@ export function executeInvestorCommand(db: Database.Database, actor: Actor, raw:
   }).immediate();
 }
 
-export function getInvestorState(db: Database.Database, actor: Actor, now = new Date().toISOString(), options: { includeRecentHistory?: boolean } = {}): InvestorState {
+export function getInvestorState(db: Database.Database, actor: Actor, now = new Date().toISOString(), options: { includeRecentHistory?: boolean; includeActionDraftProgress?: boolean } = {}): InvestorState {
   const owner = principal(actor); clock(now);
   const observationLimit = options.includeRecentHistory === false ? 1 : 50, decisionLimit = options.includeRecentHistory === false ? 0 : 50;
   return db.transaction(() => withInvestorKernelReadScope(() => {
@@ -263,8 +263,10 @@ export function getInvestorState(db: Database.Database, actor: Actor, now = new 
     if (!ws) return empty;
     const profiles = (db.prepare("SELECT id,version,document_json,content_hash,created_at FROM investor_profiles WHERE workspace_id=? ORDER BY version DESC LIMIT 20").all(ws.id) as ProfileRow[]).map(profileRecord);
     if (!profiles.length) throw new Error("INVESTOR_EVIDENCE_INVALID");
-    try { empty.action_drafts = readActionDraftProgress(db, ws.id, owner, now); }
-    catch { empty.action_drafts = unavailableActionDraftProgress(now); }
+    if (options.includeActionDraftProgress !== false) {
+      try { empty.action_drafts = readActionDraftProgress(db, ws.id, owner, now); }
+      catch { empty.action_drafts = unavailableActionDraftProgress(now); }
+    }
     profiles.forEach(profile => checkProfileClock(profile, now));
     const rows = db.prepare(`SELECT o.*,p.version profile_version FROM investor_observations o JOIN investor_profiles p ON p.id=o.profile_id AND p.workspace_id=o.workspace_id WHERE o.workspace_id=? ORDER BY o.created_at DESC,o.rowid DESC LIMIT ${observationLimit + 1}`).all(ws.id) as ObservationRow[];
     const observations = rows.slice(0, observationLimit).map(row => observationRecord(row, db, ws.id, now));

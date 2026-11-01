@@ -9,7 +9,7 @@ import { mountInvestorDisplay } from "./investor-display-fixture";
 import { displayBinding as binding, displayBefore, displayUntil, displayFuture, displayState, historicalDisplayState } from "./investor-display-state-fixture";
 import { blockedResearchDisplayState } from "./investor-research-blocker-fixture";
 import { actionCostMethodology, reviewCostMethodology, settlementCostMethodology } from "../src/server/investor/reference-cost-methodology";
-import { actionDraftProgressSchema } from "../src/server/investor/action-draft-progress-schemas";
+import { actionDraftProgressSchema, actionDraftProgressRequest } from "../src/server/investor/action-draft-progress-schemas";
 
 const before = Date.parse(displayBefore), until = Date.parse(displayUntil);
 function validationHoldState() {
@@ -38,6 +38,7 @@ function mount(t: { after: (fn: () => void) => void }, state = displayState(), v
       "lucide-react": Object.fromEntries(["ArrowRight", "CheckCircle2", "CircleHelp", "Clock3", "Eye", "ShieldCheck"].map(name => [name, name])),
       "@/components/ui/input": { Input: "Input" }, "@/components/session-boundary": { useSessionBoundary: () => null },
       "@/server/investor/schemas": schemas, "@/server/investor/loss-scenarios": losses, "./research-format": research, "./investor-client": client,
+      "@/server/investor/action-draft-progress-schemas": { actionDraftProgressRequest },
       ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel", "history-panel", "monitor-cost-panel"]
         .map(name => { const component = "Investor" + name.split("-").map(value => value[0].toUpperCase() + value.slice(1)).join("");
           return ["./investor-" + name, { [component]: component }]; })),
@@ -308,6 +309,12 @@ test("background refresh is single-flight and does not lock risk editing; explic
   await h.reply(1, { ...state, session_binding: binding });
   assert.equal(h.node("InvestorRiskPanel")!.props.disabled, false);
   assert.equal(h.requests.every(row => row.method === "GET"), true);
+  for (const request of h.requests) {
+    assert.equal(request.url, "/api/workbench/investor");
+    const headers = new Headers(request.options.headers);
+    assert.equal(headers.get(actionDraftProgressRequest.header), actionDraftProgressRequest.value);
+    assert.equal(headers.get("X-Workbench-Session-Binding"), binding);
+  }
 });
 test("an older background response or error cannot replace state or unlock a pending human mutation", async t => {
   for (const failed of [false, true]) {

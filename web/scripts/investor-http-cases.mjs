@@ -12,7 +12,7 @@ const profile = { schema_version: 'investor-profile-v1', horizon_years: 12, loss
 export async function investorHttpCases({ check, request, jsonRequest, filename, directory, origin, password, Database, diagnosticsDirectory = null }) {
   let cookie, binding, first;
   const headers = extra => ({ Cookie: cookie, 'X-Workbench-Session-Binding': binding, ...extra });
-  const get = () => jsonRequest(endpoint, { headers: headers() });
+  const get = (extra = {}) => jsonRequest(endpoint, { headers: headers(extra) });
   const post = (value, extra = {}) => jsonRequest(endpoint, { method: 'POST', headers: headers({ Origin: origin, 'Content-Type': 'application/json', ...extra }), body: JSON.stringify(value) });
   const read = operation => { const db = new Database(filename, { readonly: true }); try { return operation(db); } finally { db.close(); } };
   const financial = () => read(db => Object.fromEntries(['portfolios', 'accounts', 'ledger_heads', 'ledger_events', 'postings', 'position_movements', 'approval_events', 'activations', 'reservations', 'execution_reports'].map(table => [table, db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()])));
@@ -125,6 +125,27 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
     for (const route of ['/workbench', '/workbench/plan', '/workbench/observations', '/workbench/accounts', '/workbench/ledger'])
       assert.equal((await request(route, { headers: headers() })).status, 200);
     return { revision: 1, profile_versions: 1, risk_unknown_retained: true, financial_tables_unchanged: true };
+  });
+  await check('HTTP-I28', 'versioned progress reads preserve cached strict clients and require the same authenticated bound session', async () => {
+    const version = { 'X-Workbench-Investor-View': 'action-drafts-v1' };
+    const legacy = await get(), next = await get(version), unknown = await get({ 'X-Workbench-Investor-View': 'action-drafts-v2' });
+    for (const response of [legacy, next, unknown]) {
+      assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'private, no-store');
+      const vary = response.headers.get('vary').split(/,\s*/);
+      assert.ok(vary.includes('Cookie')); assert.ok(vary.includes('X-Workbench-Investor-View'));
+      assert.equal(response.json.workspace_id, first.json.workspace_id); assert.equal(response.json.revision, 1);
+      assert.equal(response.json.session_binding, binding); assert.equal(response.json.effective_outcome, 'insufficient_evidence');
+      assert.deepEqual(response.json.profile, legacy.json.profile);
+    }
+    assert.equal('action_drafts' in legacy.json, false); assert.equal('action_drafts' in unknown.json, false);
+    assert.equal(next.json.action_drafts.status, 'not_configured');
+    assert.equal(next.json.action_drafts.provider_online_verified, false);
+    assert.equal((await jsonRequest(endpoint, { headers: { Cookie: cookie, ...version } })).status, 400);
+    assert.equal((await get({ ...version, 'X-Workbench-Session-Binding': '' })).status, 401);
+    assert.equal((await get({ ...version, 'X-Workbench-Session-Binding': 'b'.repeat(64) })).status, 401);
+    assert.equal((await jsonRequest(endpoint, { headers: version })).status, 401);
+    assert.deepEqual(financial(), initialFinancial);
+    return { legacy_shape_preserved: true, explicit_version_required: true, stale_binding: 401, missing_binding: 400, financial_writes: false };
   });
   await check('HTTP-I04', 'reevaluation preserves immutable history; blocked observations cannot be accepted as trade ideas', async () => {
     const state = await get(), observation = state.json.latest.id;

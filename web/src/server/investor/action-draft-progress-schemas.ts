@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { investorInstant } from "./schemas";
 
+export const actionDraftProgressRequest = { header: "X-Workbench-Investor-View", value: "action-drafts-v1" } as const;
+
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => {
   const at = Date.parse(value + "T00:00:00.000Z");
   return Number.isFinite(at) && new Date(at).toISOString().slice(0, 10) === value;
