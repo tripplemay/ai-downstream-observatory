@@ -15,7 +15,7 @@ from .monitor_data import build_monitor_data, check_reference_listing_identity
 from .monitor_admission import admit_monitor_data, current_monitor_model
 from .history_collection import plan_history, collect_history, MAX_BATCH_CALLS
 from .confirmed_capture import collect_confirmed_prices, resolve_confirmed_capture, purge_confirmed_payload
-from . import issuer_sources, managed_fx, issuer_schedule, eodhd_sources, action_reconciliation
+from . import issuer_sources, managed_fx, issuer_schedule, eodhd_sources, action_reconciliation, managed_actions
 
 
 def _private_descriptor(value):
@@ -136,6 +136,15 @@ def _parser():
     crosscheck = commands.add_parser("check-action-crosscheck")
     for name in ("listing-review", "issuer-capture", "dividend-capture", "split-capture"):
         crosscheck.add_argument("--" + name, required=True)
+    preview = commands.add_parser("preview-action-maintenance")
+    for name in ("base-review", "listing-review", "issuer-capture", "dividend-capture", "split-capture"):
+        preview.add_argument("--" + name, required=True)
+    commands.add_parser("register-action-maintenance").add_argument("--file", required=True)
+    control = commands.add_parser("control-action-maintenance")
+    control.add_argument("--authority", required=True)
+    flags = control.add_mutually_exclusive_group(required=True)
+    flags.add_argument("--enable", action="store_true"); flags.add_argument("--disable", action="store_true")
+    commands.add_parser("inspect-action-maintenance").add_argument("--authority", required=True)
     return parser
 
 
@@ -145,9 +154,26 @@ def main(argv=None):
     try:
         descriptor, path = _private_descriptor(args.db)
         os.close(descriptor)
-        db = open_database(path, read_only=True) if args.command == "check-action-crosscheck" else open_database(path)
+        db = open_database(path, read_only=args.command in ("check-action-crosscheck", "preview-action-maintenance", "inspect-action-maintenance"))
         _owner(db, args.workspace, args.actor)
-        if args.command == "check-action-crosscheck":
+        if args.command == "preview-action-maintenance":
+            refs = {}
+            for key, identifier, table in (("issuer", args.issuer_capture, "investor_issuer_captures"),
+                    ("dividends", args.dividend_capture, "investor_eodhd_captures"), ("splits", args.split_capture, "investor_eodhd_captures")):
+                row = db.execute("SELECT content_hash FROM " + table + " WHERE id=? AND workspace_id=?", (identifier, args.workspace)).fetchone()
+                _assert(row is not None, "INVESTOR_DATA_OUT_OF_SCOPE")
+                refs[key] = {"capture_id": identifier, "capture_hash": row[0]}
+            result = managed_actions.preview_authority(db, args.workspace, args.actor, args.base_review, args.listing_review, refs)
+        elif args.command == "register-action-maintenance":
+            row = managed_actions.register_authority(db, args.workspace, args.actor, _read_private_json(args.file, 16384))
+            result = managed_actions.inspect_authority(db, args.workspace, args.actor, row["id"])
+        elif args.command == "control-action-maintenance":
+            row = managed_actions.set_authority_enabled(db, args.workspace, args.actor, args.authority, args.enable)
+            result = {"control_id": row["id"], "version": row["version"], "enabled": bool(row["enabled"]),
+                "source_reviews_published_by_this_command": False, "additional_source_requests": 0, "trading_permission": False}
+        elif args.command == "inspect-action-maintenance":
+            result = managed_actions.inspect_authority(db, args.workspace, args.actor, args.authority)
+        elif args.command == "check-action-crosscheck":
             result = action_reconciliation.check_action_crosscheck(db, args.workspace, args.actor,
                 args.listing_review, args.issuer_capture, args.dividend_capture, args.split_capture)
         elif args.command == "store-source":

@@ -334,13 +334,33 @@ def _refresh_fx_windows(db, workspace, definition, windows, settings, at):
         window["fx_review_ids"] = [selected[currency] for currency in sorted(currencies)]
 
 
+def _refresh_action_windows(db, workspace, definition, windows, at):
+    from .managed_actions import check_same_rule_extension, current_action_reviews
+    selected = current_action_reviews(db, workspace, [row["listing_id"] for row in definition["targets"]], at)
+    for market, window in windows:
+        identities = {row["listing_id"] for row in definition["targets"] if row["market"] == market}
+        previous = [resolve_review(db, workspace, identifier, "actions", now=at) for identifier in window["action_review_ids"]]
+        _assert({row["facts"]["listing_id"] for row in previous} == identities, "CONFIRMED_FEED_ACTION_SCOPE_INVALID")
+        replacements = []
+        for prior in previous:
+            matches = [row for row in selected if row["facts"]["listing_id"] == prior["facts"]["listing_id"]
+                and row["facts"]["range_start"] <= window["start_date"] <= window["end_date"] <= row["facts"]["range_end"]]
+            _assert(len(matches) == 1, "CONFIRMED_FEED_ACTION_COVERAGE_NOT_UNIQUE")
+            current = matches[0]
+            if current["review"]["id"] != prior["review"]["id"]:
+                check_same_rule_extension(db, workspace, prior, current, at)
+            replacements.append(current["review"]["id"])
+        window["action_review_ids"] = sorted(replacements)
+
+
 def _admit_windows(db, workspace, actor, model_id, context, windows, at, stop_requested):
-    from .monitor_bootstrap import _check_fx_selection
+    from .monitor_bootstrap import _check_action_selection, _check_fx_selection
     from .monitor_costs import current_settings
     if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
     settings = current_settings(db, workspace, context[1], context[5]["settings"], at)
     admitted = admit_monitor_data(db, workspace, actor, model_id, [window for _,window in windows], settings, now=at)
     _check_fx_selection(db, workspace, context[1], [window for _,window in windows], settings, at)
+    _check_action_selection(db, workspace, context[1], [window for _,window in windows], at)
     if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
     return admitted
 
@@ -365,6 +385,7 @@ def admit_completed_feeds(db, *, limit=100, now=None, stop_requested=None):
                     _merge_completed(db, run["workspace_id"], run["model_id"], windows, at)
                     _assert(any(run["capture_id"] in window.get("confirmed_capture_ids", []) for _, window in windows), "CONFIRMED_FEED_INPUT_ALREADY_COVERED")
                     _refresh_fx_windows(db, run["workspace_id"], context[1], windows, context[5]["settings"], at)
+                    _refresh_action_windows(db, run["workspace_id"], context[1], windows, at)
                     admitted = _admit_windows(db, run["workspace_id"], run["actor_id"], run["model_id"], context, windows, at, stop_requested)
                 status = "admitted"
             except WorkbenchError as error:
@@ -409,7 +430,14 @@ def refresh_monitor_sources(db, *, limit=100, now=None, stop_requested=None):
                 AND r.valid_until>:at AND r.version=(SELECT max(version) FROM investor_data_reviews WHERE source_id=r.source_id)
                 AND EXISTS(SELECT 1 FROM json_each(m.document_json,'$.targets') t WHERE json_extract(t.value,'$.currency')=json_extract(r.document_json,'$.facts.currency'))
                 AND NOT EXISTS(SELECT 1 FROM json_each(i.document_json,'$.segments') seg JOIN json_each(seg.value,'$.snapshot.review_refs') ref
-                  WHERE json_extract(ref.value,'$.review_id')=r.id)))
+                  WHERE json_extract(ref.value,'$.review_id')=r.id))
+          OR EXISTS(SELECT 1 FROM investor_action_publications p JOIN investor_action_authorities a ON a.id=p.authority_id AND a.workspace_id=p.workspace_id
+              WHERE p.workspace_id=m.workspace_id AND p.status='published' AND p.created_at>=i.created_at AND p.created_at<=:at AND p.valid_until>:at
+                AND p.sequence=(SELECT max(sequence) FROM investor_action_publications WHERE authority_id=p.authority_id AND status='published')
+                AND NOT EXISTS(SELECT 1 FROM investor_action_unavailable_headers unavailable WHERE unavailable.id=p.id AND unavailable.workspace_id=p.workspace_id)
+                AND EXISTS(SELECT 1 FROM json_each(m.document_json,'$.targets') target WHERE json_extract(target.value,'$.listing_id')=a.listing_id)
+                AND NOT EXISTS(SELECT 1 FROM json_each(i.document_json,'$.segments') seg JOIN json_each(seg.value,'$.snapshot.review_refs') ref
+                  WHERE json_extract(ref.value,'$.review_id')=p.id)))
       ORDER BY i.created_at,m.id LIMIT :limit""", {"at":at,"limit":limit}).fetchall()
     refreshed = []
     for row in rows:
@@ -422,6 +450,7 @@ def refresh_monitor_sources(db, *, limit=100, now=None, stop_requested=None):
                 windows = _windows(db, row["workspace_id"], context[5]); before = canonical_json(windows)
                 _merge_completed(db, row["workspace_id"], row["id"], windows, at)
                 _refresh_fx_windows(db, row["workspace_id"], context[1], windows, context[5]["settings"], at)
+                _refresh_action_windows(db, row["workspace_id"], context[1], windows, at)
                 if canonical_json(windows) == before: continue
                 actor = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (row["workspace_id"],)).fetchone()[0]
                 admitted = _admit_windows(db, row["workspace_id"], actor, row["id"], context, windows, at, stop_requested)

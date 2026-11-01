@@ -5,6 +5,7 @@ import { fundingStateSchema, fundingTimeline } from "@/server/investor/funding-s
 import { fundedStudyTaskSchema } from "@/server/investor/funded-study-schemas";
 import { monitorCostStateSchema } from "@/server/investor/monitor-cost-schemas";
 import { actionDraftProgressSchema } from "@/server/investor/action-draft-progress-schemas";
+import { actionMaintenanceProgressSchema } from "@/server/investor/action-maintenance-progress-schemas";
 
 const natural = z.number().int().nonnegative().safe();
 const profile = z.object({ id: investorId, version: natural.refine(value => value > 0), content_hash: investorHash, created_at: investorInstant, document: investorProfileSchema }).strict();
@@ -17,6 +18,7 @@ const stateSchema = z.object({
   model_watch: modelWatchSchema.nullable(),
   monitor_costs: monitorCostStateSchema.nullable(),
   action_drafts: actionDraftProgressSchema.optional(),
+  action_maintenance: actionMaintenanceProgressSchema.optional(),
   funding: fundingStateSchema,
   funded_study: fundedStudyTaskSchema.nullable(), funded_study_unavailable: z.boolean(),
   decisions: z.array(z.object({ id: investorId, observation_id: investorId,
@@ -31,6 +33,7 @@ export function parseInvestorState(value: unknown, binding: string): InvestorSta
   if (!result.success || result.data.session_binding !== binding) throw new Error("INVESTOR_RESPONSE_INVALID");
   const { session_binding: _, ...state } = result.data;
   if (state.action_drafts && (state.workspace_id === null || state.action_drafts.checked_at !== state.checked_at)) throw new Error("INVESTOR_RESPONSE_INVALID");
+  if (state.action_maintenance && (state.workspace_id === null || state.action_maintenance.checked_at !== state.checked_at)) throw new Error("INVESTOR_RESPONSE_INVALID");
   if (state.monitor_costs && (!state.model_watch || state.monitor_costs.model_id !== state.model_watch.id
     || state.monitor_costs.model_valid_until !== state.model_watch.valid_until
     || state.monitor_costs.status === "known" && (state.monitor_costs.valid_until! <= state.checked_at || state.monitor_costs.effective_from! > state.checked_at)

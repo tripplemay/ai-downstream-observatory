@@ -128,8 +128,9 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
   });
   await check('HTTP-I28', 'versioned progress reads preserve cached strict clients and require the same authenticated bound session', async () => {
     const version = { 'X-Workbench-Investor-View': 'action-drafts-v1' };
-    const legacy = await get(), next = await get(version), unknown = await get({ 'X-Workbench-Investor-View': 'action-drafts-v2' });
-    for (const response of [legacy, next, unknown]) {
+    const maintenanceVersion = { 'X-Workbench-Investor-View': 'action-drafts-v2' };
+    const legacy = await get(), next = await get(version), maintenance = await get(maintenanceVersion), unknown = await get({ 'X-Workbench-Investor-View': 'action-drafts-v999' });
+    for (const response of [legacy, next, maintenance, unknown]) {
       assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'private, no-store');
       const vary = response.headers.get('vary').split(/,\s*/);
       assert.ok(vary.includes('Cookie')); assert.ok(vary.includes('X-Workbench-Investor-View'));
@@ -138,9 +139,16 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
       assert.deepEqual(response.json.profile, legacy.json.profile);
     }
     assert.equal('action_drafts' in legacy.json, false); assert.equal('action_drafts' in unknown.json, false);
+    for (const response of [legacy, next, unknown]) assert.equal('action_maintenance' in response.json, false);
+    assert.equal(maintenance.json.action_maintenance.status, 'not_configured');
+    assert.equal(maintenance.json.action_maintenance.research_admitted_by_this_view, false);
+    assert.equal(maintenance.json.action_drafts.status, 'not_configured');
     assert.equal(next.json.action_drafts.status, 'not_configured');
     assert.equal(next.json.action_drafts.provider_online_verified, false);
     assert.equal((await jsonRequest(endpoint, { headers: { Cookie: cookie, ...version } })).status, 400);
+    assert.equal((await jsonRequest(endpoint, { headers: { Cookie: cookie, ...maintenanceVersion } })).status, 400);
+    assert.equal((await get({ ...maintenanceVersion, 'X-Workbench-Session-Binding': 'b'.repeat(64) })).status, 401);
+    assert.equal((await jsonRequest(endpoint, { headers: maintenanceVersion })).status, 401);
     assert.equal((await get({ ...version, 'X-Workbench-Session-Binding': '' })).status, 401);
     assert.equal((await get({ ...version, 'X-Workbench-Session-Binding': 'b'.repeat(64) })).status, 401);
     assert.equal((await jsonRequest(endpoint, { headers: version })).status, 401);

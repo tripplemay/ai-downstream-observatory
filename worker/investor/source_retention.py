@@ -2,7 +2,7 @@
 
 from worker.market.contracts import validate_contract
 from worker.orchestration.db import WorkbenchError, assert_writable, content_hash
-from .data_evidence import _assert, _audit_binding, _object, _owner
+from .data_evidence import _assert, _audit_binding, _object, _owner, review_header
 from .model_contracts import definition_schema, reference_schema, validate_definition
 from .model_runtime import _clock, _sealed
 from .monitor_admission import monitor_evidence_document
@@ -11,30 +11,26 @@ from .source_inputs import source_document, source_unavailable_reason
 
 def _review_receipt(db, workspace, row, now):
     _assert(row is not None and row["workspace_id"] == workspace and row["created_at"] <= now)
-    document = _object(row["document_json"])
-    _assert(set(document) == {"schema_version", "source_id", "source_hash", "kind", "version", "decision", "facts", "reason", "valid_until", "review_basis"}
-        and content_hash(document) == row["content_hash"] and document["source_id"] == row["source_id"]
-        and document["version"] == row["version"] and document["decision"] == row["decision"]
-        and document["valid_until"] == row["valid_until"] and document["schema_version"] == "investor-data-review-v1"
-        and document["review_basis"] == "owner_reviewed_not_provider_certified")
-    _owner(db, workspace, row["actor_id"])
-    _audit_binding(db, row, "investor_review_data_source", "investor_data_review", row["id"])
-    return document
+    value = review_header(db, workspace, row["id"], now=now)
+    _assert(all(value["review"][key] == row[key] for key in
+        ("workspace_id", "content_hash", "source_id", "version", "decision", "valid_until", "actor_id", "created_at", "audit_id")))
+    return _object(value["review"]["document_json"])
 
 
 def _snapshot_reason(db, workspace, snapshot, valid_until, now):
     # Candidate SQL is only a shortlist. Verify immutable owner receipts before
     # treating a superseding review or upstream purge as a deletion authority.
     for ref in snapshot["review_refs"]:
-        row = db.execute("SELECT * FROM investor_data_reviews WHERE id=? AND workspace_id=?", (ref["review_id"], workspace)).fetchone()
+        row = db.execute("SELECT * FROM investor_review_headers WHERE id=? AND workspace_id=?", (ref["review_id"], workspace)).fetchone()
         document = _review_receipt(db, workspace, row, now)
+        _assert(row["content_hash"] == ref["review_hash"] and row["source_id"] == ref["source_id"])
         source = db.execute("SELECT * FROM investor_data_sources WHERE id=? AND workspace_id=?", (row["source_id"], workspace)).fetchone()
         _assert(source is not None and source["created_at"] <= row["created_at"]
             and content_hash(_object(source["document_json"])) == source["content_hash"] == ref["source_hash"]
             and document["source_hash"] == source["content_hash"] and document["kind"] == source["kind"])
         _owner(db, workspace, source["actor_id"])
         _audit_binding(db, source, "investor_store_data_source", "investor_data_source", source["id"])
-        latest = db.execute("SELECT * FROM investor_data_reviews WHERE source_id=? ORDER BY version DESC LIMIT 1", (source["id"],)).fetchone()
+        latest = db.execute("SELECT * FROM investor_review_headers WHERE source_id=? ORDER BY version DESC LIMIT 1", (source["id"],)).fetchone()
         latest_document = _review_receipt(db, workspace, latest, now)
         _assert(latest_document["source_hash"] == source["content_hash"] and latest_document["kind"] == source["kind"])
     for ref in snapshot["capture_refs"]:
@@ -141,9 +137,10 @@ WITH source_snapshots AS (
   SELECT DISTINCT kind,id,workspace_id FROM source_snapshots s
     WHERE s.created_at<=:at AND (s.valid_until<=:at
       OR EXISTS(SELECT 1 FROM json_each(s.snapshot,'$.review_refs') ref
-        JOIN investor_data_reviews d ON d.id=json_extract(ref.value,'$.review_id') AND d.workspace_id=s.workspace_id
+        JOIN investor_review_headers d ON d.id=json_extract(ref.value,'$.review_id') AND d.workspace_id=s.workspace_id
         WHERE d.valid_until<=:at OR d.decision!='approved' OR EXISTS(
-          SELECT 1 FROM investor_data_reviews newer WHERE newer.source_id=d.source_id AND newer.version>d.version)
+          SELECT 1 FROM investor_review_headers newer WHERE newer.source_id=d.source_id AND newer.version>d.version)
+          OR EXISTS(SELECT 1 FROM investor_action_unavailable_headers a WHERE a.id=d.id AND a.workspace_id=d.workspace_id)
           OR EXISTS(SELECT 1 FROM investor_fx_publications p JOIN investor_fx_captures c ON c.id=p.capture_id AND c.workspace_id=p.workspace_id
             JOIN investor_fx_authorities a ON a.id=p.authority_id AND a.workspace_id=p.workspace_id
             WHERE p.workspace_id=s.workspace_id AND (p.usd_review_id=d.id OR p.hkd_review_id=d.id)

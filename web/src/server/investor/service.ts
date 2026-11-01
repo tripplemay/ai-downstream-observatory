@@ -27,6 +27,7 @@ import { readInvestorAcquisition, investorAcquisitionUnavailable } from "./acqui
 import { appendMonitorCosts, readMonitorCostState } from "./monitor-costs";
 import { withInvestorKernelReadScope } from "./kernel-read-scope";
 import { readActionDraftProgress, unavailableActionDraftProgress } from "./action-draft-progress";
+import { readActionMaintenanceProgress, unavailableActionMaintenanceProgress } from "./action-maintenance-progress";
 
 type Workspace = { id: string; owner_id: string; revision: number };
 type ProfileRow = { id: string; version: number; document_json: string; content_hash: string; created_at: string };
@@ -248,7 +249,7 @@ export function executeInvestorCommand(db: Database.Database, actor: Actor, raw:
   }).immediate();
 }
 
-export function getInvestorState(db: Database.Database, actor: Actor, now = new Date().toISOString(), options: { includeRecentHistory?: boolean; includeActionDraftProgress?: boolean } = {}): InvestorState {
+export function getInvestorState(db: Database.Database, actor: Actor, now = new Date().toISOString(), options: { includeRecentHistory?: boolean; includeActionDraftProgress?: boolean; includeActionMaintenanceProgress?: boolean } = {}): InvestorState {
   const owner = principal(actor); clock(now);
   const observationLimit = options.includeRecentHistory === false ? 1 : 50, decisionLimit = options.includeRecentHistory === false ? 0 : 50;
   return db.transaction(() => withInvestorKernelReadScope(() => {
@@ -266,6 +267,10 @@ export function getInvestorState(db: Database.Database, actor: Actor, now = new 
     if (options.includeActionDraftProgress !== false) {
       try { empty.action_drafts = readActionDraftProgress(db, ws.id, owner, now); }
       catch { empty.action_drafts = unavailableActionDraftProgress(now); }
+    }
+    if (options.includeActionMaintenanceProgress === true) {
+      try { empty.action_maintenance = readActionMaintenanceProgress(db, ws.id, owner, now); }
+      catch { empty.action_maintenance = unavailableActionMaintenanceProgress(now); }
     }
     profiles.forEach(profile => checkProfileClock(profile, now));
     const rows = db.prepare(`SELECT o.*,p.version profile_version FROM investor_observations o JOIN investor_profiles p ON p.id=o.profile_id AND p.workspace_id=o.workspace_id WHERE o.workspace_id=? ORDER BY o.created_at DESC,o.rowid DESC LIMIT ${observationLimit + 1}`).all(ws.id) as ObservationRow[];

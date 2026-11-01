@@ -262,6 +262,11 @@
       "version": 52,
       "file": "0052_investor_eodhd_drafts.sql",
       "sha256": "e9a3f199b35cf64d46aa105607f99f7d48d23cf9b0a24be9567e17fc7b9a9736"
+    },
+    {
+      "version": 53,
+      "file": "0053_investor_action_maintenance.sql",
+      "sha256": "7e9adedd4e438f9d3ecc5c90c49fcf97eab3296b21d74403d6f9b0ad3f2356bf"
     }
   ]
 }

@@ -43,9 +43,10 @@ def purge_due_funded_results(db, *, limit=100, now=None, stop_requested=None):
             WHERE p.run_id=h.run_id AND p.parameters_hash=h.parameters_hash)
           AND EXISTS(SELECT 1 FROM investor_funded_result_payloads b WHERE b.run_id=h.run_id AND b.parameters_hash=h.parameters_hash)
           AND (h.valid_until<=? OR EXISTS(SELECT 1 FROM json_each(i.document_json,'$.snapshot.review_refs') ref
-            JOIN investor_data_reviews d ON d.id=json_extract(ref.value,'$.review_id')
-            WHERE d.valid_until<=? OR d.decision!='approved' OR EXISTS(SELECT 1 FROM investor_data_reviews newer
-              WHERE newer.source_id=d.source_id AND newer.version>d.version))
+            JOIN investor_review_headers d ON d.id=json_extract(ref.value,'$.review_id') AND d.workspace_id=i.workspace_id
+            WHERE d.valid_until<=? OR d.decision!='approved' OR EXISTS(SELECT 1 FROM investor_review_headers newer
+              WHERE newer.source_id=d.source_id AND newer.version>d.version)
+              OR EXISTS(SELECT 1 FROM investor_action_unavailable_headers a WHERE a.id=d.id AND a.workspace_id=d.workspace_id))
             OR EXISTS(SELECT 1 FROM json_each(i.document_json,'$.snapshot.capture_refs') ref
               JOIN investor_price_captures c ON c.id=json_extract(ref.value,'$.capture_id')
               WHERE c.retain_until<=? OR EXISTS(SELECT 1 FROM investor_price_purges p WHERE p.capture_id=c.id)))

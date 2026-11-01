@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-action-maintenance.schema.json",
+  "$defs": {
+    "capture_ref": {"type": "object", "required": ["capture_id", "capture_hash"], "properties": {
+      "capture_id": {"$ref": "common.schema.json#/$defs/id"}, "capture_hash": {"$ref": "common.schema.json#/$defs/hash"}
+    }, "additionalProperties": false},
+    "capture_refs": {"type": "object", "required": ["issuer", "dividends", "splits"], "properties": {
+      "issuer": {"$ref": "#/$defs/capture_ref"}, "dividends": {"$ref": "#/$defs/capture_ref"}, "splits": {"$ref": "#/$defs/capture_ref"}
+    }, "additionalProperties": false},
+    "authority": {
+      "type": "object",
+      "required": ["schema_version", "listing_id", "provider_symbol", "base_review_id", "base_review_hash", "listing_review_id", "listing_review_hash", "anchor_captures", "anchor_binding_hash", "valid_from", "valid_until", "timezone", "run_after_hour", "standing_rule_authorized", "registered_nominal_differences_accepted", "coverage_basis", "additional_source_requests", "tax_changes_permitted", "trading_permission", "raw_ai_sharing"],
+      "properties": {
+        "schema_version": {"const": "investor-action-maintenance-policy-v1"},
+        "listing_id": {"$ref": "common.schema.json#/$defs/id"}, "provider_symbol": {"enum": ["VT.US", "BND.US"]},
+        "base_review_id": {"$ref": "common.schema.json#/$defs/id"}, "base_review_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "listing_review_id": {"$ref": "common.schema.json#/$defs/id"}, "listing_review_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "anchor_captures": {"$ref": "#/$defs/capture_refs"}, "anchor_binding_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "valid_from": {"$ref": "common.schema.json#/$defs/instant"}, "valid_until": {"$ref": "common.schema.json#/$defs/instant"},
+        "timezone": {"const": "America/New_York"}, "run_after_hour": {"const": 1},
+        "standing_rule_authorized": {"const": true}, "registered_nominal_differences_accepted": {"const": true},
+        "coverage_basis": {"const": "selected_two_source_reports_not_objective_absence"},
+        "additional_source_requests": {"const": 0}, "tax_changes_permitted": {"const": false},
+        "trading_permission": {"const": false}, "raw_ai_sharing": {"const": false}
+      }, "additionalProperties": false
+    },
+    "control": {
+      "type": "object", "required": ["schema_version", "authority_id", "authority_hash", "version", "enabled", "created_at"],
+      "properties": {
+        "schema_version": {"const": "investor-action-maintenance-control-v1"},
+        "authority_id": {"$ref": "common.schema.json#/$defs/id"}, "authority_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "version": {"type": "integer", "minimum": 1, "maximum": 1000}, "enabled": {"type": "boolean"},
+        "created_at": {"$ref": "common.schema.json#/$defs/instant"}
+      }, "additionalProperties": false
+    },
+    "request": {
+      "type": "object", "required": ["schema_version", "workspace_id", "authority_id", "authority_hash", "control_id", "control_hash", "source_day", "created_at", "valid_until"],
+      "properties": {
+        "schema_version": {"const": "investor-action-maintenance-request-v1"},
+        "workspace_id": {"$ref": "common.schema.json#/$defs/id"}, "authority_id": {"$ref": "common.schema.json#/$defs/id"},
+        "authority_hash": {"$ref": "common.schema.json#/$defs/hash"}, "control_id": {"$ref": "common.schema.json#/$defs/id"},
+        "control_hash": {"$ref": "common.schema.json#/$defs/hash"}, "source_day": {"$ref": "common.schema.json#/$defs/date"},
+        "created_at": {"$ref": "common.schema.json#/$defs/instant"}, "valid_until": {"$ref": "common.schema.json#/$defs/instant"}
+      }, "additionalProperties": false
+    },
+    "publication": {
+      "type": "object",
+      "required": ["schema_version", "publication_id", "workspace_id", "authority_id", "authority_hash", "control_id", "control_hash", "request_id", "request_hash", "sequence", "previous_id", "previous_hash", "source_day", "status", "reason_code", "failure_code", "capture_refs", "checked_input_hash", "candidate_facts_hash", "source_id", "source_hash", "review_hash", "coverage_end", "created_at", "valid_until", "coverage_basis", "human_review_performed", "additional_source_requests", "trading_permission"],
+      "properties": {
+        "schema_version": {"const": "investor-action-maintenance-publication-v1"},
+        "publication_id": {"$ref": "common.schema.json#/$defs/id"}, "workspace_id": {"$ref": "common.schema.json#/$defs/id"},
+        "authority_id": {"$ref": "common.schema.json#/$defs/id"}, "authority_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "control_id": {"$ref": "common.schema.json#/$defs/id"}, "control_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "request_id": {"$ref": "common.schema.json#/$defs/id"}, "request_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "sequence": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "previous_id": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/id"}]},
+        "previous_hash": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/hash"}]},
+        "source_day": {"$ref": "common.schema.json#/$defs/date"},
+        "status": {"enum": ["published", "blocked", "unchanged", "superseded"]},
+        "reason_code": {"enum": ["ACTION_COVERAGE_EXTENDED", "ACTION_COVERAGE_UNCHANGED", "ACTION_MAINTENANCE_NEEDS_REVIEW", "ACTION_RULE_SUPERSEDED"]},
+        "failure_code": {"enum": [null, "NEW_REPORTED_ACTION", "HISTORICAL_RECORDS_CHANGED", "CURRENT_SOURCE_UNAVAILABLE", "SOURCE_CAPTURE_TERMINAL_FAILURE", "MAINTENANCE_WINDOW_MISSED", "AUTHORITY_INPUTS_CHANGED", "RULE_INPUTS_REJECTED"]},
+        "capture_refs": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/capture_refs"}]},
+        "checked_input_hash": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/hash"}]},
+        "candidate_facts_hash": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/hash"}]},
+        "source_id": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/id"}]},
+        "source_hash": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/hash"}]},
+        "review_hash": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/hash"}]},
+        "coverage_end": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/date"}]},
+        "created_at": {"$ref": "common.schema.json#/$defs/instant"}, "valid_until": {"$ref": "common.schema.json#/$defs/instant"},
+        "coverage_basis": {"const": "selected_two_source_reports_not_objective_absence"},
+        "human_review_performed": {"const": false}, "additional_source_requests": {"const": 0}, "trading_permission": {"const": false}
+      },
+      "allOf": [
+        {"if": {"properties": {"status": {"const": "published"}}}, "then": {"properties": {
+          "reason_code": {"const": "ACTION_COVERAGE_EXTENDED"}, "failure_code": {"type": "null"},
+          "capture_refs": {"$ref": "#/$defs/capture_refs"}, "checked_input_hash": {"$ref": "common.schema.json#/$defs/hash"},
+          "candidate_facts_hash": {"$ref": "common.schema.json#/$defs/hash"}, "source_id": {"$ref": "common.schema.json#/$defs/id"},
+          "source_hash": {"$ref": "common.schema.json#/$defs/hash"}, "review_hash": {"$ref": "common.schema.json#/$defs/hash"},
+          "coverage_end": {"$ref": "common.schema.json#/$defs/date"}
+        }}, "else": {"properties": {"source_id": {"type": "null"}, "source_hash": {"type": "null"}, "review_hash": {"type": "null"}, "coverage_end": {"type": "null"}}}},
+        {"if": {"properties": {"status": {"const": "blocked"}}}, "then": {"properties": {"reason_code": {"const": "ACTION_MAINTENANCE_NEEDS_REVIEW"}, "failure_code": {"type": "string"}}}},
+        {"if": {"properties": {"status": {"const": "unchanged"}}}, "then": {"properties": {"reason_code": {"const": "ACTION_COVERAGE_UNCHANGED"}, "failure_code": {"type": "null"}}}},
+        {"if": {"properties": {"status": {"const": "superseded"}}}, "then": {"properties": {"reason_code": {"const": "ACTION_RULE_SUPERSEDED"}, "failure_code": {"type": "null"}}}}
+      ], "additionalProperties": false
+    }
+  }
+}
