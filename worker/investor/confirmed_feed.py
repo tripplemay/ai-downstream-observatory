@@ -38,6 +38,40 @@ def _seed(db, workspace, model_id, input_id, at):
     return model, definition, reference, control, source, document, result
 
 
+def _source_refresh_context(db, workspace, model_id, input_id, at):
+    """An audited old intent may seed a rebuild, never a listener or a valuation."""
+    try:
+        return _seed(db, workspace, model_id, input_id, at)
+    except WorkbenchError as error:
+        if str(error) != "CONFIRMED_FEED_SOURCE_UNAVAILABLE":
+            raise
+    from .managed_actions import PREFIX, managed_review_header, managed_review_unavailable, paused_control_successor
+    model, definition, reference = current_monitor_model(db, workspace, model_id, at)
+    source, document = monitor_evidence_document(db, workspace, model_id, input_id, at)
+    control = _latest(db, "investor_model_controls", model_id, "version DESC")
+    _assert(control is not None and control["enabled"] == 1 and control["created_at"] <= at, "CONFIRMED_FEED_MODEL_DISABLED")
+    _assert(at < document["valid_until"], "CONFIRMED_FEED_SOURCE_UNAVAILABLE")
+    changed = set()
+    for segment in document["segments"]:
+        for ref in segment["snapshot"]["review_refs"]:
+            identifier = ref["review_id"]
+            if not identifier.startswith(PREFIX):
+                continue
+            header = managed_review_header(db, workspace, identifier, at)
+            _assert(header["review"]["content_hash"] == ref["review_hash"] and header["source"]["id"] == ref["source_id"]
+                and header["source"]["content_hash"] == ref["source_hash"], "CONFIRMED_FEED_SOURCE_UNAVAILABLE")
+            reason = managed_review_unavailable(db, workspace, identifier, at)
+            if reason is None:
+                continue
+            _assert(reason == "REFERENCE_SOURCE_NO_LONGER_CURRENT", "CONFIRMED_FEED_SOURCE_UNAVAILABLE")
+            paused_control_successor(db, workspace, identifier, at)
+            changed.add(identifier)
+    _assert(changed, "CONFIRMED_FEED_SOURCE_UNAVAILABLE")
+    # No replayed projection is returned. The caller must independently admit all
+    # replacement windows, including still-current prices, FX, rights and costs.
+    return model, definition, reference, control, source, document
+
+
 def _specs(db, workspace, document, catalog, at):
     chosen = {}
     for segment in document["segments"]:
@@ -335,11 +369,11 @@ def _refresh_fx_windows(db, workspace, definition, windows, settings, at):
 
 
 def _refresh_action_windows(db, workspace, definition, windows, at):
-    from .managed_actions import check_same_rule_extension, current_action_reviews
+    from .managed_actions import action_refresh_basis, check_same_rule_extension, current_action_reviews
     selected = current_action_reviews(db, workspace, [row["listing_id"] for row in definition["targets"]], at)
     for market, window in windows:
         identities = {row["listing_id"] for row in definition["targets"] if row["market"] == market}
-        previous = [resolve_review(db, workspace, identifier, "actions", now=at) for identifier in window["action_review_ids"]]
+        previous = [action_refresh_basis(db, workspace, identifier, at) for identifier in window["action_review_ids"]]
         _assert({row["facts"]["listing_id"] for row in previous} == identities, "CONFIRMED_FEED_ACTION_SCOPE_INVALID")
         replacements = []
         for prior in previous:
@@ -446,7 +480,7 @@ def refresh_monitor_sources(db, *, limit=100, now=None, stop_requested=None):
                 if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
                 head = latest_monitor_evidence(db, row["workspace_id"], row["id"])
                 if head is None or head["id"] != row["seed_id"]: continue
-                context = _seed(db, row["workspace_id"], row["id"], head["id"], at)
+                context = _source_refresh_context(db, row["workspace_id"], row["id"], head["id"], at)
                 windows = _windows(db, row["workspace_id"], context[5]); before = canonical_json(windows)
                 _merge_completed(db, row["workspace_id"], row["id"], windows, at)
                 _refresh_fx_windows(db, row["workspace_id"], context[1], windows, context[5]["settings"], at)
