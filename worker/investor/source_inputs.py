@@ -20,7 +20,7 @@ def latest_input(db, workspace_id):
 
 
 def _review_kind(db, workspace_id, review_id):
-    row = db.execute("SELECT s.kind FROM investor_data_reviews r JOIN investor_data_sources s ON s.id=r.source_id WHERE r.id=? AND r.workspace_id=? AND s.workspace_id=?",
+    row = db.execute("SELECT s.kind FROM investor_review_headers r JOIN investor_data_sources s ON s.id=r.source_id WHERE r.id=? AND r.workspace_id=? AND s.workspace_id=?",
         (review_id, workspace_id, workspace_id)).fetchone()
     _assert(row is not None, "INVESTOR_DATA_OUT_OF_SCOPE")
     return row[0]
@@ -127,9 +127,9 @@ def source_unavailable_reason(db, workspace_id, document, now):
     if now >= document["valid_until"]:
         return "REFERENCE_SOURCE_EXPIRED"
     for ref in document["snapshot"]["review_refs"]:
-        row = db.execute("SELECT * FROM investor_data_reviews WHERE id=? AND workspace_id=?", (ref["review_id"], workspace_id)).fetchone()
+        row = db.execute("SELECT * FROM investor_review_headers WHERE id=? AND workspace_id=?", (ref["review_id"], workspace_id)).fetchone()
         _assert(row is not None and row["content_hash"] == ref["review_hash"] and row["source_id"] == ref["source_id"])
-        latest = db.execute("SELECT id FROM investor_data_reviews WHERE source_id=? ORDER BY version DESC LIMIT 1", (row["source_id"],)).fetchone()
+        latest = db.execute("SELECT id FROM investor_review_headers WHERE source_id=? ORDER BY version DESC LIMIT 1", (row["source_id"],)).fetchone()
         if row["decision"] != "approved":
             return "REFERENCE_SOURCE_NO_LONGER_CURRENT"
         if latest[0] != row["id"]:
@@ -138,6 +138,10 @@ def source_unavailable_reason(db, workspace_id, document, now):
                 return "REFERENCE_SOURCE_NO_LONGER_CURRENT"
         if now >= row["valid_until"]:
             return "REFERENCE_SOURCE_EXPIRED"
+        from .managed_actions import managed_review_unavailable as action_unavailable
+        managed = action_unavailable(db, workspace_id, row["id"], now)
+        if managed:
+            return managed
         from .managed_fx import managed_review_unavailable
         managed = managed_review_unavailable(db, workspace_id, row["id"], now)
         if managed:

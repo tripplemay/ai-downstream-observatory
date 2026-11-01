@@ -9,6 +9,7 @@ import { validateInvestorSourceDocument } from "./kernel-contracts";
 import { readInvestorConfirmedCapture } from "./confirmed-source";
 import { managedFxReviewUnavailable, verifyManagedFxReview } from "./managed-fx-source";
 import { currentCalendarReview } from "./calendar-continuation";
+import { MANAGED_ACTION_PREFIX, managedActionReviewUnavailable, readManagedActionReview } from "./managed-action-source";
 
 type Obj = Record<string, unknown>;
 type Row = { id: string; workspace_id: string; document_json: string; content_hash: string; created_at: string; actor_id: string; audit_id: string; valid_until: string; source_qualification: string };
@@ -45,6 +46,11 @@ export function latestInvestorResearchInput(db: Database.Database, workspace: st
 }
 
 function review(db: Database.Database, workspace: string, ref: Obj, now: string): Review {
+  if (typeof ref.review_id === "string" && ref.review_id.startsWith(MANAGED_ACTION_PREFIX)) {
+    const value = readManagedActionReview(db, workspace, ref.review_id, now);
+    check(value.row.content_hash === ref.review_hash && value.source.id === ref.source_id && value.source.content_hash === ref.source_hash);
+    return value;
+  }
   const row = db.prepare("SELECT * FROM investor_data_reviews WHERE id=? AND workspace_id=?").get(ref.review_id, workspace) as Review["row"] | undefined;
   check(row && row.content_hash === ref.review_hash && row.source_id === ref.source_id && row.decision === "approved" && now < row.valid_until);
   const source = db.prepare("SELECT * FROM investor_data_sources WHERE id=? AND workspace_id=?").get(row.source_id, workspace) as Review["source"] | undefined;
@@ -84,7 +90,7 @@ export function readInvestorCurrentCalendarReview(db: Database.Database, workspa
 /** Historical calendar continuation does not change the returned original facts. */
 export function readInvestorSourceReview(db: Database.Database, workspace: string, ref: Obj, now: string): Review {
   const value = review(db, workspace, ref, now);
-  const latest = db.prepare("SELECT id FROM investor_data_reviews WHERE source_id=? AND workspace_id=? ORDER BY version DESC LIMIT 1")
+  const latest = db.prepare("SELECT id FROM investor_review_headers WHERE source_id=? AND workspace_id=? ORDER BY version DESC LIMIT 1")
     .get(value.source.id, workspace) as { id: string } | undefined;
   check(latest);
   if (latest.id !== value.row.id) {
@@ -98,15 +104,16 @@ function unavailable(db: Database.Database, workspace: string, document: Obj, no
   if (now >= (document.valid_until as string)) return "REFERENCE_SOURCE_EXPIRED";
   const snapshot = obj(document.snapshot);
   for (const ref of list(snapshot.review_refs, 3000)) {
-    const row = db.prepare("SELECT id,source_id,content_hash,version,decision,valid_until FROM investor_data_reviews WHERE id=? AND workspace_id=?").get(ref.review_id, workspace) as Obj | undefined;
+    const row = db.prepare("SELECT id,source_id,content_hash,version,decision,valid_until FROM investor_review_headers WHERE id=? AND workspace_id=?").get(ref.review_id, workspace) as Obj | undefined;
     check(row && row.content_hash === ref.review_hash && row.source_id === ref.source_id);
-    const latest = db.prepare("SELECT id FROM investor_data_reviews WHERE source_id=? ORDER BY version DESC LIMIT 1").get(row.source_id) as Obj;
+    const latest = db.prepare("SELECT id FROM investor_review_headers WHERE source_id=? ORDER BY version DESC LIMIT 1").get(row.source_id) as Obj;
     if (row.decision !== "approved") return "REFERENCE_SOURCE_NO_LONGER_CURRENT";
     if (latest.id !== row.id) {
       try { readInvestorCurrentCalendarReview(db, workspace, row.id as string, now); }
       catch { return "REFERENCE_SOURCE_NO_LONGER_CURRENT"; }
     }
     if (now >= (row.valid_until as string)) return "REFERENCE_SOURCE_EXPIRED";
+    const actions = managedActionReviewUnavailable(db, workspace, row.id, now); if (actions) return actions;
     const managed = managedFxReviewUnavailable(db, workspace, row.id, now); if (managed) return managed;
   }
   for (const ref of list(snapshot.capture_refs, 1000)) {

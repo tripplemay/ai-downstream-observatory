@@ -13,7 +13,8 @@ import * as funding from "../src/server/investor/funding-schemas";
 import * as study from "../src/server/investor/funded-study-schemas";
 import * as costs from "../src/server/investor/monitor-cost-schemas";
 import { getInvestorState } from "../src/server/investor/service";
-import { actionDraftProgressRequest } from "../src/server/investor/action-draft-progress-schemas";
+import { actionDraftProgressRequest, actionDraftProgressSchema } from "../src/server/investor/action-draft-progress-schemas";
+import { actionMaintenanceProgressRequest } from "../src/server/investor/action-maintenance-progress-schemas";
 import { parseInvestorState } from "../src/components/workbench/investor-client";
 import { investorActor as actor, investorFixture, saveSyntheticProfile } from "./investor-fixture";
 
@@ -25,17 +26,21 @@ function moduleFrom(source: string, dependencies: Record<string, unknown>) {
   init((name: string) => { assert.ok(name in dependencies, name); return dependencies[name]; }, module, module.exports);
   return module.exports;
 }
-function legacyClient() {
+function legacyClient(withDrafts=false) {
   // Reconstruct the exact pre-increment consumer without needing Git history in shallow CI.
   let text = readFileSync(new URL("../src/components/workbench/investor-client.ts", import.meta.url), "utf8");
   for (const line of [
-    'import { actionDraftProgressSchema } from "@/server/investor/action-draft-progress-schemas";\n',
+    'import { actionMaintenanceProgressSchema } from "@/server/investor/action-maintenance-progress-schemas";\n',
+    '  action_maintenance: actionMaintenanceProgressSchema.optional(),\n',
+    '  if (state.action_maintenance && (state.workspace_id === null || state.action_maintenance.checked_at !== state.checked_at)) throw new Error("INVESTOR_RESPONSE_INVALID");\n',
+    ...(!withDrafts ? ['import { actionDraftProgressSchema } from "@/server/investor/action-draft-progress-schemas";\n',
     '  action_drafts: actionDraftProgressSchema.optional(),\n',
-    '  if (state.action_drafts && (state.workspace_id === null || state.action_drafts.checked_at !== state.checked_at)) throw new Error("INVESTOR_RESPONSE_INVALID");\n',
+    '  if (state.action_drafts && (state.workspace_id === null || state.action_drafts.checked_at !== state.checked_at)) throw new Error("INVESTOR_RESPONSE_INVALID");\n'] : []),
   ]) { assert.equal(text.split(line).length - 1, 1); text = text.replace(line, ""); }
-  assert.equal(createHash("sha256").update(text).digest("hex"), "b20243ba1af22d427e660cd0c2e3e50647524b2bdd827f4699ea656e7f2c733d", "FROZEN_OLD_CONSUMER_DRIFT");
+  assert.equal(createHash("sha256").update(text).digest("hex"), withDrafts ? "81da04e85b419d45464f47658426e5168cde83634992c9e7651ea8919e0a59cc" : "b20243ba1af22d427e660cd0c2e3e50647524b2bdd827f4699ea656e7f2c733d", "FROZEN_OLD_CONSUMER_DRIFT");
   return moduleFrom(text, { zod: { z }, "@/server/investor/schemas": schemas, "@/server/investor/funding-schemas": funding,
-    "@/server/investor/funded-study-schemas": study, "@/server/investor/monitor-cost-schemas": costs }).parseInvestorState;
+    "@/server/investor/funded-study-schemas": study, "@/server/investor/monitor-cost-schemas": costs,
+    "@/server/investor/action-draft-progress-schemas":{actionDraftProgressSchema} }).parseInvestorState;
 }
 function harness(t: { after: (fn: () => void) => void }, options: { denied?: boolean; changed?: boolean } = {}) {
   const f = investorFixture(); t.after(f.close); saveSyntheticProfile(f);
@@ -56,6 +61,7 @@ function harness(t: { after: (fn: () => void) => void }, options: { denied?: boo
     } },
     "@/server/workbench-db": { openWorkbench: () => { calls.push("open"); return db; } }, "@/server/strict-json": { parseStrictJson },
     "@/server/investor/action-draft-progress-schemas": { actionDraftProgressRequest },
+    "@/server/investor/action-maintenance-progress-schemas": { actionMaintenanceProgressRequest },
     "@/server/investor/service": { isInvestorClientError: () => false, getInvestorState: (_db: unknown, principal: typeof actor, _now: unknown, settings: any) => {
       calls.push("read"); return getInvestorState(f.db, principal, at, settings);
     }, executeInvestorCommand: () => { calls.push("explicit-command"); return { receipt_only: true }; } },
@@ -85,7 +91,7 @@ test("exact old strict consumer continues to accept legacy GETs while new client
 
 test("missing or unknown feature versions retain the closed legacy shape without reading optional source metadata", async t => {
   const h = harness(t), old = legacyClient();
-  for (const version of ["", "action-drafts-v0", "action-drafts-v2", "action-drafts-v1,other", "true"]) {
+  for (const version of ["", "action-drafts-v0", "action-drafts-v999", "action-drafts-v1,other", "true"]) {
     const response = await h.GET({ [actionDraftProgressRequest.header]: version }), value = await response.json();
     assert.equal(response.status, 200); assert.equal("action_drafts" in value, false); old(value, binding);
   }
@@ -94,9 +100,19 @@ test("missing or unknown feature versions retain the closed legacy shape without
   assert.equal(getInvestorState(h.f.db, actor, at).action_drafts?.status, "not_configured");
 });
 
+test("frozen v1 consumer remains compatible while v2 alone receives standing-rule metadata",async t=>{
+  const h=harness(t),old=legacyClient(true);
+  const prior=await (await h.GET({[actionDraftProgressRequest.header]:actionDraftProgressRequest.value})).json();
+  old(prior,binding);assert.equal("action_maintenance" in prior,false);
+  const response=await h.GET({[actionMaintenanceProgressRequest.header]:actionMaintenanceProgressRequest.value}),next=await response.json();
+  assert.equal(response.status,200);assert.equal(next.action_maintenance.status,"not_configured");
+  parseInvestorState(next,binding);assert.throws(()=>old(next,binding),/RESPONSE_INVALID/);
+  const {action_maintenance:_,...same}=next;assert.deepEqual(same,prior);
+});
+
 test("view negotiation cannot bypass authentication, session binding or query checks and never changes explicit command receipts", async t => {
-  const opted = { [actionDraftProgressRequest.header]: actionDraftProgressRequest.value };
-  for (const mode of ["anonymous", "changed", "binding", "missing", "empty", "query"]) {
+  for (const version of [actionDraftProgressRequest,actionMaintenanceProgressRequest]) for (const mode of ["anonymous", "changed", "binding", "missing", "empty", "query"]) {
+    const opted = { [version.header]: version.value };
     const h = harness(t, { denied: mode === "anonymous", changed: mode === "changed" });
     const response = await h.GET({ ...opted, ...(mode === "binding" ? { "X-Workbench-Session-Binding": "b".repeat(64) } : mode === "empty" ? { "X-Workbench-Session-Binding": "" } : {}) }, mode === "query" ? "?owner=forged" : "", mode === "missing");
     assert.equal(response.status, ["missing", "query"].includes(mode) ? 400 : 401); assert.ok(!h.calls.includes("open"));

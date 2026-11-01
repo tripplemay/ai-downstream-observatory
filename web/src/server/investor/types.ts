@@ -3,6 +3,7 @@ import type { InvestorFundingState } from "./funding-schemas";
 import type { FundedStudyTask } from "./funded-study-schemas";
 import type { MonitorCostState } from "./monitor-cost-schemas";
 import type { ActionDraftProgress } from "./action-draft-progress-schemas";
+import type { ActionMaintenanceProgress } from "./action-maintenance-progress-schemas";
 
 export type InvestorProfileVersion = { id: string; version: number; content_hash: string; created_at: string; document: InvestorProfile };
 export type InvestorObservationRecord = { id: string; content_hash: string; candidate_plan_id: string | null; document: InvestorObservation };
@@ -16,6 +17,7 @@ export type InvestorState = {
   model_watch: InvestorModelWatch | null;
   monitor_costs: MonitorCostState | null;
   action_drafts?: ActionDraftProgress;
+  action_maintenance?: ActionMaintenanceProgress;
   funding: InvestorFundingState;
   funded_study: FundedStudyTask | null;
   funded_study_unavailable: boolean;

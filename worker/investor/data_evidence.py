@@ -183,12 +183,16 @@ def review_source(db, workspace_id, actor_id, source_id, decision, facts, reason
         return result
 
 
-def resolve_review(db, workspace_id, review_id, kind, *, now=None, require_current=True):
+def review_header(db, workspace_id, review_id, *, now=None):
+    """Authenticate metadata, not current permission or underlying payloads."""
     checked = _milliseconds(now)
+    if review_id.startswith("managed-actions-review:"):
+        from .managed_actions import managed_review_header
+        return managed_review_header(db, workspace_id, review_id, checked)
     review = db.execute("SELECT * FROM investor_data_reviews WHERE id=? AND workspace_id=?", (review_id, workspace_id)).fetchone()
     _assert(review is not None, "INVESTOR_DATA_OUT_OF_SCOPE")
     source = db.execute("SELECT * FROM investor_data_sources WHERE id=? AND workspace_id=?", (review["source_id"], workspace_id)).fetchone()
-    _assert(source is not None and source["kind"] == kind and source["created_at"] <= review["created_at"] <= checked < review["valid_until"])
+    _assert(source is not None and source["created_at"] <= review["created_at"] <= checked)
     _owner(db, workspace_id, source["actor_id"]); _owner(db, workspace_id, review["actor_id"])
     _assert(content_hash(_object(source["document_json"])) == source["content_hash"])
     _audit_binding(db, source, "investor_store_data_source", "investor_data_source", source["id"])
@@ -196,20 +200,32 @@ def resolve_review(db, workspace_id, review_id, kind, *, now=None, require_curre
     document = _object(review["document_json"])
     _assert(set(document) == {"schema_version", "source_id", "source_hash", "kind", "version", "decision", "facts", "reason", "valid_until", "review_basis"}
         and document["schema_version"] == "investor-data-review-v1" and content_hash(document) == review["content_hash"]
-        and document["source_hash"] == source["content_hash"] and document["source_id"] == source["id"] and document["kind"] == kind
-        and document["version"] == review["version"] and document["decision"] == review["decision"] == "approved"
+        and document["source_hash"] == source["content_hash"] and document["source_id"] == source["id"] and document["kind"] == source["kind"]
+        and document["version"] == review["version"] and document["decision"] == review["decision"]
         and document["valid_until"] == review["valid_until"] and document["review_basis"] == "owner_reviewed_not_provider_certified")
+    return {"review": dict(review), "source": dict(source), "facts": document["facts"]}
+
+
+def resolve_review(db, workspace_id, review_id, kind, *, now=None, require_current=True):
+    checked = _milliseconds(now)
+    if review_id.startswith("managed-actions-review:"):
+        _assert(kind == "actions")
+        from .managed_actions import resolve_managed_review
+        return resolve_managed_review(db, workspace_id, review_id, now=checked)
+    value = review_header(db, workspace_id, review_id, now=checked)
+    review, source = value["review"], value["source"]
+    _assert(source["kind"] == kind and checked < review["valid_until"] and review["decision"] == "approved")
     if require_current:
         latest = db.execute("SELECT id FROM investor_data_reviews WHERE source_id=? ORDER BY version DESC LIMIT 1", (source["id"],)).fetchone()
         if latest[0] != review_id:
             _assert(kind == "calendar", "INVESTOR_DATA_REVIEW_SUPERSEDED")
             from .calendar_continuation import current_calendar_review
             current_calendar_review(db, workspace_id, review_id, checked)
-    validate_facts(kind, document["facts"])
+    validate_facts(kind, value["facts"])
     if kind == "fx":
         from .managed_fx import validate_managed_review
-        validate_managed_review(db, workspace_id, review, document["facts"], checked)
-    return {"review": dict(review), "source": dict(source), "facts": document["facts"]}
+        validate_managed_review(db, workspace_id, review, value["facts"], checked)
+    return value
 
 
 def collection_binding(db, workspace, rights_id, listing_id, calendar_id, start, end, now, *, allow_continued=False):

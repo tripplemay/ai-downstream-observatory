@@ -8,7 +8,7 @@ from worker.market.contracts import validate_contract
 from worker.orchestration.db import WorkbenchError, content_hash, instant, transaction
 from worker.orchestration.jobs import enqueue_notification
 from .confirmed_capture import resolve_confirmed_capture
-from .data_evidence import _assert, _audit, _object, resolve_capture, resolve_review
+from .data_evidence import _assert, _audit, _object, resolve_capture, resolve_review, review_header
 from .model_runtime import _clock
 from .monitor_admission import admit_monitor_data, current_monitor_model
 from .reference_plan import reference_source_current
@@ -23,7 +23,8 @@ MAX_REVIEW_CANDIDATES = 128
 GAPS = {"INVESTOR_BOOTSTRAP_SOURCE_LIMIT", "INVESTOR_BOOTSTRAP_IDENTITY_CHANGED", "INVESTOR_BOOTSTRAP_PRICES_NOT_READY",
     "INVESTOR_BOOTSTRAP_CALENDAR_AMBIGUOUS", "INVESTOR_BOOTSTRAP_PRICES_CONFLICT", "INVESTOR_BOOTSTRAP_LISTING_AMBIGUOUS",
     "INVESTOR_BOOTSTRAP_CAPTURE_SCOPE_AMBIGUOUS", "INVESTOR_BOOTSTRAP_ACTIONS_NOT_UNIQUE",
-    "INVESTOR_BOOTSTRAP_FX_SELECTION_CHANGED"} | FX_GAPS
+    "INVESTOR_BOOTSTRAP_FX_SELECTION_CHANGED", "INVESTOR_BOOTSTRAP_ACTION_SELECTION_CHANGED",
+    "INVESTOR_BOOTSTRAP_ACTIONS_NOT_READY"} | FX_GAPS
 
 
 def _settings(db, workspace, model, definition, reference, at):
@@ -73,7 +74,13 @@ def _candidate(db, workspace, row, targets, at):
         "created_at": value["capture"]["created_at"]}
 
 
-def _reviews(db, workspace, kind, at):
+def _reviews(db, workspace, kind, at, listing_ids=None):
+    if kind == "actions" and listing_ids is not None:
+        from .managed_actions import current_action_reviews
+        try:
+            return current_action_reviews(db, workspace, listing_ids, at, limit=MAX_REVIEW_CANDIDATES)
+        except WorkbenchError:
+            raise WorkbenchError("INVESTOR_BOOTSTRAP_ACTIONS_NOT_READY") from None
     rows = db.execute("""SELECT r.id FROM investor_data_reviews r JOIN investor_data_sources s ON s.id=r.source_id AND s.workspace_id=r.workspace_id
         WHERE r.workspace_id=? AND s.kind=? AND r.decision='approved' AND r.created_at<=? AND r.valid_until>?
           AND r.version=(SELECT max(version) FROM investor_data_reviews WHERE source_id=r.source_id)
@@ -100,6 +107,16 @@ def _check_fx_selection(db, workspace, definition, windows, settings, at):
     chosen = _current_fx(db, workspace, definition["targets"], settings, at)
     _assert(set(chosen.values()) == {identity for window in windows for identity in window["fx_review_ids"]},
         "INVESTOR_BOOTSTRAP_FX_SELECTION_CHANGED")
+
+
+def _check_action_selection(db, workspace, definition, windows, at):
+    from .managed_actions import current_action_reviews
+    values = current_action_reviews(db, workspace, [target["listing_id"] for target in definition["targets"]], at, header_only=True)
+    for window in windows:
+        identities = {review_header(db, workspace, identifier, now=at)["facts"]["listing_id"] for identifier in window["action_review_ids"]}
+        expected = [value["review"]["id"] for value in values if value["facts"]["listing_id"] in identities
+            and value["facts"]["range_start"] <= window["start_date"] <= window["end_date"] <= value["facts"]["range_end"]]
+        _assert(set(expected) == set(window["action_review_ids"]), "INVESTOR_BOOTSTRAP_ACTION_SELECTION_CHANGED")
 
 
 def _plan_bootstrap(db, workspace, model_id, at):
@@ -141,7 +158,7 @@ def _plan_bootstrap(db, workspace, model_id, at):
         chosen.append(row); covered.update(scope)
     _assert(covered == set(targets), "INVESTOR_BOOTSTRAP_CAPTURE_SCOPE_AMBIGUOUS")
     settings = _settings(db, workspace, model, definition, reference, at)
-    actions = _reviews(db, workspace, "actions", at)
+    actions = _reviews(db, workspace, "actions", at, targets)
     current_fx = _current_fx(db, workspace, targets.values(), settings, at)
     windows = []
     for market in sorted(calendars):
@@ -190,6 +207,7 @@ def bootstrap_monitor_inputs(db, *, limit=100, now=None, stop_requested=None):
                 _assert(control and control["enabled"] == 1 and control["created_at"] <= checked, "INVESTOR_BOOTSTRAP_MODEL_DISABLED")
                 if db.execute("SELECT 1 FROM investor_monitor_evidence_inputs WHERE model_id=?", (row["id"],)).fetchone(): continue
                 _check_fx_selection(db, row["workspace_id"], definition, windows, settings, checked)
+                _check_action_selection(db, row["workspace_id"], definition, windows, checked)
                 actor = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (row["workspace_id"],)).fetchone()[0]
                 source = admit_monitor_data(db, row["workspace_id"], actor, row["id"], windows, settings, now=checked)
                 if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")

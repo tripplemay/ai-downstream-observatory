@@ -25,7 +25,8 @@ import { acquisitionDeadlines, InvestorAcquisitionPanel } from "./investor-acqui
 import { useInvestorDisplayClock } from "./investor-display-clock";
 import { InvestorMonitorCostPanel } from "./investor-monitor-cost-panel";
 import { InvestorActionDrafts } from "./investor-action-drafts";
-import { actionDraftProgressRequest } from "@/server/investor/action-draft-progress-schemas";
+import { actionMaintenanceProgressRequest } from "@/server/investor/action-maintenance-progress-schemas";
+import { InvestorActionMaintenance } from "./investor-action-maintenance";
 import type { ResearchExecutionReview, ResearchCashIntentReview } from "@/server/investor/research-execution";
 
 export type InvestorView = "overview" | "plan" | "observations" | "accounts";
@@ -319,7 +320,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
   }
   async function load(sequence: number) {
     const { response, value } = await request({ cache: "no-store", credentials: "same-origin", redirect: "error", headers: {
-      "X-Workbench-Session-Binding": initialSessionBinding, [actionDraftProgressRequest.header]: actionDraftProgressRequest.value } });
+      "X-Workbench-Session-Binding": initialSessionBinding, [actionMaintenanceProgressRequest.header]: actionMaintenanceProgressRequest.value } });
     if (response.status === 401) { invalidate(); return false; }
     if (!response.ok) throw new Error("INVESTOR_UNAVAILABLE");
     const state = parseInvestorState(value, initialSessionBinding);
@@ -345,7 +346,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
     data?.model_watch?.acquisition?.status, data?.model_watch?.acquisition?.markets.map(row => row.status).join("|")]);
   const acquisitionClockKey = [...acquisitionDeadlines(data?.model_watch?.acquisition, data?.model_watch?.valid_until),
     ...[data?.model_watch?.next_check_at, data?.plan?.document.valid_until, data?.research_task?.study?.source_context?.valid_until, data?.latest?.document.next_review_at,
-      data?.monitor_costs?.effective_from, data?.monitor_costs?.valid_until, data?.action_drafts?.refresh_after]
+      data?.monitor_costs?.effective_from, data?.monitor_costs?.valid_until, data?.action_drafts?.refresh_after, data?.action_maintenance?.refresh_after]
       .filter((value): value is string => !!value).map(Date.parse)].join("|");
   const displayNow = useInvestorDisplayClock(data?.checked_at ?? null, acquisitionClockKey);
   const displayClock = useRef(displayNow);
@@ -442,7 +443,9 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
         </details> : researchDetails}
         {data.model_watch && <ModelWatch watch={data.model_watch} nowMs={displayNow} disabled={locked || !data.model_watch.enabled && !canResumeInvestorWatch(data, displayNow)}
           onToggle={() => command({ action: "set_monitoring", model_id: data.model_watch!.id, enabled: !data.model_watch!.enabled })} />}
-        {data.action_drafts && <InvestorActionDrafts value={data.action_drafts} nowMs={displayNow} />}
+        {data.action_maintenance ? <InvestorActionMaintenance value={data.action_maintenance} nowMs={displayNow}>
+          {data.action_drafts && <InvestorActionDrafts value={data.action_drafts} nowMs={displayNow} />}
+        </InvestorActionMaintenance> : data.action_drafts && <InvestorActionDrafts value={data.action_drafts} nowMs={displayNow} />}
         {data.monitor_costs && (data.monitor_costs.editable || data.monitor_costs.version > 0) && <InvestorMonitorCostPanel
           key={`${data.monitor_costs.model_id}:${data.monitor_costs.version}`} state={data.monitor_costs} nowMs={displayNow}
           disabled={baseLocked || editing || scopeState.account} onCommand={intent => command(intent, "costs")} onEditingChange={lockCostScope} />}

@@ -33,7 +33,7 @@ function calendarHorizon(day: string, zone: string) {
 }
 function segmentExpiry(db: Database.Database, workspace: string, snapshot: Obj) {
   const deadlines = [
-    ...rows(snapshot.review_refs).map(ref => db.prepare("SELECT valid_until FROM investor_data_reviews WHERE id=? AND workspace_id=?").get(ref.review_id, workspace) as { valid_until: string } | undefined),
+    ...rows(snapshot.review_refs).map(ref => db.prepare("SELECT valid_until FROM investor_review_headers WHERE id=? AND workspace_id=?").get(ref.review_id, workspace) as { valid_until: string } | undefined),
     ...rows(snapshot.capture_refs).map(ref => { const table = snapshot.schema_version === "investor-monitor-price-snapshot-v1" && ref.kind === "confirmed_sdk" ? "investor_confirmed_captures" : "investor_price_captures";
       const row = db.prepare(`SELECT retain_until FROM ${table} WHERE id=? AND workspace_id=?`).get(ref.capture_id, workspace) as { retain_until: string } | undefined; return row ? { valid_until: row.retain_until } : undefined; })
   ];

@@ -9,7 +9,9 @@ import { mountInvestorDisplay } from "./investor-display-fixture";
 import { displayBinding as binding, displayBefore, displayUntil, displayFuture, displayState, historicalDisplayState } from "./investor-display-state-fixture";
 import { blockedResearchDisplayState } from "./investor-research-blocker-fixture";
 import { actionCostMethodology, reviewCostMethodology, settlementCostMethodology } from "../src/server/investor/reference-cost-methodology";
-import { actionDraftProgressSchema, actionDraftProgressRequest } from "../src/server/investor/action-draft-progress-schemas";
+import { actionDraftProgressSchema } from "../src/server/investor/action-draft-progress-schemas";
+import { actionMaintenanceProgressRequest } from "../src/server/investor/action-maintenance-progress-schemas";
+import { unavailableActionMaintenanceProgress } from "../src/server/investor/action-maintenance-progress";
 
 const before = Date.parse(displayBefore), until = Date.parse(displayUntil);
 function validationHoldState() {
@@ -38,7 +40,7 @@ function mount(t: { after: (fn: () => void) => void }, state = displayState(), v
       "lucide-react": Object.fromEntries(["ArrowRight", "CheckCircle2", "CircleHelp", "Clock3", "Eye", "ShieldCheck"].map(name => [name, name])),
       "@/components/ui/input": { Input: "Input" }, "@/components/session-boundary": { useSessionBoundary: () => null },
       "@/server/investor/schemas": schemas, "@/server/investor/loss-scenarios": losses, "./research-format": research, "./investor-client": client,
-      "@/server/investor/action-draft-progress-schemas": { actionDraftProgressRequest },
+      "@/server/investor/action-maintenance-progress-schemas": { actionMaintenanceProgressRequest },
       ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel", "history-panel", "monitor-cost-panel"]
         .map(name => { const component = "Investor" + name.split("-").map(value => value[0].toUpperCase() + value.slice(1)).join("");
           return ["./investor-" + name, { [component]: component }]; })),
@@ -312,7 +314,7 @@ test("background refresh is single-flight and does not lock risk editing; explic
   for (const request of h.requests) {
     assert.equal(request.url, "/api/workbench/investor");
     const headers = new Headers(request.options.headers);
-    assert.equal(headers.get(actionDraftProgressRequest.header), actionDraftProgressRequest.value);
+    assert.equal(headers.get(actionMaintenanceProgressRequest.header), actionMaintenanceProgressRequest.value);
     assert.equal(headers.get("X-Workbench-Session-Binding"), binding);
   }
 });
@@ -370,6 +372,19 @@ test("source task metadata expires during edit locks without a GET, never revive
   const without = { ...state }; delete without.action_drafts;
   const original = JSON.parse(snapshot); delete original.action_drafts;
   assert.deepEqual(without, original);
+});
+
+test("standing-rule panel expires despite locked edits, cannot revive on clock rollback, and leaves advice and history untouched", async t => {
+  const state=displayState(),original=JSON.stringify(state);
+  state.action_maintenance={...unavailableActionMaintenanceProgress(displayBefore),refresh_after:new Date(before+100).toISOString()};
+  const h=mount(t,state);await h.flush();
+  const card=()=>h.words(h.card("研究资料自动维护"));
+  assert.match(card(),/维护记录暂未通过核对/);await h.fundingLock(true);await h.advance(before+100);
+  assert.match(card(),/状态快照已到复核时间/);assert.doesNotMatch(card(),/维护记录暂未通过核对/);
+  assert.equal(h.headline(),"需要你做决定");assert.equal(h.requests.length,0);
+  h.setWall(before-10000);await h.wake();assert.match(card(),/状态快照已到复核时间/);
+  await h.invalidate();assert.equal(h.card("研究资料自动维护"),undefined);assert.equal(h.requests.length,0);
+  const without={...state};delete without.action_maintenance;assert.deepEqual(without,JSON.parse(original));
 });
 
 test("fee submission releases only its own lock; lost response retries exact command and session invalidation clears it", async t => {
