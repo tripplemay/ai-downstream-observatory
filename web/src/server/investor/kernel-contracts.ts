@@ -42,6 +42,7 @@ import actionReviewWorkflow from "../../../../contracts/v1/investor-action-revie
 import actionReviewJob from "../../../../contracts/v1/investor-action-review-job.schema.json";
 import legacyActionTransitionPreview from "../../../../contracts/v1/investor-legacy-action-transition-preview.schema.json";
 import legacyTransitionWorkflow from "../../../../contracts/v1/investor-legacy-transition-workflow.schema.json";
+import legacyTransitionSource from "../../../../contracts/v1/investor-legacy-transition-source.schema.json";
 import calendarContinuation from "../../../../contracts/v1/investor-calendar-continuation.schema.json";
 import dataSnapshot from "../../../../contracts/v1/investor-data-snapshot.schema.json";
 import evidenceInput from "../../../../contracts/v1/investor-evidence-input.schema.json";
@@ -51,12 +52,14 @@ import monitorDataInput from "../../../../contracts/v1/investor-monitor-data-inp
 import monitorDataInputV2 from "../../../../contracts/v1/investor-monitor-data-input-v2.schema.json";
 import monitorDataInputV3 from "../../../../contracts/v1/investor-monitor-data-input-v3.schema.json";
 import monitorDataInputV4 from "../../../../contracts/v1/investor-monitor-data-input-v4.schema.json";
+import monitorDataInputV5 from "../../../../contracts/v1/investor-monitor-data-input-v5.schema.json";
 import monitorSourceSnapshotV2 from "../../../../contracts/v1/investor-monitor-source-snapshot-v2.schema.json";
 import monitorSourceDataset from "../../../../contracts/v1/investor-monitor-source-dataset.schema.json";
 import monitorCosts from "../../../../contracts/v1/investor-monitor-costs.schema.json";
 import monitorPriceSnapshot from "../../../../contracts/v1/investor-monitor-price-snapshot.schema.json";
 import monitorDataProjection from "../../../../contracts/v1/investor-monitor-data-projection.schema.json";
 import monitorDataProjectionV2 from "../../../../contracts/v1/investor-monitor-data-projection-v2.schema.json";
+import monitorDataProjectionV3 from "../../../../contracts/v1/investor-monitor-data-projection-v3.schema.json";
 import evidenceCheckpoint from "../../../../contracts/v1/investor-evidence-model-checkpoint.schema.json";
 import evidenceCheckpointV2 from "../../../../contracts/v1/investor-evidence-model-checkpoint-v2.schema.json";
 import evidenceCheckpointV3 from "../../../../contracts/v1/investor-evidence-model-checkpoint-v3.schema.json";
@@ -99,6 +102,7 @@ ajv.addSchema(calendarContinuation);
 for (const schema of [actionCrosscheck, actionSuccessor, actionReviewDraft, actionReviewWorkflow, actionReviewJob]) ajv.addSchema(schema);
 ajv.addSchema(legacyActionTransitionPreview);
 ajv.addSchema(legacyTransitionWorkflow);
+for (const schema of [legacyTransitionSource, monitorDataInputV5, monitorDataProjectionV3]) ajv.addSchema(schema);
 for (const schema of [policyV2, policyV3, policyInput, strategyResultV2, strategyResultV3, settledPlan]) ajv.addSchema(schema);
 ajv.addSchema(boundedPlan); ajv.addSchema(actionAwarePlan); ajv.addSchema(eventReviewPlan); ajv.addSchema(planInput);
 for (const schema of [longHorizonInputV4, longHorizonResultV4, fundedHistoryInputV3, fundedHistoryResultV3]) ajv.addSchema(schema);
@@ -148,6 +152,9 @@ export function validateLegacyActionTransitionPreview(value: unknown) { requireT
 export function validateLegacyTransitionWorkflow(kind: "preview_request" | "preview" | "submit" | "confirmation", value: unknown) {
   requireTrue(ajv.getSchema(legacyTransitionWorkflow.$id + "#/$defs/" + kind)!(value));
 }
+export function validateLegacyTransitionSource(kind: "transition_ref" | "request" | "admission", value: unknown) {
+  requireTrue(ajv.getSchema(legacyTransitionSource.$id + "#/$defs/" + kind)!(value));
+}
 export function validateInvestorActionReviewDocument(kind: "preview" | "confirmation" | "append_proof" | "preview_request" | "submit", value: unknown) {
   const schema = kind === "append_proof" ? actionSuccessor : actionReviewWorkflow;
   requireTrue(ajv.getSchema(schema.$id + "#/$defs/" + kind)!(value));
@@ -158,8 +165,8 @@ export function validateInvestorActionReviewJob(kind: "request" | "result", valu
 export function validateInvestorReferenceDocument(value: unknown) { requireTrue(ajv.getSchema((value as JsonObject | null)?.schema_version === "investor-reference-plan-v2" ? referencePlanV2.$id : referencePlan.$id)!(value)); }
 export function validateInvestorMonitorDataDocument(kind: "input" | "projection", value: unknown) {
   const version = (value as JsonObject | null)?.schema_version;
-  requireTrue(ajv.getSchema(kind === "input" ? (version === "investor-monitor-data-input-v4" ? monitorDataInputV4.$id : version === "investor-monitor-data-input-v3" ? monitorDataInputV3.$id : version === "investor-monitor-data-input-v2" ? monitorDataInputV2.$id : monitorDataInput.$id)
-    : version === "investor-monitor-data-projection-v2" ? monitorDataProjectionV2.$id : monitorDataProjection.$id)!(value));
+  requireTrue(ajv.getSchema(kind === "input" ? (version === "investor-monitor-data-input-v5" ? monitorDataInputV5.$id : version === "investor-monitor-data-input-v4" ? monitorDataInputV4.$id : version === "investor-monitor-data-input-v3" ? monitorDataInputV3.$id : version === "investor-monitor-data-input-v2" ? monitorDataInputV2.$id : monitorDataInput.$id)
+    : version === "investor-monitor-data-projection-v3" ? monitorDataProjectionV3.$id : version === "investor-monitor-data-projection-v2" ? monitorDataProjectionV2.$id : monitorDataProjection.$id)!(value));
 }
 export function validateInvestorMonitorCostRecord(value: unknown) { requireTrue(ajv.getSchema(monitorCosts.$id + "#/$defs/record")!(value)); }
 export function validateInvestorEvidenceCheckpoint(value: unknown) {

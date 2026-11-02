@@ -29,7 +29,8 @@ def validate_monitor_data_document(document):
     schema = {"investor-monitor-data-input-v1": "investor-monitor-data-input.schema.json",
         "investor-monitor-data-input-v2": "investor-monitor-data-input-v2.schema.json",
         "investor-monitor-data-input-v3": "investor-monitor-data-input-v3.schema.json",
-        "investor-monitor-data-input-v4": "investor-monitor-data-input-v4.schema.json"}.get(document.get("schema_version"))
+        "investor-monitor-data-input-v4": "investor-monitor-data-input-v4.schema.json",
+        "investor-monitor-data-input-v5": "investor-monitor-data-input-v5.schema.json"}.get(document.get("schema_version"))
     _assert(schema is not None)
     validate_contract(document, schema)
 
@@ -174,7 +175,7 @@ def project_monitor_data(definition, source, reviews, settings, created_at, *, c
     return result
 
 
-def build_monitor_data(db, workspace_id, definition, windows, settings, *, now=None, snapshot_at=None, audited_action_knowledge=False):
+def build_monitor_data(db, workspace_id, definition, windows, settings, *, now=None, snapshot_at=None, audited_action_knowledge=False, legacy_transition=None):
     from .monitor_costs import verify_settings
     checked = _milliseconds(now)
     frozen = checked if snapshot_at is None else _milliseconds(snapshot_at)
@@ -220,10 +221,30 @@ def build_monitor_data(db, workspace_id, definition, windows, settings, *, now=N
         "segments": [{key: row[key] for key in ("snapshot", "dataset_hash", "catalog_hash")} for row in sorted(segments, key=lambda row: row["snapshot"]["capture_refs"][0]["capture_id"])],
         "settings": settings, "projection_hash": content_hash(projection), "created_at": frozen, "valid_until": merged["valid_until"], "live_advice_eligible": False}
     validate_monitor_data_document(document)
-    return {"document": document, "projection": projection, "catalog": catalogs, "content_hash": content_hash(document)}
+    result = {"document": document, "projection": projection, "catalog": catalogs, "content_hash": content_hash(document)}
+    if legacy_transition is not None:
+        _assert(audited_action_knowledge, "LEGACY_TRANSITION_AUDITED_PROTOCOL_REQUIRED")
+        from .legacy_transition_source import bind_transition_monitor_data
+        return bind_transition_monitor_data(db, workspace_id, definition, legacy_transition, result, checked)
+    return result
 
 
 def resolve_monitor_data(db, workspace_id, definition, document, *, now=None, evaluated_at=None):
+    if type(document) is dict and document.get("schema_version") == "investor-monitor-data-input-v5":
+        from .legacy_transition_source import resolve_transition_monitor_data
+        return resolve_transition_monitor_data(db, workspace_id, definition, document, now=now, evaluated_at=evaluated_at)
+    return _replay_monitor_data(db, workspace_id, definition, document, now=now, evaluated_at=evaluated_at)
+
+
+def compare_monitor_data(db, workspace_id, definition, document, *, now=None):
+    evidence = {}
+    result = _replay_monitor_data(db, workspace_id, definition, document, now=now,
+        comparison=lambda value: evidence.update(value))
+    return {"comparison_projection": evidence.get("projection"), "comparison_catalog": evidence.get("catalog"),
+        "unavailable_reason": result["unavailable_reason"]}
+
+
+def _replay_monitor_data(db, workspace_id, definition, document, *, now=None, evaluated_at=None, comparison=None):
     from .monitor_costs import verify_settings
     validate_monitor_data_document(document)
     checked = _milliseconds(now)
@@ -262,6 +283,7 @@ def resolve_monitor_data(db, workspace_id, definition, document, *, now=None, ev
         result = build_monitor_data(db, workspace_id, definition, windows, document["settings"], now=checked, snapshot_at=document["created_at"],
             audited_action_knowledge=document["schema_version"] == "investor-monitor-data-input-v4")
     _assert(result["document"] == document)
+    if comparison is not None: comparison(result)
     if result["projection"]["valid_until"] <= evaluated:
         return {"document": document, "projection": None, "unavailable_reason": "MONITOR_DATA_PROJECTION_EXPIRED"}
     return {**result, "unavailable_reason": None}

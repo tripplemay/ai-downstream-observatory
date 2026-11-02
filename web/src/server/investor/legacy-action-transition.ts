@@ -3,12 +3,12 @@ import { canonical, hash } from "../ledger/service";
 import { Decimal } from "../ledger/decimal";
 import { priceInstant } from "../market-price-source";
 import { parseStrictJson } from "../strict-json";
-import { validateInvestorEvidenceCheckpoint, validateInvestorModelDocument, validateInvestorMonitorDataDocument, validateLegacyActionTransitionPreview, validateLegacyTransitionWorkflow } from "./kernel-contracts";
-import { readLegacyTransitionInput } from "./action-checkpoint-replay";
+import { validateInvestorEvidenceCheckpoint, validateInvestorModelDocument, validateInvestorMonitorDataDocument, validateLegacyActionTransitionPreview, validateLegacyTransitionWorkflow, validateLegacyTransitionSource } from "./kernel-contracts";
+import { checkpointActionReview, readLegacyTransitionInput } from "./action-checkpoint-replay";
 import { transitionActionReview } from "./action-review-selection";
 import { MANAGED_ACTION_PREFIX } from "./managed-action-source";
 import { actionAvailabilityRefs, indexActionAvailability } from "./monitor-action-knowledge";
-import { compareInvestorMonitorData } from "./monitor-source";
+import { compareInvestorMonitorData, replayInvestorMonitorData } from "./monitor-source";
 import { readEvidenceReference } from "./reference-evidence";
 import { monitorCostsAt, verifyMonitorCostSettings } from "./monitor-costs";
 import { replayEvidenceModel } from "./evidence-model-state";
@@ -17,6 +17,7 @@ import type { PlannedFundingBinding } from "./planned-funding-monitor";
 import type { VerifiedSourceReview } from "./source-inputs";
 
 type Obj = Record<string, unknown>;
+type TransitionProjection = Obj & { policy: Obj; valid_until: string; quality_gaps: string[] };
 type Ledger = Map<string, { action: Obj; input_id: string; input_hash: string }>;
 const legacy = new Set(["investor-monitor-data-input-v1", "investor-monitor-data-input-v2", "investor-monitor-data-input-v3"]);
 function check(value: unknown): asserts value { if (!value) throw new Error("LEGACY_TRANSITION_INVALID"); }
@@ -184,8 +185,7 @@ function transitionHeader(db: Database.Database, actor: { id: string }, workspac
   return { row, doc };
 }
 
-/** Independently prove consent and its original ledger scope, never return current prices or admission authority. */
-export function readLegacyTransitionConfirmation(db: Database.Database, actor: { id: string }, workspace: string, identifier: string, rawCandidate: unknown, now: string) {
+function verifiedTransition(db: Database.Database, actor: { id: string }, workspace: string, identifier: string, now: string) {
   return db.transaction(() => {
     const owner = db.prepare("SELECT owner_id FROM investor_workspaces WHERE id=?").get(workspace) as { owner_id: string } | undefined;
     check(owner?.owner_id === actor.id);
@@ -218,13 +218,18 @@ export function readLegacyTransitionConfirmation(db: Database.Database, actor: {
     check(same(head, { id: chain.bindings.at(-1)!.id, sequence: chain.previous.sequence, content_hash: hash(chain.previous),
       chain_hash: hash(chain.bindings), processed_actions_hash: hash(chain.previous.processed_actions) })
       && doc.valid_until === earliest([chain.bindings.at(-1)!.valid_until, original.document.valid_until, definition.valid_until]));
-    const candidate = obj(structuredClone(rawCandidate)); validateInvestorMonitorDataDocument("input", candidate);
-    check(candidate.schema_version === "investor-monitor-data-input-v4" && Buffer.byteLength(canonical(candidate)) <= 1048576
-      && candidate.created_at === millis(candidate.created_at) && time(doc.created_at) <= time(candidate.created_at) && time(candidate.created_at) <= time(now));
-    const bound = candidateBindings(db, workspace, definition, original.document, candidate, now);
     const reference = readEvidenceReference(db, workspace, text(model.plan_id), now); check(!reference.unavailable_reason);
-    compareInvestorMonitorData(db, workspace, definition, reference.document.targets, candidate, now);
-    const actions = auditedActions(definition, candidate, bound.reviews), carry = carryActions(chain.ledger, actions);
+    const selected = new Map<string, VerifiedSourceReview>();
+    for (const segment of rows(original.document.segments)) {
+      const snapshot = obj(segment.snapshot);
+      for (const ref of rows(snapshot.review_refs)) if (reviewKind(db, workspace, ref) === "actions") {
+        const current = transitionActionReview(db, workspace, ref, text(snapshot.range_start), text(snapshot.range_end), now);
+        selected.set(text(current.facts.listing_id), current);
+      }
+    }
+    const selectedReviews = [...selected.values()];
+    const current = { created_at: now, segments: [{ snapshot: { action_availability_refs: actionAvailabilityRefs(db, workspace, selectedReviews, now, now) } }] };
+    const actions = auditedActions(definition, current, selectedReviews), carry = carryActions(chain.ledger, actions);
     check(hash(carry) === doc.carry_hash && carry.length === doc.carry_count);
     const markets = new Map(rows(definition.targets).map(target => [text(target.listing_id), text(target.market)]));
     for (const action of actions) {
@@ -232,6 +237,125 @@ export function readLegacyTransitionConfirmation(db: Database.Database, actor: {
       check(chain.ledger.has(text(action.id)) || !(time(obj(chain.previous.initialized_at)[market]) < time(action.effective_at)
         && time(action.effective_at) <= time(obj(chain.previous.market_cutoffs)[market])));
     }
-    return structuredClone(doc);
+    return { row, doc, definition, original, chain, selected, reference };
   }).deferred();
+}
+
+/** Independently prove consent and its original ledger scope, never return current prices or admission authority. */
+export function readLegacyTransitionConfirmation(db: Database.Database, actor: { id: string }, workspace: string, identifier: string, rawCandidate: unknown, now: string) {
+  return db.transaction(() => {
+    const context = verifiedTransition(db, actor, workspace, identifier, now), candidate = obj(structuredClone(rawCandidate));
+    validateInvestorMonitorDataDocument("input", candidate);
+    check(candidate.schema_version === "investor-monitor-data-input-v4" && Buffer.byteLength(canonical(candidate)) <= 1048576
+      && candidate.created_at === millis(candidate.created_at) && time(context.doc.created_at) <= time(candidate.created_at) && time(candidate.created_at) <= time(now));
+    candidateBindings(db, workspace, context.definition, context.original.document, candidate, now);
+    compareInvestorMonitorData(db, workspace, context.definition, context.reference.document.targets, candidate, now);
+    return structuredClone(context.doc);
+  }).deferred();
+}
+
+function admission(db: Database.Database, actor: { id: string }, workspace: string, receipt: Obj, reference: Obj) {
+  validateLegacyTransitionSource("transition_ref", reference);
+  check(reference.id === receipt.confirmation_id && reference.content_hash === hash(receipt));
+  const row = db.prepare("SELECT * FROM investor_legacy_transition_admissions WHERE transition_id=? AND workspace_id=? AND model_id=?")
+    .get(reference.id, workspace, receipt.model_id) as Obj | undefined;
+  check(row && row.actor_id === actor.id && Buffer.byteLength(text(row.document_json)) <= 16384);
+  const doc = obj(parseStrictJson(text(row.document_json))); validateLegacyTransitionSource("admission", doc);
+  check(canonical(doc) === row.document_json && hash(doc) === row.content_hash && doc.admission_id === row.id
+    && ["workspace_id", "workspace_revision", "model_id", "transition_id", "input_id", "request_hash", "created_at", "valid_until"].every(key => row[key] === doc[key])
+    && doc.transition_hash === reference.content_hash && same(obj(doc.request), { transition_id: reference.id, transition_hash: reference.content_hash,
+      expected_revision: Number(row.workspace_revision) - 1, idempotency_key: row.idempotency_key }) && hash(doc.request) === row.request_hash);
+  const audit = db.prepare("SELECT * FROM audit_events WHERE id=?").get(row.audit_id) as Obj | undefined;
+  check(audit && audit.actor_id === actor.id && audit.action === "investor_register_legacy_transition_source" && audit.object_type === "investor_legacy_transition_admission"
+    && audit.object_id === row.id && audit.created_at === row.created_at && same(parseStrictJson(text(audit.payload_json)), { content_hash: row.content_hash }));
+  const input = db.prepare("SELECT * FROM investor_monitor_evidence_inputs WHERE id=? AND workspace_id=? AND model_id=?").get(row.input_id, workspace, row.model_id) as Obj | undefined;
+  check(input && input.actor_id === actor.id && Buffer.byteLength(text(input.document_json)) <= 1048576);
+  const root = obj(parseStrictJson(text(input.document_json))); validateInvestorMonitorDataDocument("input", root);
+  const inputAudit = db.prepare("SELECT * FROM audit_events WHERE id=?").get(input.audit_id) as Obj | undefined;
+  check(root.schema_version === "investor-monitor-data-input-v5" && same(root.transition, reference) && canonical(root) === input.document_json
+    && hash(root) === input.content_hash && input.content_hash === doc.input_hash && root.model_id === row.model_id && root.workspace_id === workspace
+    && root.created_at === input.created_at && input.created_at === row.created_at && root.valid_until === input.valid_until && input.valid_until === row.valid_until
+    && time(receipt.created_at) <= time(row.created_at) && time(row.valid_until) <= time(receipt.valid_until)
+    && inputAudit && inputAudit.actor_id === actor.id && inputAudit.action === "investor_admit_monitor_source" && inputAudit.object_type === "investor_monitor_evidence_input"
+    && inputAudit.object_id === input.id && inputAudit.created_at === input.created_at && same(parseStrictJson(text(inputAudit.payload_json)), { content_hash: input.content_hash }));
+  return doc;
+}
+
+export function auditedLegacyTransitionDocument(document: Obj) {
+  validateInvestorMonitorDataDocument("input", document); check(document.schema_version === "investor-monitor-data-input-v5");
+  const result = structuredClone(document);
+  delete result.transition; delete result.audited_projection_hash; delete result.audited_valid_until;
+  result.schema_version = "investor-monitor-data-input-v4"; result.projection_hash = document.audited_projection_hash; result.valid_until = document.audited_valid_until;
+  validateInvestorMonitorDataDocument("input", result); return result;
+}
+
+/** Separate comparison facts; ordinary resolution must apply the capped freshness deadline. */
+export function compareLegacyTransitionData(db: Database.Database, workspace: string, definition: Obj, targets: Obj[], document: Obj, now: string): {
+  comparison_projection: TransitionProjection | null; comparison_catalog: Record<string, Obj> | null; unavailable_reason: string | null;
+} {
+  return db.transaction(() => {
+    const rawDocument = auditedLegacyTransitionDocument(document);
+    const normal = replayInvestorMonitorData(db, workspace, definition, targets, rawDocument, now);
+    if (!normal.projection && normal.unavailable_reason !== "MONITOR_DATA_PROJECTION_EXPIRED")
+      return { comparison_projection: null, comparison_catalog: null, unavailable_reason: normal.unavailable_reason };
+    const raw = compareInvestorMonitorData(db, workspace, definition, targets, rawDocument, now);
+    const owner = db.prepare("SELECT owner_id FROM investor_workspaces WHERE id=?").get(workspace) as { owner_id: string } | undefined; check(owner);
+    const context = verifiedTransition(db, { id: owner.owner_id }, workspace, text(obj(document.transition).id), now);
+    const receipt = context.doc; check(same(context.definition, definition));
+    const registration = admission(db, { id: owner.owner_id }, workspace, receipt, obj(document.transition));
+    check(time(receipt.created_at) <= time(document.created_at) && time(registration.created_at) <= time(document.created_at) && time(document.created_at) <= time(now));
+    const selected = new Map<string, VerifiedSourceReview>();
+    for (const segment of rows(rawDocument.segments)) {
+      const snapshot = obj(segment.snapshot);
+      for (const ref of rows(snapshot.review_refs)) if (reviewKind(db, workspace, ref) === "actions") {
+        const current = transitionActionReview(db, workspace, ref, text(snapshot.range_start), text(snapshot.range_end), now);
+        const expected = context.selected.get(text(current.facts.listing_id)); check(expected && same(reviewRef(expected), reviewRef(current)));
+        if (ref.review_id !== current.row.id) check(checkpointActionReview(db, workspace, ref.review_id, now));
+        const historical = checkpointActionReview(db, workspace, ref.review_id, now);
+        selected.set(text(current.facts.listing_id), historical ?? current);
+      }
+    }
+    const actions = auditedActions(definition, rawDocument, [...selected.values()]), carry = carryActions(context.chain.ledger, actions);
+    check(hash(carry) === receipt.carry_hash && carry.length === receipt.carry_count);
+    const all = new Map(actions.map(action => [text(action.id), action])), projection = structuredClone(raw.comparison_projection);
+    for (const action of rows(projection.corporate_actions)) {
+      check(same(action, all.get(text(action.id))));
+      const old = context.chain.ledger.get(text(action.id)); if (old) action.known_at = old.action.known_at;
+    }
+    const markets = new Map(rows(definition.targets).map(target => [text(target.listing_id), text(target.market)]));
+    for (const action of actions) {
+      const market = markets.get(text(action.listing_id)); check(market);
+      check(context.chain.ledger.has(text(action.id)) || !(time(obj(context.chain.previous.initialized_at)[market]) < time(action.effective_at)
+        && time(action.effective_at) <= time(obj(context.chain.previous.market_cutoffs)[market])));
+    }
+    projection.schema_version = "investor-monitor-data-projection-v3"; projection.transition = structuredClone(document.transition);
+    projection.knowledge_protocol = "owner_confirmed_legacy_accounting_carry_v1"; projection.valid_until = earliest([projection.valid_until, receipt.valid_until]);
+    for (const quote of [...rows(projection.quotes), ...rows(projection.fx)]) quote.valid_until = earliest([quote.valid_until, receipt.valid_until]);
+    validateInvestorMonitorDataDocument("projection", projection);
+    check(hash(projection) === document.projection_hash && document.valid_until === earliest([rawDocument.valid_until, receipt.valid_until]));
+    return { comparison_projection: projection as TransitionProjection, comparison_catalog: raw.comparison_catalog, unavailable_reason: raw.unavailable_reason };
+  }).deferred();
+}
+
+/** Only an actual admitted current bridge can authorize exact original checkpoint comparison. */
+export function readApprovedLegacyCheckpointSource(db: Database.Database, workspace: string, model: Obj, checkpoint: Obj, now: string) {
+  const owner = db.prepare("SELECT owner_id FROM investor_workspaces WHERE id=?").get(workspace) as { owner_id: string } | undefined; check(owner);
+  const latest = db.prepare("SELECT * FROM investor_monitor_evidence_inputs WHERE workspace_id=? AND model_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1").get(workspace, model.id) as Obj | undefined;
+  if (!latest) return null;
+  const document = obj(parseStrictJson(text(latest.document_json))); if (document.schema_version !== "investor-monitor-data-input-v5") return null;
+  validateInvestorMonitorDataDocument("input", document);
+  check(canonical(document) === latest.document_json && hash(document) === latest.content_hash && document.workspace_id === workspace && document.model_id === model.id
+    && latest.actor_id === owner.owner_id && latest.source_qualification === "owner_reviewed_reconstructed"
+    && document.created_at === latest.created_at && document.valid_until === latest.valid_until
+    && time(document.created_at) <= time(now) && time(now) < time(document.valid_until));
+  const audit = db.prepare("SELECT * FROM audit_events WHERE id=?").get(latest.audit_id) as Obj | undefined;
+  check(audit && audit.actor_id === owner.owner_id && audit.action === "investor_admit_monitor_source" && audit.object_type === "investor_monitor_evidence_input"
+    && audit.object_id === latest.id && audit.created_at === latest.created_at && same(parseStrictJson(text(audit.payload_json)), { content_hash: latest.content_hash }));
+  const context = verifiedTransition(db, { id: owner.owner_id }, workspace, text(obj(document.transition).id), now);
+  const registration = admission(db, { id: owner.owner_id }, workspace, context.doc, obj(document.transition));
+  check(context.definition.model_id === model.id && context.doc.model_hash === model.content_hash && time(registration.created_at) <= time(document.created_at));
+  check(Number.isInteger(checkpoint.sequence) && Number(checkpoint.sequence) >= 1 && Number(checkpoint.sequence) <= context.chain.bindings.length);
+  const { input_hash: ignored, ...header } = context.chain.bindings[Number(checkpoint.sequence) - 1];
+  check(same(header, checkpoint));
+  return readLegacyTransitionInput(db, { id: owner.owner_id }, workspace, text(model.id), text(checkpoint.input_id), now);
 }

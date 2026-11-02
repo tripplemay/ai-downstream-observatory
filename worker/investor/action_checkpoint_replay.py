@@ -25,7 +25,11 @@ def replay_checkpoint_monitor_source(db, workspace, definition, checkpoint, docu
     from .data_evidence import resolve_review
     with transaction(db, immediate=False), _fact_validation_scope():
         original = resolve_monitor_data(db, workspace, definition, document, now=now, evaluated_at=checkpoint["created_at"])
-        if original["unavailable_reason"] != "REFERENCE_SOURCE_NO_LONGER_CURRENT" or document["schema_version"] != "investor-monitor-data-input-v4": return original
+        if original["unavailable_reason"] != "REFERENCE_SOURCE_NO_LONGER_CURRENT": return original
+        from .legacy_transition_source import replay_approved_legacy_checkpoint
+        legacy = replay_approved_legacy_checkpoint(db, workspace, definition, checkpoint, document, now)
+        if legacy is not None: return legacy
+        if document["schema_version"] not in ("investor-monitor-data-input-v4", "investor-monitor-data-input-v5"): return original
         stored = db.execute("SELECT * FROM investor_evidence_model_checkpoints WHERE id=? AND workspace_id=? AND model_id=?",
             (checkpoint["id"], workspace, definition["model_id"])).fetchone()
         _assert(stored is not None and dict(stored) == dict(checkpoint) and now < stored["valid_until"])

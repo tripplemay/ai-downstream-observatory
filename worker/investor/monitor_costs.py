@@ -104,7 +104,8 @@ def refresh_cost_inputs(db, *, limit=100, now=None, stop_requested=None):
                 original = resolve_monitor_data(db, model["workspace_id"], definition, old, now=at, evaluated_at=old["created_at"])
                 _assert(original["unavailable_reason"] is None)
                 actor = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (model["workspace_id"],)).fetchone()[0]
-                knowledge = {"audited_action_knowledge": True} if old["schema_version"] == "investor-monitor-data-input-v4" else {}
+                knowledge = {"audited_action_knowledge": True} if old["schema_version"] in ("investor-monitor-data-input-v4", "investor-monitor-data-input-v5") else {}
+                if old["schema_version"] == "investor-monitor-data-input-v5": knowledge["legacy_transition"] = old["transition"]
                 admitted = admit_monitor_data(db, model["workspace_id"], actor, model["id"],
                     [window for _, window in _windows(db, model["workspace_id"], old)], settings, now=at, **knowledge)
                 _audit(db, actor, "investor_apply_monitor_costs", "investor_monitor_evidence_input", admitted["id"],

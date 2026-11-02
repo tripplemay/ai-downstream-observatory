@@ -3,6 +3,7 @@ import type Database from "better-sqlite3";
 import { hash } from "../ledger/service";
 import { checkpointActionReviewNeedsReplay, checkpointPredecessorReview } from "./action-review-selection";
 import { readInvestorMonitorEvidenceSource } from "./monitor-source";
+import { readApprovedLegacyCheckpointSource } from "./legacy-action-transition";
 import type { VerifiedSourceReview } from "./source-inputs";
 
 type Obj=Record<string,unknown>;
@@ -38,7 +39,11 @@ export function readLegacyTransitionInput(db:Database.Database,actor:{id:string}
 export function readCheckpointMonitorSource(db:Database.Database,workspace:string,model:Obj,checkpoint:Obj,now:string) {
   return db.transaction(()=>{
     const original=readInvestorMonitorEvidenceSource(db,workspace,model.id as string,checkpoint.input_id as string,now,checkpoint.created_at as string);
-    if(original.unavailable_reason!=="REFERENCE_SOURCE_NO_LONGER_CURRENT"||original.document.schema_version!=="investor-monitor-data-input-v4")return original;
+    if(original.unavailable_reason!=="REFERENCE_SOURCE_NO_LONGER_CURRENT")return original;
+    if(["investor-monitor-data-input-v1","investor-monitor-data-input-v2","investor-monitor-data-input-v3"].includes(original.document.schema_version as string)) {
+      const approved=readApprovedLegacyCheckpointSource(db,workspace,model,checkpoint,now);return approved??original;
+    }
+    if(!["investor-monitor-data-input-v4","investor-monitor-data-input-v5"].includes(original.document.schema_version as string))return original;
     const stored=db.prepare("SELECT * FROM investor_evidence_model_checkpoints WHERE id=? AND workspace_id=? AND model_id=?").get(checkpoint.id,workspace,model.id) as Obj|undefined;
     check(stored&&hash(stored)===hash(checkpoint)&&now<(stored.valid_until as string)&&original.document.projection_hash===stored.projection_hash);
     const reviews=new Map<string,VerifiedSourceReview>();

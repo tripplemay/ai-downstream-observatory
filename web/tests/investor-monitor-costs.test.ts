@@ -58,6 +58,10 @@ test("explicit owner costs cross normal command/core and independent replay; exp
     const pending = getInvestorState(f.db, actor, at);
     assert.equal(pending.monitor_costs?.status, "pending"); assert.equal(pending.model_watch?.model_nav_cny, null);
     assert.equal(pending.effective_outcome, "insufficient_evidence"); assert.deepEqual(parseInvestorState({ ...pending, session_binding: binding }, binding), pending);
+    const expiredBeforeApplication = getInvestorState(f.db, actor, "2026-01-03T12:05:04.000Z");
+    assert.equal(expiredBeforeApplication.monitor_costs?.status, "expired");
+    assert.equal(expiredBeforeApplication.monitor_costs.input_applied, false);
+    assert.equal(expiredBeforeApplication.model_watch?.model_nav_cny, null);
     const appliedAt = "2026-01-02T12:05:04.001Z";
     python(f, "tests.investor.queue_fixture", ["--mode", "core", "--now", appliedAt]);
     const known = getInvestorState(f.db, actor, appliedAt);

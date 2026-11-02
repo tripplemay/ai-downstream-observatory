@@ -32,6 +32,11 @@ def _seed(db, workspace, model_id, input_id, at):
     # Expired prices are precisely why a listener is needed. Source retention,
     # current rights and the original frozen arithmetic still must verify.
     result = resolve_monitor_data(db, workspace, definition, document, now=at, evaluated_at=document["created_at"])
+    if result["unavailable_reason"] == "MONITOR_DATA_PROJECTION_EXPIRED" and document["schema_version"] == "investor-monitor-data-input-v5":
+        from .legacy_transition_source import compare_transition_monitor_data
+        comparison = compare_transition_monitor_data(db, workspace, definition, document, now=at)
+        _assert(comparison["comparison_catalog"] is not None, "CONFIRMED_FEED_SOURCE_UNAVAILABLE")
+        result = {"projection": None, "catalog": comparison["comparison_catalog"], "source_only": True, "unavailable_reason": None}
     _assert(result["unavailable_reason"] is None, "CONFIRMED_FEED_SOURCE_UNAVAILABLE")
     control = _latest(db, "investor_model_controls", model_id, "version DESC")
     _assert(control is not None and control["enabled"] == 1 and control["created_at"] <= at, "CONFIRMED_FEED_MODEL_DISABLED")
@@ -52,12 +57,19 @@ def _source_refresh_context(db, workspace, model_id, input_id, at):
     control = _latest(db, "investor_model_controls", model_id, "version DESC")
     _assert(control is not None and control["enabled"] == 1 and control["created_at"] <= at, "CONFIRMED_FEED_MODEL_DISABLED")
     _assert(at < document["valid_until"], "CONFIRMED_FEED_SOURCE_UNAVAILABLE")
+    if document["schema_version"] in ("investor-monitor-data-input-v1", "investor-monitor-data-input-v2", "investor-monitor-data-input-v3"):
+        from .legacy_transition_source import approved_legacy_refresh_context
+        if approved_legacy_refresh_context(db, workspace, definition, source, document, at):
+            return model, definition, reference, control, source, document
     changed = set()
     for segment in document["segments"]:
         for ref in segment["snapshot"]["review_refs"]:
             identifier = ref["review_id"]
             if retired_action_review(db, workspace, identifier, at):
-                _assert(document["schema_version"] == "investor-monitor-data-input-v4", "CONFIRMED_FEED_ACTION_PROTOCOL_REVIEW_REQUIRED")
+                _assert(document["schema_version"] in ("investor-monitor-data-input-v4", "investor-monitor-data-input-v5"), "CONFIRMED_FEED_ACTION_PROTOCOL_REVIEW_REQUIRED")
+                if document["schema_version"] == "investor-monitor-data-input-v5":
+                    from .legacy_transition_source import _context
+                    _context(db, workspace, definition, document["transition"], at)
                 from .managed_actions import action_refresh_basis, current_action_reviews
                 prior = action_refresh_basis(db, workspace, identifier, at)
                 _assert(prior["review"]["content_hash"] == ref["review_hash"] and prior["source"]["id"] == ref["source_id"]
@@ -167,7 +179,8 @@ def discover_confirmed_watches(db, *, limit=100, now=None, stop_requested=None):
                     if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
                     day = instant(at).astimezone(ZoneInfo(longport._MARKETS[market][0])).date().isoformat()
                     if db.execute("SELECT 1 FROM investor_confirmed_feed_requests WHERE model_id=? AND market=? AND session_date=?", (model["id"], market, day)).fetchone(): continue
-                    if any(target["market"] == market and instant(target["observed_at"]).astimezone(ZoneInfo(longport._MARKETS[market][0])).date().isoformat() >= day for target in result["projection"]["quotes"]): continue
+                    if any(target["market"] == market and instant(target["observed_at"]).astimezone(ZoneInfo(longport._MARKETS[market][0])).date().isoformat() >= day
+                        for target in (result["projection"]["quotes"] if result.get("projection") is not None else [])): continue
                     planned = market_plan(db, model["workspace_id"], model, definition, control, source, document, result, market, day, at)
                     if planned is None: continue
                     plans.append(planned)
@@ -425,7 +438,8 @@ def _admit_windows(db, workspace, actor, model_id, context, windows, at, stop_re
     from .monitor_costs import current_settings
     if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
     settings = current_settings(db, workspace, context[1], context[5]["settings"], at)
-    knowledge = {"audited_action_knowledge": True} if context[5]["schema_version"] == "investor-monitor-data-input-v4" else {}
+    knowledge = {"audited_action_knowledge": True} if context[5]["schema_version"] in ("investor-monitor-data-input-v4", "investor-monitor-data-input-v5") else {}
+    if context[5]["schema_version"] == "investor-monitor-data-input-v5": knowledge["legacy_transition"] = context[5]["transition"]
     admitted = admit_monitor_data(db, workspace, actor, model_id, [window for _,window in windows], settings, now=at, **knowledge)
     _check_fx_selection(db, workspace, context[1], [window for _,window in windows], settings, at)
     _check_action_selection(db, workspace, context[1], [window for _,window in windows], at)
@@ -490,7 +504,14 @@ def refresh_monitor_sources(db, *, limit=100, now=None, stop_requested=None):
         AND i.id=(SELECT id FROM investor_monitor_evidence_inputs WHERE model_id=m.id AND workspace_id=m.workspace_id ORDER BY created_at DESC,rowid DESC LIMIT 1)
         AND (EXISTS(SELECT 1 FROM investor_confirmed_feed_runs r JOIN job_runs j ON j.id=r.job_id
               WHERE r.model_id=m.id AND r.workspace_id=m.workspace_id AND r.status='complete' AND j.status='succeeded'
-                AND r.created_at>=i.created_at AND r.created_at<=:at
+                AND r.created_at<=:at AND (r.created_at>=i.created_at
+                  OR (json_extract(i.document_json,'$.schema_version')='investor-monitor-data-input-v5'
+                    AND EXISTS(SELECT 1 FROM investor_legacy_transition_admissions bridge
+                      JOIN investor_legacy_transition_confirmations consent ON consent.id=bridge.transition_id AND consent.workspace_id=bridge.workspace_id AND consent.model_id=bridge.model_id
+                      JOIN investor_confirmed_feed_requests prior ON prior.id=r.request_id AND prior.workspace_id=r.workspace_id AND prior.model_id=r.model_id
+                      WHERE bridge.workspace_id=m.workspace_id AND bridge.model_id=m.id AND bridge.created_at>=r.created_at
+                        AND consent.id=json_extract(i.document_json,'$.transition.id') AND consent.content_hash=json_extract(i.document_json,'$.transition.content_hash')
+                        AND prior.input_id=consent.legacy_input_id)))
                 AND NOT EXISTS(SELECT 1 FROM json_each(i.document_json,'$.segments') s
                   JOIN json_each(s.value,'$.snapshot.capture_refs') ref WHERE json_extract(ref.value,'$.capture_id')=r.capture_id))
           OR EXISTS(SELECT 1 FROM investor_data_reviews r JOIN investor_data_sources s ON s.id=r.source_id AND s.workspace_id=r.workspace_id

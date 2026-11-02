@@ -288,6 +288,12 @@
       "version": 57,
       "file": "0057_investor_legacy_transition_workflow.sql",
       "sha256": "e64f087a90b5123d711f177e7dd87947c79fe6de415d84b3f00c7df6d29e68e6"
+    },
+    {
+      "version": 58,
+      "file": "0058_investor_legacy_transition_source.sql",
+      "sha256": "7a339182448749cff674afada62de33a55dc8b7868f324e074a4eb762360bba3",
+      "foreign_key_rebuild": true
     }
   ]
 }

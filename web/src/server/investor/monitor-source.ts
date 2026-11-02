@@ -11,6 +11,7 @@ import { readEvidenceReference } from "./reference-evidence";
 import { verifyMonitorCostSettings } from "./monitor-costs";
 import { actionReviewManualUnavailable, actionReviewSourceRetired } from "./action-review-selection";
 import { checkpointActionReview } from "./action-checkpoint-replay";
+import { compareLegacyTransitionData } from "./legacy-action-transition";
 
 type Obj = Record<string, unknown>;
 const zones: Record<string, string> = { CN: "Asia/Shanghai", HK: "Asia/Hong_Kong", US: "America/New_York" };
@@ -107,6 +108,14 @@ function replay(db: Database.Database, workspace: string, rawDefinition: unknown
   try {
     validateInvestorModelDocument("definition", rawDefinition); validateInvestorMonitorDataDocument("input", rawDocument);
     const definition = obj(rawDefinition), document = obj(rawDocument), created = text(document.created_at), at = time(created);
+    if (document.schema_version === "investor-monitor-data-input-v5") {
+      check(at <= time(evaluatedAt) && time(evaluatedAt) <= time(now));
+      const rebuilt = compareLegacyTransitionData(db, workspace, definition, referenceTargets, document, now);
+      if (!rebuilt.comparison_projection) return { projection: null, catalog: null, unavailable_reason: rebuilt.unavailable_reason };
+      comparison?.(rebuilt.comparison_projection, rebuilt.comparison_catalog!);
+      if (time(rebuilt.comparison_projection.valid_until) <= time(evaluatedAt)) return { projection: null, catalog: null, unavailable_reason: "MONITOR_DATA_PROJECTION_EXPIRED" };
+      return { projection: rebuilt.comparison_projection, catalog: rebuilt.comparison_catalog, unavailable_reason: null };
+    }
     const auditedActions = document.schema_version === "investor-monitor-data-input-v4";
     check(document.workspace_id === workspace && document.model_id === definition.model_id && document.target_definition_hash === definition.target_definition_hash
       && definition.data_mode === "reconstructed" && time(definition.created_at) <= at && at < time(definition.valid_until) && at <= time(evaluatedAt) && time(evaluatedAt) <= time(now)

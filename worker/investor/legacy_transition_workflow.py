@@ -252,7 +252,7 @@ def _verified_transition(db, workspace, actor, identifier, at, stop_requested=No
     carry = _carry_actions(ledger, actions); _check_unprocessed_history(definition, previous, ledger, actions)
     _assert(content_hash(carry) == doc["carry_hash"] and len(carry) == doc["carry_count"], "LEGACY_TRANSITION_ACTION_CARRY_CHANGED")
     _stop(stop_requested)
-    return {"confirmation": doc, "checkpoint": previous, "ledger": ledger, "candidate": candidate}
+    return {"confirmation": doc, "checkpoint": previous, "ledger": ledger, "bindings": bindings, "candidate": candidate}
 
 
 def resolve_legacy_transition_confirmation(db, workspace, actor, identifier, *, now=None, stop_requested=None):
