@@ -8,7 +8,7 @@ import test from 'node:test';
 import { migrateWorkbench, migrationDirectory, verifyWorkbenchSchema } from '../../scripts/migrate-workbench.mjs';
 
 const require = createRequire(new URL('../../web/package.json', import.meta.url)), Database = require('better-sqlite3');
-function fixture(t) {
+function fixture(t, targetVersion = 54) {
   const directory = mkdtempSync(join(tmpdir(), 'fictional-action-knowledge-upgrade-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const manifest = JSON.parse(readFileSync(join(migrationDirectory, 'manifest.json')));
@@ -17,7 +17,7 @@ function fixture(t) {
     for (const entry of manifest.migrations.slice(0, count)) cpSync(join(migrationDirectory, entry.file), join(target, entry.file));
     writeFileSync(join(target, 'manifest.json'), JSON.stringify({ ...manifest, migrations: manifest.migrations.slice(0, count) })); return target;
   }
-  const prefix = copy('v53', 53), target = copy('v54', 54), filename = join(directory, 'workbench.db');
+  const prefix = copy('v53', 53), target = copy(`v${targetVersion}`, targetVersion), filename = join(directory, 'workbench.db');
   migrateWorkbench(filename, { directory: prefix });
   const db = new Database(filename); db.pragma('foreign_keys=ON'); t.after(() => db.close());
   const at = '2026-01-02T12:00:00.000Z', expiry = '2027-01-01T00:00:00.000Z', hash = 'a'.repeat(64);
@@ -74,4 +74,40 @@ test('late FK corruption rolls back migration 54, all old bytes, rowids, constra
   assert.deepEqual(f.snapshot(),f.before); assert.deepEqual(f.db.prepare('SELECT * FROM sqlite_master ORDER BY type,name').all(),schema);
   assert.deepEqual(f.db.prepare('SELECT * FROM schema_migrations ORDER BY version').all(),f.applied);
   assert.equal(f.db.pragma('user_version',{ simple:true }),53); assert.equal(f.db.pragma('foreign_keys',{ simple:true }),1);
+});
+
+test('whole v53-to-v61 release chain preserves old component rows and FKs without creating work or changing old checksums', t => {
+  const f = fixture(t, 61);
+  assert.equal(migrateWorkbench(f.filename, { directory: f.target }).applied, 8);
+  assert.equal(verifyWorkbenchSchema(f.db, f.target).version, 61);
+  assert.deepEqual(f.snapshot(), f.before);
+  assert.deepEqual(f.db.prepare('SELECT * FROM schema_migrations WHERE version<=53 ORDER BY version').all(), f.applied);
+  for (const table of ['investor_action_review_previews', 'investor_action_review_confirmations',
+    'investor_legacy_transition_confirmations', 'investor_legacy_transition_admissions',
+    'investor_correction_impact_requests', 'investor_initial_close_requests', 'investor_initial_close_runs']) {
+    assert.equal(f.db.prepare(`SELECT count(*) n FROM ${table}`).get().n, 0, table);
+  }
+  assert.equal(f.db.pragma('foreign_keys', { simple: true }), 1);
+  assert.deepEqual(f.db.pragma('foreign_key_check'), []);
+  assert.equal(f.db.pragma('integrity_check', { simple: true }), 'ok');
+  assert.match(f.db.prepare("SELECT sql FROM sqlite_master WHERE name='investor_monitor_evidence_inputs'").get().sql, /investor-monitor-data-input-v5/);
+  assert.throws(() => f.db.exec("UPDATE investor_monitor_evidence_inputs SET content_hash='x'"), /immutable/);
+  assert.throws(() => f.db.exec("DELETE FROM investor_monitor_evidence_inputs"), /immutable/);
+  assert.throws(() => f.db.exec("INSERT INTO fictional_knowledge_child VALUES('bad','missing','w','model')"), /FOREIGN KEY/);
+  assert.equal(migrateWorkbench(f.filename, { directory: f.target }).applied, 0);
+  assert.deepEqual(f.snapshot(), f.before);
+});
+
+test('failure in the final v61 step rolls back the complete v53 release chain, schema and all original rowids', t => {
+  const f = fixture(t, 61), schema = f.db.prepare('SELECT * FROM sqlite_master ORDER BY type,name').all();
+  const manifest = JSON.parse(readFileSync(join(f.target, 'manifest.json'))), entry = manifest.migrations.at(-1);
+  const sql = readFileSync(join(f.target, entry.file), 'utf8') + "\nINSERT INTO fictional_knowledge_child VALUES('bad','missing','w','model');\n";
+  writeFileSync(join(f.target, entry.file), sql); entry.sha256 = createHash('sha256').update(sql).digest('hex');
+  writeFileSync(join(f.target, 'manifest.json'), JSON.stringify(manifest));
+  assert.throws(() => migrateWorkbench(f.filename, { directory: f.target }), /WORKBENCH_FOREIGN_KEY_CHECK_FAILED/);
+  assert.deepEqual(f.snapshot(), f.before);
+  assert.deepEqual(f.db.prepare('SELECT * FROM sqlite_master ORDER BY type,name').all(), schema);
+  assert.deepEqual(f.db.prepare('SELECT * FROM schema_migrations ORDER BY version').all(), f.applied);
+  assert.equal(f.db.pragma('user_version', { simple: true }), 53);
+  assert.equal(f.db.pragma('foreign_keys', { simple: true }), 1);
 });
