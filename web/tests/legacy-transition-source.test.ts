@@ -25,7 +25,13 @@ db.execute("INSERT INTO investor_workspaces VALUES('w','synthetic-investor',0,'2
 case=LegacyTransitionSourceTests();case.db=db;case.at='${at}';case.case=ActionReviewReadmissionTests();case.case.db=db
 case.case.case=ActionReviewWorkflowTests();case.case.case.db=db;case.case.case.path=Path(sys.argv[1]);case.case.case.version=0
 if ${completed ? "True" : "False"}:
- case.test_default_core_rebinds_the_already_completed_capture_and_continues_the_original_model_without_a_new_request()
+ from worker.orchestration.runtime import run_pending_once
+ case.prepare(completed=True)
+ tables=('investor_confirmed_feed_requests','investor_confirmed_feed_runs','investor_confirmed_feed_admissions','investor_confirmed_captures')
+ original={table:[list(row) for row in db.execute('SELECT rowid,* FROM '+table)] for table in tables}
+ case.admit()
+ assert run_pending_once(db,'fictional-node-v5-core',clock=lambda:'${at}')['status']=='succeeded'
+ assert original=={table:[list(row) for row in db.execute('SELECT rowid,* FROM '+table)] for table in tables}
 else:
  case.prepare();case.admit()
 source=latest_monitor_evidence(db,'w',case.model_id);document=json.loads(source['document_json'])

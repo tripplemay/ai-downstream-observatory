@@ -126,6 +126,32 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
       assert.equal((await request(route, { headers: headers() })).status, 200);
     return { revision: 1, profile_versions: 1, risk_unknown_retained: true, financial_tables_unchanged: true };
   });
+  await check('HTTP-I29', 'legacy compatibility API is private, read-only on GET, explicit on POST and closed to caller prices or scope', async () => {
+    const route = `${endpoint}/legacy-transition`, before = financial();
+    const counts = () => read(db => ['investor_legacy_transition_job_requests', 'investor_legacy_transition_previews', 'investor_legacy_transition_confirmations',
+      'investor_legacy_transition_admissions'].map(table => db.prepare(`SELECT count(*) n FROM ${table}`).get().n));
+    const original = counts();
+    assert.equal((await jsonRequest(route)).status, 401);
+    assert.equal((await jsonRequest(route, { headers: { Cookie: cookie } })).status, 400);
+    const value = await jsonRequest(route, { headers: headers() }); assert.equal(value.status, 200);
+    assert.equal(value.json.workspace_id, first.json.workspace_id); assert.equal(value.json.session_binding, binding);
+    assert.equal(value.json.model, null); assert.equal(value.json.request, null); assert.equal(value.json.view, null);
+    assert.equal(value.json.current_advice_certified, false); assert.equal(value.headers.get('cache-control'), 'private, no-store');
+    const absent = await jsonRequest(`${route}?nonce=fictional-unknown-original`, { headers: headers() });
+    assert.equal(absent.status, 200); assert.equal(absent.json.request, null); assert.equal(absent.json.lookup_nonce, 'fictional-unknown-original');
+    for (const query of ['?nonce=x&request=y', '?request=x&request=y', '?actor_id=other'])
+      assert.equal((await jsonRequest(route + query, { headers: headers() })).status, 400);
+    const intent = { kind: 'preview', model_id: 'fictional-no-model', expected_revision: 1, idempotency_key: 'fictional-legacy-http' };
+    const send = (body, extra = {}) => jsonRequest(route, { method: 'POST', headers: headers({ Origin: origin, 'Content-Type': 'application/json', ...extra }),
+      body: typeof body === 'string' ? body : JSON.stringify(body) });
+    assert.equal((await send(intent, { Origin: 'https://wrong.example.test' })).status, 403);
+    assert.equal((await send(intent, { 'X-Workbench-Session-Binding': 'b'.repeat(64) })).status, 401);
+    for (const body of [{ ...intent, quotes: [] }, { ...intent, actor_id: 'other' }, { kind: 'confirmation', body: {} }, '{"kind":"preview","kind":"preview"}'])
+      assert.equal((await send(body)).status, 400);
+    assert.equal((await send({ ...intent, padding: 'x'.repeat(32769) })).status, 413);
+    assert.equal((await send(intent)).status, 409); assert.deepEqual(counts(), original); assert.deepEqual(financial(), before);
+    return { no_implicit_migration: true, unknown_nonce_not_latest: true, maximum_body_bytes: 32768, provider_calls: 0, financial_writes: false };
+  });
   await check('HTTP-I28', 'versioned progress reads preserve cached strict clients and require the same authenticated bound session', async () => {
     const version = { 'X-Workbench-Investor-View': 'action-drafts-v1' };
     const maintenanceVersion = { 'X-Workbench-Investor-View': 'action-drafts-v2' };

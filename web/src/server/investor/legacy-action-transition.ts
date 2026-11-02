@@ -185,6 +185,68 @@ function transitionHeader(db: Database.Database, actor: { id: string }, workspac
   return { row, doc };
 }
 
+/** Historical witness metadata is not current source qualification. */
+export function readLegacyTransitionPreviewWitness(db: Database.Database, actor: { id: string }, workspace: string, identifier: string) {
+  const owner = db.prepare("SELECT owner_id FROM investor_workspaces WHERE id=?").get(workspace) as Obj | undefined;
+  check(owner?.owner_id === actor.id);
+  const { row, doc } = transitionHeader(db, actor, workspace, identifier, "preview"), proof = obj(doc.proof);
+  check(doc.request_hash === hash({ model_id: doc.model_id, expected_revision: Number(doc.workspace_revision) - 1, idempotency_key: row.idempotency_key })
+    && time(doc.checked_at) <= time(doc.created_at) && time(doc.created_at) < time(doc.valid_until)
+    && time(doc.valid_until) <= time(proof.source_valid_until) && time(doc.valid_until) - time(doc.checked_at) <= 300000000n
+    && Buffer.byteLength(text(row.candidate_json)) <= 1048576);
+  const candidate = obj(parseStrictJson(text(row.candidate_json))); validateInvestorMonitorDataDocument("input", candidate);
+  check(canonical(candidate) === row.candidate_json && hash(candidate) === proof.audited_document_hash
+    && candidate.projection_hash === proof.audited_projection_hash && candidate.schema_version === "investor-monitor-data-input-v4"
+    && candidate.workspace_id === workspace && candidate.model_id === doc.model_id && candidate.created_at === doc.checked_at);
+  return doc;
+}
+
+/** Reconstruct raw sources and the complete original chain before exposing consent. */
+export function readLegacyTransitionPreviewView(db: Database.Database, actor: { id: string }, workspace: string, identifier: string, now: string) {
+  return db.transaction(() => {
+    const witness = readLegacyTransitionPreviewWitness(db, actor, workspace, identifier);
+    const ws = db.prepare("SELECT revision FROM investor_workspaces WHERE id=?").get(workspace) as Obj;
+    check(ws.revision === witness.workspace_revision && time(witness.created_at) <= time(now) && time(now) < time(witness.valid_until));
+    const row = db.prepare("SELECT candidate_json FROM investor_legacy_transition_previews WHERE id=? AND workspace_id=?").get(identifier, workspace) as Obj;
+    const candidate = obj(parseStrictJson(text(row.candidate_json)));
+    const replay = readLegacyActionTransitionPreview(db, actor, workspace, text(witness.model_id), candidate, now);
+    check(hash(replay) === witness.comparison_hash);
+    const compact: Obj = { carry_hash: hash(replay.carry_forward), carry_count: (replay.carry_forward as unknown[]).length };
+    for (const key of ["model_hash", "control_hash", "legacy_input_id", "legacy_input_hash", "settings_hash", "checkpoint",
+      "audited_document_hash", "audited_projection_hash", "projection_quality_gaps", "source_valid_until"] as const) compact[key] = replay[key];
+    check(same(compact, witness.proof));
+    const normalized = structuredClone(candidate); delete normalized.created_at; delete normalized.projection_hash;
+    for (const segment of rows(normalized.segments)) { delete obj(segment.snapshot).created_at; delete segment.dataset_hash; }
+    const proof = structuredClone(compact); delete proof.audited_document_hash; delete proof.audited_projection_hash;
+    check(hash({ candidate: normalized, proof }) === witness.basis_hash);
+    const control = db.prepare("SELECT * FROM investor_model_controls WHERE id=? AND workspace_id=? AND model_id=?").get(witness.control_id, workspace, witness.model_id) as Obj | undefined;
+    check(control && hash(control) === compact.control_hash);
+    return { preview: witness, monitoring_enabled: control.enabled === 1, checked_at: now,
+      refresh_after: new Date(Math.min(Date.parse(now) + 15000, Date.parse(text(witness.valid_until)))).toISOString() };
+  }).deferred();
+}
+
+/** Verify immutable consent lineage without treating it as a live admission. */
+export function readLegacyTransitionConfirmationReceipt(db: Database.Database, actor: { id: string }, workspace: string, identifier: string) {
+  const { row, doc } = transitionHeader(db, actor, workspace, identifier, "confirmation"), request = obj(doc.request);
+  const witness = readLegacyTransitionPreviewWitness(db, actor, workspace, text(row.preview_id)), proof = obj(witness.proof);
+  check(doc.preview_id === row.preview_id && request.preview_id === witness.preview_id && doc.preview_hash === hash(witness)
+    && request.expected_preview_hash === hash(witness) && hash(request) === row.request_hash && request.idempotency_key === row.idempotency_key
+    && doc.workspace_revision === Number(witness.workspace_revision) + 1 && request.expected_revision === witness.workspace_revision
+    && witness.model_id === doc.model_id && witness.control_id === doc.control_id
+    && ["model_hash", "control_hash", "legacy_input_id", "legacy_input_hash", "checkpoint", "carry_hash", "carry_count"].every(key => same(doc[key], proof[key]))
+    && time(witness.created_at) <= time(doc.created_at) && time(doc.created_at) < time(witness.valid_until) && time(doc.created_at) < time(doc.valid_until));
+  return doc;
+}
+
+/** Historical registration remains visible after source withdrawal, never as current NAV. */
+export function readLegacyTransitionRegistrationReceipt(db: Database.Database, actor: { id: string }, workspace: string, identifier: string) {
+  const row = db.prepare("SELECT transition_id FROM investor_legacy_transition_admissions WHERE id=? AND workspace_id=?").get(identifier, workspace) as Obj | undefined;
+  check(row);
+  const confirmation = readLegacyTransitionConfirmationReceipt(db, actor, workspace, text(row.transition_id));
+  return { confirmation, admission: admission(db, actor, workspace, confirmation, { id: confirmation.confirmation_id, content_hash: hash(confirmation) }) };
+}
+
 function verifiedTransition(db: Database.Database, actor: { id: string }, workspace: string, identifier: string, now: string) {
   return db.transaction(() => {
     const owner = db.prepare("SELECT owner_id FROM investor_workspaces WHERE id=?").get(workspace) as { owner_id: string } | undefined;

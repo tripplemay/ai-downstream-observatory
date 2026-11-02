@@ -294,6 +294,11 @@
       "file": "0058_investor_legacy_transition_source.sql",
       "sha256": "7a339182448749cff674afada62de33a55dc8b7868f324e074a4eb762360bba3",
       "foreign_key_rebuild": true
+    },
+    {
+      "version": 59,
+      "file": "0059_investor_legacy_transition_jobs.sql",
+      "sha256": "97d3280fb46ae15ba45e9f64d755f617cd51afa3f185af52114b93ce1956a3c8"
     }
   ]
 }
