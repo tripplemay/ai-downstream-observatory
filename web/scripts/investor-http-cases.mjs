@@ -143,6 +143,25 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
     assert.deepEqual(counts(), original); assert.deepEqual(financial(), before);
     return { get_never_enqueues: true, original_nonce_only: true, no_implicit_answers_or_caller_facts: true, financial_writes: false };
   });
+  await check('HTTP-I31', 'formal correction API separates explicit consent from hypotheses and only reads private metadata without an admitted comparison', async () => {
+    const route = `${endpoint}/correction-consent`, before = financial();
+    const counts = () => read(db => ['investor_correction_consent_requests', 'investor_correction_consents', 'investor_correction_consent_results'].map(table => db.prepare(`SELECT count(*) n FROM ${table}`).get().n));
+    const original = counts();
+    assert.equal((await jsonRequest(route)).status, 401);
+    assert.equal((await jsonRequest(route, { headers: { Cookie: cookie } })).status, 400);
+    const result = await jsonRequest(`${route}?nonce=fictional-missing`, { headers: headers() });
+    assert.equal(result.status, 200); assert.equal(result.json.lookup_nonce, 'fictional-missing'); assert.equal(result.json.request, null);
+    assert.equal(result.json.candidate, null); assert.equal(result.json.receipt, null); assert.equal(result.json.trading_permission, false);
+    assert.equal(result.headers.get('cache-control'), 'private, no-store');
+    for (const query of ['', '?request=a&nonce=b', '?impact=a&impact=b', '?actor_id=other']) assert.equal((await jsonRequest(route + query, { headers: headers() })).status, 400);
+    const send = (body, extra = {}) => jsonRequest(route, { method: 'POST', headers: headers({ Origin: origin, 'Content-Type': 'application/json', ...extra }), body });
+    assert.equal((await send('{}', { Origin: 'https://wrong.example.test' })).status, 403);
+    assert.equal((await send('{}', { 'X-Workbench-Session-Binding': 'b'.repeat(64) })).status, 401);
+    for (const body of ['{}', '{"expected_revision":1,"expected_revision":2}', JSON.stringify({ acknowledgements: { hypothetical_only: true } }), JSON.stringify({ baseline: {}, tax_per_unit: '0' })]) assert.equal((await send(body)).status, 400);
+    assert.equal((await send(JSON.stringify({ padding: 'x'.repeat(32769) }))).status, 413);
+    assert.deepEqual(counts(), original); assert.deepEqual(financial(), before);
+    return { get_never_enqueues: true, no_inferred_correction_or_caller_economics: true, metadata_only: true, maximum_body_bytes: 32768, provider_calls: 0, financial_writes: false };
+  });
   await check('HTTP-I29', 'legacy compatibility API is private, read-only on GET, explicit on POST and closed to caller prices or scope', async () => {
     const route = `${endpoint}/legacy-transition`, before = financial();
     const counts = () => read(db => ['investor_legacy_transition_job_requests', 'investor_legacy_transition_previews', 'investor_legacy_transition_confirmations',

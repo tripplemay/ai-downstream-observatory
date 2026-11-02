@@ -9,6 +9,7 @@ import type { ActionReviewResponse, ActionReviewView } from "@/server/investor/a
 import { useInvestorDisplayClock } from "./investor-display-clock";
 import { InvestorCorrectionImpact } from "./investor-correction-impact";
 import { InvestorActionRecovery } from "./investor-action-recovery";
+import { InvestorCorrectionConsent } from "./investor-correction-consent";
 import { actionReviewAttempt, actionReviewErrorText, blankActionReviewDrafts, buildActionReviewConfirmation,
   parseActionReviewResponse, readActionReviewJson, type ActionReviewAttempt, type ActionReviewDraft } from "./investor-action-review-client";
 
@@ -158,6 +159,8 @@ export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange
         {data.symbols.map(symbol=><Button key={symbol} type="button" variant="outline" disabled={disabled||data.read_only||!verified} onClick={()=>prepare(symbol)}>准备 {symbol} 更新预览</Button>)}
         {!data.symbols.length&&<p className="text-sm">暂无可以唯一定位的已登记维护规则；不以最新记录覆盖其他来源。</p>}
       </div>}
+      {modelId&&view?.status!=="historical_correction_required"&&<InvestorCorrectionConsent key={`${scope}:${modelId}`} workspaceId={workspaceId} binding={binding}
+        modelId={modelId} disabled={disabled||busy||uncertain||!!data?.read_only} onGuardChange={()=>{}}/>}
       {view&&<div className="space-y-4">
         <p className="text-sm">{view.provider_symbol} · 来源批次 {view.source_day}（纽约）；历史覆盖 {view.previous_coverage_end}，待核对覆盖 {view.candidate_coverage_end}。</p>
         <p className="break-words text-xs text-muted-foreground">原确认截止 {view.preview.valid_until.replace("T"," ")}；刷新不会延长。预览核对时间 {view.checked_at.replace("T"," ")}。</p>

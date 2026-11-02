@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useSessionBoundary } from "@/components/session-boundary";
@@ -10,6 +10,7 @@ import type { CorrectionImpactResponse } from "@/server/investor/correction-impa
 import { readActionReviewJson } from "./investor-action-review-client";
 import { blankCorrectionDrafts, buildCorrectionAttempt, correctionErrorText, parseCorrectionResponse, type CorrectionAttempt, type CorrectionDraft } from "./investor-correction-impact-client";
 import { useInvestorDisplayClock } from "./investor-display-clock";
+import { InvestorCorrectionConsent } from "./investor-correction-consent";
 
 const states:Record<string,string>={queued:"比较已受理，等待后台核对",running:"正在重放原来源和历史经济状态",preview_ready:"假设影响已计算，不是更正批准",
   rejected:"本次比较未通过核对",expired:"原比较或预览期限已到",outdated:"来源、模型或控制已有变化，已隐藏旧差额",unknown:"任务结果尚未核实，不自动重试"};
@@ -24,6 +25,7 @@ export function InvestorCorrectionImpact({view,modelId,workspaceId,binding,disab
   const key=Object.values(scope).join(":"),[drafts,setDrafts]=useState<CorrectionDraft[]>(()=>blankCorrectionDrafts(view));
   const [ack,setAck]=useState(false),[busy,setBusy]=useState(false),[uncertain,setUncertain]=useState(false),[error,setError]=useState("");
   const [data,setData]=useState<CorrectionImpactResponse|null>(null),[hideSummary,setHideSummary]=useState(false);
+  const [consentLocked,setConsentLocked]=useState(false),[registered,setRegistered]=useState(false);
   const live=useRef(true),invalid=useRef(false),epoch=useRef(0),active=useRef<AbortController|null>(null),pending=useRef<CorrectionAttempt|null>(null),tracking=useRef<string|null>(null);
   const verified=session?.verified===true&&session.sessionBinding===binding&&!invalid.current;
   const current=useRef({key,verified,disabled,canSubmit:false,dirty:false});current.current={key,verified,disabled,canSubmit:false,dirty:false};
@@ -31,12 +33,19 @@ export function InvestorCorrectionImpact({view,modelId,workspaceId,binding,disab
   const dirty=drafts.some(row=>row.choice||row.reason||row.dividend_at||row.pay_at||row.tax||row.split_at||row.ratio_ack);
   current.current.dirty=dirty;
   const waiting=["queued","running"].includes(data?.request?.status??"");
+  const correctionState=useRef({busy,uncertain,waiting,dirty});correctionState.current={busy,uncertain,waiting,dirty};
+  const protectConsent=useCallback((locked:boolean)=>{
+    if(!live.current||invalid.current||!current.current.verified)return;
+    if(locked)current.current.canSubmit=false;
+    setConsentLocked(locked);onGuardChange(locked||Object.values(correctionState.current).some(Boolean));
+  },[onGuardChange]);
+  const consentRegistered=useCallback(()=>{setRegistered(true);setDrafts([]);setAck(false);setHideSummary(true);},[]);
   useEffect(()=>{live.current=true;const clear=()=>{invalid.current=true;epoch.current++;active.current?.abort();pending.current=null;tracking.current=null;
     setData(null);setDrafts([]);setAck(false);setBusy(false);setUncertain(false);setError("");};
     window.addEventListener(SESSION_INVALIDATED_EVENT,clear);return()=>{live.current=false;epoch.current++;active.current?.abort();window.removeEventListener(SESSION_INVALIDATED_EVENT,clear);};},[]);
   useEffect(()=>{if(!verified){epoch.current++;active.current?.abort();pending.current=null;tracking.current=null;setData(null);setDrafts([]);setAck(false);setBusy(false);setUncertain(false);}},[verified]);
   useEffect(()=>{if(verified)setDrafts(rows=>rows.length?rows:blankCorrectionDrafts(view));},[verified,view]);
-  useEffect(()=>{onGuardChange(verified&&(busy||uncertain||waiting||dirty));},[verified,busy,uncertain,waiting,dirty,onGuardChange]);
+  useEffect(()=>{onGuardChange(verified&&(busy||uncertain||waiting||dirty||consentLocked));},[verified,busy,uncertain,waiting,dirty,consentLocked,onGuardChange]);
   useEffect(()=>()=>onGuardChange(false),[onGuardChange]);
   useEffect(()=>{if(!dirty&&!uncertain)return;const unload=(event:BeforeUnloadEvent)=>{event.preventDefault();event.returnValue="";};
     window.addEventListener("beforeunload",unload);return()=>window.removeEventListener("beforeunload",unload);},[dirty,uncertain]);
@@ -70,7 +79,7 @@ export function InvestorCorrectionImpact({view,modelId,workspaceId,binding,disab
   function submit(event:FormEvent){event.preventDefault();if(!live.current||invalid.current||!current.current.canSubmit||current.current.key!==key||active.current||pending.current||!modelId)return;try{
     const attempt=buildCorrectionAttempt(view,modelId,drafts,ack,crypto.randomUUID());pending.current=attempt;setUncertain(true);setHideSummary(true);void exchange(attempt);
   }catch(cause){setError(correctionErrorText(cause));}}
-  const expired=now>=Date.parse(view.preview.valid_until),locked=disabled||!verified||busy||uncertain||waiting||!!data?.read_only||expired;
+  const expired=now>=Date.parse(view.preview.valid_until),locked=disabled||!verified||busy||uncertain||waiting||!!data?.read_only||expired||consentLocked||registered;
   current.current.canSubmit=!locked;
   const summary=verified&&!hideSummary&&data?.summary&&now<Date.parse(data.summary.valid_until)?data.summary:null;
   if(!verified)return null;
@@ -78,8 +87,8 @@ export function InvestorCorrectionImpact({view,modelId,workspaceId,binding,disab
     <h3 id="correction-impact-title" className="font-semibold">先看历史变化会产生什么影响</h3>
     <p className="text-sm text-muted-foreground">仅比较原检查点价格和汇率下的假设影响，不显示当前净值、不改写原收益，也不批准更正或交易。提交后后台会重新核对原文、许可和版本。</p>
     {!modelId?<p role="status" className="text-sm">尚无观察模型，不能计算组合历史影响；不会替你创建观察起点。</p>:<>
-      <div className="flex flex-wrap gap-3"><Button type="button" variant="outline" disabled={busy} onClick={()=>void exchange()}>核对比较受理状态</Button>
-        <Button type="button" variant="ghost" disabled={busy||uncertain||waiting} onClick={()=>{setDrafts(blankCorrectionDrafts(view));setAck(false);setError("");setHideSummary(true);}}>清除本地假设</Button></div>
+      <div className="flex flex-wrap gap-3"><Button type="button" variant="outline" disabled={busy||consentLocked} onClick={()=>void exchange()}>核对比较受理状态</Button>
+        <Button type="button" variant="ghost" disabled={busy||uncertain||waiting||consentLocked||registered} onClick={()=>{setDrafts(blankCorrectionDrafts(view));setAck(false);setError("");setHideSummary(true);}}>清除本地假设</Button></div>
       {busy&&<p role="status" className="text-sm">正在核对本次请求…</p>}{error&&<p role="alert" className="text-sm text-red-600">{error}</p>}
       {uncertain&&<div role="status" className="space-y-2 text-sm"><p>原请求是否受理尚未核实。先核对状态；如需重发，只能使用原请求，不会自动生成第二份。</p>
         <Button type="button" variant="outline" disabled={busy||disabled} onClick={()=>{if(pending.current)void exchange(pending.current);}}>使用原请求重试</Button></div>}
@@ -96,9 +105,12 @@ export function InvestorCorrectionImpact({view,modelId,workspaceId,binding,disab
         <div className="grid min-w-0 gap-3 sm:grid-cols-2">{[["币种现金差额",summary.cash_delta],["未支付应收差额",summary.receivable_delta]].map(([label,values])=><div key={String(label)} className="min-w-0"><p className="font-medium">{String(label)}</p>
           {Object.entries(values).map(([currency,value])=><p key={currency} className="break-all">{currency}：{value}</p>)}</div>)}</div>
         {!!summary.ignored_new_report_dates.length&&<p>另有新增日期尚未处理：{summary.ignored_new_report_dates.join("、")}。</p>}
-        <p>当前仅保存了假设比较，没有批准更正、写入新检查点或恢复监测。正式更正确认与状态接续仍待完成。</p>
+        <p>这份结果本身只是已保存的假设比较。正式更正须在下方另行确认；登记状态以独立收据为准，不会据此恢复监测。</p>
       </div>}
-      <form onSubmit={submit} className="space-y-4"><fieldset disabled={locked} className="min-w-0 space-y-4">
+      {data?.request&&<InvestorCorrectionConsent key={`${key}:${data.request.id}`} workspaceId={workspaceId} binding={binding} modelId={modelId}
+        impactId={data.request.id} summaryHash={summary?data.summary_hash:null} disabled={disabled||busy||uncertain||waiting||!!data.read_only}
+        onGuardChange={protectConsent} onRegistered={consentRegistered}/>}
+      {!registered&&<form onSubmit={submit} className="space-y-4"><fieldset disabled={locked} className="min-w-0 space-y-4">
         <p className="text-sm">每个历史日期单独选择。未知税额或时刻请保留空白，不要猜测或填零。UTC 时刻换算后的纽约日期须与上方来源相同。</p>
         {drafts.map((row,index)=>{const source=view.changes.find(change=>change.date===row.date)!;return <div key={row.date} className="min-w-0 space-y-3 rounded-xl border p-3 text-sm">
           <h4 className="font-medium">{row.date}（纽约）的影响假设</h4>
@@ -118,7 +130,7 @@ export function InvestorCorrectionImpact({view,modelId,workspaceId,binding,disab
         </div>;})}
         <label className="flex items-start gap-3 text-sm"><input type="checkbox" checked={ack} onChange={event=>setAck(event.target.checked)}/><span>已核对来源差异、金额单位与币种，明确时刻、税额及原税务说明仍适用；仅接受原报告覆盖加上述假设，不声称客观无其他事件。本次只计算影响，不批准历史更正、不恢复监测、不授权交易。</span></label>
         <Button disabled={locked||!ack}>计算假设影响，不批准更正</Button>
-      </fieldset></form>
+      </fieldset></form>}
       {expired&&<p role="status" className="text-sm">原预览期限已到。清除本地假设后，可在上方重新准备来源预览；刷新不会延长原期限。</p>}
       {data?.read_only&&<p role="status" className="text-sm">系统只读，不能提交新的比较。</p>}
     </>}

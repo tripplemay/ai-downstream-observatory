@@ -13,7 +13,7 @@ function mount(t:TestContext,modelId:string|null="fictional-model"){
   const h=mountInvestorDisplay(t,new URL("../src/components/workbench/investor-correction-impact.tsx",import.meta.url),"InvestorCorrectionImpact",
     {view:correctionView(),modelId,workspaceId:"w",binding,disabled:false,onGuardChange:(value:boolean)=>locks.push(value)},
     {"@/components/ui/input":{Input:"Input"},"@/components/session-boundary":{useSessionBoundary:()=>({verified:true,sessionBinding:binding})},
-      "./investor-correction-impact-client":client,"./investor-action-review-client":{readActionReviewJson}},now,{crypto:{randomUUID:()=>`fictional-impact-${++nonce}`,subtle:webcrypto.subtle}});
+      "./investor-correction-impact-client":client,"./investor-action-review-client":{readActionReviewJson},"./investor-correction-consent":{InvestorCorrectionConsent:"InvestorCorrectionConsent"}},now,{crypto:{randomUUID:()=>`fictional-impact-${++nonce}`,subtle:webcrypto.subtle}});
   async function reply(index:number,value:unknown,status=200){h.requests[index].resolve(new Response(JSON.stringify(value),{status}));await h.waitFor(()=>!h.text().includes("正在核对本次请求…"));}
   async function ready(){await h.waitRequests(1);await reply(0,correctionResponse({request:null}));}
   async function edit(index:number,value:string){(h.nodes().filter(row=>row.type==="Input")[index].props.onChange as (event:unknown)=>void)({target:{value}});await h.flush();}
@@ -40,7 +40,7 @@ test("one explicit intent, queued GET polling and an original-price result never
   const queued=correctionResponse({lookup_nonce:body.idempotency_key,request:{...correctionResponse().request!,intent_hash:hash(body)}});
   await h.reply(1,queued,202);await h.advance(now+5000);await h.waitRequests(3);assert.equal(h.requests[2].method,"GET");
   await h.reply(2,readyCorrectionResponse({checked_at:"2026-11-03T06:00:08.001Z",refresh_after:"2026-11-03T06:00:23.001Z",request:{...queued.request!,status:"preview_ready",code:"CORRECTION_IMPACT_READY"}}));
-  assert.match(h.text(),/原检查点/);assert.match(h.text(),/10002.5/);assert.match(h.text(),/不是当前行情/);assert.match(h.text(),/没有批准更正、写入新检查点或恢复监测/);
+  assert.match(h.text(),/原检查点/);assert.match(h.text(),/10002.5/);assert.match(h.text(),/不是当前行情/);assert.match(h.text(),/正式更正须在下方另行确认/);
   assert.equal(h.requests.filter(row=>row.method==="POST").length,1);
   await h.edit(0,"Changed unsubmitted hypothesis");assert.doesNotMatch(h.text(),/10002.5/);
 });
@@ -62,4 +62,14 @@ test("stale callbacks cannot POST after parent lock or session change; failed re
 test("unmounted correction forms cannot send a new intent through a retained event handler",async t=>{
   const h=mount(t);await h.ready();await h.fill();const old=h.node("form")!.props.onSubmit as (event:unknown)=>void;
   h.close();old({preventDefault(){}});await h.flush();assert.equal(h.requests.filter(row=>row.method==="POST").length,0);assert.equal(h.timers.size,0);
+});
+test("formal confirmation locks hypothesis edits synchronously; registration hides the old draft and difference but keeps the same receipt scope",async t=>{
+  const h=mount(t);await h.ready();await h.fill();const old=h.node("form")!.props.onSubmit as (e:unknown)=>void;
+  await h.click("清除本地假设");await h.click("核对比较受理状态");await h.reply(1,readyCorrectionResponse());
+  const child=h.node("InvestorCorrectionConsent")!;assert.equal(child.props.summaryHash,readyCorrectionResponse().summary_hash);
+  const guard=child.props.onGuardChange as (v:boolean)=>void;guard(true);old({preventDefault(){}});await h.flush();
+  assert.equal(h.requests.filter(r=>r.method==="POST").length,0);assert.equal(h.button("清除本地假设")!.props.disabled,true);
+  (child.props.onRegistered as ()=>void)();await h.flush();guard(false);await h.flush();
+  assert.equal(h.node("form"),undefined);assert.doesNotMatch(h.text(),/10002.5/);
+  const retained=h.node("InvestorCorrectionConsent")!;assert.equal(retained.props.impactId,child.props.impactId);assert.equal(retained.props.summaryHash,null);
 });

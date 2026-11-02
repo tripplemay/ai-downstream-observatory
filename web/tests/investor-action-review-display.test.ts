@@ -12,7 +12,7 @@ function mount(t:TestContext) {
   const h=mountInvestorDisplay(t,new URL("../src/components/workbench/investor-action-review.tsx",import.meta.url),"InvestorActionReview",
     {workspaceId:"w",binding,modelId:"fictional-model",disabled:false,onScopeChange:(value:boolean)=>locks.push(value),onRefresh:()=>refreshes.push(1)},
     {"@/components/ui/input":{Input:"Input"},"@/components/session-boundary":{useSessionBoundary:()=>({verified:true,sessionBinding:binding})},
-      "./investor-action-review-client":client,"./investor-correction-impact":{InvestorCorrectionImpact:"InvestorCorrectionImpact"},
+      "./investor-action-review-client":client,"./investor-correction-impact":{InvestorCorrectionImpact:"InvestorCorrectionImpact"},"./investor-correction-consent":{InvestorCorrectionConsent:"InvestorCorrectionConsent"},
       "./investor-action-recovery":{InvestorActionRecovery:"InvestorActionRecovery"}},now,{Element:ReviewLinkTarget,crypto:{randomUUID:()=>`fictional-review-${++nonce}`,subtle:webcrypto.subtle}});
   async function reply(index:number,value:unknown,status=200) {
     h.requests[index].resolve(new Response(JSON.stringify(value),{status}));
