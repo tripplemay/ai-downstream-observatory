@@ -163,6 +163,11 @@ jobs:
         env:
           WORKBENCH_TEST_PYTHON: python
         run: npm run test:workbench:http -- --no-build
+      - name: actual-clock fictional first-close HTTP acceptance
+        working-directory: web
+        env:
+          WORKBENCH_TEST_PYTHON: python
+        run: npm run test:first-close:http
       - name: dependency audit
         working-directory: web
         run: npm audit --audit-level=high

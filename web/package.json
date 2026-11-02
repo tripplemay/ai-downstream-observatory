@@ -20,6 +20,7 @@
     "test:auth": "tsx --test tests/auth.test.ts",
     "test:auth:http": "tsx tests/auth-http.integration.ts",
     "test:workbench:http": "node scripts/test-workbench-http.mjs",
+    "test:first-close:http": "node scripts/test-current-first-close-http.mjs",
     "dev:fixture": "node scripts/serve-workbench-fixture.mjs",
     "auth:hash-password": "tsx scripts/hash-password.ts"
   },

@@ -35,6 +35,30 @@ test("cost fields reject omitted, floating, hidden-grant and invalid-rate values
     expected_cost_version: 0, costs: values, validity_days: 30, acknowledged_research_only: false }).success, false);
 });
 
+test("cost confirmation before any monitor input preserves the waiting-for-input state", () => {
+  const f = investorFixture();
+  try {
+    saveSyntheticProfile(f, actor, { ...syntheticProfile, loss_tolerance: "0.30" });
+    python(f, "tests.investor.managed_fx_monitor_fixture", ["--stage", "history"]);
+    python(f, "tests.investor.queue_fixture", ["--mode", "core"]);
+    const savedAt = "2026-01-02T12:00:04.000Z", costsAt = "2026-01-02T12:00:04.001Z";
+    const first = getInvestorState(f.db, actor, savedAt); assert.ok(first.plan);
+    executeInvestorCommand(f.db, actor, { action: "save_plan", plan_id: first.plan.id,
+      expected_revision: first.revision, idempotency_key: "fictional-cost-waiting-model" }, savedAt);
+    const before = getInvestorState(f.db, actor, costsAt), stable = fixedRows(f);
+    assert.equal(before.model_watch?.status, "awaiting_inputs"); assert.ok(before.model_watch && before.monitor_costs?.editable);
+    executeInvestorCommand(f.db, actor, { action: "set_monitor_costs", model_id: before.model_watch.id,
+      model_hash: before.monitor_costs.model_hash, expected_cost_version: 0, expected_revision: before.revision,
+      idempotency_key: "fictional-cost-waiting-input", costs: values, validity_days: 7, acknowledged_research_only: true }, costsAt);
+    const pending = getInvestorState(f.db, actor, costsAt);
+    assert.equal(pending.monitor_costs?.status, "pending"); assert.equal(pending.monitor_costs.input_applied, false);
+    assert.equal(pending.model_watch?.status, "awaiting_inputs"); assert.equal(pending.model_watch.model_nav_cny, null);
+    assert.equal(pending.model_watch.checkpoint_sequence, 0); assert.equal(pending.effective_outcome, "insufficient_evidence");
+    assert.equal((f.db.prepare("SELECT count(*) n FROM investor_monitor_evidence_inputs").get() as { n: number }).n, 0);
+    assert.deepEqual(fixedRows(f), stable); assert.deepEqual(parseInvestorState({ ...pending, session_binding: binding }, binding), pending);
+  } finally { f.close(); }
+});
+
 test("explicit owner costs cross normal command/core and independent replay; expiry and replacement never rewrite models or ancestors", () => {
   const f = investorFixture();
   try {
