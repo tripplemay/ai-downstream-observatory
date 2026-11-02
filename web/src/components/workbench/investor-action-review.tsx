@@ -13,6 +13,17 @@ import { actionReviewAttempt, actionReviewErrorText, blankActionReviewDrafts, bu
 const field="flex min-w-0 flex-col gap-2 text-sm";
 const labels:Record<string,string>={queued:"已受理，等待后台核对",running:"后台正在核对原文与版本",preview_ready:"预览已登记，确认前仍须核对当前原文",
   confirmed:"研究审阅已登记；不是交易或监测准入",rejected:"本次请求未通过核对",expired:"本次请求或原确认期限已到",outdated:"工作区已变化，原预览不能确认",unknown:"本次任务结果尚未核实，不自动重试"};
+const rejectionReasons:Partial<Record<NonNullable<NonNullable<ActionReviewResponse["request"]>["code"]>,string>>={
+  ACTION_REVIEW_VERSION_CHANGED:"工作区已有更新。请刷新工作台，再重新准备预览；原确认不会自动套用到新版本。",
+  ACTION_REVIEW_PREVIEW_EXPIRED:"原预览已过期。请重新准备并逐项核对；刷新不会延长原确认期限。",
+  ACTION_REVIEW_SOURCE_UNAVAILABLE:"当前来源、身份或使用许可未通过核对。请查看上方资料维护状态；资料就绪或缺口处理后，再明确准备新预览。不会复用旧资料自动确认。",
+  ACTION_REVIEW_HISTORICAL_REVIEW_REQUIRED:"发现历史记录变化或覆盖差异，不能按普通新增事件登记。请先人工复核历史影响，不能通过重新启用维护清除差异。",
+  ACTION_REVIEW_INVALID_ANSWERS:"研究时刻、税额或逐项确认未通过核对。请重新检查必要假设；未知税额不要填零。",
+  ACTION_REVIEW_RULE_RETIRED:"原维护规则已由另一次审阅接续。请刷新后核对当前规则，不要重新启用旧规则。",
+  ACTION_REVIEW_SCOPE_CHANGED:"资料范围或原批准关系已经变化。请重新准备当前范围的预览，不能沿用旧确认。",
+  ACTION_REVIEW_REQUEST_EXPIRED:"请求在完成核对前已到期。请先核对原登记状态，再明确准备新预览；不会自动重发。",
+  ACTION_REVIEW_FAILED:"后台未完成本次核对。请先核对受理状态，必要时查看任务详情；不会自动重试或推定已批准。",
+};
 const acknowledgements=["已核对发行人每份金额、单位和币种，以及两源的精确差异。","以下有效/支付时刻是我明确选择的研究假设，不是提供方精确时刻。",
   "研究税额由我明确填写；原税务说明仍适用于本次研究。","覆盖依据是这两源的报告范围，不保证客观不存在其他事件。",
   "本次不重述既有历史，只登记新报告事件；新规则先按默认停用登记。"];
@@ -128,7 +139,8 @@ export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange
       {uncertain&&<div role="status" className="space-y-2 rounded-xl border p-3 text-sm"><p>原提交仍待核实。连接失败不等于未受理；不会自动创建第二个请求。</p>
         <Button type="button" variant="outline" disabled={busy||disabled||!verified} onClick={()=>{if(pending.current)void exchange(pending.current);}}>使用原请求重试</Button></div>}
       {data?.read_only&&<p role="status" className="text-sm">系统当前只读，只能核对登记状态。</p>}
-      {data?.request&&<p role="status" className="text-sm">{labels[data.request.status]}{data.request.status==="rejected"?`（${data.request.code}）`:""}。</p>}
+      {data?.request&&<p role="status" className="text-sm">{labels[data.request.status]}。
+        {data.request.status==="rejected"&&<span className="mt-2 block text-muted-foreground">{rejectionReasons[data.request.code??"ACTION_REVIEW_FAILED"]??"当前请求未通过核对。请查看资料维护状态，再明确准备新预览；不会自动确认。"}</span>}</p>}
       {data?.request?.status==="confirmed"&&<p className="text-sm">已保留原历史。当前行情、汇率、费用和模型接续仍须重新核验，登记不等于监测已恢复；系统未下单。</p>}
       {data?.preview_error&&<p role="status" className="text-sm">当前原文或依赖未通过核对，已隐藏旧预览；保留的本地输入仍未确认。</p>}
       {data&&!view&&!uncertain&&!busy&&!["queued","running"].includes(data.request?.status??"")&&<div className="flex flex-wrap gap-3">

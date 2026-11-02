@@ -362,3 +362,33 @@ Node 的独立未批准预览已接普通入口；新确认接续从实际保留
 
 本阶段新增尚未用于生产的迁移 54、55、56；已有普通确认任务/界面入口，没有真实来源请求或生产变更。
 现有无新增行动的生产维护与单份备份策略保持，不从准备结果扩大授权。
+
+## 真实时钟的本地 HTTP / 原生验收工具
+
+`web/scripts/test-current-action-http.mjs` 为普通资料审阅提供独立、隔离的本地纵切。
+来源是显式虚构的保留发行人和 EODHD 原文，不调用真实提供方、不读取凭据，也不写金融事实。
+历史传输时钟只在构造夹具时局部模拟；应用认证、HTTP 处理器、后台默认 core 和界面均使用
+真实系统时钟。它不接收数据库、账户、来源 URL 或时钟参数，不能用于生产资料准入。
+
+先完成正常生产构建，再从仓库根目录执行：
+
+```sh
+node web/scripts/test-current-action-http.mjs
+node web/scripts/test-current-action-http.mjs --serve
+node web/scripts/test-current-action-http.mjs --serve-pending
+```
+
+需提前配置本地测试解释器及依赖、支持 `req -addext` 的 OpenSSL；工具沿用 `WORKBENCH_TEST_PYTHON` / `WORKBENCH_PYTHON`。
+无参数模式执行实际认证 HTTP 的预览、明确确认、原 nonce 恢复及撤权后的新请求拒绝。
+正常模式仅在纽约 01:00 后构造当前日虚构报告，窗口前返回 `WAITING_WINDOW`，不伪造时间或
+将其记作通过。`--serve` 留出 25 分钟供原生操作；`--serve-pending` 不构造当前日报告，
+专供缺资料路径。`SERVED_NOT_NATIVE_ACCEPTED` 只证明本地环境运行，不替代浏览器操作证据。
+
+原生模式只监听 loopback，随机登录资料保存在临时目录的 0600 文件中。临时 TLS 证书由本地
+生成，HTTP 客户端精确固定该证书验证，不关闭 TLS 校验或修改系统信任；浏览器仅可对该已知
+本地夹具确认临时证书警告。它不是生产域名 TLS 验收。退出或限期后停止自有进程，清理临时
+认证库、数据库、密钥和证书，不产生业务备份或恢复副本。
+
+实际缺资料界面曾仅显示内部 `ACTION_REVIEW_SOURCE_UNAVAILABLE`。现改为中文核对原因和
+下一步，覆盖全部封闭失败码，不从粗粒度错误猜测具体根因；来源、时窗、重试、幂等及确认
+规则不变。确认表单仍只在独立核验的有效预览下显示，不因说明更易读而恢复旧资料资格。

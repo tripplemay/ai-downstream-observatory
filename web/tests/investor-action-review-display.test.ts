@@ -80,3 +80,16 @@ test("queued previews poll only GET; original deadlines and ready metadata witho
   await h.reply(2,reviewResponse({view:null,preview_error:"ACTION_REVIEW_VIEW_UNAVAILABLE"}));assert.equal(h.node("form"),undefined);
   assert.equal(h.requests.filter(row=>row.method==="POST").length,1);assert.match(h.text(),/当前原文或依赖未通过核对/);
 });
+test("rejected reviews explain every closed failure in ordinary language without leaking source facts or scheduling another write",async t=>{
+  const reasons={ACTION_REVIEW_VERSION_CHANGED:"工作区已有更新",ACTION_REVIEW_PREVIEW_EXPIRED:"原预览已过期",
+    ACTION_REVIEW_SOURCE_UNAVAILABLE:"当前来源、身份或使用许可未通过核对",ACTION_REVIEW_HISTORICAL_REVIEW_REQUIRED:"发现历史记录变化或覆盖差异",
+    ACTION_REVIEW_INVALID_ANSWERS:"研究时刻、税额或逐项确认未通过核对",ACTION_REVIEW_RULE_RETIRED:"原维护规则已由另一次审阅接续",
+    ACTION_REVIEW_SCOPE_CHANGED:"资料范围或原批准关系已经变化",ACTION_REVIEW_REQUEST_EXPIRED:"请求在完成核对前已到期",ACTION_REVIEW_FAILED:"后台未完成本次核对"} as const;
+  for(const [code,text] of Object.entries(reasons)){
+    const h=mount(t);await h.ready();await h.click("核对受理状态");
+    await h.reply(1,reviewResponse({view:null,request:{...reviewResponse().request!,status:"rejected",code:code as keyof typeof reasons,
+      resource_id:null,resource_hash:null,resource_valid_until:null}}));
+    assert.ok(h.text().includes(text),code);assert.doesNotMatch(h.text(),/ACTION_REVIEW_|4\.32109 USD|Fictional unchanged private/);
+    assert.equal(h.node("form"),undefined);assert.equal(h.requests.filter(row=>row.method==="POST").length,0);h.close();
+  }
+});
