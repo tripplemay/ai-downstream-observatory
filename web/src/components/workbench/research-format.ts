@@ -19,6 +19,12 @@ export function formatResearchMoneyDelta(value: string): string {
   return formatted === "0.00" && /[1-9]/.test(value) ? (value.startsWith("-") ? "-" : "+") + "<0.01" : formatted;
 }
 export function formatResearchPercent(value: string | null): string { return value === null ? "未能计算" : formatFixed(value, 4) + "%"; }
+export function formatResearchWeightDelta(value: string): string {
+  const formatted = formatFixed(value, 4), nonzero = /[1-9]/.test(value);
+  const number = formatted === "0.00" && nonzero ? (value.startsWith("-") ? "-" : "+") + "<0.01"
+    : !value.startsWith("-") && nonzero ? "+" + formatted : formatted;
+  return number + " 个百分点";
+}
 export function currentResearchDisplay(task: InvestorResearchTask, nowMs: number): InvestorResearchTask {
   const until = task.study?.source_context?.valid_until;
   if (!until || Date.parse(until) > nowMs) return task;

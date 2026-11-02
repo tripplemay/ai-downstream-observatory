@@ -14,7 +14,8 @@ import type { InvestorModelChange, InvestorModelWatch, InvestorResearchTask, Ref
 import type { InvestorPlan, InvestorState } from "@/server/investor/types";
 import { parseInvestorState, verifyInvestorReceipt } from "./investor-client";
 import { illustrateLossScenarios } from "@/server/investor/loss-scenarios";
-import { canResumeInvestorWatch, currentInvestorDisplay, currentModelWatchDisplay, currentResearchDisplay, investorPollInterval, formatResearchMoney, formatResearchMoneyDelta, formatResearchPercent, researchTaskStatus, splitResearchCostMethodology } from "./research-format";
+import { canResumeInvestorWatch, currentInvestorDisplay, currentModelWatchDisplay, currentResearchDisplay, investorPollInterval, formatResearchMoney, formatResearchMoneyDelta, formatResearchPercent, formatResearchWeightDelta, researchTaskStatus, splitResearchCostMethodology } from "./research-format";
+import { currentResearchModelComposition, type ResearchModelComposition } from "./investor-model-composition";
 import { InvestorAccountWorkspace } from "./investor-account-workspace";
 import { InvestorFundingPanel } from "./investor-funding-panel";
 import { InvestorFundedComparisonPanel } from "./investor-funded-comparison-panel";
@@ -192,6 +193,25 @@ function ResearchTask({ task: storedTask, nowMs }: { task: InvestorResearchTask;
     </div>}
     <details className="mt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">任务证据</summary><pre className="mt-2 whitespace-pre-wrap break-all">{JSON.stringify({ request_id: task.id, input_version: task.input_version, reason_codes: task.reason_codes, result_hash: task.study?.result_hash ?? null, registry: task.registry }, null, 2)}</pre></details>
   </Card>;
+}
+function modelMoney(value: string) { return formatResearchMoneyDelta(value).replace(/^\+(?=<)/, ""); }
+function CurrentResearchModel({ value }: { value: ResearchModelComposition }) {
+  return <section id="current-research-model" aria-labelledby="current-research-model-title" className={panel}>
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 id="current-research-model-title" className="text-xl font-semibold">当前研究模型</h2>
+      <p className="mt-2 text-sm text-muted-foreground">按最近合格收盘估值 · 非真实持仓 · 不自动交易</p></div>
+      <div className="min-w-0 max-w-full text-sm"><p className="text-muted-foreground">归一化模型估值</p><p className="mt-1 break-all text-xl font-semibold tabular-nums">{modelMoney(value.model_nav_cny)} CNY</p></div></div>
+    <p className="mt-3 text-xs text-muted-foreground">起点为 10,000 CNY 的研究模型，不是你的本金、账户资产或实际收益。计划追加和“采纳思路”均未计入当前模型持仓。</p>
+    <ul className="mt-5 grid gap-3 md:grid-cols-2">{value.targets.map(target => <li key={target.listing_id} className="min-w-0 rounded-xl border p-4">
+      <h3 className="break-words font-medium">{target.name}</h3><p className="mt-1 break-words text-xs text-muted-foreground">{target.symbol} · {marketLabels[target.market]} · {target.currency}</p>
+      <dl className="mt-4 grid grid-cols-2 gap-3 text-sm"><div><dt className="text-muted-foreground">模型当前权重</dt><dd className="mt-1 font-semibold tabular-nums">{formatResearchPercent(target.observed_weight)}</dd></div>
+        <div><dt className="text-muted-foreground">参考目标权重</dt><dd className="mt-1 tabular-nums">{formatResearchPercent(target.weight)}</dd></div>
+        <div className="col-span-2"><dt className="text-muted-foreground">当前减目标</dt><dd className="mt-1 break-words tabular-nums">{formatResearchWeightDelta(target.weight_difference)}</dd></div>
+        <div className="col-span-2"><dt className="text-muted-foreground">模型市值（人民币折算）</dt><dd className="mt-1 break-all tabular-nums">{modelMoney(target.value_cny)} CNY</dd></div></dl>
+      <p className="mt-3 break-words text-xs text-muted-foreground">该市场收盘截止：{target.data_cutoff}</p>
+    </li>)}</ul>
+    <p className="mt-4 text-xs text-muted-foreground">权重以包括模型现金、外币及应收的完整模型估值为分母，ETF 权重不强行归一到 100%。正偏离表示高于参考目标，负偏离表示低于目标；偏离本身不是交易信号。小于显示精度的非零偏离或市值以 &lt;0.01 标记，不当作零。</p>
+    <p className="mt-2 break-words text-xs text-muted-foreground">本次评估：{value.evaluated_at} · 整体输入截止：{value.data_cutoff}。各市场收盘分别核对，不代表同时完成。</p>
+  </section>;
 }
 function ModelWatch({ watch: storedWatch, disabled, onToggle, nowMs }: { watch: InvestorModelWatch; disabled: boolean; onToggle: () => void; nowMs: number }) {
   const watch = currentModelWatchDisplay(storedWatch, nowMs);
@@ -395,6 +415,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
   const display = data ? currentInvestorDisplay(data, displayNow) : null;
   const latest = data?.latest, profile = data?.profile, plan = display?.plan ?? null;
   const currentOutcome = display?.outcome === "not_started" ? null : display?.outcome ?? null;
+  const composition = data && sessionVerified && pending === null && !invalidated.current ? currentResearchModelComposition(data, displayNow) : null;
   const policyReview = currentOutcome !== "insufficient_evidence" && latest?.document.model_change?.policy_evaluation
     ? <PolicyReview value={latest.document.model_change.policy_evaluation} /> : null;
   const title = view === "plan" ? "组合方案" : view === "observations" ? "观察记录" : view === "accounts" ? "账户资料" : "ETF 投资工作台";
@@ -439,7 +460,10 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
         </section>
         {currentOutcome === "decision_required" && latest && <Card title="变化卡 · 决定由你作出"><p className="text-sm">仅记录你的审阅意见，不批准交易、不预占资金，也不代表成交。</p>{latest.document.model_change && <ModelChange change={latest.document.model_change} plan={plan?.document ?? null} />}{plan && <div className="mt-3 space-y-2 text-sm"><ResearchCost value={plan.document.estimated_cost} />{plan.document.counterarguments.map((s, i) => <p key={i}>反对理由：{s}</p>)}</div>}<label className="mt-4 flex flex-col gap-2 text-sm">审阅备注（可选）<textarea ref={note} maxLength={2000} className="min-h-20 rounded-lg border bg-background p-3" /></label><div className="mt-4 flex flex-wrap gap-3">{(["accept_idea", "defer", "reject"] as const).map(decision => <Button key={decision} variant={decision === "accept_idea" ? "default" : "outline"} disabled={locked} onClick={() => command({ action: "review", observation_id: latest.id, decision, note: note.current?.value ?? "" })}>{decisionLabels[decision]}</Button>)}</div></Card>}
         {view !== "overview" && policyReview}
-        {view === "overview" ? <>{evidenceGaps}{referenceCard}</> : riskConfirmed ? [referenceCard, planRiskDetails] : [planRiskDetails, referenceCard]}
+        {view === "overview" ? <>{evidenceGaps}{composition ? <><CurrentResearchModel value={composition} />
+          <details data-testid="model-reference-details" className="min-w-0 rounded-2xl border bg-card shadow-sm"><summary className="cursor-pointer rounded-2xl p-5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring md:p-6">历史参考配置与研究依据</summary>
+            <div className="p-3 pt-0 md:p-5 md:pt-0">{referenceCard}</div></details></> : referenceCard}</>
+          : <>{riskConfirmed ? [referenceCard, planRiskDetails] : [planRiskDetails, referenceCard]}{composition && <CurrentResearchModel value={composition} />}</>}
         {view === "overview" ? <details data-testid="overview-research-details" className="min-w-0 rounded-2xl border bg-card shadow-sm">
           <summary className="cursor-pointer rounded-2xl p-5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring md:p-6">
             <span className="font-semibold">风险、投入与研究详情</span>

@@ -12,6 +12,8 @@ import { actionCostMethodology, reviewCostMethodology, settlementCostMethodology
 import { actionDraftProgressSchema } from "../src/server/investor/action-draft-progress-schemas";
 import { initialCloseProgressRequest } from "../src/server/investor/initial-close-progress";
 import { unavailableActionMaintenanceProgress } from "../src/server/investor/action-maintenance-progress";
+import { currentResearchModelComposition } from "../src/components/workbench/investor-model-composition";
+import { compositionDisplayState } from "./investor-model-composition-fixture";
 
 const before = Date.parse(displayBefore), until = Date.parse(displayUntil);
 function validationHoldState() {
@@ -39,6 +41,7 @@ function mount(t: { after: (fn: () => void) => void }, state = displayState(), v
     { initial: state, initialSessionBinding: binding, view }, { "next/link": { default: "Link", __esModule: true },
       "lucide-react": Object.fromEntries(["ArrowRight", "CheckCircle2", "CircleHelp", "Clock3", "Eye", "ShieldCheck"].map(name => [name, name])),
       "@/components/ui/input": { Input: "Input" }, "@/components/session-boundary": { useSessionBoundary: () => null },
+      "./investor-model-composition": { currentResearchModelComposition },
       "@/server/investor/schemas": schemas, "@/server/investor/loss-scenarios": losses, "./research-format": research, "./investor-client": client,
       "@/server/investor/initial-close-progress": { initialCloseProgressRequest },
       ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel", "history-panel", "monitor-cost-panel","action-review","legacy-transition"]
@@ -52,6 +55,31 @@ function mount(t: { after: (fn: () => void) => void }, state = displayState(), v
     headline: () => h.nodes().filter(node => node.type === "h2").map(node => h.words(node)).find(text => ["继续观察", "需要你做决定", "证据不足"].includes(text)),
   };
 }
+
+test("qualified model composition leads the overview while reference evidence stays available in a closed keyboard disclosure", async t => {
+  const state = compositionDisplayState(), original = JSON.stringify(state), h = mount(t, state); await h.flush();
+  const current = h.card("当前研究模型")!; assert.ok(current);
+  for (const text of ["61.00%", "60.00%", "+1.00 个百分点", "38.00%", "-2.00 个百分点", "6,100.00 CNY", "3,800.00 CNY", "非真实持仓", "计划追加"])
+    assert.ok(h.words(current).includes(text), text);
+  assert.doesNotMatch(h.words(current), /9,000.00|61.62%|38.38%/);
+  const fold = h.nodes().find(node => node.props["data-testid"] === "model-reference-details")!;
+  assert.ok(fold); assert.equal(!!fold.props.open, false); assert.match(h.words(fold), /历史参考配置与研究依据/);
+  assert.match(h.words(fold), /Historical|历史研究参考组合/);
+  assert.ok(h.nodes().indexOf(current) < h.nodes().indexOf(fold));
+  assert.equal(h.requests.length, 0); assert.equal(JSON.stringify(state), original);
+});
+test("model composition hides on known expiry despite an edit lock and never revives after clock rollback", async t => {
+  const h = mount(t, compositionDisplayState()); await h.flush(); assert.ok(h.card("当前研究模型"));
+  await h.fundingLock(true); await h.advance(until); assert.equal(h.card("当前研究模型"), undefined);
+  assert.equal(h.headline(), "证据不足"); assert.equal(h.requests.length, 0);
+  await h.advance(before - 10000, 1000); await h.wake(); assert.equal(h.card("当前研究模型"), undefined);
+});
+test("an uncertain human decision and session invalidation cannot leave current model values displayed", async t => {
+  const h = mount(t, compositionDisplayState("decision_required")); await h.flush(); assert.ok(h.card("当前研究模型"));
+  await h.click("暂缓"); await h.waitRequests(1); assert.equal(h.card("当前研究模型"), undefined);
+  await h.fail(0); assert.equal(h.card("当前研究模型"), undefined);
+  await h.invalidate(); assert.equal(h.card("当前研究模型"), undefined); assert.equal(h.requests.length, 1);
+});
 
 test("legacy compatibility locks sibling commands and old callbacks, without blocking its own status read",async t=>{
   const h=mount(t,costDisplayState(),"plan");await h.flush();const panel=h.node("InvestorLegacyTransition")!;assert.ok(panel);assert.equal(panel.props.disabled,false);
