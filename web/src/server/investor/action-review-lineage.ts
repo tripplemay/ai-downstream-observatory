@@ -7,7 +7,8 @@ import { actionCheck as check, actionNyParts, actionObject as object, actionText
 import type { ActionObject as Obj } from "./action-source-parsers";
 import { actionAudit, actionJson, actionRead } from "./action-source-proof";
 import { checkActionReportAgreement, checkReviewedActionAppend, type ActionSnapshot } from "./action-maintenance-candidate";
-import { readManagedActionAnchorContext, readManagedActionComparisonBasis, readManagedActionControlWitness, readManagedActionCurrentCaptures } from "./managed-action-source";
+import { readManagedActionAnchorContext, readManagedActionComparisonBasis, readManagedActionControlWitness, readManagedActionCurrentCaptures,
+  readRetainedActionAnchorContext, readRetainedActionComparisonContext, readRetainedActionEvidence } from "./managed-action-source";
 import { validateInvestorActionReviewDocument } from "./kernel-contracts";
 import { actionReviewViewSchema } from "./action-review-schemas";
 import { actionAddDays } from "./action-source-parsers";
@@ -126,6 +127,11 @@ function verifiedConfirmation(db: Database.Database, workspace: string, actor: u
   const { doc, request } = confirmationHeader(db, workspace, actor, id, now);
   const before = readManagedActionComparisonBasis(db, workspace, doc.previous_authority_id, now);
   const after = readManagedActionAnchorContext(db, workspace, doc.new_authority_id, now);
+  return compareConfirmationContexts(db,workspace,actor,doc,request,before,after,now);
+}
+
+function compareConfirmationContexts(db:Database.Database,workspace:string,actor:unknown,doc:Obj,request:Obj,
+  before:ReturnType<typeof readManagedActionComparisonBasis>,after:ReturnType<typeof readManagedActionAnchorContext>,now:string) {
   const old = before.grant, next = after.grant;
   check(old.row.id !== next.row.id && old.row.content_hash === doc.previous_authority_hash && next.row.content_hash === doc.new_authority_hash
     && old.current.enabled === 0 && next.doc.base_review_id === doc.new_review_id);
@@ -173,6 +179,17 @@ export function readActionReviewConfirmationContext(db:Database.Database,workspa
   return db.transaction(()=>verifiedConfirmation(db,workspace,actor,id,now)).deferred();
 }
 
+/** Retained sources and original answers, not permission to admit changed historical facts. */
+export function readRetainedActionReviewConfirmationContext(db:Database.Database,workspace:string,actor:unknown,id:unknown,now:string) {
+  return db.transaction(()=>{
+    const {doc,request}=confirmationHeader(db,workspace,actor,id,now);
+    const before=readRetainedActionComparisonContext(db,workspace,doc.previous_authority_id,doc.previous_publication_id,text(doc.created_at),now);
+    const after=readRetainedActionAnchorContext(db,workspace,doc.new_authority_id,now);
+    return {...compareConfirmationContexts(db,workspace,actor,doc,request,before,after,now),
+      readValidUntil:millis([before.readValidUntil,after.readValidUntil,...before.historicalLimits].map(time).reduce((a,b)=>a<b?a:b))};
+  }).deferred();
+}
+
 /** Internal normal-resolver input; equal amounts alone never inherit knowledge. */
 function eventOrigins(db: Database.Database, workspace: string, review: VerifiedSourceReview, now: string, seen: Set<string>): Map<string, Obj> {
   check(seen.size < 256 && !seen.has(review.row.id)); const visited = new Set(seen); visited.add(review.row.id);
@@ -189,6 +206,26 @@ function eventOrigins(db: Database.Database, workspace: string, review: Verified
 
 export function confirmedEventOrigins(db: Database.Database, workspace: string, review: VerifiedSourceReview, now: string) {
   return db.transaction(() => eventOrigins(db, workspace, review, now, new Set())).deferred();
+}
+
+export function retainedConfirmedEventOrigins(db:Database.Database,workspace:string,review:VerifiedSourceReview,now:string,seen=new Set<string>(),listingReviewId?:string):{origins:Map<string,Obj>;ancestors:Map<string,string>;readValidUntil:string} {
+  check(seen.size<256 && !seen.has(review.row.id));const visited=new Set(seen);visited.add(review.row.id);
+  const row=db.prepare("SELECT id FROM investor_action_review_confirmations WHERE workspace_id=? AND new_review_id=?").get(workspace,review.row.id) as Obj|undefined;
+  const events=review.facts.events as Obj[];check(Array.isArray(events));
+  if(!row) {
+    const retained=readRetainedActionEvidence(db,workspace,review.row.actor_id,review.row.id,now,listingReviewId);
+    check(hash({row:retained.original_review,source:retained.original_source,facts:retained.original_facts})===hash(review));
+    return {origins:new Map(events.map(event=>[text(event.id),{original_review_id:review.row.id,original_review_hash:review.row.content_hash,known_at:review.row.created_at}])),
+      ancestors:new Map([[review.row.id,review.row.content_hash]]),readValidUntil:retained.proof.valid_until};
+  }
+  const value=readRetainedActionReviewConfirmationContext(db,workspace,review.row.actor_id,row.id,now);
+  check(hash(value.after) === hash(review));
+  const prior=retainedConfirmedEventOrigins(db,workspace,value.before,now,visited,listingReviewId);
+  for(const event of events)if(!prior.origins.has(text(event.id)))prior.origins.set(text(event.id),{
+    original_review_id:review.row.id,original_review_hash:review.row.content_hash,known_at:value.document.created_at});
+  check(prior.origins.size === events.length && events.every(event=>prior.origins.has(text(event.id))));
+  prior.ancestors.set(review.row.id,review.row.content_hash);
+  prior.readValidUntil=millis([prior.readValidUntil,value.readValidUntil].map(time).reduce((a,b)=>a<b?a:b));return prior;
 }
 
 /** Current private view, independently rebuilt; a registered witness alone is insufficient. */

@@ -66,6 +66,17 @@ def _build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_i
                         "capture_kind": "confirmed_sdk", "binding": binding, "records": [row for row in value["records"] if row["listing_id"] == listing_id]})
         actions = [resolve_review(db, workspace_id, identity, "actions", now=checked) for identity in action_review_ids]
         rates = [resolve_review(db, workspace_id, identity, "fx", now=checked) for identity in fx_review_ids]
+        availability = None
+        if audited_action_knowledge:
+            from .monitor_action_knowledge import _availability_refs
+            availability = _availability_refs(db, workspace_id, actions, checked, frozen_at)
+    return _assemble_dataset(captures, actions, rates, start_date, end_date, workspace_id, frozen_at,
+        allow_synthetic=allow_synthetic, confirmed=bool(confirmed_capture_ids), availability=availability)
+
+
+def _assemble_dataset(captures, actions, rates, start_date, end_date, workspace_id, frozen_at, *, allow_synthetic=False, confirmed=False, availability=None):
+    """Pure assembly only; callers must independently resolve every input first."""
+    audited_action_knowledge = availability is not None
     capture_reviews = [row["binding"][kind] for row in captures for kind in ("rights", "listing", "calendar")]
     _assert(all(row["capture"]["created_at"] <= frozen_at for row in captures)
         and all(row["review"]["created_at"] <= frozen_at for row in [*actions, *rates, *capture_reviews]),
@@ -147,10 +158,11 @@ def _build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_i
                 "time_precision": "second", "price_basis": "not_applicable", "revision_id": row["review"]["id"],
                 "raw_hash": row["source"]["content_hash"], "parser_version": PARSER, "provenance": "reconstructed"})
     events, journal = [], []
-    availability = []
     if audited_action_knowledge:
-        from .monitor_action_knowledge import _availability_refs
-        availability = _availability_refs(db, workspace_id, actions, checked, frozen_at)
+        from .monitor_action_knowledge import index_availability
+        index_availability(actions, availability, frozen_at)
+    else:
+        availability = []
     by_event = {(row["review_id"], row["event_id"]): row for row in availability}
     for identity, row in sorted(action_by_listing.items()):
         zone = ZoneInfo(longport._MARKETS[assets[identity]["facts"]["market"]][0])
@@ -167,7 +179,7 @@ def _build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_i
         "review_refs": sorted(({"review_id": identity, "review_hash": row["review"]["content_hash"], "source_id": row["source"]["id"], "source_hash": row["source"]["content_hash"]} for identity, row in reviews.items()), key=lambda row: row["review_id"]),
         "publication_times": "reconstructed_assumptions_not_provider_published_at", "universe_basis": "retrospectively_selected_not_survivorship_free",
         "review_basis": "owner_reviewed_not_provider_certified", "external_ai_authorized": False, "live_advice_eligible": False}
-    if confirmed_capture_ids or audited_action_knowledge:
+    if confirmed or audited_action_knowledge:
         refs = {}
         for row in captures:
             source, kind = row["capture"], row["capture_kind"]
@@ -180,7 +192,7 @@ def _build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_i
     if audited_action_knowledge:
         manifest.update(schema_version="investor-monitor-source-snapshot-v2", action_availability_refs=availability,
             publication_times="reconstructed_prices_and_audited_action_review_times_not_point_in_time")
-    schema = "investor-monitor-source-snapshot-v2.schema.json" if audited_action_knowledge else "investor-monitor-price-snapshot.schema.json" if confirmed_capture_ids else "investor-data-snapshot.schema.json"
+    schema = "investor-monitor-source-snapshot-v2.schema.json" if audited_action_knowledge else "investor-monitor-price-snapshot.schema.json" if confirmed else "investor-data-snapshot.schema.json"
     validate_contract(manifest, schema)
     manifest_hash = content_hash(manifest)
     dataset = {"schema_version": "research-dataset-v2", "mode": manifest["mode"], "source_evidence": "investor-data-snapshot:" + manifest_hash,

@@ -216,10 +216,16 @@ export function readManagedActionCurrentCaptures(db:Database.Database,workspace:
 
 /** Current source-qualified anchor, not permission to resume a retired rule. */
 export function readManagedActionAnchorContext(db:Database.Database,workspace:string,id:unknown,now:string) {
-  const grant=authority(db,workspace,id,now),{base,listing}=baseline(db,workspace,grant,now),policy=grant.doc;
+  const grant=authority(db,workspace,id,now),{base,listing}=baseline(db,workspace,grant,now);
   for(const value of [base,listing])check(latestManual(db,value.row) && time(now) < time(value.row.valid_until)
     && canonical(actionJson(value.row.document_json,8388608)) === value.row.document_json
     && canonical(actionJson(value.source.document_json,131072)) === value.source.document_json);
+  return replayActionAnchorContext(db,workspace,grant,base,listing,now);
+}
+
+function replayActionAnchorContext(db:Database.Database,workspace:string,grant:ReturnType<typeof authority>,
+  base:ReturnType<typeof manualHeader>,listing:ReturnType<typeof manualHeader>,now:string) {
+  const policy=grant.doc;
   check(listing.facts.market === "US" && listing.facts.currency === "USD" && Object.hasOwn(ACTION_TARGETS,actionText(policy.provider_symbol))
     && time(listing.facts.tradable_from) <= time(now) && (listing.facts.tradable_until === null || time(now) < time(listing.facts.tradable_until)));
   const anchor=captures(db,workspace,object(policy.anchor_captures),actionText(policy.provider_symbol),now);
@@ -230,6 +236,32 @@ export function readManagedActionAnchorContext(db:Database.Database,workspace:st
   if(listing.facts.tradable_until !== null)limits.push(listing.facts.tradable_until);
   check(bindingHash === policy.anchor_binding_hash && time(policy.valid_until) <= minimum(limits));
   return {grant,base:base as unknown as VerifiedSourceReview,listing:listing as unknown as VerifiedSourceReview,anchor,bindingHash,limits};
+}
+
+/** Retained original anchor only: a changed manual review is not current qualification. */
+export function readRetainedActionAnchorContext(db:Database.Database,workspace:string,id:unknown,now:string) {
+  const grant=authority(db,workspace,id,now),{base,listing}=baseline(db,workspace,grant,now);
+  const manual=retainedManualAction(db,workspace,base.row.id,now);
+  check(hash(manual.original) === hash(base) && latestManual(db,listing.row) && time(now)<time(listing.row.valid_until));
+  for(const value of [base,listing])check(canonical(actionJson(value.row.document_json,8388608)) === value.row.document_json
+    && canonical(actionJson(value.source.document_json,131072)) === value.source.document_json);
+  return {...replayActionAnchorContext(db,workspace,grant,base,listing,now),
+    readValidUntil:new Date(Number(minimum([grant.doc.valid_until,manual.latest.row.valid_until])/1000n)).toISOString()};
+}
+
+/** Select the original recorded publication, while all permission reads still use now. */
+export function readRetainedActionComparisonContext(db:Database.Database,workspace:string,id:unknown,publicationId:unknown,recordedAt:string,now:string) {
+  const context=readRetainedActionAnchorContext(db,workspace,id,now);
+  check(time(recordedAt)<=time(now));
+  const head=db.prepare("SELECT id FROM investor_action_publications WHERE workspace_id=? AND authority_id=? AND status='published' AND created_at<=? ORDER BY sequence DESC LIMIT 1")
+    .get(workspace,id,recordedAt) as Obj|undefined;
+  check((head?.id??null) === publicationId);
+  if(!head)return {...context,prior:context.base,previous:context.anchor.snapshots,publicationId:null,historicalLimits:context.anchor.limits};
+  const metadata=publication(db,workspace,head.id,now);
+  check(metadata.row.authority_id === id && metadata.row.status === "published" && time(now)<time(metadata.row.valid_until));
+  const evidence=replayManagedActionReviewEvidence(db,workspace,head.id,now);
+  return {...context,prior:evidence.value,previous:evidence.current.snapshots,publicationId:actionText(head.id),historicalLimits:evidence.current.limits,
+    readValidUntil:new Date(Number(minimum([context.readValidUntil,metadata.row.valid_until])/1000n)).toISOString()};
 }
 
 /** Historical comparison only: quarantine/retirement is NOT cleared or admitted. */
@@ -306,7 +338,8 @@ function replayManagedActionReviewEvidence(db:Database.Database,workspace:string
     return {value,row,grant,base,listing,anchor,current};
 }
 
-function retainedManualAction(db:Database.Database,workspace:string,id:unknown,now:string) {
+function retainedManualAction(db:Database.Database,workspace:string,id:unknown,now:string,market="US") {
+  const zone=({US:"America/New_York",CN:"Asia/Shanghai",HK:"Asia/Hong_Kong"} as Record<string,string>)[market];check(zone);
   const original=manualHeader(db,workspace,id,"actions",now);
   check(original.row.decision === "approved" && time(now)<time(original.row.valid_until));
   const rows=db.prepare("SELECT id,version FROM investor_data_reviews WHERE source_id=? AND version>=? ORDER BY version LIMIT 1001")
@@ -320,7 +353,8 @@ function retainedManualAction(db:Database.Database,workspace:string,id:unknown,n
     const facts=value.facts,events=facts.events as Obj[];
     check(actionText(facts.range_start)<=actionText(facts.range_end) && new Set(events.map(event=>event.id)).size === events.length);
     for(const event of events) {
-      const day=actionNyParts(event.at).day;time(event.published_at);
+      time(event.at);const parts=new Intl.DateTimeFormat("en-CA",{timeZone:zone,year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date(actionText(event.at)));
+      const day=["year","month","day"].map(key=>parts.find(part=>part.type===key)!.value).join("-");time(event.published_at);
       check(event.listing_id === facts.listing_id && actionText(facts.range_start)<=day && day<=actionText(facts.range_end));
       if(event.type === "dividend")check(time(event.pay_at)>=time(event.at) && amount(actionText(event.tax_per_unit)).gte(0)
         && amount(actionText(event.tax_per_unit)).lte(amount(actionText(event.gross_per_unit))));
@@ -332,35 +366,43 @@ function retainedManualAction(db:Database.Database,workspace:string,id:unknown,n
 }
 
 /** Exact retained originals, not a VerifiedSourceReview or permission to resume. */
-export function readRetainedActionEvidence(db:Database.Database,workspace:string,actor:string,id:string,now:string) {
+export function readRetainedActionEvidence(db:Database.Database,workspace:string,actor:string,id:string,now:string,listingReviewId?:string) {
   return db.transaction(()=>{
     now=actionMillis(now);
     check((db.prepare("SELECT owner_id FROM investor_workspaces WHERE id=?").get(workspace) as Obj|undefined)?.owner_id === actor);
     check(actionText(id).length>0 && id.length<=300);
+    const listing=listingReviewId?manualHeader(db,workspace,listingReviewId,"listing",now):null;
+    if(listing){check(listing.row.decision==="approved" && latestManual(db,listing.row) && time(now)<time(listing.row.valid_until));
+      validateInvestorSourceDocument("facts",{kind:"listing",facts:listing.facts});
+      check(amount(actionText(listing.facts.quantity_step)).gt(0) && amount(actionText(listing.facts.fee_rate)).gte(0)
+        && amount(actionText(listing.facts.fee_rate)).lte(1) && actionText(listing.facts.fee_as_of)<=actionText(listing.row.created_at).slice(0,10)
+        && (listing.facts.tradable_until===null || time(listing.facts.tradable_from)<time(listing.facts.tradable_until)));}
     let original:VerifiedSourceReview,latest:ReturnType<typeof manualHeader>,recorded:Obj|null=null,grant:ReturnType<typeof authority>|null=null;
     const bindings:Obj[]=[];
     if(id.startsWith(MANAGED_ACTION_PREFIX)) {
+      if(listing)check(listing.facts.market==="US");
       const metadata=publication(db,workspace,id,now);
       const manual=retainedManualAction(db,workspace,metadata.grant.doc.base_review_id,now);
-      const listing=baseline(db,workspace,metadata.grant,now).listing;
+      const boundListing=baseline(db,workspace,metadata.grant,now).listing;
       check(metadata.row.status === "published" && time(now)<time(metadata.row.valid_until)
-        && latestManual(db,listing.row) && time(now)<time(listing.row.valid_until));
+        && latestManual(db,boundListing.row) && time(now)<time(boundListing.row.valid_until));
       const evidence=replayManagedActionReviewEvidence(db,workspace,id,now);
       original=evidence.value;latest=manual.latest;recorded=evidence.row;grant=evidence.grant;
       for(const [prefix,source] of [["anchor",evidence.anchor],["publication",evidence.current]] as const)
         for(const [key,binding] of Object.entries(source.bindings))bindings.push({slot:prefix+"_"+key,...object(binding)});
       bindings.sort((a,b)=>actionText(a.slot)<actionText(b.slot)?-1:1);
     } else {
-      const manual=retainedManualAction(db,workspace,id,now);
+      const manual=retainedManualAction(db,workspace,id,now,listing?actionText(listing.facts.market):"US");
       original=manual.original as unknown as VerifiedSourceReview;latest=manual.latest;
     }
     const row=original.row,source=original.source;
+    if(listing)check(listing.facts.listing_id===original.facts.listing_id);
     const proof={schema_version:"investor-retained-action-evidence-v1",workspace_id:workspace,actor_id:actor,
       review_id:row.id,review_hash:row.content_hash,source_id:source.id,source_hash:source.content_hash,facts_hash:hash(original.facts),
       latest_manual_review_id:latest.row.id,latest_manual_review_hash:latest.row.content_hash,
       publication_id:recorded?.id??null,publication_hash:recorded?.content_hash??null,
       authority_id:grant?.row.id??null,authority_hash:grant?.row.content_hash??null,capture_bindings:bindings,checked_at:now,
-      valid_until:new Date(Number(minimum([row.valid_until,latest.row.valid_until])/1000n)).toISOString(),
+      valid_until:new Date(Number(minimum([row.valid_until,latest.row.valid_until,...(listing?[listing.row.valid_until]:[])])/1000n)).toISOString(),
       purpose:"retained_historical_comparison_only",evidence_basis:bindings.length?"standing_rule_original_capture_replay":"owner_review_record_only",
       original_raw_reports_replayed:!!bindings.length,current_source_eligibility_restored:false,economic_correction_approved:false,
       checkpoint_created:false,monitoring_resumed:false,historical_observations_rewritten:false,trading_permission:false,
@@ -377,4 +419,14 @@ export function readManagedActionOrigin(db:Database.Database,workspace:string,va
     && hash(base.facts.events) === hash(value.facts.events) && base.facts.listing_id === value.facts.listing_id
     && base.facts.tax_assumption === value.facts.tax_assumption && time(base.row.created_at) <= time(value.row.created_at));
   return base as unknown as VerifiedSourceReview;
+}
+
+/** Retained original resolver input only; it never makes the old rule current. */
+export function readRetainedActionOrigin(db:Database.Database,workspace:string,value:VerifiedSourceReview,now:string):VerifiedSourceReview {
+  const {row}=publication(db,workspace,value.row.id,now);
+  const {base}=readRetainedActionAnchorContext(db,workspace,row.authority_id,now);
+  check(row.status === "published" && row.review_hash === value.row.content_hash
+    && hash(base.facts.events) === hash(value.facts.events) && base.facts.listing_id === value.facts.listing_id
+    && base.facts.tax_assumption === value.facts.tax_assumption && time(base.row.created_at)<=time(value.row.created_at));
+  return base;
 }

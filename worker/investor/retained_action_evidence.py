@@ -1,5 +1,7 @@
 """Original action evidence for private comparison, never current-source admission."""
 
+from zoneinfo import ZoneInfo
+from worker.market.providers.longport import _MARKETS
 from worker.market.contracts import validate_contract
 from worker.orchestration.db import content_hash, instant, transaction
 from .data_evidence import _assert, _fact_validation_scope, _owner, resolve_review, review_header, validate_facts
@@ -15,7 +17,7 @@ def _check(value):
     _assert(value, "INVESTOR_RETAINED_ACTION_EVIDENCE_INVALID")
 
 
-def _manual(db, workspace, identifier, at):
+def _manual(db, workspace, identifier, at, *, market="US"):
     original = review_header(db, workspace, identifier, now=at)
     _check(original["source"]["kind"] == "actions" and original["review"]["decision"] == "approved"
         and at < original["review"]["valid_until"])
@@ -28,7 +30,7 @@ def _manual(db, workspace, identifier, at):
         _check(row["version"] == version and value["review"]["decision"] == "approved"
             and previous <= value["review"]["created_at"]
             and value["facts"]["listing_id"] == original["facts"]["listing_id"])
-        validate_facts("actions", value["facts"]); _fact_events(value["facts"])
+        validate_facts("actions", value["facts"]); _fact_events(value["facts"], zone=ZoneInfo(_MARKETS[market][0]))
         _check(len({event["id"] for event in value["facts"]["events"]}) == len(value["facts"]["events"]))
         previous = value["review"]["created_at"]
     _check(at < value["review"]["valid_until"])
@@ -73,18 +75,21 @@ def _managed(db, workspace, identifier, at):
     return value, latest, row, authority, sorted(bindings, key=lambda item: item["slot"])
 
 
-def read_retained_action_evidence(db, workspace, actor, review_id, *, now=None):
+def read_retained_action_evidence(db, workspace, actor, review_id, *, now=None, listing_review_id=None):
     """Read actual retained originals; never alter normal currentness or approval."""
     from .managed_actions import PREFIX
     at = _clock(now)
     with transaction(db, immediate=False), _fact_validation_scope():
         _owner(db, workspace, actor)
         _check(type(review_id) is str and 0 < len(review_id) <= 300)
+        listing = resolve_review(db, workspace, listing_review_id, "listing", now=at) if listing_review_id is not None else None
         if review_id.startswith(PREFIX):
+            if listing is not None: _check(listing["facts"]["market"] == "US")
             original, latest, publication, authority, bindings = _managed(db, workspace, review_id, at)
         else:
-            original, latest = _manual(db, workspace, review_id, at)
+            original, latest = _manual(db, workspace, review_id, at, market=listing["facts"]["market"] if listing is not None else "US")
             publication, authority, bindings = None, None, []
+        if listing is not None: _check(listing["facts"]["listing_id"] == original["facts"]["listing_id"])
         review, source = original["review"], original["source"]
         proof = {"schema_version": "investor-retained-action-evidence-v1", "workspace_id": workspace, "actor_id": actor,
             "review_id": review["id"], "review_hash": review["content_hash"], "source_id": source["id"], "source_hash": source["content_hash"],
@@ -99,5 +104,6 @@ def read_retained_action_evidence(db, workspace, actor, review_id, *, now=None):
             "original_raw_reports_replayed": bool(bindings), "current_source_eligibility_restored": False, "economic_correction_approved": False,
             "checkpoint_created": False, "monitoring_resumed": False, "historical_observations_rewritten": False,
             "trading_permission": False, "provider_calls": 0, "database_writes": 0, "distribution": "private_owner_only_not_ai"}
+        if listing is not None: proof["valid_until"] = min(proof["valid_until"], listing["review"]["valid_until"])
         validate_contract(proof, SCHEMA)
         return {"original_review": review, "original_source": source, "original_facts": original["facts"], "proof": proof}

@@ -169,6 +169,12 @@ def _verified_confirmation(db, workspace, actor, identifier, at):
         and all(before["report"]["bindings"][kind][key] == after["report"]["bindings"][kind][key]
             for kind in before["report"]["bindings"] for key in ("authority_id", "authority_hash", "control_id", "control_hash")), "CONFIRMATION_INPUTS_CHANGED")
     prior, previous, publication_id, limits = _historical_basis(db, workspace, actor, old, policy, before, at)
+    return _compare_confirmation_facts(workspace, actor, doc, old, policy, next_policy, previous_control,
+        before, after, prior, previous, publication_id, limits)
+
+
+def _compare_confirmation_facts(workspace, actor, doc, old, policy, next_policy, previous_control, before, after, prior, previous, publication_id, limits):
+    """Pure replay; callers authenticate controls, sources and original contexts."""
     _check(publication_id == doc["previous_publication_id"] and prior["review"]["id"] == doc["previous_review_id"]
         and prior["review"]["content_hash"] == doc["previous_review_hash"], "CONFIRMATION_INPUTS_CHANGED")
     floor = max((value for capture in after["values"].values() for value in (capture["capture"]["created_at"], capture["draft"]["source"]["retrieved_at"])), key=instant)

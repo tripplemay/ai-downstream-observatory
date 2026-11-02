@@ -167,6 +167,42 @@ function replay(db: Database.Database, workspace: string, rawDefinition: unknown
       if (definition.schema_version === "investor-model-definition-v2")
         check(obj(obj(definition.fixed_policy).parameters).roles && obj(obj(obj(definition.fixed_policy).parameters).roles)[text(target.listing_id)] === spec.role);
     }
+    const projection = projectInvestorMonitorProjection(definition,document,{reviews,catalog,observations,sessions,markets,availabilityRefs,costDeadline});
+    check(hash(projection) === document.projection_hash);
+    comparison?.(projection,catalog);
+    if(time(projection.valid_until)<=time(evaluatedAt))return {projection:null,catalog:null,unavailable_reason:"MONITOR_DATA_PROJECTION_EXPIRED"};
+    return {projection,catalog,unavailable_reason:null};
+  } catch { throw new Error("INVESTOR_EVIDENCE_INVALID"); }
+}
+
+type ProjectionAssembly = {reviews:Map<string,VerifiedSourceReview>;catalog:Record<string,Obj>;observations:Map<string,Obj>;
+  sessions:Obj[];markets:Set<string>;availabilityRefs:Obj[];costDeadline:string|null};
+
+/** Pure original-point math; this does not authenticate or admit any supplied source. */
+export function projectInvestorMonitorProjection(definition:Obj,document:Obj,source:ProjectionAssembly) {
+    const {reviews,catalog,observations,sessions,markets,availabilityRefs,costDeadline}=source;
+    const targets=rows(definition.targets),settings=obj(document.settings),policy=obj(settings.policy),created=text(document.created_at),at=time(created);
+    const auditedActions=document.schema_version === "investor-monitor-data-input-v4";
+    validateInvestorModelDocument("definition",definition);validateInvestorMonitorDataDocument("input",document);
+    check(definition.data_mode === "reconstructed" && document.model_id === definition.model_id
+      && document.target_definition_hash === definition.target_definition_hash
+      && definition.target_definition_hash === modelDefinitionHash(definition as Parameters<typeof modelDefinitionHash>[0])
+      && time(definition.created_at)<=at && at<time(definition.valid_until)
+      && targets.length === new Set(targets.map(row=>row.listing_id)).size && targets.every(row=>amount(text(row.weight)).gt(0))
+      && targets.reduce((sum,row)=>sum.add(text(row.weight)),new Decimal(0)).eq(1)
+      && amount(text(policy.weight_band)).gte(0) && amount(text(policy.weight_band)).lte(1) && amount(text(policy.absolute_band_cny)).gte(0));
+    check(targets.length===Object.keys(catalog).length);
+    for(const target of targets) {
+      const spec=catalog[text(target.listing_id)];check(spec && target.market===spec.market && target.currency===spec.currency);
+      if(definition.schema_version==="investor-model-definition-v2")
+        check(obj(obj(obj(definition.fixed_policy).parameters).roles)[text(target.listing_id)]===spec.role);
+    }
+    if(settings.funding_intent!==null)check(amount(text(obj(settings.funding_intent).amount_cny)).gt(0));
+    if(policy.costs!==null) {
+      const costs=obj(policy.costs);
+      check(["commission_bps","minimum_fee_cny","fx_bps","slippage_bps","maximum_cost_fraction"].every(key=>amount(text(costs[key])).gte(0))
+        && ["commission_bps","fx_bps","slippage_bps"].every(key=>amount(text(costs[key])).lt(10000)) && amount(text(costs.maximum_cost_fraction)).lte(1));
+    }
     const baseExpiry = min([time(document.valid_until), time(definition.valid_until)]), deadlines = [baseExpiry];
     if (costDeadline !== null) deadlines.push(time(costDeadline));
     const quotes: Obj[] = [], fx: Obj[] = [], coverage: Record<string, Obj> = {}, events: Obj[] = [], gaps: string[] = [];
@@ -232,9 +268,5 @@ function replay(db: Database.Database, workspace: string, rawDefinition: unknown
       quotes: quotes.sort((a,b) => cmp(text(a.listing_id),text(b.listing_id))), fx, corporate_action_coverage: coverage,
       corporate_actions: events.sort((a,b) => cmp(text(a.effective_at),text(b.effective_at)) || cmp(text(a.kind),text(b.kind)) || cmp(text(a.id),text(b.id))),
       funding_intent: settings.funding_intent, policy, quality_gaps: [...new Set(gaps)].sort(), created_at: created, valid_until: milliseconds(min(deadlines)), live_advice_eligible: false };
-    validateInvestorMonitorDataDocument("projection", projection); check(hash(projection) === document.projection_hash);
-    comparison?.(projection, catalog);
-    if (time(projection.valid_until) <= time(evaluatedAt)) return { projection: null, catalog: null, unavailable_reason: "MONITOR_DATA_PROJECTION_EXPIRED" };
-    return { projection, catalog, unavailable_reason: null };
-  } catch { throw new Error("INVESTOR_EVIDENCE_INVALID"); }
+    validateInvestorMonitorDataDocument("projection", projection);return projection;
 }

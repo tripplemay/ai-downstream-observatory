@@ -2,8 +2,8 @@ import type Database from "better-sqlite3";
 import { hash } from "../ledger/service";
 import { priceInstant } from "../market-price-source";
 import { validateInvestorActionAvailability } from "./kernel-contracts";
-import { MANAGED_ACTION_PREFIX, readManagedActionOrigin } from "./managed-action-source";
-import { confirmedEventOrigins } from "./action-review-lineage";
+import { MANAGED_ACTION_PREFIX, readManagedActionOrigin, readRetainedActionOrigin } from "./managed-action-source";
+import { confirmedEventOrigins, retainedConfirmedEventOrigins } from "./action-review-lineage";
 import type { VerifiedSourceReview } from "./source-inputs";
 
 type Obj = Record<string, unknown>;
@@ -29,6 +29,23 @@ export function actionAvailabilityRefs(db: Database.Database, workspace: string,
   result.sort((a,b) => cmp(text(a.review_id),text(b.review_id)) || cmp(text(a.event_id),text(b.event_id)));
   indexActionAvailability(reviews, result, frozen);
   return result;
+}
+
+/** Original knowledge only; callers already authenticated retained review/source bytes. */
+export function retainedActionAvailabilityRefs(db:Database.Database,workspace:string,reviews:VerifiedSourceReview[],now:string,frozen:string,listingReviewIds?:Map<string,string>) {
+  const refs:Obj[]=[],ancestry=new Map<string,Map<string,string>>(),deadlines:string[]=[];
+  for(const review of reviews) {
+    const origin=review.row.id.startsWith(MANAGED_ACTION_PREFIX)?readRetainedActionOrigin(db,workspace,review,now):review;
+    const proof=retainedConfirmedEventOrigins(db,workspace,origin,now,new Set(),listingReviewIds?.get(text(review.facts.listing_id)));
+    ancestry.set(review.row.id,proof.ancestors);deadlines.push(proof.readValidUntil);
+    for(const event of events(review.facts.events)) {
+      const original=proof.origins.get(text(event.id));check(original);
+      refs.push({review_id:review.row.id,review_hash:review.row.content_hash,event_id:event.id,event_hash:hash(event),...original});
+    }
+  }
+  check(refs.length<=10000);
+  refs.sort((a,b)=>cmp(text(a.review_id),text(b.review_id))||cmp(text(a.event_id),text(b.event_id)));
+  indexActionAvailability(reviews,refs,frozen);return {refs,ancestry,readValidUntil:deadlines.length?deadlines.sort()[0]:null};
 }
 
 /** Binding checks only; the receipt reader must independently derive all refs. */

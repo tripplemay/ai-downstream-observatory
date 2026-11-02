@@ -189,6 +189,17 @@ function readSnapshot(db: Database.Database, workspace: string, document: Obj, n
     const actionReviews = [...reviews.values()].filter(value => value.source.kind === "actions");
     const availability = auditedActions ? actionAvailabilityRefs(db, workspace, actionReviews, now, frozen) : null;
     if (availability) eq(snapshot.action_availability_refs, availability);
+    return assembleInvestorSourceSnapshot(db, workspace, document, now, confirmedSnapshot, reviews, availability);
+  } catch { throw new Error("INVESTOR_EVIDENCE_INVALID"); }
+}
+
+/** Internal assembly, not a source verifier: every supplied review must be independently authenticated. */
+export function assembleInvestorSourceSnapshot(db: Database.Database, workspace: string, document: Obj, now: string,
+  confirmedSnapshot: boolean, reviews: Map<string, VerifiedSourceReview>, availability: Obj[] | null) {
+  try {
+    const snapshot = obj(document.snapshot), frozen = document.created_at as string, start = snapshot.range_start as string, end = snapshot.range_end as string;
+    const captureRefs = list(snapshot.capture_refs, 1000), auditedActions = availability !== null;
+    const actionReviews = [...reviews.values()].filter(value => value.source.kind === "actions");
     const available = availability ? indexActionAvailability(actionReviews, availability, frozen) : null;
     const assets = new Map<string, Review>(), calendars = new Map<string, Review>();
     const quotes = new Map<string, { capture: Obj; record: Obj }>(), used = new Set<string>();

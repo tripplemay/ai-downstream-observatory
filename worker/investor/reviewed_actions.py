@@ -35,11 +35,11 @@ def _source_history(previous, current, coverage_end):
             == _groups(after["records"], day, fields, start, coverage_end), "HISTORICAL_SOURCE_CORRECTION_REQUIRED")
 
 
-def _fact_events(facts):
+def _fact_events(facts, *, zone=ZONE):
     for event in facts["events"]:
         effective = _time(event["at"])
         _time(event["published_at"])
-        day = effective.astimezone(ZONE).date().isoformat()
+        day = effective.astimezone(zone).date().isoformat()
         _check(facts["range_start"] <= day <= facts["range_end"], "FACT_EVENT_OUTSIDE_REVIEW_RANGE")
         if event["type"] == "dividend":
             _check(_time(event["pay_at"]) >= effective, "PAYMENT_PRECEDES_ENTITLEMENT")
