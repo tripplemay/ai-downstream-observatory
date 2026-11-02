@@ -12,7 +12,9 @@ import { readManagedActionAnchorContext, readManagedActionComparisonBasis, readM
 import { validateInvestorActionReviewDocument } from "./kernel-contracts";
 import { actionReviewViewSchema } from "./action-review-schemas";
 import { actionAddDays } from "./action-source-parsers";
+import { checkUnchangedActionRecovery, isUnchangedActionRecovery, readActionRecoveryFailure } from "./unchanged-action-recovery";
 import type { VerifiedSourceReview } from "./source-inputs";
+import { unchangedRecoveryViewSchema } from "./unchanged-action-recovery-schemas";
 
 const Exact = Decimal.clone({ precision: 128, rounding: Decimal.ROUND_HALF_EVEN });
 const kinds = ["issuer", "dividends", "splits"] as const;
@@ -156,10 +158,16 @@ function compareConfirmationContexts(db:Database.Database,workspace:string,actor
   const floor = receipts.reduce((a, b) => time(a) >= time(b) ? a : b);
   const maximum = millis([old.doc.valid_until, ...before.limits, ...after.limits, ...before.historicalLimits].map(time).reduce((a, b) => a < b ? a : b));
   check(next.doc.valid_from === doc.created_at && next.doc.valid_until === maximum && after.base.row.valid_until === maximum);
-  const facts = expectedFacts(before.prior.facts, after.anchor.snapshots, request, doc.preview_id, floor);
+  const recovering = isUnchangedActionRecovery(doc);
+  const failure = recovering ? readActionRecoveryFailure(db, workspace, text(old.row.id), now) : null;
+  if (failure) check(request.failed_publication_id === failure.failed_publication_id && request.failed_publication_hash === failure.failed_publication_hash);
+  const facts = recovering ? { ...before.prior.facts, range_end: kinds.map(kind => text(after.anchor.snapshots[kind].source.range_end)).sort()[0] }
+    : expectedFacts(before.prior.facts, after.anchor.snapshots, request, doc.preview_id, floor);
   check(hash(facts) === hash(after.base.facts));
-  const proof = checkReviewedActionAppend(before.prior.facts, facts, before.previous, after.anchor.snapshots,
-    text(old.doc.provider_symbol), text(old.doc.listing_id), floor, text(doc.created_at));
+  const proof = failure ? checkUnchangedActionRecovery(before.prior.facts, facts, before.previous, after.anchor.snapshots,
+    text(old.doc.provider_symbol), text(old.doc.listing_id), floor, text(doc.created_at), failure)
+    : checkReviewedActionAppend(before.prior.facts, facts, before.previous, after.anchor.snapshots,
+      text(old.doc.provider_symbol), text(old.doc.listing_id), floor, text(doc.created_at));
   check(hash(proof) === hash(doc.append_proof));
   const basis = { workspace, owner: actor, authority_id: old.row.id, authority_hash: old.row.content_hash, control_id: original.id, control_hash: original.content_hash,
     publication_id: before.publicationId, previous_review_hash: before.prior.row.content_hash, previous_facts_hash: hash(before.prior.facts),
@@ -271,5 +279,19 @@ export function readActionReviewPreview(db: Database.Database, workspace: string
       unchanged_tax_assumption:before.prior.facts.tax_assumption,changes:rows,confirmation_supported:supported,checked_at:now,refresh_after:until,
       visibility:"private_owner_only_not_ai",provider_calls:0,research_admitted:false,trading_permission:false});
     check(Buffer.byteLength(canonical(view)) <= 4194304);return view;
+  }).deferred();
+}
+
+/** Separate recovery qualification; a no-change view or failure header alone cannot enable it. */
+export function readUnchangedActionRecoveryPreview(db: Database.Database, workspace: string, actor: unknown, id: unknown, now: string) {
+  return db.transaction(() => {
+    const view = readActionReviewPreview(db, workspace, actor, id, now);
+    check(view.status === "no_reported_changes" && !view.confirmation_supported && view.changes.length === 0);
+    const before = readManagedActionComparisonBasis(db, workspace, view.preview.authority_id, now);
+    const current = readManagedActionCurrentCaptures(db, workspace, view.preview.authority_id, now);
+    const failure = readActionRecoveryFailure(db, workspace, view.preview.authority_id, now);
+    checkUnchangedActionRecovery(before.prior.facts, { ...before.prior.facts, range_end: view.candidate_coverage_end },
+      before.previous, current.snapshots, view.provider_symbol, text(before.grant.doc.listing_id), view.knowledge_not_before, now, failure);
+    return unchangedRecoveryViewSchema.parse({ preview_id: view.preview.preview_id, ...failure });
   }).deferred();
 }

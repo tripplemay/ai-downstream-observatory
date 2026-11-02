@@ -78,8 +78,10 @@ def _confirmation(db, workspace, actor, identifier, at):
         values, _, limits = managed._captures(db, workspace, actor, policy["listing_review_id"], published["capture_refs"], at)
         _check(row["authority_id"] == old["id"] and row["created_at"] <= doc["created_at"])
         previous = {key: value["draft"] for key, value in values.items()}
+    from . import unchanged_action_recovery as recovery
     result = _compare_confirmation_facts(workspace, actor, doc, old, policy, next_policy, previous_control,
-        before, after, prior, previous, publication_id, limits)
+        before, after, prior, previous, publication_id, limits,
+        recovery_failure=recovery.failure_witness(db, workspace, old["id"], at) if recovery.is_recovery(doc) else None)
     return (*result, min(before["read_valid_until"], after["read_valid_until"], prior["review"]["valid_until"]))
 
 

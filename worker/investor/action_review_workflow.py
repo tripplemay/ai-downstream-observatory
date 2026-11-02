@@ -13,13 +13,17 @@ from .action_review_draft import _changes, _draft_binding_hash, _prepare_action_
 from .data_evidence import _audit, _audit_binding, _fact_validation_scope, _object, _owner, review_source, store_source
 from .model_runtime import _clock
 from .reviewed_actions import _check, _historical_basis, _time, check_reviewed_action_append, preview_reviewed_action_successor
+from . import unchanged_action_recovery as recovery
 
 
 SCHEMA = "investor-action-review-workflow.schema.json"
 
 
 def _validate(value, fragment):
-    validate_contract(value, SCHEMA, fragment="$defs/" + fragment)
+    versioned = fragment == "submit" and value.get("schema_version") == recovery.SUBMIT \
+        or fragment == "confirmation" and value.get("schema_version") == recovery.CONFIRMATION
+    schema = recovery.SCHEMA if versioned else SCHEMA
+    validate_contract(value, schema, fragment="$defs/" + fragment)
     if "expected_revision" in value:
         _check(type(value["expected_revision"]) is int, "REVISION_INVALID")
 
@@ -170,10 +174,11 @@ def _verified_confirmation(db, workspace, actor, identifier, at):
             for kind in before["report"]["bindings"] for key in ("authority_id", "authority_hash", "control_id", "control_hash")), "CONFIRMATION_INPUTS_CHANGED")
     prior, previous, publication_id, limits = _historical_basis(db, workspace, actor, old, policy, before, at)
     return _compare_confirmation_facts(workspace, actor, doc, old, policy, next_policy, previous_control,
-        before, after, prior, previous, publication_id, limits)
+        before, after, prior, previous, publication_id, limits,
+        recovery_failure=recovery.failure_witness(db, workspace, old["id"], at) if recovery.is_recovery(doc) else None)
 
 
-def _compare_confirmation_facts(workspace, actor, doc, old, policy, next_policy, previous_control, before, after, prior, previous, publication_id, limits):
+def _compare_confirmation_facts(workspace, actor, doc, old, policy, next_policy, previous_control, before, after, prior, previous, publication_id, limits, *, recovery_failure=None):
     """Pure replay; callers authenticate controls, sources and original contexts."""
     _check(publication_id == doc["previous_publication_id"] and prior["review"]["id"] == doc["previous_review_id"]
         and prior["review"]["content_hash"] == doc["previous_review_hash"], "CONFIRMATION_INPUTS_CHANGED")
@@ -182,10 +187,17 @@ def _compare_confirmation_facts(workspace, actor, doc, old, policy, next_policy,
     _check(next_policy["valid_from"] == doc["created_at"] and next_policy["valid_until"] == maximum
         and after["base"]["review"]["valid_until"] == maximum, "CONFIRMATION_INPUTS_CHANGED")
     context = {"prior": prior, "current": after["snapshots"], "report": after["report"]}
-    expected_facts = _new_facts(context, doc["request"]["new_events"], doc["preview_id"], floor)
+    recovering = recovery.is_recovery(doc)
+    if recovering:
+        _check(recovery_failure is not None and all(doc["request"][key] == recovery_failure[key]
+            for key in ("failed_publication_id", "failed_publication_hash")), "RECOVERY_FAILURE_CHANGED")
+        expected_facts = recovery.recovery_facts(prior["facts"], previous, after["snapshots"], symbol=policy["provider_symbol"], listing_id=policy["listing_id"])[0]
+    else:
+        expected_facts = _new_facts(context, doc["request"]["new_events"], doc["preview_id"], floor)
     _check(expected_facts == after["base"]["facts"], "CONFIRMATION_FACTS_CHANGED")
-    proof = check_reviewed_action_append(prior["facts"], expected_facts, previous, after["snapshots"], symbol=policy["provider_symbol"],
-        listing_id=policy["listing_id"], knowledge_floor=floor, reviewed_at=doc["created_at"])
+    proof = (recovery.check_unchanged_action_recovery if recovering else check_reviewed_action_append)(prior["facts"], expected_facts, previous, after["snapshots"],
+        symbol=policy["provider_symbol"], listing_id=policy["listing_id"], knowledge_floor=floor, reviewed_at=doc["created_at"],
+        **({"failure": recovery_failure} if recovering else {}))
     _check(proof == doc["append_proof"], "CONFIRMATION_PROOF_CHANGED")
     changes = _changes(previous, after["snapshots"], prior["facts"]["range_end"], after["report"]["comparison"]["common_window"]["range_end"])
     binding = _draft_binding_hash(workspace, actor, old, previous_control, prior, previous, after["snapshots"], after["report"], publication_id, floor, maximum, changes)
@@ -285,10 +297,19 @@ def prepare_action_review_confirmation(db, workspace, actor, request, *, now=Non
         _check(witness["created_at"] <= at < witness["valid_until"], "PREVIEW_EXPIRED")
         draft, context = _prepare_action_review_draft(db, workspace, actor, witness["authority_id"], now=at)
         _check(draft["draft_basis_hash"] == witness["draft_basis_hash"], "DRAFT_CHANGED")
-        _check(draft["status"] == "new_reported_actions", "SEPARATE_HISTORICAL_REVIEW_REQUIRED")
-        facts = _new_facts(context, request["new_events"], witness["preview_id"], draft["knowledge_not_before"])
-        proof = check_reviewed_action_append(context["prior"]["facts"], facts, context["previous"], context["current"],
-            symbol=context["policy"]["provider_symbol"], listing_id=context["policy"]["listing_id"], knowledge_floor=draft["knowledge_not_before"], reviewed_at=at)
+        recovering = recovery.is_recovery(request)
+        _check(draft["status"] == ("no_reported_changes" if recovering else "new_reported_actions"), "SEPARATE_HISTORICAL_REVIEW_REQUIRED")
+        if recovering:
+            failure = recovery.failure_witness(db, workspace, witness["authority_id"], at)
+            _check(all(request[key] == failure[key] for key in ("failed_publication_id", "failed_publication_hash")), "RECOVERY_FAILURE_CHANGED")
+            facts = recovery.recovery_facts(context["prior"]["facts"], context["previous"], context["current"],
+                symbol=context["policy"]["provider_symbol"], listing_id=context["policy"]["listing_id"])[0]
+        else:
+            facts = _new_facts(context, request["new_events"], witness["preview_id"], draft["knowledge_not_before"])
+        proof = (recovery.check_unchanged_action_recovery if recovering else check_reviewed_action_append)(
+            context["prior"]["facts"], facts, context["previous"], context["current"], symbol=context["policy"]["provider_symbol"],
+            listing_id=context["policy"]["listing_id"], knowledge_floor=draft["knowledge_not_before"], reviewed_at=at,
+            **({"failure": failure} if recovering else {}))
     def commit(connection):
         _check(connection is db, "PREPARED_CONNECTION_CHANGED")
         return _commit_confirmation(db, workspace, actor, request, request_hash, witness, draft, context, facts, proof, now, clock)
@@ -313,11 +334,15 @@ def _commit_confirmation(db, workspace, actor, request, request_hash, witness, d
         policy = {**context["policy"], **{key: prepared[key] for key in ("base_review_id", "base_review_hash", "anchor_captures", "anchor_binding_hash")},
             "valid_from": current, "valid_until": context["maximum_valid_until"]}
         following = managed.register_authority(db, workspace, actor, policy, now=current)
-        checked = preview_reviewed_action_successor(db, workspace, actor, context["authority"]["id"], following["id"], now=current)
+        if recovery.is_recovery(request):
+            from .reviewed_actions import preview_recovered_action_successor
+            checked = preview_recovered_action_successor(db, workspace, actor, context["authority"]["id"], following["id"], now=current)
+        else:
+            checked = preview_reviewed_action_successor(db, workspace, actor, context["authority"]["id"], following["id"], now=current)
         _check(checked["append_proof"] == proof, "DRAFT_CHANGED")
         retired = managed.set_authority_enabled(db, workspace, actor, context["authority"]["id"], False, now=current)
         control = managed.set_authority_enabled(db, workspace, actor, following["id"], request["enable_rule"], now=current)
-        doc = {"schema_version": "investor-action-review-confirmation-v1", "confirmation_id": identifier, "workspace_id": workspace,
+        doc = {"schema_version": recovery.CONFIRMATION if recovery.is_recovery(request) else "investor-action-review-confirmation-v1", "confirmation_id": identifier, "workspace_id": workspace,
             "workspace_revision": request["expected_revision"] + 1, "preview_id": request["preview_id"], "request": deepcopy(request), "request_hash": request_hash,
             "draft_basis_hash": witness["draft_basis_hash"], "previous_authority_id": context["authority"]["id"], "previous_authority_hash": context["authority"]["content_hash"],
             "previous_control_id": context["control"]["id"], "previous_control_hash": context["control"]["content_hash"],

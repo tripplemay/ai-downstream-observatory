@@ -40,6 +40,7 @@ import actionSuccessor from "../../../../contracts/v1/investor-action-successor.
 import actionReviewDraft from "../../../../contracts/v1/investor-action-review-draft.schema.json";
 import actionReviewWorkflow from "../../../../contracts/v1/investor-action-review-workflow.schema.json";
 import actionReviewJob from "../../../../contracts/v1/investor-action-review-job.schema.json";
+import unchangedActionRecovery from "../../../../contracts/v1/investor-unchanged-action-recovery.schema.json";
 import legacyActionTransitionPreview from "../../../../contracts/v1/investor-legacy-action-transition-preview.schema.json";
 import legacyTransitionWorkflow from "../../../../contracts/v1/investor-legacy-transition-workflow.schema.json";
 import legacyTransitionSource from "../../../../contracts/v1/investor-legacy-transition-source.schema.json";
@@ -105,7 +106,7 @@ import { verifyInvestorKernelProof } from "./kernel-read-scope";
 const ajv = new Ajv2020({ strict: true, strictRequired: false });
 addFormats(ajv);
 ajv.addSchema(calendarContinuation);
-for (const schema of [actionCrosscheck, actionSuccessor, actionReviewDraft, actionReviewWorkflow, actionReviewJob]) ajv.addSchema(schema);
+for (const schema of [actionCrosscheck, actionSuccessor, actionReviewDraft, actionReviewWorkflow, actionReviewJob, unchangedActionRecovery]) ajv.addSchema(schema);
 ajv.addSchema(legacyActionTransitionPreview);
 ajv.addSchema(legacyTransitionWorkflow);
 ajv.addSchema(actionRestatementKernel);
@@ -181,11 +182,22 @@ export function validateCorrectionImpactJob(kind: "request" | "result", value: u
   requireTrue(ajv.getSchema(correctionImpactJob.$id + "#/$defs/" + kind)!(value));
 }
 export function validateInvestorActionReviewDocument(kind: "preview" | "confirmation" | "append_proof" | "preview_request" | "submit", value: unknown) {
+  const version = (value as JsonObject | null)?.schema_version;
+  if ((kind === "submit" && version === "investor-unchanged-action-recovery-submit-v1")
+    || (kind === "confirmation" && version === "investor-unchanged-action-recovery-confirmation-v1")) {
+    validateUnchangedActionRecovery(kind, value); return;
+  }
   const schema = kind === "append_proof" ? actionSuccessor : actionReviewWorkflow;
   requireTrue(ajv.getSchema(schema.$id + "#/$defs/" + kind)!(value));
 }
 export function validateInvestorActionReviewJob(kind: "request" | "result", value: unknown) {
+  if (kind === "request" && (value as JsonObject | null)?.schema_version === "investor-action-review-job-request-v2") {
+    validateUnchangedActionRecovery("job_request", value); return;
+  }
   requireTrue(ajv.getSchema(actionReviewJob.$id + "#/$defs/" + kind)!(value));
+}
+export function validateUnchangedActionRecovery(kind: "submit" | "proof" | "confirmation" | "successor_preview" | "job_request", value: unknown) {
+  requireTrue(ajv.getSchema(unchangedActionRecovery.$id + "#/$defs/" + kind)!(value));
 }
 export function validateInvestorReferenceDocument(value: unknown) { requireTrue(ajv.getSchema((value as JsonObject | null)?.schema_version === "investor-reference-plan-v2" ? referencePlanV2.$id : referencePlan.$id)!(value)); }
 export function validateInvestorMonitorDataDocument(kind: "input" | "projection", value: unknown) {

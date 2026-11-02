@@ -162,6 +162,15 @@ def _historical_basis(db, workspace, actor, authority, policy, anchor, at, *, ca
 
 def preview_reviewed_action_successor(db, workspace, actor, previous_authority_id, next_authority_id, *, now=None):
     """Verify existing manual review and raw bindings; do not retire or enable rules."""
+    return _preview_successor(db, workspace, actor, previous_authority_id, next_authority_id, now=now, recovering=False)
+
+
+def preview_recovered_action_successor(db, workspace, actor, previous_authority_id, next_authority_id, *, now=None):
+    """Separate unchanged-recovery proof, not an empty append under the old protocol."""
+    return _preview_successor(db, workspace, actor, previous_authority_id, next_authority_id, now=now, recovering=True)
+
+
+def _preview_successor(db, workspace, actor, previous_authority_id, next_authority_id, *, now, recovering):
     from datetime import timedelta
     from . import managed_actions as managed
     from .data_evidence import _fact_validation_scope, _owner
@@ -195,11 +204,14 @@ def preview_reviewed_action_successor(db, workspace, actor, previous_authority_i
         reviewed_at = after["base"]["review"]["created_at"]
         _check(max(instant(prior["review"]["created_at"]), instant(old["created_at"])) <= instant(reviewed_at) <= instant(at),
             "REVIEW_TIME_INVALID")
-        proof = check_reviewed_action_append(prior["facts"], after["base"]["facts"], snapshots, after["snapshots"],
-            symbol=new_policy["provider_symbol"], listing_id=new_policy["listing_id"], knowledge_floor=floor, reviewed_at=reviewed_at)
+        from . import unchanged_action_recovery as recovery
+        proof = (recovery.check_unchanged_action_recovery if recovering else check_reviewed_action_append)(
+            prior["facts"], after["base"]["facts"], snapshots, after["snapshots"], symbol=new_policy["provider_symbol"],
+            listing_id=new_policy["listing_id"], knowledge_floor=floor, reviewed_at=reviewed_at,
+            **({"failure": recovery.failure_witness(db, workspace, old["id"], at)} if recovering else {}))
         deadline = _clock(min([instant(at) + timedelta(seconds=60), instant(old_policy["valid_until"]), instant(new_policy["valid_until"]),
             *before["limits"], *after["limits"], *limits]))
-        result = {"status":"explicit_review_successor_prepared_not_registered", "checked_at":at, "refresh_after":deadline,
+        result = {"status":"explicit_unchanged_recovery_prepared_not_registered" if recovering else "explicit_review_successor_prepared_not_registered", "checked_at":at, "refresh_after":deadline,
             "previous_authority_id":old["id"], "previous_authority_hash":old["content_hash"],
             "previous_control_id":old_control["id"], "previous_control_hash":old_control["content_hash"],
             "previous_control_enabled":bool(old_control["enabled"]), "previous_publication_id":prior_publication,
@@ -213,5 +225,6 @@ def preview_reviewed_action_successor(db, workspace, actor, previous_authority_i
             "handover_registered":False, "next_rule_enabled":False, "quarantine_cleared":False,
             "provider_calls":0, "database_writes":0, "research_admitted":False, "trading_permission":False,
             "raw_amounts_or_tax_text_output":False}
-        validate_contract(result, "investor-action-successor.schema.json", fragment="$defs/preview")
+        validate_contract(result, recovery.SCHEMA if recovering else "investor-action-successor.schema.json",
+            fragment="$defs/successor_preview" if recovering else "$defs/preview")
         return result

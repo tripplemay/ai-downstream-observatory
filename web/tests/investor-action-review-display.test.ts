@@ -12,7 +12,8 @@ function mount(t:TestContext) {
   const h=mountInvestorDisplay(t,new URL("../src/components/workbench/investor-action-review.tsx",import.meta.url),"InvestorActionReview",
     {workspaceId:"w",binding,modelId:"fictional-model",disabled:false,onScopeChange:(value:boolean)=>locks.push(value),onRefresh:()=>refreshes.push(1)},
     {"@/components/ui/input":{Input:"Input"},"@/components/session-boundary":{useSessionBoundary:()=>({verified:true,sessionBinding:binding})},
-      "./investor-action-review-client":client,"./investor-correction-impact":{InvestorCorrectionImpact:"InvestorCorrectionImpact"}},now,{Element:ReviewLinkTarget,crypto:{randomUUID:()=>`fictional-review-${++nonce}`,subtle:webcrypto.subtle}});
+      "./investor-action-review-client":client,"./investor-correction-impact":{InvestorCorrectionImpact:"InvestorCorrectionImpact"},
+      "./investor-action-recovery":{InvestorActionRecovery:"InvestorActionRecovery"}},now,{Element:ReviewLinkTarget,crypto:{randomUUID:()=>`fictional-review-${++nonce}`,subtle:webcrypto.subtle}});
   async function reply(index:number,value:unknown,status=200) {
     h.requests[index].resolve(new Response(JSON.stringify(value),{status}));
     await h.waitFor(()=>!h.text().includes("正在核对受理记录与当前资料…"));
@@ -40,6 +41,17 @@ test("historical differences reach the ordinary correction panel with the curren
   assert.equal(child.props.modelId,"fictional-model");assert.equal(child.props.workspaceId,"w");assert.equal(child.props.binding,binding);
   (child.props.onGuardChange as (locked:boolean)=>void)(true);await h.flush();assert.equal(h.button("重新准备该基金预览")!.props.disabled,true);
   assert.equal(h.button("收起并清除本地输入")!.props.disabled,true);
+  (child.props.onGuardChange as (locked:boolean)=>void)(false);await h.flush();assert.equal(h.button("重新准备该基金预览")!.props.disabled,false);
+});
+test("unchanged views reach a separate recovery panel and share the parent polling and navigation guard",async t=>{
+  const h=mount(t);await h.click("查看并复核资料更新");const value=reviewResponse();
+  value.view!.refresh_after=new Date(now+1000).toISOString();
+  value.view!.status="no_reported_changes";value.view!.confirmation_supported=false;value.view!.changes=[];await h.reply(0,value);
+  const child=h.node("InvestorActionRecovery")!;assert.ok(child);assert.equal(child.props.requestId,value.request!.id);
+  (child.props.onGuardChange as (locked:boolean)=>void)(true);await h.flush();await h.advance(now+30000);
+  assert.equal(h.requests.length,1);assert.equal(h.button("重新准备该基金预览")!.props.disabled,true);
+  assert.equal(h.button("收起并清除本地输入")!.props.disabled,true);assert.equal(h.windowListeners.get("beforeunload")?.size,1);
+  assert.match(h.text(),/下方独立复核以其当前核验状态和原确认期限为准/);
   (child.props.onGuardChange as (locked:boolean)=>void)(false);await h.flush();assert.equal(h.button("重新准备该基金预览")!.props.disabled,false);
 });
 test("correction drafts pause parent polling and reject retained reset, refresh and prepare handlers without losing the child",async t=>{
@@ -122,6 +134,12 @@ test("queued previews poll only GET; original deadlines and ready metadata witho
   await h.advance(now+2500);assert.equal(h.requests[2].method,"GET");assert.match(h.requests[2].url,/request=fictional-job/);
   await h.reply(2,reviewResponse({view:null,preview_error:"ACTION_REVIEW_VIEW_UNAVAILABLE"}));assert.equal(h.node("form"),undefined);
   assert.equal(h.requests.filter(row=>row.method==="POST").length,1);assert.match(h.text(),/当前原文或依赖未通过核对/);
+});
+test("ordinary confirmation locks on a source deadline before any polling render",async t=>{
+  const h=mount(t);await h.click("查看并复核资料更新");const value=reviewResponse();
+  value.view!.refresh_after=new Date(now+1000).toISOString();await h.reply(0,value);await h.fill();
+  assert.equal(h.button("登记研究审阅，不执行交易")!.props.disabled,false);await h.advance(now+1001);
+  assert.equal(h.requests.length,1);assert.equal(h.button("登记研究审阅，不执行交易")!.props.disabled,true);
 });
 test("rejected reviews explain every closed failure in ordinary language without leaking source facts or scheduling another write",async t=>{
   const reasons={ACTION_REVIEW_VERSION_CHANGED:"工作区已有更新",ACTION_REVIEW_PREVIEW_EXPIRED:"原预览已过期",

@@ -309,6 +309,12 @@
       "version": 61,
       "file": "0061_investor_initial_close.sql",
       "sha256": "5ed6ecdec88063a8b3e8f33e6e4e580aaa8a7f342078ad7843aa7d79fe9a41e1"
+    },
+    {
+      "version": 62,
+      "file": "0062_investor_unchanged_action_recovery.sql",
+      "foreign_key_rebuild": true,
+      "sha256": "7844a6f15c37ec0b4069de6a915e6b04594acd6fc0ff43debf789d4e69707b4e"
     }
   ]
 }

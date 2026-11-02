@@ -8,6 +8,7 @@ import { SESSION_INVALIDATED_EVENT } from "@/components/session-boundary-state";
 import type { ActionReviewResponse, ActionReviewView } from "@/server/investor/action-review-schemas";
 import { useInvestorDisplayClock } from "./investor-display-clock";
 import { InvestorCorrectionImpact } from "./investor-correction-impact";
+import { InvestorActionRecovery } from "./investor-action-recovery";
 import { actionReviewAttempt, actionReviewErrorText, blankActionReviewDrafts, buildActionReviewConfirmation,
   parseActionReviewResponse, readActionReviewJson, type ActionReviewAttempt, type ActionReviewDraft } from "./investor-action-review-client";
 
@@ -52,7 +53,8 @@ export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange
   const tracking=useRef<string|null>(null),viewKey=useRef<string|null>(null),draftSymbol=useRef<string|null>(null);
   const verified=session?.verified===true&&session.sessionBinding===binding&&!invalidated.current;
   const current=useRef({scope,verified,disabled,correctionLocked});current.current={scope,verified,disabled,correctionLocked};
-  const now=useInvestorDisplayClock(data?.checked_at??null,[data?.view?.refresh_after,data?.view?.preview.valid_until].join("|"));
+  const now=useInvestorDisplayClock(data?.checked_at??null,[data?.view?.refresh_after,data?.view?.preview.valid_until]
+    .filter(Boolean).map(value=>Date.parse(value!)).join("|"));
   const protectCorrection=useCallback((locked:boolean)=>{
     if(!alive.current||!current.current.verified||current.current.scope!==scope)return;
     current.current.correctionLocked=locked;
@@ -142,7 +144,7 @@ export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange
     {!open?<Button className="mt-4" variant="outline" disabled={disabled||!verified} onClick={()=>{if(current.current.disabled||!current.current.verified)return;onScopeChange(true);setOpen(true);void exchange();}}>查看并复核资料更新</Button>:<div className="mt-4 space-y-4">
       <div className="flex flex-wrap gap-3"><Button type="button" variant="outline" disabled={busy||!verified||correctionLocked} onClick={()=>void exchange()}>核对受理状态</Button>
         <Button type="button" variant="ghost" disabled={busy||uncertain||correctionLocked} onClick={()=>{if(!alive.current||!current.current.verified||current.current.correctionLocked||active.current||pending.current)return;epoch.current++;setOpen(false);setData(null);setDrafts([]);setAck(false);setEnable(false);tracking.current=null;viewKey.current=null;draftSymbol.current=null;onScopeChange(false);onRefresh();}}>收起并清除本地输入</Button></div>
-      {correctionLocked&&<p className="text-sm text-muted-foreground">历史比较正在处理，或仍有未清除的本地假设。父级资料刷新已暂停；请在下方核对比较状态，或先清除本地假设再重新准备资料。离开页面不会撤销已受理任务，本地未提交假设不会跨页面保存。</p>}
+      {correctionLocked&&<p className="text-sm text-muted-foreground">独立复核正在处理，或仍有未清除的本地假设。父级资料刷新已暂停；请在下方核对状态，或先收起复核再重新准备资料。离开页面不会撤销已受理任务，本地未提交假设不会跨页面保存。</p>}
       {busy&&<p role="status" className="text-sm">正在核对受理记录与当前资料…</p>}
       {error&&<p role="alert" className="break-words text-sm text-red-600">{error}</p>}
       {uncertain&&<div role="status" className="space-y-2 rounded-xl border p-3 text-sm"><p>原提交仍待核实。连接失败不等于未受理；不会自动创建第二个请求。</p>
@@ -162,6 +164,9 @@ export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange
         <SourceChanges view={view}/>
         <div className="rounded-xl border p-3 text-sm"><p className="font-medium">原税务说明（本入口不修改）</p><p className="mt-2 whitespace-pre-wrap break-words">{view.unchanged_tax_assumption}</p></div>
         {!view.confirmation_supported&&<p role="status" className="text-sm">{view.status==="no_reported_changes"?"没有新增可确认记录；不会重复批准。":"存在历史更正、共同覆盖以外记录或其他来源差异，不能当作普通追加。需另行核对影响范围，不能通过重新启用清除。"}</p>}
+        {view.status==="no_reported_changes"&&data.request&&<InvestorActionRecovery key={`${binding}:${workspaceId}:${view.preview.preview_id}`}
+          view={view} requestId={data.request.id} workspaceId={workspaceId} binding={binding}
+          disabled={disabled||busy||uncertain||data.read_only} onGuardChange={protectCorrection}/>}
         {view.status==="historical_correction_required"&&<InvestorCorrectionImpact key={`${binding}:${workspaceId}:${modelId}:${view.preview.preview_id}:${view.preview.draft_basis_hash}`}
           view={view} modelId={modelId} workspaceId={workspaceId} binding={binding} disabled={disabled||busy||uncertain||data.read_only}
           onGuardChange={protectCorrection}/>}
@@ -178,7 +183,9 @@ export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange
           <label className="flex items-start gap-3 text-sm"><input type="checkbox" checked={enable} onChange={event=>{setEnable(event.target.checked);setAck(false);}} className="mt-1"/>另行选择：登记后启用新的有界资料维护。仍只在无新增、无变化时续接，出现异常就停止，不自动批准新事件。</label>
           <Button disabled={locked||!ack}>登记研究审阅，不执行交易</Button>
         </fieldset></form>}
-        {stale&&<p role="status" className="text-sm">预览已到复核时间，当前不能确认；请核对受理状态。输入仍只保留在本地未确认草稿中。</p>}
+        {stale&&<p role="status" className="text-sm">{correctionLocked
+          ?"普通更新预览已到复核时间；下方独立复核以其当前核验状态和原确认期限为准，不延长旧预览。"
+          :"预览已到复核时间，当前不能确认；请核对受理状态。输入仍只保留在本地未确认草稿中。"}</p>}
         <Button type="button" variant="outline" disabled={disabled||busy||uncertain||correctionLocked||data.read_only||!verified} onClick={()=>prepare(view.provider_symbol)}>重新准备该基金预览</Button>
       </div>}
     </div>}

@@ -13,7 +13,7 @@ from tests.investor.test_issuer_sources import Collector as IssuerCollector, pol
 from tests.investor.test_eodhd_sources import policy as eodhd_policy
 from tests.market.test_eodhd_actions import archive as div_archive, dividend
 from tests.market.test_vanguard_distributions import archive, row
-from worker.investor import data_evidence, eodhd_sources, issuer_sources, managed_actions
+from worker.investor import data_evidence, eodhd_sources, issuer_sources, issuer_schedule, managed_actions
 from worker.market.providers.eodhd_actions import action_url, parse_eodhd_actions
 from worker.orchestration.db import WorkbenchError, canonical_json, content_hash, instant, open_database
 from worker.orchestration.jobs import run_one
@@ -140,8 +140,30 @@ def reports(db, at):
         "payment_at": day_at(dates["event"] + timedelta(days=7), 16), "real_provider_called": False}
 
 
+def recovery_reports(db, at):
+    if instant(at).astimezone(ZONE).hour < 1: raise WorkbenchError("FICTIONAL_ACCEPTANCE_REQUIRES_NY_AFTER_01")
+    dates = timeline(at); failed_at = day_at(instant(at).astimezone(ZONE).date() - timedelta(days=1), 12)
+    registered = day_at(dates["seed"], 12)
+    issuer = db.execute("SELECT * FROM investor_issuer_authorities WHERE workspace_id='w'").fetchone()
+    policy = {"schema_version": "investor-issuer-schedule-policy-v1", "authority_id": issuer["id"], "authority_hash": issuer["content_hash"],
+        "lookback_days": 365, "run_after_hour": 1, "timezone": "America/New_York", "valid_from": registered,
+        "valid_until": json.loads(issuer["document_json"])["valid_until"], "standing_collection_authorized": True,
+        "collection_scope": "unapproved_distribution_draft_only", "automatic_retry_permitted": False}
+    schedule = issuer_schedule.register_schedule(db, "w", "owner", policy, now=registered)
+    issuer_schedule.set_schedule_enabled(db, "w", "owner", schedule["id"], True, now=registered)
+    issuer_schedule.discover_issuer_requests(db, now=failed_at)
+    with patch.object(issuer_sources.receiver, "collect_vanguard_distribution_draft", side_effect=WorkbenchError("FICTIONAL_TRANSPORT_FAILURE")) as collector:
+        failed = run_one(db, "fictional-current-recovery-failure", lambda job, lease: issuer_schedule.prepare_issuer_capture(
+            db, job, lease, clock=lambda: failed_at), job_type=issuer_schedule.JOB_TYPE, lease_seconds=180, clock=lambda: failed_at)
+    collector.assert_called_once(); assert (failed["status"], failed["attempt_count"], failed["max_attempts"]) == ("failed", 1, 1)
+    publication = managed_actions.publish_current_actions(db, now=failed_at)
+    assert len(publication) == 1 and publication[0]["failure_code"] == "SOURCE_CAPTURE_TERMINAL_FAILURE", publication
+    calls = collect(db, dates, issuer["id"], at, updated=False)
+    return {"source_calls": calls, "failed_job_id": failed["id"], "failed_publication_id": publication[0]["publication_id"], "real_provider_called": False}
+
+
 def main():
-    parser = argparse.ArgumentParser(); parser.add_argument("--db", required=True); parser.add_argument("--stage", choices=("prepare", "reports", "work", "tick", "withdraw"), required=True)
+    parser = argparse.ArgumentParser(); parser.add_argument("--db", required=True); parser.add_argument("--stage", choices=("prepare", "reports", "recovery", "work", "tick", "withdraw"), required=True)
     args = parser.parse_args(); path = Path(args.db).resolve(strict=True)
     assert path.name == "workbench.db" and path.parent.parent == Path(tempfile.gettempdir()).resolve()
     assert path.parent.name.startswith(("etf-action-review-http-", "etf-browser-fixture-"))
@@ -155,6 +177,7 @@ def main():
             at = stamp(datetime.now(timezone.utc))
             if args.stage == "prepare": result = prepare(db, at)
             elif args.stage == "reports": result = reports(db, at)
+            elif args.stage == "recovery": result = recovery_reports(db, at)
             elif args.stage in ("work", "tick"):
                 result = run_pending_once(db, "fictional-actual-clock-action-review")
                 assert result is not None or args.stage == "tick", "EXPECTED_CORE_JOB"
