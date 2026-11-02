@@ -105,13 +105,20 @@ export function transitionActionReview(db:Database.Database,workspace:string,ref
   if(checkpointActionReviewNeedsReplay(db,workspace,id,now)) {
     checkpointPredecessorReview(db,workspace,ref,start,end,now);return current;
   }
-  check(id.startsWith(MANAGED_ACTION_PREFIX)&&current.row.id.startsWith(MANAGED_ACTION_PREFIX));
-  const before=db.prepare("SELECT * FROM investor_action_publications WHERE workspace_id=? AND id=?").get(workspace,id) as Obj|undefined;
+  check(current.row.id.startsWith(MANAGED_ACTION_PREFIX));
   const after=db.prepare("SELECT * FROM investor_action_publications WHERE workspace_id=? AND id=?").get(workspace,current.row.id) as Obj|undefined;
-  check(before&&after&&before.authority_id===after.authority_id&&Number(before.sequence)<Number(after.sequence));
-  const beforeDoc=JSON.parse(before.document_json as string) as Obj,afterDoc=JSON.parse(after.document_json as string) as Obj;
+  check(after);
+  if(id.startsWith(MANAGED_ACTION_PREFIX)) {
+    const before=db.prepare("SELECT * FROM investor_action_publications WHERE workspace_id=? AND id=?").get(workspace,id) as Obj|undefined;
+    check(before&&before.authority_id===after.authority_id&&Number(before.sequence)<Number(after.sequence));
+    const beforeDoc=JSON.parse(before.document_json as string) as Obj,afterDoc=JSON.parse(after.document_json as string) as Obj;
+    check(beforeDoc.control_id===afterDoc.control_id);
+  } else {
+    const grant=readManagedActionAuthorityWitness(db,workspace,after.authority_id,now);
+    check(grant.doc.base_review_id===id&&grant.doc.base_review_hash===previous.row.content_hash);
+  }
   const basis=(value:Obj)=>Object.fromEntries(Object.entries(value).filter(([key])=>key!=="range_end"));
-  check(beforeDoc.control_id===afterDoc.control_id&&(previous.facts.range_end as string)<=(current.facts.range_end as string)
+  check((previous.facts.range_end as string)<=(current.facts.range_end as string)
     &&hash(basis(previous.facts))===hash(basis(current.facts)));
   return current;
 }

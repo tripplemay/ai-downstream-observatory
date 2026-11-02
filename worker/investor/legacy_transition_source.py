@@ -68,6 +68,7 @@ def _context(db, workspace, definition, reference, at, stop_requested=None):
 def _action_references(db, workspace, proof, document, at):
     from .action_checkpoint_replay import checkpoint_action_review
     from .action_review_selection import check_action_review_extension, check_paused_checkpoint_extension, retired_action_review
+    from .managed_actions import check_same_rule_extension
     from .source_inputs import _review_kind
     selected = {}
     for segment in proof["candidate"]["document"]["segments"]:
@@ -84,6 +85,9 @@ def _action_references(db, workspace, proof, document, at):
             _assert(current is not None, "LEGACY_TRANSITION_ACTION_SELECTION_CHANGED")
             if prior["review"]["id"] == current["review"]["id"]:
                 _assert(prior == current, "LEGACY_TRANSITION_ACTION_SELECTION_CHANGED"); continue
+            if checkpoint_action_review(db, workspace, ref["review_id"], "actions", at) is None:
+                _assert(not retired_action_review(db, workspace, ref["review_id"], at), "LEGACY_TRANSITION_ACTION_SELECTION_CHANGED")
+                check_same_rule_extension(db, workspace, prior, current, at); continue
             _assert(checkpoint_action_review(db, workspace, ref["review_id"], "actions", at) == prior,
                 "LEGACY_TRANSITION_ACTION_SELECTION_CHANGED")
             extension = check_action_review_extension if retired_action_review(db, workspace, ref["review_id"], at) else check_paused_checkpoint_extension
@@ -148,6 +152,22 @@ def resolve_transition_monitor_data(db, workspace, definition, document, *, now=
         return {"document": document, "projection": None, "unavailable_reason": "MONITOR_DATA_PROJECTION_EXPIRED"}
     return {"document": document, "projection": result["comparison_projection"], "catalog": result["comparison_catalog"],
         "content_hash": content_hash(document), "unavailable_reason": None}
+
+
+def transition_listener_catalog(db, workspace, definition, input_id, at):
+    """Reprove a real v5 input through qualified extensions; expose no prices."""
+    from .action_checkpoint_replay import _action_source_replay_scope
+    from .monitor_admission import current_monitor_model
+    with transaction(db, immediate=False), _fact_validation_scope():
+        _, current, _ = current_monitor_model(db, workspace, definition["model_id"], at)
+        _, document = monitor_evidence_document(db, workspace, definition["model_id"], input_id, at)
+        _assert(current == definition and document["schema_version"] == "investor-monitor-data-input-v5" and at < document["valid_until"],
+            "CONFIRMED_FEED_SOURCE_UNAVAILABLE")
+        with _action_source_replay_scope(db, workspace, document, at):
+            comparison = compare_transition_monitor_data(db, workspace, definition, document, now=at)
+        _assert(comparison["comparison_catalog"] is not None and comparison["comparison_projection"] is not None
+            and comparison["unavailable_reason"] in (None, "MONITOR_DATA_PROJECTION_EXPIRED"), "CONFIRMED_FEED_SOURCE_UNAVAILABLE")
+        return comparison["comparison_catalog"]
 
 
 def _root_plan(db, workspace, actor, request, at, stop_requested):

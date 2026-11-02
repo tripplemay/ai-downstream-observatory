@@ -31,6 +31,9 @@ test('all Web CI shards preserve pretest publishers and serial per-file executio
   assert.equal(scripts['test:ci:shard'], 'node scripts/ci-web-tests.mjs');
   assert.match(readFileSync('web/scripts/ci-web-tests.mjs', 'utf8'), /'--test-concurrency=1'/);
   assert.doesNotMatch(web, /continue-on-error:/);
+  const fixtures=ci.match(/^  fixtures:\n[\s\S]*?(?=^  http:)/m)?.[0];
+  assert.ok(fixtures);assert.match(fixtures,/node --test --test-concurrency=2 tests\/\*\/\*\.test\.mjs/);
+  assert.doesNotMatch(fixtures,/continue-on-error:/);
 });
 
 test('measured costs distribute expensive replays without omitting cheap or newly discovered files', () => {

@@ -118,7 +118,7 @@ jobs:
           npm run build:funded-comparison
           npm run build:ai-explanation
       - name: schema, market, recovery and release fixtures
-        run: node --test tests/*/*.test.mjs
+        run: node --test --test-concurrency=2 tests/*/*.test.mjs
       - name: shell release checks
         run: shellcheck scripts/deploy-workbench.sh tests/deployment/container-smoke.sh tests/deployment/provider-container-smoke.sh
   http:

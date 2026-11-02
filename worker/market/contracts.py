@@ -2,7 +2,11 @@
 
 from datetime import date
 from functools import lru_cache
+from contextlib import contextmanager
+from contextvars import ContextVar
+from hashlib import sha256
 import json
+import math
 import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -11,6 +15,43 @@ from referencing import Registry, Resource
 
 from worker.accounting import fact_decimal
 from worker.orchestration.db import ROOT, WorkbenchError, instant
+
+
+_VALIDATION_SCOPE = ContextVar("pure_contract_validation_scope", default=None)
+_MAX_SCOPE_VALIDATIONS = 256
+
+
+@contextmanager
+def contract_validation_scope():
+    """Reuse pure shape checks only within one synchronous evidence operation."""
+    if _VALIDATION_SCOPE.get() is not None:
+        yield
+        return
+    token = _VALIDATION_SCOPE.set({"registry": None, "keys": set()})
+    try: yield
+    finally: _VALIDATION_SCOPE.reset(token)
+
+
+def _validation_key(value, name, fragment):
+    # JSON encoding must not conflate tuples/subclasses/non-string object keys
+    # with their native JSON counterparts. Such values still validate normally.
+    pending, seen = [value], set()
+    while pending:
+        item = pending.pop(); kind = type(item)
+        if kind in (dict, list):
+            if id(item) in seen: return None
+            seen.add(id(item))
+        if kind is dict:
+            if any(type(key) is not str for key in item): return None
+            pending.extend(item.values())
+        elif kind is list: pending.extend(item)
+        elif kind is float:
+            if not math.isfinite(item): return None
+        elif kind not in (str, int, bool, type(None)): return None
+    try: encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()
+    except (ValueError, TypeError, OverflowError, RecursionError): return None
+    if len(encoded) > 65536: return None
+    return name, fragment, sha256(encoded).digest()
 
 
 @lru_cache(maxsize=1)
@@ -37,6 +78,12 @@ def _schemas():
 def validate_contract(value, name="market-batch.schema.json", fragment=None):
     schemas, registry, checker = _schemas()
     schema = schemas[name]
+    scope, key = _VALIDATION_SCOPE.get(), None
+    if scope is not None:
+        if scope["registry"] is not registry:
+            scope["registry"] = registry; scope["keys"].clear()
+        key = _validation_key(value, name, fragment)
+        if key is not None and key in scope["keys"]: return
     if fragment is not None:
         # An absolute reference keeps relative common-schema references local.
         schema = {"$ref": schemas[name]["$id"] + "#/" + fragment}
@@ -46,6 +93,8 @@ def validate_contract(value, name="market-batch.schema.json", fragment=None):
         error = errors[0]
         path = "/" + "/".join(str(item) for item in error.absolute_path)
         raise WorkbenchError("CONTRACT_INVALID:" + path + ":" + error.message)
+    if scope is not None and key is not None and len(scope["keys"]) < _MAX_SCOPE_VALIDATIONS:
+        scope["keys"].add(key)
 
 
 def observation_semantics(row, batch):

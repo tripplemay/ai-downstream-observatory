@@ -5,7 +5,7 @@ import { priceInstant } from "../market-price-source";
 import { parseStrictJson } from "../strict-json";
 import { validateInvestorEvidenceCheckpoint, validateInvestorModelDocument, validateInvestorMonitorDataDocument, validateLegacyActionTransitionPreview, validateLegacyTransitionWorkflow, validateLegacyTransitionSource } from "./kernel-contracts";
 import { checkpointActionReview, readLegacyTransitionInput } from "./action-checkpoint-replay";
-import { transitionActionReview } from "./action-review-selection";
+import { checkpointActionReviewNeedsReplay, transitionActionReview } from "./action-review-selection";
 import { MANAGED_ACTION_PREFIX } from "./managed-action-source";
 import { actionAvailabilityRefs, indexActionAvailability } from "./monitor-action-knowledge";
 import { compareInvestorMonitorData, replayInvestorMonitorData } from "./monitor-source";
@@ -14,7 +14,7 @@ import { monitorCostsAt, verifyMonitorCostSettings } from "./monitor-costs";
 import { replayEvidenceModel } from "./evidence-model-state";
 import { readBoundPlannedFundingMonitor } from "./planned-funding-source";
 import type { PlannedFundingBinding } from "./planned-funding-monitor";
-import type { VerifiedSourceReview } from "./source-inputs";
+import { readInvestorSourceReview, type VerifiedSourceReview } from "./source-inputs";
 
 type Obj = Record<string, unknown>;
 type TransitionProjection = Obj & { policy: Obj; valid_until: string; quality_gaps: string[] };
@@ -372,9 +372,10 @@ export function compareLegacyTransitionData(db: Database.Database, workspace: st
       for (const ref of rows(snapshot.review_refs)) if (reviewKind(db, workspace, ref) === "actions") {
         const current = transitionActionReview(db, workspace, ref, text(snapshot.range_start), text(snapshot.range_end), now);
         const expected = context.selected.get(text(current.facts.listing_id)); check(expected && same(reviewRef(expected), reviewRef(current)));
-        if (ref.review_id !== current.row.id) check(checkpointActionReview(db, workspace, ref.review_id, now));
+        if (ref.review_id !== current.row.id && checkpointActionReviewNeedsReplay(db, workspace, ref.review_id, now))
+          check(checkpointActionReview(db, workspace, ref.review_id, now));
         const historical = checkpointActionReview(db, workspace, ref.review_id, now);
-        selected.set(text(current.facts.listing_id), historical ?? current);
+        selected.set(text(current.facts.listing_id), historical ?? readInvestorSourceReview(db, workspace, ref, now));
       }
     }
     const actions = auditedActions(definition, rawDocument, [...selected.values()]), carry = carryActions(context.chain.ledger, actions);

@@ -16,6 +16,8 @@ function fixture() {
   if(!saved){
     const result=spawnSync(process.env.WORKBENCH_TEST_PYTHON||'python3',['-m','tests.investor.test_legacy_transition_workflow','--contract'],
       {cwd:root,encoding:'utf8',timeout:60000,maxBuffer:1024*1024});
+    assert.ok(!result.error,`OFFLINE_LEGACY_CONSENT_${result.error?.code??'SPAWN_FAILURE'} deadline_ms=60000`);
+    assert.equal(result.signal,null,'OFFLINE_LEGACY_CONSENT_INTERRUPTED');
     assert.equal(result.status,0,result.stderr);saved=JSON.parse(result.stdout);
   }
   return structuredClone(saved);

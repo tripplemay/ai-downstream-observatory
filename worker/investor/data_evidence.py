@@ -8,7 +8,7 @@ import json
 from zoneinfo import ZoneInfo
 
 from worker.accounting.decimal_math import decimal
-from worker.market.contracts import validate_contract
+from worker.market.contracts import contract_validation_scope, validate_contract
 from worker.market.providers import longport
 from worker.orchestration.db import WorkbenchError, assert_writable, canonical_json, content_hash, instant, new_id, transaction
 from .precision import validate_time_precision
@@ -27,7 +27,7 @@ def _fact_validation_scope():
     """Reuse pure validation only; source/audit/currentness reads never cache."""
     token = _FACT_VALIDATIONS.set(set())
     try:
-        yield
+        with contract_validation_scope(): yield
     finally:
         _FACT_VALIDATIONS.reset(token)
 

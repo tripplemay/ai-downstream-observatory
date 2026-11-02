@@ -24,8 +24,8 @@ class LegacyTransitionSourceTests(unittest.TestCase):
     def revision(self):
         return self.db.execute("SELECT revision FROM investor_workspaces WHERE id='w'").fetchone()[0]
 
-    def prepare(self, *, completed=False):
-        self.case.model(audited=False, known_costs=True)
+    def prepare(self, *, completed=False, quote_ttl=None, closed_dates=(), bnd_coverage_end='2026-11-02'):
+        self.case.model(audited=False, known_costs=True, quote_ttl=quote_ttl, closed_dates=closed_dates, bnd_coverage_end=bnd_coverage_end)
         if completed: self.case.complete_prices()
         self.case.confirm(); self.model_id = self.case.definition["model_id"]
         preview = workflow.register_legacy_transition_preview(self.db, "w", "synthetic-investor", {"model_id": self.model_id,

@@ -24,9 +24,10 @@ class ActionReviewReadmissionTests(unittest.TestCase):
     def setUp(self):
         self.case = review_fixture.ActionReviewWorkflowTests(); self.case.setUp(); self.addCleanup(self.case.doCleanups); self.db = self.case.db
 
-    def model(self, *, audited=True, known_costs=False):
+    def model(self, *, audited=True, known_costs=False, quote_ttl=None, closed_dates=(), bnd_coverage_end='2026-11-02'):
         self.definition, self.seed, self.old = refresh_fixture.ActionRefreshTests.model_and_prices(self.case, audited=audited, calendar_end="2026-11-06",
-            explicit_costs=monitor_input()["policy"]["costs"] if known_costs else None)
+            explicit_costs=monitor_input()["policy"]["costs"] if known_costs else None, quote_ttl=quote_ttl,
+            closed_dates=closed_dates, bnd_coverage_end=bnd_coverage_end)
         self.assertEqual(run_pending_once(self.db, "fictional-initial-review-core", clock=lambda: managed_fixture.AT)["status"], "succeeded")
         self.checkpoints = [list(row) for row in self.db.execute("SELECT rowid,* FROM investor_evidence_model_checkpoints")]
         self.assertEqual(len(self.checkpoints), 1)

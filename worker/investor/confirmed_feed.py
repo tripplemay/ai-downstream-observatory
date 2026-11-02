@@ -32,11 +32,11 @@ def _seed(db, workspace, model_id, input_id, at):
     # Expired prices are precisely why a listener is needed. Source retention,
     # current rights and the original frozen arithmetic still must verify.
     result = resolve_monitor_data(db, workspace, definition, document, now=at, evaluated_at=document["created_at"])
-    if result["unavailable_reason"] == "MONITOR_DATA_PROJECTION_EXPIRED" and document["schema_version"] == "investor-monitor-data-input-v5":
-        from .legacy_transition_source import compare_transition_monitor_data
-        comparison = compare_transition_monitor_data(db, workspace, definition, document, now=at)
-        _assert(comparison["comparison_catalog"] is not None, "CONFIRMED_FEED_SOURCE_UNAVAILABLE")
-        result = {"projection": None, "catalog": comparison["comparison_catalog"], "source_only": True, "unavailable_reason": None}
+    if result["unavailable_reason"] in ("MONITOR_DATA_PROJECTION_EXPIRED", "REFERENCE_SOURCE_NO_LONGER_CURRENT") \
+            and document["schema_version"] == "investor-monitor-data-input-v5":
+        from .legacy_transition_source import transition_listener_catalog
+        catalog = transition_listener_catalog(db, workspace, definition, input_id, at)
+        result = {"projection": None, "catalog": catalog, "source_only": True, "unavailable_reason": None}
     _assert(result["unavailable_reason"] is None, "CONFIRMED_FEED_SOURCE_UNAVAILABLE")
     control = _latest(db, "investor_model_controls", model_id, "version DESC")
     _assert(control is not None and control["enabled"] == 1 and control["created_at"] <= at, "CONFIRMED_FEED_MODEL_DISABLED")
