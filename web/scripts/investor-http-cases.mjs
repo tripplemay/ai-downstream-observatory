@@ -126,6 +126,23 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
       assert.equal((await request(route, { headers: headers() })).status, 200);
     return { revision: 1, profile_versions: 1, risk_unknown_retained: true, financial_tables_unchanged: true };
   });
+  await check('HTTP-I30', 'hypothetical correction API is private, GET-only for lookup and rejects inferred facts or scope before writing', async () => {
+    const route = `${endpoint}/correction-impact`, before = financial();
+    const counts = () => read(db => ['investor_correction_impact_requests', 'investor_correction_impact_results'].map(table => db.prepare(`SELECT count(*) n FROM ${table}`).get().n));
+    const original = counts();
+    assert.equal((await jsonRequest(route)).status, 401);
+    assert.equal((await jsonRequest(route, { headers: { Cookie: cookie } })).status, 400);
+    const result = await jsonRequest(`${route}?nonce=fictional-missing`, { headers: headers() });
+    assert.equal(result.status, 200); assert.equal(result.json.lookup_nonce, 'fictional-missing'); assert.equal(result.json.request, null); assert.equal(result.json.summary, null);
+    assert.equal(result.json.economic_correction_approved, false); assert.equal(result.headers.get('cache-control'), 'private, no-store');
+    for (const query of ['?request=a&nonce=b', '?preview=a&preview=b', '?actor_id=other']) assert.equal((await jsonRequest(route + query, { headers: headers() })).status, 400);
+    const send = (body, extra = {}) => jsonRequest(route, { method: 'POST', headers: headers({ Origin: origin, 'Content-Type': 'application/json', ...extra }), body });
+    assert.equal((await send('{}', { Origin: 'https://wrong.example.test' })).status, 403);
+    assert.equal((await send('{}', { 'X-Workbench-Session-Binding': 'b'.repeat(64) })).status, 401);
+    for (const body of ['{}', '{"model_id":"a","model_id":"b"}', JSON.stringify({ actor_id: 'other', gross_per_unit: '123' })]) assert.equal((await send(body)).status, 400);
+    assert.deepEqual(counts(), original); assert.deepEqual(financial(), before);
+    return { get_never_enqueues: true, original_nonce_only: true, no_implicit_answers_or_caller_facts: true, financial_writes: false };
+  });
   await check('HTTP-I29', 'legacy compatibility API is private, read-only on GET, explicit on POST and closed to caller prices or scope', async () => {
     const route = `${endpoint}/legacy-transition`, before = financial();
     const counts = () => read(db => ['investor_legacy_transition_job_requests', 'investor_legacy_transition_previews', 'investor_legacy_transition_confirmations',

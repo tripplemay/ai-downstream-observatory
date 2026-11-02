@@ -33,8 +33,9 @@ try:
  case=LegacyTransitionSourceTests();case.db=db;case.at='2026-11-03T06:00:04.002Z';case.case=ActionReviewReadmissionTests();case.case.db=db
  case.case.case=ActionReviewWorkflowTests();case.case.case.db=db;case.case.case.path=Path(sys.argv[1]);case.case.case.version=0
  # Only the newly introduced v59 scan is absent from the real v58 baseline.
- with patch('worker.investor.legacy_transition_jobs.discover_legacy_transition_requests',return_value=[]) as scan:
-  case.prepare();case.admit();assert scan.call_count==2
+ with patch('worker.investor.legacy_transition_jobs.discover_legacy_transition_requests',return_value=[]) as scan, \
+   patch('worker.investor.correction_impact_jobs.discover_correction_impact_requests',return_value=[]) as v60_scan:
+  case.prepare();case.admit();assert scan.call_count==2;assert v60_scan.call_count==2
 finally:db.close()
 `,filename],{cwd:new URL('../../',import.meta.url),encoding:'utf8',timeout:120000,maxBuffer:1024*1024});
   assert.equal(seeded.status,0,seeded.stderr);

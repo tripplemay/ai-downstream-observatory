@@ -35,10 +35,12 @@ try:
  # The predecessor schema has no v58 discovery table. Only omit that new scan;
  # actual admission, raw source checks, workers and checkpoint arithmetic remain.
  with patch('worker.investor.confirmed_feed.refresh_monitor_sources',return_value=[]) as next_version_scan, \
-   patch('worker.investor.legacy_transition_jobs.discover_legacy_transition_requests',return_value=[]) as v59_scan:
+   patch('worker.investor.legacy_transition_jobs.discover_legacy_transition_requests',return_value=[]) as v59_scan, \
+   patch('worker.investor.correction_impact_jobs.discover_correction_impact_requests',return_value=[]) as v60_scan:
   case.prepare()
   assert next_version_scan.call_count==2
   assert v59_scan.call_count==2
+  assert v60_scan.call_count==2
 finally:db.close()
 `,filename],{cwd:new URL('../../',import.meta.url),encoding:'utf8',timeout:60000,maxBuffer:1024*1024});
   assert.equal(seeded.status,0,seeded.stderr);

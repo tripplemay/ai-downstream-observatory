@@ -452,6 +452,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
           {data.action_drafts && <InvestorActionDrafts value={data.action_drafts} nowMs={displayNow} />}
         </InvestorActionMaintenance> : data.action_drafts && <InvestorActionDrafts value={data.action_drafts} nowMs={displayNow} />}
         {data.workspace_id&&<InvestorActionReview key={`${initialSessionBinding}:${data.workspace_id}`} workspaceId={data.workspace_id} binding={initialSessionBinding}
+          modelId={data.model_watch?.id??null}
           disabled={baseLocked||editing||scopeState.account||scopeState.costs||scopeState.legacy} onScopeChange={lockReviewScope} onRefresh={()=>void refresh(false)}/>}
         {view === "plan"&&data.workspace_id&&data.model_watch&&<InvestorLegacyTransition key={`legacy:${initialSessionBinding}:${data.workspace_id}:${data.model_watch.id}`} workspaceId={data.workspace_id} binding={initialSessionBinding}
           disabled={baseLocked||editing||scopeState.account||scopeState.costs||scopeState.reviews} onScopeChange={lockLegacyScope} onRefresh={()=>void refresh(false)}/>}

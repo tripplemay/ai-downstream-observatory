@@ -299,6 +299,11 @@
       "version": 59,
       "file": "0059_investor_legacy_transition_jobs.sql",
       "sha256": "97d3280fb46ae15ba45e9f64d755f617cd51afa3f185af52114b93ce1956a3c8"
+    },
+    {
+      "version": 60,
+      "file": "0060_investor_correction_impact_jobs.sql",
+      "sha256": "2a6f376d97908b8250dd3dadcc646f8ce8923a4f89a46cf8dbd9345e5ed7b3a7"
     }
   ]
 }

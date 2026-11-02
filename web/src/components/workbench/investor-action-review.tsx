@@ -7,6 +7,7 @@ import { useSessionBoundary } from "@/components/session-boundary";
 import { SESSION_INVALIDATED_EVENT } from "@/components/session-boundary-state";
 import type { ActionReviewResponse, ActionReviewView } from "@/server/investor/action-review-schemas";
 import { useInvestorDisplayClock } from "./investor-display-clock";
+import { InvestorCorrectionImpact } from "./investor-correction-impact";
 import { actionReviewAttempt, actionReviewErrorText, blankActionReviewDrafts, buildActionReviewConfirmation,
   parseActionReviewResponse, readActionReviewJson, type ActionReviewAttempt, type ActionReviewDraft } from "./investor-action-review-client";
 
@@ -40,12 +41,13 @@ function SourceChanges({view}:{view:ActionReviewView}) {
     </div>)}
   </section>)}</div>;
 }
-export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange,onRefresh}:{
-  workspaceId:string;binding:string;disabled:boolean;onScopeChange:(locked:boolean)=>void;onRefresh:()=>void;
+export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange,onRefresh,modelId=null}:{
+  workspaceId:string;binding:string;disabled:boolean;onScopeChange:(locked:boolean)=>void;onRefresh:()=>void;modelId?:string|null;
 }) {
   const session=useSessionBoundary(),scope=workspaceId+":"+binding;
   const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[data,setData]=useState<ActionReviewResponse|null>(null),[error,setError]=useState("");
   const [drafts,setDrafts]=useState<ActionReviewDraft[]>([]),[ack,setAck]=useState(false),[enable,setEnable]=useState(false),[uncertain,setUncertain]=useState(false);
+  const [correctionLocked,setCorrectionLocked]=useState(false);
   const alive=useRef(true),invalidated=useRef(false),epoch=useRef(0),active=useRef<AbortController|null>(null),pending=useRef<ActionReviewAttempt|null>(null);
   const tracking=useRef<string|null>(null),viewKey=useRef<string|null>(null),draftSymbol=useRef<string|null>(null);
   const verified=session?.verified===true&&session.sessionBinding===binding&&!invalidated.current;
@@ -133,7 +135,7 @@ export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange
     <p className="mt-2 text-sm text-muted-foreground">查看已保留的发行人和交叉资料，确认必要研究假设。不用填写来源编号或 JSON，不重新请求行情，不授权交易。</p>
     {!open?<Button className="mt-4" variant="outline" disabled={disabled||!verified} onClick={()=>{if(current.current.disabled||!current.current.verified)return;onScopeChange(true);setOpen(true);void exchange();}}>查看并复核资料更新</Button>:<div className="mt-4 space-y-4">
       <div className="flex flex-wrap gap-3"><Button type="button" variant="outline" disabled={busy||!verified} onClick={()=>void exchange()}>核对受理状态</Button>
-        <Button type="button" variant="ghost" disabled={busy||uncertain} onClick={()=>{epoch.current++;active.current?.abort();setOpen(false);setData(null);setDrafts([]);setAck(false);setEnable(false);tracking.current=null;viewKey.current=null;draftSymbol.current=null;onScopeChange(false);onRefresh();}}>收起并清除本地输入</Button></div>
+        <Button type="button" variant="ghost" disabled={busy||uncertain||correctionLocked} onClick={()=>{epoch.current++;active.current?.abort();setOpen(false);setData(null);setDrafts([]);setAck(false);setEnable(false);tracking.current=null;viewKey.current=null;draftSymbol.current=null;onScopeChange(false);onRefresh();}}>收起并清除本地输入</Button></div>
       {busy&&<p role="status" className="text-sm">正在核对受理记录与当前资料…</p>}
       {error&&<p role="alert" className="break-words text-sm text-red-600">{error}</p>}
       {uncertain&&<div role="status" className="space-y-2 rounded-xl border p-3 text-sm"><p>原提交仍待核实。连接失败不等于未受理；不会自动创建第二个请求。</p>
@@ -153,6 +155,9 @@ export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange
         <SourceChanges view={view}/>
         <div className="rounded-xl border p-3 text-sm"><p className="font-medium">原税务说明（本入口不修改）</p><p className="mt-2 whitespace-pre-wrap break-words">{view.unchanged_tax_assumption}</p></div>
         {!view.confirmation_supported&&<p role="status" className="text-sm">{view.status==="no_reported_changes"?"没有新增可确认记录；不会重复批准。":"存在历史更正、共同覆盖以外记录或其他来源差异，不能当作普通追加。需另行核对影响范围，不能通过重新启用清除。"}</p>}
+        {view.status==="historical_correction_required"&&<InvestorCorrectionImpact key={`${binding}:${workspaceId}:${modelId}:${view.preview.preview_id}:${view.preview.draft_basis_hash}`}
+          view={view} modelId={modelId} workspaceId={workspaceId} binding={binding} disabled={disabled||busy||uncertain||data.read_only}
+          onGuardChange={setCorrectionLocked}/>}
         {view.confirmation_supported&&<form onSubmit={submit} className="space-y-4"><fieldset disabled={locked} className="min-w-0 space-y-4">
           <p className="text-sm">来源只报告日期。以下时刻采用 UTC，由你明确选择为研究假设，不冒充提供方的精确时刻；换算后的纽约日期须与来源一致。未知税额不要填零。</p>
           {drafts.map((row,index)=><div key={row.type+row.date} className="grid min-w-0 gap-3 rounded-xl border p-3 sm:grid-cols-2">
@@ -167,7 +172,7 @@ export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange
           <Button disabled={locked||!ack}>登记研究审阅，不执行交易</Button>
         </fieldset></form>}
         {stale&&<p role="status" className="text-sm">预览已到复核时间，当前不能确认；请核对受理状态。输入仍只保留在本地未确认草稿中。</p>}
-        <Button type="button" variant="outline" disabled={disabled||busy||uncertain||data.read_only||!verified} onClick={()=>prepare(view.provider_symbol)}>重新准备该基金预览</Button>
+        <Button type="button" variant="outline" disabled={disabled||busy||uncertain||correctionLocked||data.read_only||!verified} onClick={()=>prepare(view.provider_symbol)}>重新准备该基金预览</Button>
       </div>}
     </div>}
   </section>;

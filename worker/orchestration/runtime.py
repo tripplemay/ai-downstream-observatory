@@ -263,6 +263,9 @@ def command_handler(connection, clock=None, lease_seconds=300, stop_requested=No
     clock = (lambda: None) if clock is None else clock
     supported = role_commands(role)
     def handle(job, lease):
+        if job["job_type"] == "investor_correction_impact" and role == "core":
+            from worker.investor.correction_impact_jobs import prepare_correction_impact_job
+            return prepare_correction_impact_job(connection, job, lease, clock=clock, stop_requested=stop_requested)
         if job["job_type"] == "investor_legacy_transition" and role == "core":
             from worker.investor.legacy_transition_jobs import prepare_legacy_transition_job
             return prepare_legacy_transition_job(connection, job, lease, clock=clock, stop_requested=stop_requested)
@@ -420,6 +423,8 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
     if role == "longport" and (type(lease_seconds) is not int or lease_seconds < 180):
         raise WorkbenchError("PRICE_WORKER_LEASE_TOO_SHORT")
     if role == "core":
+        from worker.investor.correction_impact_jobs import discover_correction_impact_requests
+        discover_correction_impact_requests(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         from worker.investor.legacy_transition_jobs import discover_legacy_transition_requests
         discover_legacy_transition_requests(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         from worker.investor.action_review_jobs import discover_action_review_requests
@@ -465,5 +470,5 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
     sync_requests(connection, now=clock(), command_types=supported)
     # One oldest-ready selection avoids starving periodic jobs behind a busy
     # ingestion stream while still excluding unsupported modules' jobs.
-    types = (*supported, "investor_research", "investor_funded_study", "investor_monitor", "investor_evidence_monitor", "investor_action_review", "investor_legacy_transition") if role == "core" else (*supported, "investor_confirmed_watch", "investor_initial_prices", "investor_current_fx", "investor_issuer_capture", "investor_eodhd_capture") if role == "longport" else supported
+    types = (*supported, "investor_research", "investor_funded_study", "investor_monitor", "investor_evidence_monitor", "investor_action_review", "investor_legacy_transition", "investor_correction_impact") if role == "core" else (*supported, "investor_confirmed_watch", "investor_initial_prices", "investor_current_fx", "investor_issuer_capture", "investor_eodhd_capture") if role == "longport" else supported
     return run_one(connection, owner, command_handler(connection, clock, lease_seconds, stop_requested, role), job_type=types, lease_seconds=lease_seconds, clock=clock)

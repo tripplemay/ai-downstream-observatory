@@ -9,9 +9,9 @@ import {reviewAt,reviewBinding as binding,reviewNow as now,reviewResponse,review
 function mount(t:TestContext) {
   let nonce=0;const locks:boolean[]=[],refreshes:number[]=[];
   const h=mountInvestorDisplay(t,new URL("../src/components/workbench/investor-action-review.tsx",import.meta.url),"InvestorActionReview",
-    {workspaceId:"w",binding,disabled:false,onScopeChange:(value:boolean)=>locks.push(value),onRefresh:()=>refreshes.push(1)},
+    {workspaceId:"w",binding,modelId:"fictional-model",disabled:false,onScopeChange:(value:boolean)=>locks.push(value),onRefresh:()=>refreshes.push(1)},
     {"@/components/ui/input":{Input:"Input"},"@/components/session-boundary":{useSessionBoundary:()=>({verified:true,sessionBinding:binding})},
-      "./investor-action-review-client":client},now,{crypto:{randomUUID:()=>`fictional-review-${++nonce}`,subtle:webcrypto.subtle}});
+      "./investor-action-review-client":client,"./investor-correction-impact":{InvestorCorrectionImpact:"InvestorCorrectionImpact"}},now,{crypto:{randomUUID:()=>`fictional-review-${++nonce}`,subtle:webcrypto.subtle}});
   async function reply(index:number,value:unknown,status=200) {
     h.requests[index].resolve(new Response(JSON.stringify(value),{status}));
     await h.waitFor(()=>!h.text().includes("正在核对受理记录与当前资料…"));
@@ -31,6 +31,15 @@ test("ordinary review opens lazily, shows exact source differences and old tax p
   assert.deepEqual(h.nodes().filter(row=>row.type==="input").map(row=>row.props.checked),[false,false]);
   assert.equal(h.button("登记研究审阅，不执行交易")!.props.disabled,true);
   await h.click("收起并清除本地输入");assert.equal(h.locks.at(-1),false);assert.equal(h.refreshes.length,1);assert.doesNotMatch(h.text(),/Fictional unchanged private/);
+});
+test("historical differences reach the ordinary correction panel with the current model and protect its pending or dirty scope",async t=>{
+  const h=mount(t);await h.click("查看并复核资料更新");const value=reviewResponse();value.view!.status="historical_correction_required";
+  value.view!.confirmation_supported=false;value.view!.changes[0].disposition="historical_correction";
+  await h.reply(0,value);const child=h.node("InvestorCorrectionImpact")!;assert.ok(child);
+  assert.equal(child.props.modelId,"fictional-model");assert.equal(child.props.workspaceId,"w");assert.equal(child.props.binding,binding);
+  (child.props.onGuardChange as (locked:boolean)=>void)(true);await h.flush();assert.equal(h.button("重新准备该基金预览")!.props.disabled,true);
+  assert.equal(h.button("收起并清除本地输入")!.props.disabled,true);
+  (child.props.onGuardChange as (locked:boolean)=>void)(false);await h.flush();assert.equal(h.button("重新准备该基金预览")!.props.disabled,false);
 });
 test("explicit confirmation posts one immutable intent, separate enable stays false, and receipt status never claims admission or trades",async t=>{
   const h=mount(t);await h.ready();await h.fill();assert.equal(h.button("登记研究审阅，不执行交易")!.props.disabled,false);

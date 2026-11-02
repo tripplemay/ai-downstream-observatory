@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-correction-impact-job.schema.json",
+  "$defs": {
+    "id": {"$ref": "common.schema.json#/$defs/id"}, "hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "instant": {"$ref": "investor-planned-funding-monitor.schema.json#/$defs/instant"},
+    "request": {"type": "object", "additionalProperties": false,
+      "required": ["schema_version", "request_id", "workspace_id", "body", "request_hash", "created_at", "valid_until"], "properties": {
+        "schema_version": {"const": "investor-correction-impact-job-request-v1"}, "request_id": {"$ref": "#/$defs/id"}, "workspace_id": {"$ref": "#/$defs/id"},
+        "body": {"$ref": "investor-action-correction-impact.schema.json#/$defs/request"}, "request_hash": {"$ref": "#/$defs/hash"},
+        "created_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"}
+      }},
+    "code": {"enum": ["CORRECTION_IMPACT_READY", "CORRECTION_IMPACT_VERSION_CHANGED", "CORRECTION_IMPACT_EXPIRED", "CORRECTION_IMPACT_INVALID_ANSWERS", "CORRECTION_IMPACT_SOURCE_UNAVAILABLE"]},
+    "result": {"type": "object", "additionalProperties": false,
+      "required": ["schema_version", "result_id", "request_id", "workspace_id", "request_hash", "job_id", "fencing_token", "outcome", "code", "impact", "change_fence", "implementation_hash", "created_at"],
+      "properties": {
+        "schema_version": {"const": "investor-correction-impact-job-result-v1"}, "result_id": {"$ref": "#/$defs/id"}, "request_id": {"$ref": "#/$defs/id"},
+        "workspace_id": {"$ref": "#/$defs/id"}, "request_hash": {"$ref": "#/$defs/hash"}, "job_id": {"$ref": "#/$defs/id"},
+        "fencing_token": {"type": "integer", "minimum": 1}, "outcome": {"enum": ["preview_ready", "rejected"]}, "code": {"$ref": "#/$defs/code"},
+        "impact": {"oneOf": [{"type": "null"}, {"$ref": "investor-action-correction-impact.schema.json#/$defs/result"}]},
+        "change_fence": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/hash"}]}, "implementation_hash": {"$ref": "#/$defs/hash"}, "created_at": {"$ref": "#/$defs/instant"}
+      }, "allOf": [
+        {"if": {"properties": {"outcome": {"const": "preview_ready"}}},
+          "then": {"properties": {"code": {"const": "CORRECTION_IMPACT_READY"}, "impact": {"type": "object"}, "change_fence": {"type": "string"}}},
+          "else": {"properties": {"code": {"not": {"const": "CORRECTION_IMPACT_READY"}}, "impact": {"type": "null"}, "change_fence": {"type": "null"}}}}
+      ]}
+  }
+}
