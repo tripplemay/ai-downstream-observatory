@@ -44,6 +44,7 @@ import legacyActionTransitionPreview from "../../../../contracts/v1/investor-leg
 import legacyTransitionWorkflow from "../../../../contracts/v1/investor-legacy-transition-workflow.schema.json";
 import legacyTransitionSource from "../../../../contracts/v1/investor-legacy-transition-source.schema.json";
 import legacyTransitionJob from "../../../../contracts/v1/investor-legacy-transition-job.schema.json";
+import actionRestatementKernel from "../../../../contracts/v1/investor-action-restatement-kernel.schema.json";
 import calendarContinuation from "../../../../contracts/v1/investor-calendar-continuation.schema.json";
 import dataSnapshot from "../../../../contracts/v1/investor-data-snapshot.schema.json";
 import evidenceInput from "../../../../contracts/v1/investor-evidence-input.schema.json";
@@ -103,6 +104,7 @@ ajv.addSchema(calendarContinuation);
 for (const schema of [actionCrosscheck, actionSuccessor, actionReviewDraft, actionReviewWorkflow, actionReviewJob]) ajv.addSchema(schema);
 ajv.addSchema(legacyActionTransitionPreview);
 ajv.addSchema(legacyTransitionWorkflow);
+ajv.addSchema(actionRestatementKernel);
 for (const schema of [legacyTransitionSource, legacyTransitionJob, monitorDataInputV5, monitorDataProjectionV3]) ajv.addSchema(schema);
 for (const schema of [policyV2, policyV3, policyInput, strategyResultV2, strategyResultV3, settledPlan]) ajv.addSchema(schema);
 ajv.addSchema(boundedPlan); ajv.addSchema(actionAwarePlan); ajv.addSchema(eventReviewPlan); ajv.addSchema(planInput);
@@ -158,6 +160,9 @@ export function validateLegacyTransitionSource(kind: "transition_ref" | "request
 }
 export function validateLegacyTransitionJob(kind: "request" | "result", value: unknown) {
   requireTrue(ajv.getSchema(legacyTransitionJob.$id + "#/$defs/" + kind)!(value));
+}
+export function validateActionRestatementKernel(kind: "input" | "result" | "economics", value: unknown) {
+  requireTrue(ajv.getSchema(actionRestatementKernel.$id + "#/$defs/" + kind)!(value));
 }
 export function validateInvestorActionReviewDocument(kind: "preview" | "confirmation" | "append_proof" | "preview_request" | "submit", value: unknown) {
   const schema = kind === "append_proof" ? actionSuccessor : actionReviewWorkflow;
