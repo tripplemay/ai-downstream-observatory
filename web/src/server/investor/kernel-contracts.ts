@@ -50,6 +50,8 @@ import retainedActionEvidence from "../../../../contracts/v1/investor-retained-a
 import retainedMonitorHistory from "../../../../contracts/v1/investor-retained-monitor-history.schema.json";
 import actionCorrectionImpact from "../../../../contracts/v1/investor-action-correction-impact.schema.json";
 import correctionImpactJob from "../../../../contracts/v1/investor-correction-impact-job.schema.json";
+import correctionConsent from "../../../../contracts/v1/investor-correction-consent.schema.json";
+import actionMaintenance from "../../../../contracts/v1/investor-action-maintenance.schema.json";
 import calendarContinuation from "../../../../contracts/v1/investor-calendar-continuation.schema.json";
 import dataSnapshot from "../../../../contracts/v1/investor-data-snapshot.schema.json";
 import evidenceInput from "../../../../contracts/v1/investor-evidence-input.schema.json";
@@ -114,6 +116,8 @@ ajv.addSchema(retainedActionEvidence);
 ajv.addSchema(retainedMonitorHistory);
 ajv.addSchema(actionCorrectionImpact);
 ajv.addSchema(correctionImpactJob);
+ajv.addSchema(correctionConsent);
+ajv.addSchema(actionMaintenance);
 for (const schema of [legacyTransitionSource, legacyTransitionJob, monitorDataInputV5, monitorDataProjectionV3]) ajv.addSchema(schema);
 for (const schema of [policyV2, policyV3, policyInput, strategyResultV2, strategyResultV3, settledPlan]) ajv.addSchema(schema);
 ajv.addSchema(boundedPlan); ajv.addSchema(actionAwarePlan); ajv.addSchema(eventReviewPlan); ajv.addSchema(planInput);
@@ -180,6 +184,9 @@ export function validateActionCorrectionImpact(kind: "request" | "result", value
 }
 export function validateCorrectionImpactJob(kind: "request" | "result", value: unknown) {
   requireTrue(ajv.getSchema(correctionImpactJob.$id + "#/$defs/" + kind)!(value));
+}
+export function validateCorrectionConsent(kind: "submit" | "request" | "confirmation" | "baseline" | "result" | "receipt", value: unknown) {
+  requireTrue(ajv.getSchema(correctionConsent.$id + "#/$defs/" + kind)!(value));
 }
 export function validateInvestorActionReviewDocument(kind: "preview" | "confirmation" | "append_proof" | "preview_request" | "submit", value: unknown) {
   const version = (value as JsonObject | null)?.schema_version;

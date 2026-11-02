@@ -214,6 +214,15 @@ export function readManagedActionCurrentCaptures(db:Database.Database,workspace:
   const value=captures(db,workspace,refs,symbol,now);check(value.day === day);return value;
 }
 
+/** Replays selected retained reports, not today's coverage or monitor admission. */
+export function readManagedActionReportCaptures(db:Database.Database,workspace:string,id:unknown,refs:Obj,now:string) {
+  const basis=readManagedActionAnchorContext(db,workspace,id,now);
+  const value=captures(db,workspace,refs,actionText(basis.grant.doc.provider_symbol),now);
+  for(const kind of ["issuer","dividends","splits"])for(const key of ["authority_id","authority_hash","control_id","control_hash"])
+    check(object(value.bindings[kind])[key] === object(basis.anchor.bindings[kind])[key]);
+  return value;
+}
+
 /** Current source-qualified anchor, not permission to resume a retired rule. */
 export function readManagedActionAnchorContext(db:Database.Database,workspace:string,id:unknown,now:string) {
   const grant=authority(db,workspace,id,now),{base,listing}=baseline(db,workspace,grant,now);

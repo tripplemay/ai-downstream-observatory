@@ -315,6 +315,11 @@
       "file": "0062_investor_unchanged_action_recovery.sql",
       "foreign_key_rebuild": true,
       "sha256": "7844a6f15c37ec0b4069de6a915e6b04594acd6fc0ff43debf789d4e69707b4e"
+    },
+    {
+      "version": 63,
+      "file": "0063_investor_correction_consent.sql",
+      "sha256": "8fb74d9acba1928eb35eb71af5f4c0d62886d9ac815dbe9141f84d5f2a302783"
     }
   ]
 }

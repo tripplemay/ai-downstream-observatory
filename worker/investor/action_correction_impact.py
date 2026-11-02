@@ -95,6 +95,11 @@ def _candidate(prior, changes, current, decisions, digest, at):
 
 def compare_action_correction_impact(db, workspace, actor, request, *, now=None, stop_requested=None):
     """Full source/history/math replay for a future worker, never inline HTTP GET."""
+    return _prepare_action_correction_impact(db, workspace, actor, request, now=now, stop_requested=stop_requested)["result"]
+
+
+def _prepare_action_correction_impact(db, workspace, actor, request, *, now=None, stop_requested=None):
+    """Internal replay bundle; not an approved source or a public admission object."""
     _owner(db, workspace, actor); validate_contract(request, SCHEMA)
     _check(type(request["expected_revision"]) is int, "REVISION_INVALID")
     request = deepcopy(request); at = _clock(now); digest = content_hash(request)
@@ -149,4 +154,5 @@ def compare_action_correction_impact(db, workspace, actor, request, *, now=None,
                 "monitoring_resumed", "historical_observations_rewritten", "trading_permission")}, "provider_calls": 0, "database_writes": 0}
         _check(at < result["valid_until"], "PREVIEW_EXPIRED"); validate_contract(result, SCHEMA, fragment="$defs/result")
         _check(len(canonical_json(result).encode()) <= 4194304, "RESULT_LIMIT")
-        return result
+        return {"result": result, "facts": facts, "history": history, "context": context, "draft": draft,
+            "kernel_input": value, "changed_days": changed_days}

@@ -295,3 +295,5 @@ export function readUnchangedActionRecoveryPreview(db: Database.Database, worksp
     return unchangedRecoveryViewSchema.parse({ preview_id: view.preview.preview_id, ...failure });
   }).deferred();
 }
+
+export { changes as compareActionSourceChanges };

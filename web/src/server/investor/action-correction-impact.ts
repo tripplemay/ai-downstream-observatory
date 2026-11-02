@@ -138,3 +138,6 @@ export function compareActionCorrectionImpact(db: Database.Database, workspace: 
     validateActionCorrectionImpact("result", result); check(Buffer.byteLength(canonical(result)) <= 4194304, "RESULT_LIMIT"); return result;
   }).deferred();
 }
+
+// Pure unapproved transformations; callers still authenticate reports and owner intent.
+export { ledger as correctionActionLedger, candidate as deriveCorrectionHypothesis };
