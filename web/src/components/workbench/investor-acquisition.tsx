@@ -49,13 +49,13 @@ export function acquisitionDeadlines(value: InvestorAcquisition | undefined, mod
 export function InvestorAcquisitionPanel({ value, nowMs, modelValidUntil }: { value: InvestorAcquisition; nowMs: number; modelValidUntil: string }) {
   const current = currentAcquisitionDisplay(value, nowMs, modelValidUntil);
   return <section aria-label="行情采集进度" className="mt-4 min-w-0 rounded-xl border p-3">
-    <h3 className="text-sm font-medium">{value.phase === "initial_prices" ? "首份监测价格补采" : "按市场收盘持续采集"}</h3>
-    {value.phase === "initial_prices" && current.status === "visible" && <InitialNextStep markets={current.markets} />}
+    <h3 className="text-sm font-medium">{value.phase === "initial_prices" ? "首份监测价格补采" : value.phase === "initial_close" ? "首份监测收盘采集" : "按市场收盘持续采集"}</h3>
+    {value.phase !== "confirmed_close" && current.status === "visible" && <InitialNextStep markets={current.markets} />}
     {current.status !== "visible" ? <p role="status" className="mt-2 text-sm">{hidden[current.status]}</p> : <ul className="mt-2 grid gap-3 sm:grid-cols-3">
       {current.markets.map(row => <li key={row.market} className="min-w-0 rounded-lg border p-3 text-sm">
         <p className="font-medium">{labels[row.market]} · 已登记 {row.registered_count}/{row.target_count} 个目标</p>
         <p role="status" className="mt-2">{statuses[row.status]}</p>
-        {value.phase === "initial_prices" && <p className="mt-1 text-xs text-muted-foreground">任务完成 {row.completed_count}/{row.target_count}；不等于行情已合格。</p>}
+        {value.phase !== "confirmed_close" && <p className="mt-1 text-xs text-muted-foreground">任务完成 {row.completed_count}/{row.target_count}；不等于行情已合格。</p>}
         {row.session_date && <p className="mt-1 text-xs">目标交易日：{row.session_date}</p>}
         {row.scheduled_at && <p className="mt-1 break-words text-xs">登记启动时间：{instant(row.scheduled_at)}</p>}
         {row.latest_start_at && <p className="mt-1 break-words text-xs">最迟启动：{instant(row.latest_start_at)}</p>}

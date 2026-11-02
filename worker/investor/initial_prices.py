@@ -128,6 +128,8 @@ def discover_initial_prices(db, *, limit=100, now=None, stop_requested=None):
                 for identity in sorted(context[4]):
                     if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
                     spec = _plan(db, model["workspace_id"], context, identity, at)
+                    if db.execute("SELECT 1 FROM investor_initial_close_requests WHERE model_id=? AND market=? AND session_date=?",
+                            (model["id"], spec["market"], spec["session_date"])).fetchone(): continue
                     if _available(db, model["workspace_id"], spec, at) or db.execute("SELECT 1 FROM investor_initial_price_requests WHERE model_id=? AND listing_id=? AND session_date=?",
                             (model["id"], identity, spec["session_date"])).fetchone(): continue
                     plans.append(spec)

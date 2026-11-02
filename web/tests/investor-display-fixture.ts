@@ -56,7 +56,7 @@ export function mountInvestorDisplay<P>(t: { after: (fn: () => void) => void }, 
   const arm = (callback: () => void, delay: number, interval?: number) => {
     const id = ++timerId; timers.set(id, { callback, at: elapsed + delay, interval }); return id;
   };
-  const context = { window, document, AbortController, TextEncoder, Element: class {}, CustomEvent: class { constructor(public type: string) {} },
+  const context = { window, document, Headers, AbortController, TextEncoder, Element: class {}, CustomEvent: class { constructor(public type: string) {} },
     crypto: { randomUUID: () => "fictional-display-command", subtle: webcrypto.subtle },
     Date: class extends Date { static now() { return wall; } }, performance: { now: () => elapsed },
     setTimeout: (fn: () => void, delay: number) => arm(fn, delay), clearTimeout: (id: number) => timers.delete(id),

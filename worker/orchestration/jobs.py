@@ -82,8 +82,8 @@ def claim_job(connection, owner, lease_seconds=60, job_type=None, now=None):
         parameters = [current]
         # Provider credentials share a bounded connection budget across workers.
         # SQLite's immediate transaction makes this global price-job mutex atomic.
-        query += """ AND (job_type NOT IN ('market_collect_prices','investor_confirmed_watch','investor_initial_prices') OR NOT EXISTS (
-            SELECT 1 FROM job_runs active WHERE active.job_type IN ('market_collect_prices','investor_confirmed_watch','investor_initial_prices')
+        query += """ AND (job_type NOT IN ('market_collect_prices','investor_confirmed_watch','investor_initial_close','investor_initial_prices') OR NOT EXISTS (
+            SELECT 1 FROM job_runs active WHERE active.job_type IN ('market_collect_prices','investor_confirmed_watch','investor_initial_close','investor_initial_prices')
               AND active.status='running' AND active.lease_until>?))"""
         parameters.append(current)
         query += """ AND (job_type NOT IN ('market_collect_prices','investor_initial_prices','investor_current_fx','investor_issuer_capture','investor_eodhd_capture') OR NOT EXISTS (
@@ -91,6 +91,12 @@ def claim_job(connection, owner, lease_seconds=60, job_type=None, now=None):
             WHERE reserved.job_type='investor_confirmed_watch' AND reserved.status IN ('queued','retry_queued') AND r.latest_start>=?
               AND reserved.not_before<=?))"""
         parameters.extend([current, stamp(instant(current) + timedelta(seconds=120))])
+        if connection.execute("SELECT 1 FROM job_runs WHERE job_type='investor_initial_close' LIMIT 1").fetchone():
+            query += """ AND (job_type NOT IN ('market_collect_prices','investor_initial_prices','investor_current_fx','investor_issuer_capture','investor_eodhd_capture') OR NOT EXISTS (
+                SELECT 1 FROM job_runs reserved JOIN investor_initial_close_requests r ON r.id=reserved.period AND r.workspace_id=reserved.scope
+                WHERE reserved.job_type='investor_initial_close' AND reserved.status IN ('queued','retry_queued') AND r.latest_start>=?
+                  AND reserved.not_before<=?))"""
+            parameters.extend([current, stamp(instant(current) + timedelta(seconds=120))])
         # An unknown EODHD outcome must close its day before another call starts.
         query += """ AND (job_type!='investor_eodhd_capture' OR NOT EXISTS (
             SELECT 1 FROM job_runs active WHERE active.job_type='investor_eodhd_capture'

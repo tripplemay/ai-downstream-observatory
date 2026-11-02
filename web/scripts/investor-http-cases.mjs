@@ -172,8 +172,9 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
   await check('HTTP-I28', 'versioned progress reads preserve cached strict clients and require the same authenticated bound session', async () => {
     const version = { 'X-Workbench-Investor-View': 'action-drafts-v1' };
     const maintenanceVersion = { 'X-Workbench-Investor-View': 'action-drafts-v2' };
-    const legacy = await get(), next = await get(version), maintenance = await get(maintenanceVersion), unknown = await get({ 'X-Workbench-Investor-View': 'action-drafts-v999' });
-    for (const response of [legacy, next, maintenance, unknown]) {
+    const firstCloseVersion = { 'X-Workbench-Investor-View': 'initial-close-v1' };
+    const legacy = await get(), next = await get(version), maintenance = await get(maintenanceVersion), firstClose = await get(firstCloseVersion), unknown = await get({ 'X-Workbench-Investor-View': 'action-drafts-v999' });
+    for (const response of [legacy, next, maintenance, firstClose, unknown]) {
       assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'private, no-store');
       const vary = response.headers.get('vary').split(/,\s*/);
       assert.ok(vary.includes('Cookie')); assert.ok(vary.includes('X-Workbench-Investor-View'));
@@ -186,6 +187,15 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
     assert.equal(maintenance.json.action_maintenance.status, 'not_configured');
     assert.equal(maintenance.json.action_maintenance.research_admitted_by_this_view, false);
     assert.equal(maintenance.json.action_drafts.status, 'not_configured');
+    assert.deepEqual(Object.keys(firstClose.json).sort(), Object.keys(maintenance.json).sort());
+    assert.equal(firstClose.json.action_maintenance.status, 'not_configured');
+    assert.equal(firstClose.json.action_maintenance.research_admitted_by_this_view, false);
+    assert.equal(firstClose.json.action_drafts.status, 'not_configured');
+    assert.equal((await jsonRequest(endpoint, { headers: { Cookie: cookie, ...firstCloseVersion } })).status, 400);
+    assert.equal((await get({ ...firstCloseVersion, 'X-Workbench-Session-Binding': 'b'.repeat(64) })).status, 401);
+    assert.equal((await jsonRequest(endpoint, { headers: firstCloseVersion })).status, 401);
+    assert.equal((await jsonRequest(endpoint, {method:'POST',headers:{Cookie:cookie,Origin:origin,'Content-Type':'application/json',...firstCloseVersion},
+      body:JSON.stringify({action:'evaluate',expected_revision:1,idempotency_key:'first-close-missing-binding'})})).status,400);
     assert.equal(next.json.action_drafts.status, 'not_configured');
     assert.equal(next.json.action_drafts.provider_online_verified, false);
     assert.equal((await jsonRequest(endpoint, { headers: { Cookie: cookie, ...version } })).status, 400);
@@ -196,7 +206,7 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
     assert.equal((await get({ ...version, 'X-Workbench-Session-Binding': 'b'.repeat(64) })).status, 401);
     assert.equal((await jsonRequest(endpoint, { headers: version })).status, 401);
     assert.deepEqual(financial(), initialFinancial);
-    return { legacy_shape_preserved: true, explicit_version_required: true, stale_binding: 401, missing_binding: 400, financial_writes: false };
+    return { legacy_shape_preserved: true, explicit_version_required: true, first_close_capability:'empty_workspace_metadata_only_not_collection', stale_binding: 401, missing_binding: 400, financial_writes: false };
   });
   await check('HTTP-I04', 'reevaluation preserves immutable history; blocked observations cannot be accepted as trade ideas', async () => {
     const state = await get(), observation = state.json.latest.id;

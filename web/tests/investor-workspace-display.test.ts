@@ -10,7 +10,7 @@ import { displayBinding as binding, displayBefore, displayUntil, displayFuture, 
 import { blockedResearchDisplayState } from "./investor-research-blocker-fixture";
 import { actionCostMethodology, reviewCostMethodology, settlementCostMethodology } from "../src/server/investor/reference-cost-methodology";
 import { actionDraftProgressSchema } from "../src/server/investor/action-draft-progress-schemas";
-import { actionMaintenanceProgressRequest } from "../src/server/investor/action-maintenance-progress-schemas";
+import { initialCloseProgressRequest } from "../src/server/investor/initial-close-progress";
 import { unavailableActionMaintenanceProgress } from "../src/server/investor/action-maintenance-progress";
 
 const before = Date.parse(displayBefore), until = Date.parse(displayUntil);
@@ -40,7 +40,7 @@ function mount(t: { after: (fn: () => void) => void }, state = displayState(), v
       "lucide-react": Object.fromEntries(["ArrowRight", "CheckCircle2", "CircleHelp", "Clock3", "Eye", "ShieldCheck"].map(name => [name, name])),
       "@/components/ui/input": { Input: "Input" }, "@/components/session-boundary": { useSessionBoundary: () => null },
       "@/server/investor/schemas": schemas, "@/server/investor/loss-scenarios": losses, "./research-format": research, "./investor-client": client,
-      "@/server/investor/action-maintenance-progress-schemas": { actionMaintenanceProgressRequest },
+      "@/server/investor/initial-close-progress": { initialCloseProgressRequest },
       ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel", "history-panel", "monitor-cost-panel","action-review","legacy-transition"]
         .map(name => { const component = "Investor" + name.split("-").map(value => value[0].toUpperCase() + value.slice(1)).join("");
           return ["./investor-" + name, { [component]: component }]; })),
@@ -339,7 +339,7 @@ test("background refresh is single-flight and does not lock risk editing; explic
   for (const request of h.requests) {
     assert.equal(request.url, "/api/workbench/investor");
     const headers = new Headers(request.options.headers);
-    assert.equal(headers.get(actionMaintenanceProgressRequest.header), actionMaintenanceProgressRequest.value);
+    assert.equal(headers.get(initialCloseProgressRequest.header), initialCloseProgressRequest.value);
     assert.equal(headers.get("X-Workbench-Session-Binding"), binding);
   }
 });

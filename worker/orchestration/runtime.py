@@ -287,6 +287,9 @@ def command_handler(connection, clock=None, lease_seconds=300, stop_requested=No
         if job["job_type"] == "investor_confirmed_watch" and role == "longport":
             from worker.investor.confirmed_feed import prepare_confirmed_watch
             return prepare_confirmed_watch(connection, job, lease, clock=clock, lease_seconds=lease_seconds, stop_requested=stop_requested)
+        if job["job_type"] == "investor_initial_close" and role == "longport":
+            from worker.investor.initial_close import prepare_initial_close
+            return prepare_initial_close(connection, job, lease, clock=clock, lease_seconds=lease_seconds, stop_requested=stop_requested)
         if job["job_type"] == "investor_research" and role == "core":
             from worker.investor.runtime import prepare_research_job
             return prepare_research_job(connection, job, lease, clock=clock, stop_requested=stop_requested)
@@ -455,6 +458,7 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
         discover_due_cycles(connection, limit=discovery_limit, now=clock(), state=discovery_state)
         discover_due_collections(connection, limit=collection_discovery_limit, now=clock(), state=collection_discovery_state)
     elif role == "longport":
+        from worker.investor.initial_close import discover_initial_closes
         from worker.investor.confirmed_feed import discover_confirmed_watches
         from worker.investor.initial_prices import discover_initial_prices
         from worker.investor.managed_fx import discover_current_fx
@@ -463,6 +467,7 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
         discover_current_fx(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
         discover_issuer_requests(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
         discover_eodhd_requests(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
+        discover_initial_closes(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
         discover_confirmed_watches(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
         discover_initial_prices(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
         discover_due_price_collections(connection, limit=price_collection_discovery_limit, now=clock(),
@@ -470,5 +475,5 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
     sync_requests(connection, now=clock(), command_types=supported)
     # One oldest-ready selection avoids starving periodic jobs behind a busy
     # ingestion stream while still excluding unsupported modules' jobs.
-    types = (*supported, "investor_research", "investor_funded_study", "investor_monitor", "investor_evidence_monitor", "investor_action_review", "investor_legacy_transition", "investor_correction_impact") if role == "core" else (*supported, "investor_confirmed_watch", "investor_initial_prices", "investor_current_fx", "investor_issuer_capture", "investor_eodhd_capture") if role == "longport" else supported
+    types = (*supported, "investor_research", "investor_funded_study", "investor_monitor", "investor_evidence_monitor", "investor_action_review", "investor_legacy_transition", "investor_correction_impact") if role == "core" else (*supported, "investor_confirmed_watch", "investor_initial_close", "investor_initial_prices", "investor_current_fx", "investor_issuer_capture", "investor_eodhd_capture") if role == "longport" else supported
     return run_one(connection, owner, command_handler(connection, clock, lease_seconds, stop_requested, role), job_type=types, lease_seconds=lease_seconds, clock=clock)

@@ -25,7 +25,7 @@ import { acquisitionDeadlines, InvestorAcquisitionPanel } from "./investor-acqui
 import { useInvestorDisplayClock } from "./investor-display-clock";
 import { InvestorMonitorCostPanel } from "./investor-monitor-cost-panel";
 import { InvestorActionDrafts } from "./investor-action-drafts";
-import { actionMaintenanceProgressRequest } from "@/server/investor/action-maintenance-progress-schemas";
+import { initialCloseProgressRequest } from "@/server/investor/initial-close-progress";
 import { InvestorActionMaintenance } from "./investor-action-maintenance";
 import { InvestorActionReview } from "./investor-action-review";
 import { InvestorLegacyTransition } from "./investor-legacy-transition";
@@ -316,7 +316,8 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
   async function request(init: RequestInit) {
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15000);
     try {
-      const response = await fetch("/api/workbench/investor", { ...init, signal: controller.signal });
+      const headers = new Headers(init.headers); headers.set(initialCloseProgressRequest.header, initialCloseProgressRequest.value);
+      const response = await fetch("/api/workbench/investor", { ...init, headers, signal: controller.signal });
       if (response.status === 401) return { response, value: null };
       const value: unknown = await response.json();
       return { response, value };
@@ -324,7 +325,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
   }
   async function load(sequence: number) {
     const { response, value } = await request({ cache: "no-store", credentials: "same-origin", redirect: "error", headers: {
-      "X-Workbench-Session-Binding": initialSessionBinding, [actionMaintenanceProgressRequest.header]: actionMaintenanceProgressRequest.value } });
+      "X-Workbench-Session-Binding": initialSessionBinding } });
     if (response.status === 401) { invalidate(); return false; }
     if (!response.ok) throw new Error("INVESTOR_UNAVAILABLE");
     const state = parseInvestorState(value, initialSessionBinding);

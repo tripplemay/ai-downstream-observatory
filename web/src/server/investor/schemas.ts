@@ -190,7 +190,7 @@ const acquisitionMarketSchema = z.object({
   && ((value.latest_start_at === null) === (value.stop_at === null))
   && (value.latest_start_at === null || value.scheduled_at !== null && value.scheduled_at <= value.latest_start_at && value.latest_start_at < value.stop_at!));
 export const acquisitionSchema = z.object({
-  model_id: investorId, checked_at: investorInstant, phase: z.enum(["initial_prices", "confirmed_close"]),
+  model_id: investorId, checked_at: investorInstant, phase: z.enum(["initial_prices", "initial_close", "confirmed_close"]),
   status: z.enum(["visible", "paused", "outdated", "expired", "source_unavailable", "unavailable"]),
   markets: z.array(acquisitionMarketSchema).max(3).refine(rows => new Set(rows.map(row => row.market)).size === rows.length
     && rows.reduce((sum, row) => sum + row.target_count, 0) <= 20),
@@ -200,7 +200,8 @@ export const acquisitionSchema = z.object({
   && value.markets.every(row => row.status !== "running" || row.lease_until! > value.checked_at)
   && value.markets.every(row => row.status !== "scheduled" || row.scheduled_at !== null && row.scheduled_at > value.checked_at)
   && value.markets.every(row => !["queued", "scheduled", "running"].includes(row.status) || row.valid_until !== null && row.valid_until > value.checked_at)
-  && value.markets.every(row => value.phase !== "initial_prices" || row.latest_start_at === null && row.stop_at === null && row.status !== "input_registered"));
+  && value.markets.every(row => value.phase !== "initial_prices" || row.latest_start_at === null && row.stop_at === null)
+  && value.markets.every(row => value.phase === "confirmed_close" || row.status !== "input_registered"));
 export type InvestorAcquisition = z.infer<typeof acquisitionSchema>;
 
 export const modelWatchSchema = z.object({

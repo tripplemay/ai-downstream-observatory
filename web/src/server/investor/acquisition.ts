@@ -3,6 +3,7 @@ import Ajv2020 from "ajv/dist/2020";
 import addFormats from "ajv-formats";
 import initialSchema from "../../../../contracts/v1/investor-initial-prices.schema.json";
 import confirmedSchema from "../../../../contracts/v1/investor-confirmed-feed.schema.json";
+import initialCloseSchema from "../../../../contracts/v1/investor-initial-close.schema.json";
 import { canonical, hash } from "../ledger/service";
 import { parseStrictJson } from "../strict-json";
 import { priceInstant } from "../market-price-source";
@@ -19,7 +20,8 @@ type Job = { id: string; command_request_id: string | null; job_type: string; sc
   max_attempts: number; attempt_count: number; fencing_token: number; lease_until: string | null; lease_owner: string | null; not_before: string; created_at: string; updated_at: string; result_json: string | null };
 type Market = InvestorAcquisition["markets"][number];
 const ajv = new Ajv2020({ strict: true, strictRequired: false }); addFormats(ajv); ajv.addSchema(initialSchema); ajv.addSchema(confirmedSchema);
-const schemas = { initial_prices: initialSchema, confirmed_close: confirmedSchema };
+ajv.addSchema(initialCloseSchema);
+const schemas = { initial_prices: initialSchema, initial_close: initialCloseSchema, confirmed_close: confirmedSchema };
 const codes: Record<string, string> = { collected: "INITIAL_PRICE_COLLECTED", already_available: "INITIAL_PRICE_ALREADY_AVAILABLE", superseded: "INITIAL_PRICE_SUPERSEDED", transport_failed: "INITIAL_PRICE_TRANSPORT_FAILED" };
 const confirmedCodes: Record<string, string> = { complete: "CONFIRMED_FEED_COMPLETE", partial: "CONFIRMED_FEED_PARTIAL", no_confirmed_events: "CONFIRMED_FEED_NO_EVENTS", missed_window: "CONFIRMED_FEED_MISSED_WINDOW", superseded: "CONFIRMED_FEED_SUPERSEDED", transport_failed: "CONFIRMED_FEED_TRANSPORT_FAILED" };
 function requireTrue(value: unknown): asserts value { if (!value) throw new Error("INVESTOR_ACQUISITION_EVIDENCE_INVALID"); }
@@ -70,17 +72,18 @@ function failedTaskStatus(db: Database.Database, job: Job): Market["status"] {
 
 function requestMetadata(db: Database.Database, row: Request, phase: InvestorAcquisition["phase"], owner: string, modelHash: string,
   modelCreated: string, controlCreated: string, plan: Obj, targets: { listing_id: string; market: Market["market"] }[], at: bigint) {
-  const initial = phase === "initial_prices", value = sealed(row, initial ? 8192 : 16384); validate(phase, "request", value);
-  audit(db, row, owner, initial ? "investor_schedule_initial_price" : "investor_schedule_confirmed_feed",
-    initial ? "investor_initial_price_request" : "investor_confirmed_feed_request", at);
+  const initial = phase === "initial_prices", bootstrap = phase !== "confirmed_close", value = sealed(row, initial ? 8192 : 16384); validate(phase, "request", value);
+  const prefix = initial ? "initial_price" : phase === "initial_close" ? "initial_close" : "confirmed_feed";
+  audit(db, row, owner, "investor_schedule_" + prefix, "investor_" + prefix + "_request", at);
   for (const key of ["workspace_id", "model_id", "control_id", "market", "session_date"]) requireTrue(value[key] === row[key as keyof Request]);
   requireTrue(value.model_hash === modelHash && priceInstant(modelCreated) <= priceInstant(row.created_at) && priceInstant(controlCreated) <= priceInstant(row.created_at));
-  const id = initial ? row.reference_input_id : row.input_id;
-  const source = db.prepare(initial ? "SELECT content_hash,created_at FROM investor_evidence_inputs WHERE id=? AND workspace_id=?"
+  const id = bootstrap ? row.reference_input_id : row.input_id;
+  const source = db.prepare(bootstrap ? "SELECT content_hash,created_at FROM investor_evidence_inputs WHERE id=? AND workspace_id=?"
     : "SELECT content_hash,created_at FROM investor_monitor_evidence_inputs WHERE id=? AND workspace_id=? AND model_id=?")
-    .get(...(initial ? [id, row.workspace_id] : [id, row.workspace_id, row.model_id])) as { content_hash: string; created_at: string } | undefined;
-  requireTrue(source && value[initial ? "reference_input_id" : "input_id"] === id
-    && value[initial ? "reference_input_hash" : "input_hash"] === source.content_hash && priceInstant(source.created_at) <= priceInstant(row.created_at));
+    .get(...(bootstrap ? [id, row.workspace_id] : [id, row.workspace_id, row.model_id])) as { content_hash: string; created_at: string } | undefined;
+  requireTrue(source && value[bootstrap ? "reference_input_id" : "input_id"] === id
+    && value[bootstrap ? "reference_input_hash" : "input_hash"] === source.content_hash && priceInstant(source.created_at) <= priceInstant(row.created_at));
+  if (bootstrap) requireTrue(object(plan.reference_evidence).source_input_id === id);
   if (initial) {
     requireTrue(object(plan.reference_evidence).source_input_id === id && value.listing_id === row.listing_id
       && targets.some(target => target.listing_id === row.listing_id && target.market === row.market));
@@ -103,7 +106,9 @@ function requestMetadata(db: Database.Database, row: Request, phase: InvestorAcq
 }
 
 function task(db: Database.Database, row: Request, value: Obj, phase: InvestorAcquisition["phase"], owner: string, currentInput: string | null, at: bigint): Market {
-  const initial = phase === "initial_prices", type = initial ? "investor_initial_prices" : "investor_confirmed_watch";
+  const initial = phase === "initial_prices", firstClose = phase === "initial_close";
+  const type = initial ? "investor_initial_prices" : firstClose ? "investor_initial_close" : "investor_confirmed_watch";
+  const prefix = initial ? "initial_price" : firstClose ? "initial_close" : "confirmed_feed";
   const count = initial ? 1 : (value.targets as Obj[]).length;
   const result: Market = { ...emptyMarket(row.market, count), registered_count: count, session_date: row.session_date,
     valid_until: acquisitionDisplayInstant(value.valid_until as string), scheduled_at: initial ? null : acquisitionDisplayInstant(row.not_before!, "start"),
@@ -117,11 +122,11 @@ function task(db: Database.Database, row: Request, value: Obj, phase: InvestorAc
     && priceInstant(row.created_at) <= priceInstant(job.created_at) && priceInstant(job.created_at) <= priceInstant(job.updated_at) && priceInstant(job.updated_at) <= at
     && typeof job.not_before === "string"); priceInstant(job.not_before);
   if (!initial) requireTrue(job.not_before === row.not_before || ["failed", "partial"].includes(job.status));
-  const run = db.prepare(`SELECT * FROM ${initial ? "investor_initial_price_runs" : "investor_confirmed_feed_runs"} WHERE request_id=? AND workspace_id=? AND model_id=?`)
+  const run = db.prepare(`SELECT * FROM investor_${prefix}_runs WHERE request_id=? AND workspace_id=? AND model_id=?`)
     .get(row.id, row.workspace_id, row.model_id) as Run | undefined;
   if (run) {
     const doc = sealed(run, 4096); validate(phase, "run", doc);
-    audit(db, run, owner, initial ? "investor_complete_initial_price" : "investor_complete_confirmed_feed", initial ? "investor_initial_price_run" : "investor_confirmed_feed_run", at);
+    audit(db, run, owner, "investor_complete_" + prefix, "investor_" + prefix + "_run", at);
     for (const key of ["request_id", "job_id", "capture_id", "status", "created_at"]) requireTrue(doc[key] === run[key as keyof Run]);
     const code = (initial ? codes : confirmedCodes)[run.status];
     const expected = initial ? run.status === "collected" ? "succeeded" : run.status === "transport_failed" ? "failed" : "skipped"
@@ -142,7 +147,7 @@ function task(db: Database.Database, row: Request, value: Obj, phase: InvestorAc
     const complete = ["collected", "already_available", "complete"].includes(run.status);
     result.completed_count = complete ? count : 0;
     result.status = complete ? "waiting_core" : ({ transport_failed: "failed", no_confirmed_events: "no_events" } as Record<string, Market["status"]>)[run.status] ?? run.status as Market["status"];
-    if (!initial && run.status === "complete") {
+    if (phase === "confirmed_close" && run.status === "complete") {
       const admission = db.prepare("SELECT *,run_id id FROM investor_confirmed_feed_admissions WHERE run_id=? AND workspace_id=? AND model_id=?")
         .get(run.id, row.workspace_id, row.model_id) as (Stored & { input_id: string | null; status: string }) | undefined;
       if (admission) {
@@ -163,7 +168,7 @@ function task(db: Database.Database, row: Request, value: Obj, phase: InvestorAc
   }
   requireTrue(["queued", "running", "failed"].includes(job.status));
   if (job.status === "failed") { result.status = failedTaskStatus(db, job); return result; }
-  if (!initial && row.input_id !== currentInput) { result.status = "superseded"; return result; }
+  if (phase === "confirmed_close" && row.input_id !== currentInput) { result.status = "superseded"; return result; }
   if (priceInstant(result.valid_until!) <= at) { result.status = "expired"; return result; }
   if (job.status === "running") {
     requireTrue(job.attempt_count === 1 && job.lease_owner && job.lease_until);
@@ -188,7 +193,8 @@ export function readInvestorAcquisition(db: Database.Database, workspace: string
       schema_version: definition.schema_version, fixed_policy: definition.fixed_policy }));
   const input = db.prepare("SELECT * FROM investor_monitor_evidence_inputs WHERE model_id=? AND workspace_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1")
     .get(model.id, workspace) as Stored | undefined;
-  const phase = input ? "confirmed_close" : "initial_prices";
+  const phase = input ? "confirmed_close" : db.prepare(`SELECT 1 FROM investor_initial_close_requests WHERE model_id=? AND workspace_id=?
+    AND control_id=(SELECT id FROM investor_model_controls WHERE model_id=? ORDER BY version DESC LIMIT 1) LIMIT 1`).get(model.id,workspace,model.id) ? "initial_close" : "initial_prices";
   const base = { model_id: watch.id, checked_at: now, phase, markets: [], evidence_scope: "task_metadata_only", live_advice_eligible: false };
   const status = !watch.enabled ? "paused" : definition.profile_id !== profile.id || definition.profile_hash !== profile.content_hash ? "outdated"
     : priceInstant(definition.valid_until) <= priceInstant(now) ? "expired" : !referenceAvailable ? "source_unavailable" : null;
@@ -201,7 +207,7 @@ export function readInvestorAcquisition(db: Database.Database, workspace: string
   const plan = db.prepare("SELECT document_json,content_hash FROM investor_reference_plans WHERE id=? AND workspace_id=?").get(model.plan_id, workspace) as Stored | undefined;
   requireTrue(plan && plan.content_hash === definition.plan_hash); const reference = referencePlanSchema.parse(sealed(plan, 65536));
   const targets = definition.targets as { listing_id: string; market: Market["market"] }[];
-  const initial = phase === "initial_prices", table = initial ? "investor_initial_price_requests" : "investor_confirmed_feed_requests";
+  const initial = phase === "initial_prices", table = initial ? "investor_initial_price_requests" : phase === "initial_close" ? "investor_initial_close_requests" : "investor_confirmed_feed_requests";
   const rows = db.prepare(`SELECT * FROM (SELECT *,row_number() OVER (PARTITION BY ${initial ? "listing_id" : "market"} ORDER BY created_at DESC,rowid DESC) rank
     FROM ${table} WHERE workspace_id=? AND model_id=? AND control_id=?) WHERE rank=1 LIMIT 21`).all(workspace, model.id, control.id) as Request[];
   requireTrue(rows.length <= (initial ? targets.length : 3));

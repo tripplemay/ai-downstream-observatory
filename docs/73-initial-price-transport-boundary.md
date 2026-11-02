@@ -92,3 +92,9 @@ does not authorize replay of an old request. It adds no button, source query,
 worker write, attempt or data-quality admission. Hidden/invalid source states
 do not display the registered-work guidance. This clarification does not solve
 the missing production prices or certify the next market session.
+
+A separate [first confirmed-close bootstrap](84-first-confirmed-close-bootstrap.md)
+can now schedule from the selected reference without inventing a monitor input.
+It preserves the historical endpoint's past-local-date restriction, globally
+reserves its single callback window, and never replays a consumed close through
+history. Its completed receipt still needs independent core qualification.

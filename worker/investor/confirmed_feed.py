@@ -179,6 +179,7 @@ def discover_confirmed_watches(db, *, limit=100, now=None, stop_requested=None):
                     if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
                     day = instant(at).astimezone(ZoneInfo(longport._MARKETS[market][0])).date().isoformat()
                     if db.execute("SELECT 1 FROM investor_confirmed_feed_requests WHERE model_id=? AND market=? AND session_date=?", (model["id"], market, day)).fetchone(): continue
+                    if db.execute("SELECT 1 FROM investor_initial_close_requests WHERE model_id=? AND market=? AND session_date=?", (model["id"], market, day)).fetchone(): continue
                     if any(target["market"] == market and instant(target["observed_at"]).astimezone(ZoneInfo(longport._MARKETS[market][0])).date().isoformat() >= day
                         for target in (result["projection"]["quotes"] if result.get("projection") is not None else [])): continue
                     planned = market_plan(db, model["workspace_id"], model, definition, control, source, document, result, market, day, at)
@@ -288,14 +289,24 @@ def _run(db, row, document, job, status, at, capture=None):
 
 
 def prepare_confirmed_watch(db, job, lease, *, clock=None, lease_seconds=300, stop_requested=None):
+    return _prepare_watch(db, job, lease, request_header=request_header, current=_current, publish_run=_run,
+        job_type=JOB_TYPE, clock=clock, lease_seconds=lease_seconds, stop_requested=stop_requested)
+
+
+def _prepare_watch(db, job, lease, *, request_header, current, publish_run, job_type, clock=None, lease_seconds=300, stop_requested=None):
+    _assert(db.execute("PRAGMA query_only").fetchone()[0] == 0, "WORKBENCH_READ_ONLY")
     clock = clock or (lambda: None); at = _clock(clock())
+    bound_job = db.execute("SELECT * FROM job_runs WHERE id=?", (lease.job_id,)).fetchone()
+    _assert(bound_job is not None and all(job[key] == bound_job[key] for key in
+        ("id", "job_type", "scope", "period", "input_version", "command_request_id", "max_attempts")), "CONFIRMED_FEED_BINDING_INVALID")
+    assert_lease(db, lease, now=at)
     row, document = request_header(db, job["scope"], job["period"], at)
-    _assert(job["job_type"] == JOB_TYPE and job["command_request_id"] is None and job["input_version"] == row["content_hash"] and job["max_attempts"] == 1)
+    _assert(job["job_type"] == job_type and job["command_request_id"] is None and job["input_version"] == row["content_hash"] and job["max_attempts"] == 1)
     if instant(at) < instant(document["not_before"]): raise WorkbenchError("CONFIRMED_FEED_NOT_DUE")
-    status, prepared = None, None
+    status, prepared, collection_prepared = None, None, False
     if instant(at) > instant(document["latest_start"]): status = "missed_window"
     else:
-        try: _current(db, row, document, at)
+        try: current(db, row, document, at)
         except WorkbenchError: status = "superseded"
     live_lease, last_beat = lease, instant(at)
     def guard():
@@ -309,31 +320,48 @@ def prepare_confirmed_watch(db, job, lease, *, clock=None, lease_seconds=300, st
         model = db.execute("SELECT profile_id,plan_id FROM investor_models WHERE id=?", (row["model_id"],)).fetchone()
         _assert(current and current["id"] == row["control_id"] and current["enabled"] == 1 and profile and selected
             and profile[0] == model["profile_id"] and selected[0] == model["plan_id"], "CONFIRMED_FEED_SUPERSEDED")
-        _assert(instant(now) < instant(document["valid_until"]) and instant(now) <= instant(document["stop_at"]) + timedelta(seconds=receiver.STARTUP_SECONDS), "CONFIRMED_FEED_WINDOW_ENDED")
+        _assert(instant(now) < instant(document["valid_until"]), "CONFIRMED_FEED_WINDOW_ENDED")
+        # A timely frozen receipt may outlive the network window while current
+        # sources replay. Lease, rights and request expiry still guard persistence.
+        if not collection_prepared:
+            _assert(instant(now) <= instant(document["stop_at"]) + timedelta(seconds=receiver.STARTUP_SECONDS), "CONFIRMED_FEED_WINDOW_ENDED")
         if instant(now) - last_beat >= timedelta(seconds=max(1, lease_seconds // 3)):
             live_lease = heartbeat(db, live_lease, lease_seconds=lease_seconds, now=now); last_beat = instant(now)
         return False
+    def before_collect():
+        if guard(): raise WorkbenchError("WORKER_STOP_REQUESTED")
+        checked = instant(_clock(clock()))
+        _assert(checked <= instant(document["latest_start"]), "CONFIRMED_FEED_START_WINDOW_ENDED")
+        if job_type == "investor_initial_close":
+            _assert(not db.execute("SELECT 1 FROM investor_monitor_evidence_inputs WHERE model_id=?", (row["model_id"],)).fetchone(), "CONFIRMED_FEED_SUPERSEDED")
+        return ceil((instant(document["stop_at"]) - checked).total_seconds())
     if status is None:
         try:
             if guard(): raise WorkbenchError("WORKER_STOP_REQUESTED")
             duration = ceil((instant(document["stop_at"]) - instant(_clock(clock()))).total_seconds())
             _assert(1 <= duration <= receiver.MAX_WATCH_SECONDS)
             prepared = confirmed_capture.prepare_confirmed_prices(db, row["workspace_id"], row["actor_id"], document["targets"],
-                watch_seconds=duration, stop_requested=guard)
-        except Exception:
+                watch_seconds=duration, stop_requested=guard, before_collect=before_collect)
+            collection_prepared = True
+        except Exception as error:
             if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED") from None
             assert_lease(db, live_lease, now=_clock(clock()))
-            status = "transport_failed"
+            status = "missed_window" if isinstance(error, WorkbenchError) and str(error) == "CONFIRMED_FEED_START_WINDOW_ENDED" \
+                else "superseded" if isinstance(error, WorkbenchError) and str(error) == "CONFIRMED_FEED_SUPERSEDED" else "transport_failed"
     def commit_effect(connection):
         now = _clock(clock())
         if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
         assert_lease(connection, live_lease, now=now)
-        if status is not None: return _run(connection, row, document, job, status, now)
-        try: _current(connection, row, document, now)
-        except WorkbenchError: return _run(connection, row, document, job, "superseded", now)
+        if status is not None: return publish_run(connection, row, document, job, status, now)
+        try: current(connection, row, document, now)
+        except WorkbenchError: return publish_run(connection, row, document, job, "superseded", now)
         capture = prepared(connection)
         _assert(capture["qualification"] == confirmed_capture.OFFICIAL)
-        return _run(connection, row, document, job, capture["status"], _clock(clock()), capture)
+        receipt = _object(capture["receipt_json"])
+        _assert(content_hash(receipt) == capture["receipt_hash"] and content_hash(receipt["bindings"]) == document["binding_hash"]
+            and instant(document["not_before"]) <= instant(receipt["call_started_at"]) <= instant(document["latest_start"]) + timedelta(seconds=receiver.STARTUP_SECONDS)
+            and instant(receipt["call_returned_at"]) <= instant(document["stop_at"]) + timedelta(seconds=receiver.STARTUP_SECONDS))
+        return publish_run(connection, row, document, job, capture["status"], _clock(clock()), capture)
     def commit(connection):
         try: return commit_effect(connection)
         except WorkbenchError as error:
