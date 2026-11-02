@@ -58,3 +58,21 @@ acceptance are separate requirements. Earlier expired attempts remain closed;
 this repair does not recover their missing prices. Complete corporate actions,
 continuous qualified data, ordinary/funding/stale journeys, independent running
 recovery, capacity and the remaining v2 P0/P1/P2 work remain open.
+
+## Terminal lease-expiry progress
+
+The optional read-only acquisition view now distinguishes a closed expired lease
+from a generic failed task. The exact persisted `LEASE_EXPIRED` result must agree
+with its original single attempt, expiry status/error, final timestamp, cleared
+lease and incremented fencing token. Inconsistent metadata hides only this
+optional progress view; it does not disable independently checked research or
+expose raw errors. Unknown failures remain generic rather than being inferred to
+be provider outages.
+
+Both initial historical-price and subsequent confirmed-close tasks retain their
+original one-attempt identity. The display explains that expiry can leave an
+unknown request outcome and never adds a retry action, resets a budget or predicts
+an unregistered future collection time. Fictional regressions use the actual
+claim/expiry lifecycle without SDK calls and test corrupted attempts, hidden
+private error details, read-only state, empty financial tables and no false NAV.
+This is task-metadata correctness, not successful collection or restored monitoring.

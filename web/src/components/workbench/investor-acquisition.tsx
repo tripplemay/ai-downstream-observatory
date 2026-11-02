@@ -48,6 +48,7 @@ export function InvestorAcquisitionPanel({ value, nowMs, modelValidUntil }: { va
         {row.status === "running" && row.lease_until && <p className="mt-1 break-words text-xs">租约截止：{instant(row.lease_until)}</p>}
         {row.completed_at && <p className="mt-1 break-words text-xs">最近任务提交：{instant(row.completed_at)}</p>}
         {row.status === "not_registered" && <p className="mt-1 text-xs">待核对资料或后台调度；未推测下次时间。</p>}
+        {row.status === "lease_expired" && <p className="mt-1 text-xs">租约过期不等于行情源故障；原请求结果可能未知。</p>}
         {["missed_window", "partial", "no_events", "lease_expired", "failed"].includes(row.status) && <p className="mt-1 text-xs">本次不会自动重放；等待后续合法窗口与后台核对。</p>}
       </li>)}
     </ul>}

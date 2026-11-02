@@ -16,7 +16,7 @@ type Stored = { id: string; workspace_id: string; model_id: string; document_jso
 type Request = Stored & { control_id: string; market: "CN" | "HK" | "US"; session_date: string; listing_id?: string; reference_input_id?: string; input_id?: string; not_before?: string; latest_start?: string; stop_at?: string };
 type Run = Stored & { request_id: string; job_id: string; capture_id: string | null; status: string };
 type Job = { id: string; command_request_id: string | null; job_type: string; scope: string; period: string; input_version: string; status: string;
-  max_attempts: number; attempt_count: number; lease_until: string | null; lease_owner: string | null; not_before: string; created_at: string; updated_at: string; result_json: string | null };
+  max_attempts: number; attempt_count: number; fencing_token: number; lease_until: string | null; lease_owner: string | null; not_before: string; created_at: string; updated_at: string; result_json: string | null };
 type Market = InvestorAcquisition["markets"][number];
 const ajv = new Ajv2020({ strict: true, strictRequired: false }); addFormats(ajv); ajv.addSchema(initialSchema); ajv.addSchema(confirmedSchema);
 const schemas = { initial_prices: initialSchema, confirmed_close: confirmedSchema };
@@ -51,6 +51,21 @@ function earliest(values: (string | null)[], direction: "start" | "deadline" = "
 function emptyMarket(market: Market["market"], count: number): Market {
   return { market, target_count: count, registered_count: 0, completed_count: 0, status: "not_registered", session_date: null,
     scheduled_at: null, latest_start_at: null, stop_at: null, lease_until: null, valid_until: null, completed_at: null };
+}
+
+function failedTaskStatus(db: Database.Database, job: Job): Market["status"] {
+  const expired = canonical({ code: "LEASE_EXPIRED" });
+  if (job.result_json !== expired) return "failed";
+  const attempts = db.prepare("SELECT attempt,fencing_token,status,started_at,finished_at,error_json FROM job_attempts WHERE job_id=? LIMIT 2")
+    .all(job.id) as { attempt: number; fencing_token: number; status: string; started_at: string; finished_at: string | null; error_json: string | null }[];
+  requireTrue(job.attempt_count === 1 && job.lease_owner === null && job.lease_until === null && attempts.length === 1);
+  const attempt = attempts[0];
+  requireTrue(attempt.attempt === 1 && attempt.status === "lease_expired" && attempt.error_json === expired
+    && Number.isSafeInteger(attempt.fencing_token) && attempt.fencing_token > 0 && Number.isSafeInteger(job.fencing_token)
+    && job.fencing_token === attempt.fencing_token + 1
+    && attempt.finished_at === job.updated_at && priceInstant(job.created_at) <= priceInstant(attempt.started_at)
+    && priceInstant(attempt.started_at) <= priceInstant(attempt.finished_at));
+  return "lease_expired";
 }
 
 function requestMetadata(db: Database.Database, row: Request, phase: InvestorAcquisition["phase"], owner: string, modelHash: string,
@@ -147,7 +162,7 @@ function task(db: Database.Database, row: Request, value: Obj, phase: InvestorAc
     return result;
   }
   requireTrue(["queued", "running", "failed"].includes(job.status));
-  if (job.status === "failed") { result.status = "failed"; return result; }
+  if (job.status === "failed") { result.status = failedTaskStatus(db, job); return result; }
   if (!initial && row.input_id !== currentInput) { result.status = "superseded"; return result; }
   if (priceInstant(result.valid_until!) <= at) { result.status = "expired"; return result; }
   if (job.status === "running") {

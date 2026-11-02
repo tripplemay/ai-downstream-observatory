@@ -21,7 +21,7 @@ LATE = "2026-01-04T06:59:30.001Z"
 
 def main():
     parser = argparse.ArgumentParser(); parser.add_argument("--db", required=True)
-    parser.add_argument("--mode", choices=("discover", "claim", "complete", "partial", "empty", "late", "admit"), required=True); args = parser.parse_args()
+    parser.add_argument("--mode", choices=("discover", "claim", "expired", "complete", "partial", "empty", "late", "admit"), required=True); args = parser.parse_args()
     path = Path(args.db).resolve(strict=True)
     if path.name != "workbench.db" or path.parent.parent != Path(tempfile.gettempdir()).resolve() or not path.parent.name.startswith("etf-investor-synthetic-"):
         raise WorkbenchError("SYNTHETIC_FIXTURE_DATABASE_REQUIRED")
@@ -34,8 +34,15 @@ def main():
             if db.execute("SELECT count(*) FROM " + table).fetchone()[0]: raise WorkbenchError("SYNTHETIC_EMPTY_FINANCIAL_DATABASE_REQUIRED")
         if not confirmed_feed.discover_confirmed_watches(db, now=EARLY): raise WorkbenchError("SYNTHETIC_NO_DISCOVERED_CALLBACK")
         calls = 0
-        if args.mode == "claim":
+        if args.mode in ("claim", "expired"):
             if not claim_job(db, "fictional-activity-lease", job_type=confirmed_feed.JOB_TYPE, lease_seconds=300, now=START): raise WorkbenchError("SYNTHETIC_NO_LEASE")
+            if args.mode == "expired":
+                with patch("socket.create_connection", side_effect=AssertionError("NO_NETWORK")), \
+                        patch("socket.getaddrinfo", side_effect=AssertionError("NO_DNS")), \
+                        patch.object(longport, "read_private_credentials_file", side_effect=AssertionError("NO_CREDENTIAL_READ")), \
+                        patch.object(longport_confirmed, "collect_confirmed_days", side_effect=AssertionError("NO_SDK_CALL")):
+                    if claim_job(db, "fictional-activity-expiry", job_type=confirmed_feed.JOB_TYPE, lease_seconds=300,
+                            now="2026-01-04T07:03:00.000Z") is not None: raise WorkbenchError("SYNTHETIC_EXPIRED_RETRY_FORBIDDEN")
         elif args.mode != "discover":
             at = [LATE if args.mode == "late" else START]
             def advance(): at[0] = END
@@ -50,7 +57,8 @@ def main():
                 if args.mode == "admit":
                     if run_pending_once(db, "fictional-activity-core", clock=lambda: at[0]) is None: raise WorkbenchError("SYNTHETIC_NO_CORE_JOB")
             calls = mock.calls
-        print(canonical_json({"stubbed_sdk_calls": calls, "real_provider_called": False, "real_gateway_called": False}))
+        print(canonical_json({"stubbed_sdk_calls": calls, "real_provider_called": False, "real_gateway_called": False,
+            **({"checked_at": "2026-01-04T07:03:00.000Z"} if args.mode == "expired" else {})}))
     finally: db.close()
 
 
