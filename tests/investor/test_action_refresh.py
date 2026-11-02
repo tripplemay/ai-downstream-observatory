@@ -27,7 +27,7 @@ class ActionRefreshTests(unittest.TestCase):
     assert_no_finance = fixture.ManagedActionTests.assert_no_finance
 
     def model_and_prices(self, *, audited=False, calendar_end='2026-11-02', explicit_costs=None, quote_ttl=None,
-                         closed_dates=(), bnd_coverage_end='2026-11-02'):
+                         closed_dates=(), bnd_coverage_end='2026-11-02', prepare_only=False):
         at = fixture.AT
         fixture.runtime_fixture.InvestorRuntimeTests.save(self, profile('0.30'))
         historical = evidence_fixture.create(self.db, 'w', 'synthetic-investor', now=at,
@@ -93,6 +93,8 @@ class ActionRefreshTests(unittest.TestCase):
             from copy import deepcopy
             settings['policy']['costs'] = deepcopy(explicit_costs)
         windows = [{'capture_ids': captures, 'action_review_ids': [publication, bnd['id']], 'fx_review_ids': [fx['id']], 'start_date': day, 'end_date': day}]
+        if prepare_only:
+            return definition, {'windows': windows, 'settings': settings}, publication
         seed = monitor_admission.admit_monitor_data(self.db, 'w', 'synthetic-investor', definition['model_id'], windows, settings, now=at,
             audited_action_knowledge=audited)
         return definition, seed, publication
