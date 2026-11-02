@@ -3,6 +3,7 @@
 import argparse
 from datetime import datetime, timedelta, timezone
 import json
+import math
 from pathlib import Path
 import socket
 import tempfile
@@ -13,7 +14,9 @@ from zoneinfo import ZoneInfo
 from tests.investor import evidence_fixture
 from tests.investor.confirmed_capture_fixture import FictionalReceiver
 from worker.investor import initial_close, monitor_bootstrap
+from worker.investor.confirmed_feed import _windows
 from worker.investor.data_evidence import review_source
+from worker.investor.monitor_admission import admit_monitor_data, latest_monitor_evidence
 from worker.investor.model_runtime import POLL_SECONDS
 from worker.market.providers import longport, longport_confirmed
 from worker.orchestration.db import WorkbenchError, canonical_json, instant, open_database, stamp
@@ -128,9 +131,37 @@ def diagnose_stale(db):
         "stale_retained_quotes_rejected": True, "writes": 0, "real_provider_called": False}
 
 
+def scenario_input(db, *, expire=False):
+    workspace, actor = scope(db)
+    models = db.execute("SELECT id FROM investor_models WHERE workspace_id=?", (workspace,)).fetchall()
+    assert len(models) == 1
+    model = models[0][0]
+    assert db.execute("SELECT count(*) FROM investor_evidence_model_checkpoints WHERE model_id=?", (model,)).fetchone()[0] >= 1
+    assert db.execute("SELECT count(*) FROM investor_funding_plans").fetchone()[0] == 0
+    previous = latest_monitor_evidence(db, workspace, model)
+    document = json.loads(previous["document_json"])
+    assert document["schema_version"] == "investor-monitor-data-input-v4"
+    windows = [window for _, window in _windows(db, workspace, document)]
+    settings = document["settings"]
+    at = actual()
+    if expire:
+        assert settings["funding_intent"] is not None
+        close = db.execute("SELECT payload FROM investor_evidence_checkpoint_payloads ORDER BY rowid DESC LIMIT 1").fetchone()[0]
+        cutoffs = json.loads(close)["market_cutoffs"]
+        settings["max_quote_age_seconds"] = math.ceil(max((instant(at) - instant(value)).total_seconds() for value in cutoffs.values())) + 120
+    else:
+        assert settings["funding_intent"] is None
+        settings["funding_intent"] = {"id": "fictional-current-first-funding", "amount_cny": "1000", "expected_at": at}
+    admitted = admit_monitor_data(db, workspace, actor, model, windows, settings, now=at, audited_action_knowledge=True)
+    assert admitted["id"] != previous["id"]
+    return {"fictional_input": "short_quote_lifetime" if expire else "explicit_hypothetical_funding_intent",
+        "input_id": admitted["id"], "actual_application_clock": True, "ordinary_funding_plan_due_path": False,
+        "real_provider_called": False, "model_cash_changed": False, "model_units_changed": False}
+
+
 def main():
     parser = argparse.ArgumentParser(); parser.add_argument("--db", required=True)
-    parser.add_argument("--stage", choices=("prepare", "core", "provider", "stale", "withdraw"), required=True); args = parser.parse_args()
+    parser.add_argument("--stage", choices=("prepare", "core", "provider", "stale", "funding", "expire", "withdraw"), required=True); args = parser.parse_args()
     path = Path(args.db).resolve(strict=True)
     assert path.name == "workbench.db" and path.parent.parent == Path(tempfile.gettempdir()).resolve()
     assert path.parent.name.startswith("etf-first-close-http-")
@@ -145,6 +176,7 @@ def main():
             elif args.stage == "core": value = core(db)
             elif args.stage == "provider": value = provider(db)
             elif args.stage == "stale": value = diagnose_stale(db)
+            elif args.stage in ("funding", "expire"): value = scenario_input(db, expire=args.stage == "expire")
             else:
                 workspace, actor = scope(db)
                 rights = db.execute("SELECT id FROM investor_data_sources WHERE workspace_id=? AND kind='rights'", (workspace,)).fetchall(); assert len(rights) == 1

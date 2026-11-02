@@ -20,6 +20,7 @@ const report={status:'RUNNING',started_at:new Date().toISOString(),actual_applic
   build_performed:false,build_id:readFileSync(path.join(web,'.next/BUILD_ID'),'utf8').trim(),cases:[],
   limitations:['Uses an explicitly fictional current calendar and stubbed transport, never an actual exchange close or provider certification.',
     'Only historical source construction freezes its sampled retrieval stamp; HTTP, core and first callback use the real wall clock.',
+    'Funding decision uses an explicitly admitted fictional hypothetical intent, not the ordinary annual-plan midnight release path.',
     'Reuses the existing production build. TLS is locally generated and exactly pinned by this HTTP client, not production or native acceptance.']};
 function inventory(){const names=['web/scripts/test-current-first-close-http.mjs','web/scripts/http-fixture-process.mjs','scripts/migrate-workbench.mjs',
   'web/next.config.ts','web/package.json','web/package-lock.json'];
@@ -38,6 +39,8 @@ try{
   const financial=()=>read(db=>Object.fromEntries(['portfolios','accounts','ledger_events','postings','position_movements','approval_events','activations','reservations','execution_reports']
     .map(name=>[name,db.prepare(`SELECT count(*) n FROM ${name}`).get().n])));
   const baseline=financial();
+  const modelAssets=()=>read(db=>db.prepare('SELECT payload FROM investor_evidence_checkpoint_payloads ORDER BY rowid DESC LIMIT 1').get()).payload;
+  function economicAssets(){const value=JSON.parse(modelAssets().toString());return Object.fromEntries(['quantities','cash_by_currency','receivables','entitlements','processed_actions'].map(name=>[name,value[name]]));}
   async function fixture(stage){const value=await runHttpFixture(process.env.WORKBENCH_TEST_PYTHON??process.env.WORKBENCH_PYTHON??'python3',
     ['-m','tests.investor.current_first_close_fixture','--db',filename,'--stage',stage],
     {cwd:root,encoding:'utf8',timeout:['prepare','provider'].includes(stage)?450000:120000,maxBuffer:65536,signal:workerAbort.signal,
@@ -125,6 +128,17 @@ try{
       assert.equal(read(db=>db.prepare('SELECT count(*) n FROM investor_monitor_evidence_inputs').get().n),1);
       return{actual_clock:true,registered_progress:before.model_watch.acquisition.markets[0].status,
         stale_old_prices_rejected:report.stale_before.stale_retained_quotes_rejected,checkpoint:1,financial_writes:false};
+    });
+    await check('hypothetical_funding_decision_and_ordinary_review_persist_without_execution',async()=>{
+      const assets=economicAssets();report.funding=await fixture('funding');await fixture('core');
+      let state=(await get()).json;assert.equal(state.effective_outcome,'decision_required');assert.equal(state.model_watch.status,'research_decision');
+      assert.equal(state.latest.document.model_change.funding_status,'hypothetical_due');assert.equal(state.model_watch.model_nav_cny,'10000');
+      const observation=state.latest.id;assert.match(await(await request('/workbench',{headers})).text(),/变化卡/);
+      assert.equal((await post({action:'review',observation_id:observation,decision:'defer',note:'Fictional native/HTTP review; no trade',
+        expected_revision:state.revision,idempotency_key:'fictional-first-defer'})).status,200);
+      state=(await get()).json;assert.ok(state.decisions.some(row=>row.observation_id===observation&&row.decision==='defer'));
+      assert.deepEqual(economicAssets(),assets);assert.deepEqual(financial(),baseline);
+      return{decision_from_fictional_admitted_intent:true,ordinary_annual_plan_due_path:false,ordinary_http_review_persisted:true,model_assets_unchanged:true,financial_writes:false};
     });
     await check('source_withdrawal_hides_current_value_without_a_second_callback',async()=>{
       await fixture('withdraw');const state=(await get()).json;assert.equal(state.effective_outcome,'insufficient_evidence');assert.equal(state.model_watch.model_nav_cny,null);
