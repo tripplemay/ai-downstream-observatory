@@ -196,3 +196,29 @@ test("bounded semantic panel renders distinct empty, missed and invalid states w
     session_date: null, scheduled_at: null, latest_start_at: null, stop_at: null, valid_until: null }] };
   assert.match(render(none), /未推测下次时间/);
 });
+test("first monitor guidance distinguishes registered work, completed tasks and interrupted or absent work without inventing an ETA", () => {
+  const value=activity(),market={...value.markets[0],latest_start_at:null,stop_at:null};
+  const initial=(row:Partial<typeof market>)=>acquisitionSchema.parse({...value,phase:"initial_prices",markets:[{...market,...row}]});
+  const render=(input:InvestorAcquisition,at=early)=>renderToStaticMarkup(createElement(InvestorAcquisitionPanel,
+    {value:input,nowMs:Date.parse(at),modelValidUntil:future}));
+  const scheduled=render(initial({}));assert.match(scheduled,/首份合格监测输入尚未建立/);assert.match(scheduled,/已登记任务等待后台处理/);
+  assert.match(scheduled,/无需重复填写初始资料/);assert.match(scheduled,/不是重新采集旧请求的授权/);
+  const completed=render(initial({status:"waiting_core",completed_count:2,completed_at:early}));
+  assert.match(completed,/价格任务已完成/);assert.match(completed,/还不能显示为持续监测已启动/);
+  for(const status of ["lease_expired","failed","expired","superseded","incomplete"] as const){
+    const text=render(initial({status}));assert.match(text,/部分初始采集未完成/);assert.match(text,/旧请求不会自动重放/);
+    assert.match(text,/没有可确认的后续启动时间/);assert.doesNotMatch(text,/已登记任务等待后台处理|价格任务已完成/);
+  }
+  const none=render(initial({status:"not_registered",registered_count:0,session_date:null,scheduled_at:null,valid_until:null}));
+  assert.match(none,/没有可确认的后续启动时间/);assert.doesNotMatch(none,/部分初始采集未完成|旧请求不会自动重放/);
+  const lease=initial({status:"running",lease_until:"2026-01-04T06:59:00.000Z"});
+  assert.match(render(lease,"2026-01-04T06:59:00.000Z"),/部分初始采集未完成/);
+  const mixed=acquisitionSchema.parse({...value,phase:"initial_prices",markets:[{...market,status:"waiting_core",completed_count:2,completed_at:early},
+    {...market,market:"US",status:"failed"}]});
+  assert.match(render(mixed),/部分初始采集未完成/);assert.doesNotMatch(render(mixed),/价格任务已完成/);
+  const active=acquisitionSchema.parse({...mixed,markets:[{...market},mixed.markets[1]]});
+  assert.match(render(active),/已登记任务等待后台处理/);assert.match(render(active),/部分初始采集未完成/);
+  assert.doesNotMatch(render(value),/首份监测下一步|首份合格监测输入尚未建立/);
+  assert.doesNotMatch(render({...value,phase:"initial_prices",status:"source_unavailable",markets:[]}),/无需重复填写|已登记任务等待后台处理/);
+  assert.doesNotMatch(scheduled,/<button|<input|<form/);
+});

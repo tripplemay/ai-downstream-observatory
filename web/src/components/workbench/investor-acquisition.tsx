@@ -13,6 +13,20 @@ const hidden = { paused: "观察已暂停；不展示旧任务为当前采集。
   expired: "参考策略已到期；需重新研究。", source_unavailable: "参考来源已失效；采集状态不能替代来源资格。",
   unavailable: "采集任务记录未通过核对；不影响独立研究核验，也不能证明行情合格。" };
 function instant(value: string) { return value.replace("T", " ").replace(/\.000Z$/, " UTC").replace(/Z$/, " UTC"); }
+function InitialNextStep({ markets }: { markets: Market[] }) {
+  const pending = markets.some(row => ["scheduled", "queued", "running"].includes(row.status));
+  const interrupted = markets.some(row => ["failed", "lease_expired", "expired", "superseded", "missed_window", "partial", "no_events", "incomplete"].includes(row.status));
+  const complete = markets.every(row => row.status === "waiting_core");
+  const next = pending ? "已登记任务等待后台处理；任务完成后仍要核对全部价格、公司行动、汇率和费用。"
+    : complete ? "价格任务已完成，下一步由后台独立核对整套监测输入；还不能显示为持续监测已启动。"
+      : "需后台核对来源与后续合法交易日；本页没有可确认的后续启动时间，不承诺到时一定恢复。";
+  return <div className="mt-3 space-y-2 text-sm" role="note" aria-label="首份监测下一步">
+    <p className="font-medium">首份合格监测输入尚未建立，当前不能判断是否需要调整。</p>
+    {interrupted && <p>部分初始采集未完成，旧请求不会自动重放；租约过期或提交失败不等于行情源故障。</p>}
+    <p>下一步：{next}</p>
+    <p className="text-xs text-muted-foreground">无需重复填写初始资料或反复保存同一方案；保存、暂停或恢复观察都不是重新采集旧请求的授权。</p>
+  </div>;
+}
 
 export function currentAcquisitionDisplay(value: InvestorAcquisition, nowMs: number, modelValidUntil: string): InvestorAcquisition {
   const at = Math.max(nowMs, Date.parse(value.checked_at));
@@ -36,6 +50,7 @@ export function InvestorAcquisitionPanel({ value, nowMs, modelValidUntil }: { va
   const current = currentAcquisitionDisplay(value, nowMs, modelValidUntil);
   return <section aria-label="行情采集进度" className="mt-4 min-w-0 rounded-xl border p-3">
     <h3 className="text-sm font-medium">{value.phase === "initial_prices" ? "首份监测价格补采" : "按市场收盘持续采集"}</h3>
+    {value.phase === "initial_prices" && current.status === "visible" && <InitialNextStep markets={current.markets} />}
     {current.status !== "visible" ? <p role="status" className="mt-2 text-sm">{hidden[current.status]}</p> : <ul className="mt-2 grid gap-3 sm:grid-cols-3">
       {current.markets.map(row => <li key={row.market} className="min-w-0 rounded-lg border p-3 text-sm">
         <p className="font-medium">{labels[row.market]} · 已登记 {row.registered_count}/{row.target_count} 个目标</p>

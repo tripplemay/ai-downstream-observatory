@@ -76,3 +76,19 @@ an unregistered future collection time. Fictional regressions use the actual
 claim/expiry lifecycle without SDK calls and test corrupted attempts, hidden
 private error details, read-only state, empty financial tables and no false NAV.
 This is task-metadata correctness, not successful collection or restored monitoring.
+
+## First-monitor user guidance
+
+The first-input panel states that continuous monitoring is not yet established,
+rather than presenting a saved observation task as an active monitor. Registered
+work, completed price tasks awaiting independent core checks, and absent or
+interrupted tasks have separate next-step text. Local display expiry updates
+that explanation even without a fresh response. Mixed markets do not turn a
+partial failure into full completion.
+
+No new ETA is inferred from a weekend, a source label or an exhausted request.
+The panel explains that resaving the same profile/plan or toggling observation
+does not authorize replay of an old request. It adds no button, source query,
+worker write, attempt or data-quality admission. Hidden/invalid source states
+do not display the registered-work guidance. This clarification does not solve
+the missing production prices or certify the next market session.

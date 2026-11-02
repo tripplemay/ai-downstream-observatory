@@ -6,12 +6,13 @@ import * as client from "../src/components/workbench/investor-action-review-clie
 import {mountInvestorDisplay} from "./investor-display-fixture";
 import {reviewAt,reviewBinding as binding,reviewNow as now,reviewResponse,reviewView} from "./action-review-client-fixture";
 
+class ReviewLinkTarget {closest(selector:string){return selector==="a[href]"?{}:null;}}
 function mount(t:TestContext) {
   let nonce=0;const locks:boolean[]=[],refreshes:number[]=[];
   const h=mountInvestorDisplay(t,new URL("../src/components/workbench/investor-action-review.tsx",import.meta.url),"InvestorActionReview",
     {workspaceId:"w",binding,modelId:"fictional-model",disabled:false,onScopeChange:(value:boolean)=>locks.push(value),onRefresh:()=>refreshes.push(1)},
     {"@/components/ui/input":{Input:"Input"},"@/components/session-boundary":{useSessionBoundary:()=>({verified:true,sessionBinding:binding})},
-      "./investor-action-review-client":client,"./investor-correction-impact":{InvestorCorrectionImpact:"InvestorCorrectionImpact"}},now,{crypto:{randomUUID:()=>`fictional-review-${++nonce}`,subtle:webcrypto.subtle}});
+      "./investor-action-review-client":client,"./investor-correction-impact":{InvestorCorrectionImpact:"InvestorCorrectionImpact"}},now,{Element:ReviewLinkTarget,crypto:{randomUUID:()=>`fictional-review-${++nonce}`,subtle:webcrypto.subtle}});
   async function reply(index:number,value:unknown,status=200) {
     h.requests[index].resolve(new Response(JSON.stringify(value),{status}));
     await h.waitFor(()=>!h.text().includes("正在核对受理记录与当前资料…"));
@@ -40,6 +41,39 @@ test("historical differences reach the ordinary correction panel with the curren
   (child.props.onGuardChange as (locked:boolean)=>void)(true);await h.flush();assert.equal(h.button("重新准备该基金预览")!.props.disabled,true);
   assert.equal(h.button("收起并清除本地输入")!.props.disabled,true);
   (child.props.onGuardChange as (locked:boolean)=>void)(false);await h.flush();assert.equal(h.button("重新准备该基金预览")!.props.disabled,false);
+});
+test("correction drafts pause parent polling and reject retained reset, refresh and prepare handlers without losing the child",async t=>{
+  const h=mount(t);await h.click("查看并复核资料更新");const value=reviewResponse();value.view!.status="historical_correction_required";
+  value.view!.confirmation_supported=false;value.view!.changes[0].disposition="historical_correction";
+  await h.reply(0,value);
+  const child=h.node("InvestorCorrectionImpact")!,guard=child.props.onGuardChange as (locked:boolean)=>void;
+  const oldPrepare=h.button("重新准备该基金预览")!.props.onClick as ()=>void;
+  const oldReset=h.button("收起并清除本地输入")!.props.onClick as ()=>void;
+  const oldRefresh=h.button("核对受理状态")!.props.onClick as ()=>void;
+  guard(true);oldPrepare();oldReset();oldRefresh();await h.flush();await h.advance(now+30000);
+  assert.equal(h.requests.length,1);assert.equal(h.refreshes.length,0);assert.ok(h.node("InvestorCorrectionImpact"));
+  assert.equal(h.button("核对受理状态")!.props.disabled,true);assert.match(h.text(),/父级资料刷新已暂停/);
+  assert.equal(h.documentListeners.get("click")?.size,1);assert.equal(h.windowListeners.get("beforeunload")?.size,1);
+  let prevented=0,stopped=0;const event={target:new ReviewLinkTarget(),preventDefault:()=>prevented++,stopPropagation:()=>stopped++};
+  for(const listener of h.documentListeners.get("click")??[])(listener as (event:unknown)=>void)(event);
+  assert.equal(prevented,1);assert.equal(stopped,1);assert.equal(h.requests.length,1);
+  guard(false);await h.flush();assert.equal(h.documentListeners.get("click")?.size,0);assert.equal(h.windowListeners.get("beforeunload")?.size,0);
+  assert.equal(h.button("核对受理状态")!.props.disabled,false);
+  await h.advance(now+45000);await h.waitRequests(2);assert.equal(h.requests[1].method,"GET");
+  await h.reply(1,value);await h.click("收起并清除本地输入");assert.equal(h.refreshes.length,1);
+});
+test("a parent read started before a correction edit cannot later replace its preview, even after the edit guard clears",async t=>{
+  const h=mount(t);await h.click("查看并复核资料更新");const value=reviewResponse();value.view!.status="historical_correction_required";
+  value.view!.confirmation_supported=false;value.view!.changes[0].disposition="historical_correction";await h.reply(0,value);
+  const guard=h.node("InvestorCorrectionImpact")!.props.onGuardChange as (locked:boolean)=>void;
+  await h.click("核对受理状态");assert.equal(h.requests.length,2);guard(true);
+  assert.equal(h.requests[1].options.signal?.aborted,true);await h.flush();guard(false);await h.flush();
+  const newer=reviewResponse({view:reviewView("BND.US","fictional-unrelated-preview")});await h.reply(1,newer);
+  assert.equal((h.node("InvestorCorrectionImpact")!.props.view as {provider_symbol:string}).provider_symbol,"VT.US");
+  assert.doesNotMatch(h.text(),/正在核对受理记录与当前资料/);
+  guard(true);await h.flush();await h.invalidate();
+  assert.equal(h.documentListeners.get("click")?.size,0);assert.equal(h.windowListeners.get("beforeunload")?.size,0);
+  h.close();assert.equal(h.documentListeners.get("click")?.size,0);assert.equal(h.timers.size,0);
 });
 test("explicit confirmation posts one immutable intent, separate enable stays false, and receipt status never claims admission or trades",async t=>{
   const h=mount(t);await h.ready();await h.fill();assert.equal(h.button("登记研究审阅，不执行交易")!.props.disabled,false);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useSessionBoundary } from "@/components/session-boundary";
@@ -51,27 +51,33 @@ export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange
   const alive=useRef(true),invalidated=useRef(false),epoch=useRef(0),active=useRef<AbortController|null>(null),pending=useRef<ActionReviewAttempt|null>(null);
   const tracking=useRef<string|null>(null),viewKey=useRef<string|null>(null),draftSymbol=useRef<string|null>(null);
   const verified=session?.verified===true&&session.sessionBinding===binding&&!invalidated.current;
-  const current=useRef({scope,verified,disabled});current.current={scope,verified,disabled};
+  const current=useRef({scope,verified,disabled,correctionLocked});current.current={scope,verified,disabled,correctionLocked};
   const now=useInvestorDisplayClock(data?.checked_at??null,[data?.view?.refresh_after,data?.view?.preview.valid_until].join("|"));
+  const protectCorrection=useCallback((locked:boolean)=>{
+    if(!alive.current||!current.current.verified||current.current.scope!==scope)return;
+    current.current.correctionLocked=locked;
+    if(locked){epoch.current++;active.current?.abort();active.current=null;setBusy(false);}
+    setCorrectionLocked(locked);
+  },[scope]);
   useEffect(()=>{
     alive.current=true;
     const invalidate=()=>{invalidated.current=true;epoch.current++;active.current?.abort();pending.current=null;tracking.current=null;viewKey.current=null;draftSymbol.current=null;
-      setData(null);setDrafts([]);setAck(false);setEnable(false);setUncertain(false);setOpen(false);setBusy(false);};
+      setData(null);setDrafts([]);setAck(false);setEnable(false);setUncertain(false);setCorrectionLocked(false);setOpen(false);setBusy(false);};
     window.addEventListener(SESSION_INVALIDATED_EVENT,invalidate);
     return()=>{alive.current=false;epoch.current++;active.current?.abort();window.removeEventListener(SESSION_INVALIDATED_EVENT,invalidate);};
   },[]);
   useEffect(()=>{epoch.current++;active.current?.abort();active.current=null;pending.current=null;tracking.current=null;viewKey.current=null;draftSymbol.current=null;
-    setData(null);setDrafts([]);setAck(false);setEnable(false);setUncertain(false);setOpen(false);setBusy(false);},[scope]);
-  useEffect(()=>{if(!verified){epoch.current++;active.current?.abort();pending.current=null;setData(null);setDrafts([]);setAck(false);setEnable(false);setUncertain(false);}},[verified]);
+    setData(null);setDrafts([]);setAck(false);setEnable(false);setUncertain(false);setCorrectionLocked(false);setOpen(false);setBusy(false);},[scope]);
+  useEffect(()=>{if(!verified){epoch.current++;active.current?.abort();pending.current=null;setData(null);setDrafts([]);setAck(false);setEnable(false);setUncertain(false);setCorrectionLocked(false);}},[verified]);
   useEffect(()=>{onScopeChange(verified&&open);},[verified,open,onScopeChange]);
   useEffect(()=>()=>onScopeChange(false),[onScopeChange]);
   useEffect(()=>{
-    if(!uncertain&&!drafts.some(row=>row.at||row.pay_at||row.tax_per_unit))return;
+    if(!verified||!correctionLocked&&!uncertain&&!drafts.some(row=>row.at||row.pay_at||row.tax_per_unit))return;
     const unload=(event:BeforeUnloadEvent)=>{event.preventDefault();event.returnValue="";};
     const navigate=(event:MouseEvent)=>{if(event.target instanceof Element&&event.target.closest("a[href]")&&!window.confirm("仍有未确认的研究输入或未核实的提交。离开后请先读取登记状态，不能推定提交失败。确定离开吗？")){event.preventDefault();event.stopPropagation();}};
     window.addEventListener("beforeunload",unload);document.addEventListener("click",navigate,true);
     return()=>{window.removeEventListener("beforeunload",unload);document.removeEventListener("click",navigate,true);};
-  },[uncertain,drafts]);
+  },[verified,correctionLocked,uncertain,drafts]);
   function apply(value:ActionReviewResponse) {
     const next=value.view,key=next?next.provider_symbol+":"+next.preview.preview_id+":"+next.preview.draft_basis_hash:null;
     if(next&&key!==viewKey.current){const sameSymbol=draftSymbol.current===next.provider_symbol;setAck(false);setEnable(false);setDrafts(previous=>blankActionReviewDrafts(next).map(row=>{
@@ -83,9 +89,9 @@ export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange
   }
   async function exchange(attempt?:ActionReviewAttempt) {
     const start=current.current;
-    if(!start.verified||active.current||attempt&&start.disabled)return;
+    if(!start.verified||start.correctionLocked||active.current||attempt&&start.disabled)return;
     const controller=new AbortController(),sequence=++epoch.current;active.current=controller;setBusy(true);setError("");
-    const valid=()=>alive.current&&!invalidated.current&&sequence===epoch.current&&current.current.scope===start.scope&&current.current.verified;
+    const valid=()=>alive.current&&!invalidated.current&&sequence===epoch.current&&current.current.scope===start.scope&&current.current.verified&&!current.current.correctionLocked;
     const recovery=pending.current,url=attempt?"/api/workbench/investor/action-review":recovery?`/api/workbench/investor/action-review?nonce=${encodeURIComponent(recovery.nonce)}`
       :tracking.current?`/api/workbench/investor/action-review?request=${encodeURIComponent(tracking.current)}`:"/api/workbench/investor/action-review";
     const timer=setTimeout(()=>controller.abort(),15000);
@@ -111,17 +117,17 @@ export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange
     finally{clearTimeout(timer);if(active.current===controller){active.current=null;if(alive.current)setBusy(false);}}
   }
   useEffect(()=>{
-    if(!open||!verified||uncertain||!data?.request||!["queued","running","preview_ready"].includes(data.request.status))return;
+    if(!open||!verified||correctionLocked||uncertain||!data?.request||!["queued","running","preview_ready"].includes(data.request.status))return;
     const timer=setInterval(()=>{if(document.visibilityState==="visible"&&!active.current&&!pending.current)void exchange();},data.request.status==="preview_ready"?15000:2500);
     return()=>clearInterval(timer);
-  },[open,verified,uncertain,data?.request?.id,data?.request?.status]);
+  },[open,verified,correctionLocked,uncertain,data?.request?.id,data?.request?.status]);
   function prepare(symbol:"VT.US"|"BND.US") {
-    if(!data||current.current.disabled||data.read_only||active.current||pending.current||!current.current.verified)return;
+    if(!data||current.current.disabled||current.current.correctionLocked||data.read_only||active.current||pending.current||!current.current.verified)return;
     const attempt=actionReviewAttempt({kind:"preview",symbol,expected_revision:data.workspace_revision,idempotency_key:crypto.randomUUID()},binding,workspaceId);
     pending.current=attempt;setUncertain(true);setAck(false);setEnable(false);void exchange(attempt);
   }
   function submit(event:FormEvent) {
-    event.preventDefault();if(!data?.view||current.current.disabled||data.read_only||active.current||pending.current||!current.current.verified)return;
+    event.preventDefault();if(!data?.view||current.current.disabled||current.current.correctionLocked||data.read_only||active.current||pending.current||!current.current.verified)return;
     try {
       const intent=buildActionReviewConfirmation(data.view,drafts,ack,enable,crypto.randomUUID(),now);
       const attempt=actionReviewAttempt(intent,binding,workspaceId);pending.current=attempt;setUncertain(true);void exchange(attempt);
@@ -134,8 +140,9 @@ export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange
     <h2 id="action-review-title" className="font-semibold">资料有变化，在这里核对</h2>
     <p className="mt-2 text-sm text-muted-foreground">查看已保留的发行人和交叉资料，确认必要研究假设。不用填写来源编号或 JSON，不重新请求行情，不授权交易。</p>
     {!open?<Button className="mt-4" variant="outline" disabled={disabled||!verified} onClick={()=>{if(current.current.disabled||!current.current.verified)return;onScopeChange(true);setOpen(true);void exchange();}}>查看并复核资料更新</Button>:<div className="mt-4 space-y-4">
-      <div className="flex flex-wrap gap-3"><Button type="button" variant="outline" disabled={busy||!verified} onClick={()=>void exchange()}>核对受理状态</Button>
-        <Button type="button" variant="ghost" disabled={busy||uncertain||correctionLocked} onClick={()=>{epoch.current++;active.current?.abort();setOpen(false);setData(null);setDrafts([]);setAck(false);setEnable(false);tracking.current=null;viewKey.current=null;draftSymbol.current=null;onScopeChange(false);onRefresh();}}>收起并清除本地输入</Button></div>
+      <div className="flex flex-wrap gap-3"><Button type="button" variant="outline" disabled={busy||!verified||correctionLocked} onClick={()=>void exchange()}>核对受理状态</Button>
+        <Button type="button" variant="ghost" disabled={busy||uncertain||correctionLocked} onClick={()=>{if(!alive.current||!current.current.verified||current.current.correctionLocked||active.current||pending.current)return;epoch.current++;setOpen(false);setData(null);setDrafts([]);setAck(false);setEnable(false);tracking.current=null;viewKey.current=null;draftSymbol.current=null;onScopeChange(false);onRefresh();}}>收起并清除本地输入</Button></div>
+      {correctionLocked&&<p className="text-sm text-muted-foreground">历史比较正在处理，或仍有未清除的本地假设。父级资料刷新已暂停；请在下方核对比较状态，或先清除本地假设再重新准备资料。离开页面不会撤销已受理任务，本地未提交假设不会跨页面保存。</p>}
       {busy&&<p role="status" className="text-sm">正在核对受理记录与当前资料…</p>}
       {error&&<p role="alert" className="break-words text-sm text-red-600">{error}</p>}
       {uncertain&&<div role="status" className="space-y-2 rounded-xl border p-3 text-sm"><p>原提交仍待核实。连接失败不等于未受理；不会自动创建第二个请求。</p>
@@ -157,7 +164,7 @@ export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange
         {!view.confirmation_supported&&<p role="status" className="text-sm">{view.status==="no_reported_changes"?"没有新增可确认记录；不会重复批准。":"存在历史更正、共同覆盖以外记录或其他来源差异，不能当作普通追加。需另行核对影响范围，不能通过重新启用清除。"}</p>}
         {view.status==="historical_correction_required"&&<InvestorCorrectionImpact key={`${binding}:${workspaceId}:${modelId}:${view.preview.preview_id}:${view.preview.draft_basis_hash}`}
           view={view} modelId={modelId} workspaceId={workspaceId} binding={binding} disabled={disabled||busy||uncertain||data.read_only}
-          onGuardChange={setCorrectionLocked}/>}
+          onGuardChange={protectCorrection}/>}
         {view.confirmation_supported&&<form onSubmit={submit} className="space-y-4"><fieldset disabled={locked} className="min-w-0 space-y-4">
           <p className="text-sm">来源只报告日期。以下时刻采用 UTC，由你明确选择为研究假设，不冒充提供方的精确时刻；换算后的纽约日期须与来源一致。未知税额不要填零。</p>
           {drafts.map((row,index)=><div key={row.type+row.date} className="grid min-w-0 gap-3 rounded-xl border p-3 sm:grid-cols-2">
