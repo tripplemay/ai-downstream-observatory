@@ -2,7 +2,7 @@ import type Database from "better-sqlite3";
 import { canonical, hash } from "../ledger/service";
 import { amount } from "../ledger/decimal";
 import { priceInstant } from "../market-price-source";
-import { validateInvestorSourceDocument } from "./kernel-contracts";
+import { validateInvestorSourceDocument, validateRetainedActionEvidenceProof } from "./kernel-contracts";
 import { ACTION_TARGETS, checkNoNewActionCandidate } from "./action-maintenance-candidate";
 import type { ActionSnapshot } from "./action-maintenance-candidate";
 import { actionCheck as check, actionDeadline, actionNyParts, actionObject as object, actionText } from "./action-source-parsers";
@@ -281,6 +281,10 @@ export function readManagedActionHistoricalReview(db:Database.Database,workspace
 }
 
 function replayManagedActionReview(db:Database.Database,workspace:string,id:unknown,now:string):VerifiedSourceReview {
+  return replayManagedActionReviewEvidence(db,workspace,id,now).value;
+}
+
+function replayManagedActionReviewEvidence(db:Database.Database,workspace:string,id:unknown,now:string) {
     const value=readManagedActionHeader(db,workspace,id,now),{row,doc,grant}=publication(db,workspace,id,now),{base,listing}=baseline(db,workspace,grant,now),policy=grant.doc;
     check(listing.facts.market === "US" && listing.facts.currency === "USD" && Object.hasOwn(ACTION_TARGETS,actionText(policy.provider_symbol))
       && time(listing.facts.tradable_from) <= time(now) && (listing.facts.tradable_until === null || time(now) < time(listing.facts.tradable_until)));
@@ -299,7 +303,71 @@ function replayManagedActionReview(db:Database.Database,workspace:string,id:unkn
     const validUntil=new Date(Number(minimum([policy.valid_until,...limits,...current.limits])/1000n)).toISOString();
     check(current.day === row.source_day && validUntil === row.valid_until && candidate.candidate_range_end === row.coverage_end
       && candidate.candidate_facts_hash === doc.candidate_facts_hash && hash({authority_input:policy,anchor_binding_hash:anchorHash,current_bindings:current.bindings,candidate}) === doc.checked_input_hash);
-    return value;
+    return {value,row,grant,base,listing,anchor,current};
+}
+
+function retainedManualAction(db:Database.Database,workspace:string,id:unknown,now:string) {
+  const original=manualHeader(db,workspace,id,"actions",now);
+  check(original.row.decision === "approved" && time(now)<time(original.row.valid_until));
+  const rows=db.prepare("SELECT id,version FROM investor_data_reviews WHERE source_id=? AND version>=? ORDER BY version LIMIT 1001")
+    .all(original.source.id,original.row.version) as Obj[];
+  check(rows.length>0 && rows.length<=1000);let previous=original.row.created_at,latest=original;
+  rows.forEach((row,index)=>{
+    const value=manualHeader(db,workspace,row.id,"actions",now);
+    check(row.version === Number(original.row.version)+index && value.row.decision === "approved"
+      && time(previous)<=time(value.row.created_at) && value.facts.listing_id === original.facts.listing_id);
+    validateInvestorSourceDocument("facts",{kind:"actions",facts:value.facts});
+    const facts=value.facts,events=facts.events as Obj[];
+    check(actionText(facts.range_start)<=actionText(facts.range_end) && new Set(events.map(event=>event.id)).size === events.length);
+    for(const event of events) {
+      const day=actionNyParts(event.at).day;time(event.published_at);
+      check(event.listing_id === facts.listing_id && actionText(facts.range_start)<=day && day<=actionText(facts.range_end));
+      if(event.type === "dividend")check(time(event.pay_at)>=time(event.at) && amount(actionText(event.tax_per_unit)).gte(0)
+        && amount(actionText(event.tax_per_unit)).lte(amount(actionText(event.gross_per_unit))));
+      else check(amount(actionText(event.ratio)).gt(0));
+    }
+    previous=value.row.created_at;latest=value;
+  });
+  check(time(now)<time(latest.row.valid_until));return {original,latest};
+}
+
+/** Exact retained originals, not a VerifiedSourceReview or permission to resume. */
+export function readRetainedActionEvidence(db:Database.Database,workspace:string,actor:string,id:string,now:string) {
+  return db.transaction(()=>{
+    now=actionMillis(now);
+    check((db.prepare("SELECT owner_id FROM investor_workspaces WHERE id=?").get(workspace) as Obj|undefined)?.owner_id === actor);
+    check(actionText(id).length>0 && id.length<=300);
+    let original:VerifiedSourceReview,latest:ReturnType<typeof manualHeader>,recorded:Obj|null=null,grant:ReturnType<typeof authority>|null=null;
+    const bindings:Obj[]=[];
+    if(id.startsWith(MANAGED_ACTION_PREFIX)) {
+      const metadata=publication(db,workspace,id,now);
+      const manual=retainedManualAction(db,workspace,metadata.grant.doc.base_review_id,now);
+      const listing=baseline(db,workspace,metadata.grant,now).listing;
+      check(metadata.row.status === "published" && time(now)<time(metadata.row.valid_until)
+        && latestManual(db,listing.row) && time(now)<time(listing.row.valid_until));
+      const evidence=replayManagedActionReviewEvidence(db,workspace,id,now);
+      original=evidence.value;latest=manual.latest;recorded=evidence.row;grant=evidence.grant;
+      for(const [prefix,source] of [["anchor",evidence.anchor],["publication",evidence.current]] as const)
+        for(const [key,binding] of Object.entries(source.bindings))bindings.push({slot:prefix+"_"+key,...object(binding)});
+      bindings.sort((a,b)=>actionText(a.slot)<actionText(b.slot)?-1:1);
+    } else {
+      const manual=retainedManualAction(db,workspace,id,now);
+      original=manual.original as unknown as VerifiedSourceReview;latest=manual.latest;
+    }
+    const row=original.row,source=original.source;
+    const proof={schema_version:"investor-retained-action-evidence-v1",workspace_id:workspace,actor_id:actor,
+      review_id:row.id,review_hash:row.content_hash,source_id:source.id,source_hash:source.content_hash,facts_hash:hash(original.facts),
+      latest_manual_review_id:latest.row.id,latest_manual_review_hash:latest.row.content_hash,
+      publication_id:recorded?.id??null,publication_hash:recorded?.content_hash??null,
+      authority_id:grant?.row.id??null,authority_hash:grant?.row.content_hash??null,capture_bindings:bindings,checked_at:now,
+      valid_until:new Date(Number(minimum([row.valid_until,latest.row.valid_until])/1000n)).toISOString(),
+      purpose:"retained_historical_comparison_only",evidence_basis:bindings.length?"standing_rule_original_capture_replay":"owner_review_record_only",
+      original_raw_reports_replayed:!!bindings.length,current_source_eligibility_restored:false,economic_correction_approved:false,
+      checkpoint_created:false,monitoring_resumed:false,historical_observations_rewritten:false,trading_permission:false,
+      provider_calls:0,database_writes:0,distribution:"private_owner_only_not_ai"};
+    validateRetainedActionEvidenceProof(proof);
+    return {original_review:row,original_source:source,original_facts:original.facts,proof};
+  }).deferred();
 }
 
 /** Internal: the caller already used the normal original-byte review resolver. */

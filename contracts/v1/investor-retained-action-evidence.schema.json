@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-retained-action-evidence.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "workspace_id", "actor_id", "review_id", "review_hash", "source_id", "source_hash", "facts_hash", "latest_manual_review_id", "latest_manual_review_hash", "publication_id", "publication_hash", "authority_id", "authority_hash", "capture_bindings", "checked_at", "valid_until", "purpose", "evidence_basis", "original_raw_reports_replayed", "current_source_eligibility_restored", "economic_correction_approved", "checkpoint_created", "monitoring_resumed", "historical_observations_rewritten", "trading_permission", "provider_calls", "database_writes", "distribution"],
+  "properties": {
+    "schema_version": {"const": "investor-retained-action-evidence-v1"},
+    "workspace_id": {"$ref": "#/$defs/id"},
+    "actor_id": {"$ref": "#/$defs/id"},
+    "review_id": {"$ref": "#/$defs/id"},
+    "review_hash": {"$ref": "#/$defs/hash"},
+    "source_id": {"$ref": "#/$defs/id"},
+    "source_hash": {"$ref": "#/$defs/hash"},
+    "facts_hash": {"$ref": "#/$defs/hash"},
+    "latest_manual_review_id": {"$ref": "#/$defs/id"},
+    "latest_manual_review_hash": {"$ref": "#/$defs/hash"},
+    "publication_id": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+    "publication_hash": {"anyOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+    "authority_id": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+    "authority_hash": {"anyOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+    "capture_bindings": {"type": "array", "maxItems": 6, "items": {"$ref": "#/$defs/capture"}},
+    "checked_at": {"type": "string", "format": "date-time"},
+    "valid_until": {"type": "string", "format": "date-time"},
+    "purpose": {"const": "retained_historical_comparison_only"},
+    "evidence_basis": {"enum": ["owner_review_record_only", "standing_rule_original_capture_replay"]},
+    "original_raw_reports_replayed": {"type": "boolean"},
+    "current_source_eligibility_restored": {"const": false},
+    "economic_correction_approved": {"const": false},
+    "checkpoint_created": {"const": false},
+    "monitoring_resumed": {"const": false},
+    "historical_observations_rewritten": {"const": false},
+    "trading_permission": {"const": false},
+    "provider_calls": {"const": 0},
+    "database_writes": {"const": 0},
+    "distribution": {"const": "private_owner_only_not_ai"}
+  },
+  "allOf": [{
+    "if": {"properties": {"evidence_basis": {"const": "owner_review_record_only"}}},
+    "then": {"properties": {"capture_bindings": {"type": "array", "maxItems": 0}, "publication_id": {"type": "null"}, "publication_hash": {"type": "null"}, "authority_id": {"type": "null"}, "authority_hash": {"type": "null"}, "original_raw_reports_replayed": {"const": false}}},
+    "else": {"properties": {"capture_bindings": {"type": "array", "minItems": 6}, "publication_id": {"$ref": "#/$defs/id"}, "publication_hash": {"$ref": "#/$defs/hash"}, "authority_id": {"$ref": "#/$defs/id"}, "authority_hash": {"$ref": "#/$defs/hash"}, "original_raw_reports_replayed": {"const": true}}}
+  }],
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 300},
+    "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "capture": {
+      "type": "object", "additionalProperties": false,
+      "required": ["slot", "capture_id", "capture_hash", "raw_sha256", "raw_bytes", "qualification", "retain_until", "authority_id", "authority_hash", "control_id", "control_hash"],
+      "properties": {
+        "slot": {"enum": ["anchor_issuer", "anchor_dividends", "anchor_splits", "publication_issuer", "publication_dividends", "publication_splits"]},
+        "capture_id": {"$ref": "#/$defs/id"}, "capture_hash": {"$ref": "#/$defs/hash"},
+        "raw_sha256": {"$ref": "#/$defs/hash"}, "raw_bytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "qualification": {"enum": ["isolated_fixed_issuer_https", "isolated_fixed_eodhd_https"]},
+        "retain_until": {"type": "string", "format": "date-time"},
+        "authority_id": {"$ref": "#/$defs/id"}, "authority_hash": {"$ref": "#/$defs/hash"},
+        "control_id": {"$ref": "#/$defs/id"}, "control_hash": {"$ref": "#/$defs/hash"}
+      }
+    }
+  }
+}
