@@ -19,7 +19,7 @@ const pending = args[0] === '--serve-pending', serve = args.length === 1;
 const output = path.join(root, 'artifacts/verification/current-action-http', new Date().toISOString().replace(/[:.]/g, '-'));
 mkdirSync(output, { recursive: true });
 const report = { status: 'RUNNING', started_at: new Date().toISOString(), actual_application_clock: true, fictional_sources: true,
-  current_report_fixture_collected: !pending,
+  current_report_fixture_collected: false,
   build_performed: false, build_id: readFileSync(path.join(web, '.next/BUILD_ID'), 'utf8').trim(), cases: [],
   limitations: ['Uses retained fictional issuer/EODHD transports and explicit fictional tax assumptions, not real-source certification.',
     'Historical fixture transport clocks are confined to source construction. HTTP handlers and default core use the real system clock.',
@@ -57,6 +57,7 @@ try {
     assert.equal(value.status, 0, `Fixture ${stage} failed: ${value.stderr}`); return JSON.parse(value.stdout);
   }
   await fixture('prepare'); const current = pending ? null : await fixture('reports');
+  report.current_report_fixture_collected = !pending;
   password = randomBytes(24).toString('base64url'); const salt = randomBytes(16);
   const passwordHash = `scrypt$32768$8$1$${salt.toString('base64url')}$${scryptSync(password, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }).toString('base64url')}`;
   const listener = net.createServer(); await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve));
