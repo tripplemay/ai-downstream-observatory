@@ -10,7 +10,10 @@ from worker.orchestration.runtime import command_handler
 
 
 def create(db, path):
-    value = source.create(db, path)
+    return register(db, source.create(db, path))
+
+
+def register(db, value):
     revision = db.execute("SELECT revision FROM investor_workspaces WHERE id='w'").fetchone()[0]
     preview = registration.register_model_epoch_preview(db, "w", "owner", value["model_id"], value["references"], value["windows"],
         expected_revision=revision, owner_interaction=True, now=source.NOW)

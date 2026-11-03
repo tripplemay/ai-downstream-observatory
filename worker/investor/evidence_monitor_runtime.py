@@ -49,6 +49,15 @@ def _payload(db, table, key, identifier, maximum):
 
 def resolve_checkpoint(db, workspace, definition, checkpoint_id, now):
     if checkpoint_id is None: return None, None
+    protocol = db.execute("SELECT json_extract(i.document_json,'$.schema_version') FROM investor_evidence_model_checkpoints c JOIN investor_monitor_evidence_inputs i ON i.id=c.input_id AND i.workspace_id=c.workspace_id AND i.model_id=c.model_id WHERE c.id=? AND c.workspace_id=? AND c.model_id=?", (checkpoint_id, workspace, definition["model_id"])).fetchone()
+    if protocol is not None and protocol[0] == "investor-monitor-data-input-v6":
+        epoch = db.execute("SELECT id,model_id FROM investor_model_epochs WHERE checkpoint_id=? AND workspace_id=?", (checkpoint_id, workspace)).fetchone()
+        from .registered_model_epoch import read_registered_model_epoch
+        owner = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (workspace,)).fetchone()
+        _assert(owner is not None and epoch is not None and epoch["model_id"] == definition["model_id"])
+        replay = read_registered_model_epoch(db, workspace, owner[0], epoch["id"], now=now)
+        _assert(replay["source"]["kernel_input"]["history"]["definition"] == definition)
+        return replay["source"]["candidate"]["checkpoint"], None
     head = db.execute("SELECT * FROM investor_evidence_model_checkpoints WHERE id=? AND workspace_id=? AND model_id=?", (checkpoint_id, workspace, definition["model_id"])).fetchone()
     _assert(head is not None and 1 <= head["sequence"] <= 1000)
     headers = db.execute("SELECT * FROM investor_evidence_model_checkpoints WHERE workspace_id=? AND model_id=? AND sequence<=? ORDER BY sequence", (workspace, definition["model_id"], head["sequence"])).fetchall()

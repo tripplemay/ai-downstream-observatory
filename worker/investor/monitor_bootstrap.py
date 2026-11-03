@@ -27,7 +27,7 @@ GAPS = {"INVESTOR_BOOTSTRAP_SOURCE_LIMIT", "INVESTOR_BOOTSTRAP_IDENTITY_CHANGED"
     "INVESTOR_BOOTSTRAP_ACTIONS_NOT_READY"} | FX_GAPS
 
 
-def _settings(db, workspace, model, definition, reference, at):
+def _source_settings(db, workspace, model, definition, reference, at):
     _assert(reference_source_current(db, workspace, model["plan_id"], at, verify_result=True))
     evidence = reference["reference_evidence"]
     source = resolve_evidence_input(db, workspace, evidence["source_input_id"], now=at)
@@ -41,8 +41,12 @@ def _settings(db, workspace, model, definition, reference, at):
     settings = {"policy": {"version": VERSION, "weight_band": parameters["tolerance"]["weight"],
         "absolute_band_cny": parameters["tolerance"]["absolute_cny"], "max_fx_age_seconds": min(MAX_QUOTE_AGE_SECONDS, execution["max_fx_age_seconds"]), "costs": None},
         "funding_intent": None, "max_quote_age_seconds": MAX_QUOTE_AGE_SECONDS}
+    return settings
+
+
+def _settings(db, workspace, model, definition, reference, at):
     from .monitor_costs import current_settings
-    settings = current_settings(db, workspace, definition, settings, at)
+    settings = current_settings(db, workspace, definition, _source_settings(db, workspace, model, definition, reference, at), at)
     validate_contract(settings, "investor-monitor-data-input-v3.schema.json" if "cost_assumptions" in settings else "investor-monitor-data-input.schema.json", fragment="$defs/settings")
     return settings
 

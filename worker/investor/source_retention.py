@@ -49,7 +49,20 @@ def _snapshot_reason(db, workspace, snapshot, valid_until, now):
 
 
 def _monitor_reason(db, workspace, definition, input_id, evaluated_at, now):
-    row, document = monitor_evidence_document(db, workspace, definition["model_id"], input_id, now)
+    row = db.execute("SELECT * FROM investor_monitor_evidence_inputs WHERE id=? AND workspace_id=? AND model_id=?", (input_id, workspace, definition["model_id"])).fetchone()
+    _assert(row is not None)
+    document = _object(row["document_json"])
+    if document.get("schema_version") == "investor-monitor-data-input-v6":
+        # Cleanup must authenticate the actual journal even when source bytes are
+        # no longer readable. This is not current-state/source replay authority.
+        from .model_epoch_registration import _header
+        epoch = db.execute("SELECT id FROM investor_model_epochs WHERE input_id=? AND workspace_id=? AND model_id=?", (input_id, workspace, definition["model_id"])).fetchone()
+        owner = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (workspace,)).fetchone()
+        _assert(epoch is not None and owner is not None)
+        _, record = _header(db, workspace, owner[0], epoch["id"], "registration")
+        _assert(record["input"] == {"id": input_id, "content_hash": content_hash(document)})
+    else:
+        row, document = monitor_evidence_document(db, workspace, definition["model_id"], input_id, now)
     _assert(row["created_at"] <= evaluated_at and document["target_definition_hash"] == definition["target_definition_hash"])
     reason = None
     for segment in document["segments"]:
@@ -118,7 +131,16 @@ def monitor_payload_unavailable(db, row, kind, now):
     request = db.execute("SELECT * FROM investor_evidence_monitor_requests WHERE id=? AND workspace_id=? AND model_id=?", (row["request_id"], workspace, model["id"])).fetchone()
     _assert(request is not None and request["created_at"] <= row["created_at"])
     from .evidence_monitor_runtime import _validate_request
-    bound = _object(request["document_json"]); _validate_request(bound)
+    bound = _object(request["document_json"])
+    if bound.get("schema_version") == "investor-evidence-monitor-request-v3":
+        from .model_epoch_registration import _header, SCHEMA
+        validate_contract(bound, SCHEMA, fragment="$defs/monitor_request")
+        epoch = db.execute("SELECT id FROM investor_model_epochs WHERE monitor_run_id=? AND workspace_id=? AND model_id=?", (row["id"], workspace, model["id"])).fetchone()
+        owner = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (workspace,)).fetchone()
+        _assert(epoch is not None and owner is not None)
+        _, record = _header(db, workspace, owner[0], epoch["id"], "registration")
+        _assert(record["request"]["id"] == request["id"] and record["input"]["id"] == request["input_id"] and record["checkpoint"]["id"] == row["checkpoint_id"])
+    else: _validate_request(bound)
     input_row, _, reason = _monitor_reason(db, workspace, definition, request["input_id"], request["created_at"], now)
     _assert(content_hash(bound) == request["input_version"] == run["input_version"]
         and bound["model_hash"] == model["content_hash"] and bound["profile_hash"] == definition["profile_hash"]

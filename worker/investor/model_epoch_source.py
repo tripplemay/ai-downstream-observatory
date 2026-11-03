@@ -49,11 +49,12 @@ def _descendant(db, workspace, actor, identifier, handover, at):
     _check(False, "ACTION_LINEAGE_LIMIT")
 
 
-def _basis(db, workspace, actor, model_id, references, checked, frozen, stop_requested=None):
+def _correction_basis(db, workspace, actor, model_id, references, checked, frozen, stop_requested=None):
     _owner(db, workspace, actor)
     _check(type(references) is list and 1 <= len(references) <= 64)
     model, definition, reference = current_monitor_model(db, workspace, model_id, checked)
     corrections, handovers, history, maximum = [], {}, None, definition["valid_until"]
+    original_maximum = maximum
     seen = set()
     for ref in references:
         managed._stopped(db, stop_requested)
@@ -79,6 +80,14 @@ def _basis(db, workspace, actor, model_id, references, checked, frozen, stop_req
         corrections.append({"baseline": baseline, "corrected_actions": actions, **{key: ref[key] for key in ("confirmation_hash", "handover_id", "handover_hash")}, "handover_at": handover["created_at"]})
         handovers[listing] = handover
         maximum = min(maximum, doc["valid_until"], handover["source_valid_until"], history["proof"]["source_valid_until"], key=instant)
+        original_maximum = min(original_maximum, doc["valid_until"], handover["source_valid_until"], baseline["original_history"]["source_valid_until"], key=instant)
+    return {"model": model, "definition": definition, "reference": reference, "history": history, "corrections": corrections,
+        "handovers": handovers, "maximum": maximum, "original_maximum": original_maximum}
+
+
+def _basis(db, workspace, actor, model_id, references, checked, frozen, stop_requested=None):
+    basis = _correction_basis(db, workspace, actor, model_id, references, checked, frozen, stop_requested)
+    history = basis["history"]
     head = db.execute("SELECT id,content_hash FROM investor_evidence_model_checkpoints WHERE workspace_id=? AND model_id=? ORDER BY sequence DESC LIMIT 1", (workspace, model_id)).fetchone()
     _check(head is not None and head["id"] == history["proof"]["head_checkpoint_id"] and head["content_hash"] == content_hash(history["head"]), "LATEST_HEAD_CHANGED")
     control = db.execute("SELECT * FROM investor_model_controls WHERE workspace_id=? AND model_id=? ORDER BY version DESC LIMIT 1", (workspace, model_id)).fetchone()
@@ -86,18 +95,25 @@ def _basis(db, workspace, actor, model_id, references, checked, frozen, stop_req
     funding = read_planned_funding_monitor(db, workspace, actor, model_id, now=checked)
     frozen_funding = read_bound_planned_funding_monitor(db, workspace, actor, funding["request"]["binding"], evaluated_at=frozen, now=checked) if funding else None
     _check((funding["context_hash"] if funding else None) == (frozen_funding["context_hash"] if frozen_funding else None), "FUNDING_CHANGED")
-    return {"model": model, "definition": definition, "reference": reference, "history": history, "corrections": corrections,
-        "handovers": handovers, "control": {"id": control["id"], "content_hash": content_hash(dict(control))}, "maximum": maximum, "funding": funding}
+    return {**basis, "control": {"id": control["id"], "content_hash": content_hash(dict(control))}, "funding": funding}
 
 
 def _assemble(db, workspace, actor, epoch_id, basis, raw, checked, frozen, maximum=None):
+    ceiling = basis["maximum"] if maximum is None else maximum
+    _check(instant(checked) < instant(ceiling) <= instant(basis["maximum"]), "EXPIRED")
+    settings = _settings(db, workspace, basis["model"], basis["definition"], basis["reference"], checked)
+    return _assemble_evidence(db, workspace, actor, epoch_id, basis, raw, checked, frozen, checked, settings, ceiling)
+
+
+def _assemble_evidence(db, workspace, actor, epoch_id, basis, raw, checked, frozen, calculated, settings, ceiling):
+    """Shared derivation only; callers authenticate current or recorded context."""
     definition, history = basis["definition"], basis["history"]
     _check(raw["document"]["schema_version"] == "investor-monitor-data-input-v4" and raw["projection"]["schema_version"] == "investor-monitor-data-projection-v2")
     # Original cost metadata is authenticated by the normal source replay at its
     # recorded creation time; all raw reference access uses checked, never frozen.
-    _check(raw["document"]["settings"] == _settings(db, workspace, basis["model"], definition, basis["reference"], checked), "SETTINGS_CHANGED")
+    _check(raw["document"]["settings"] == settings, "SETTINGS_CHANGED")
     check_reference_listing_identity(basis["reference"]["targets"], raw["catalog"])
-    _check(not raw["projection"]["quality_gaps"] and instant(checked) < instant(raw["projection"]["valid_until"]), "CURRENT_INPUTS_NOT_READY")
+    _check(not raw["projection"]["quality_gaps"] and instant(calculated) < instant(raw["projection"]["valid_until"]), "CURRENT_INPUTS_NOT_READY")
     selected = {}
     for segment in raw["document"]["segments"]:
         for ref in segment["snapshot"]["review_refs"]:
@@ -118,14 +134,13 @@ def _assemble(db, workspace, actor, epoch_id, basis, raw, checked, frozen, maxim
         old = indexed.get(action["id"])
         _check(old is not None and economics(old) == economics(action) and instant(old["known_at"]) <= instant(action["known_at"]), "HISTORICAL_ACTION_CHANGED")
     economic = deepcopy(raw["projection"]); economic["corporate_actions"] = sorted(carry + future, key=lambda row: row["id"])
-    ceiling = basis["maximum"] if maximum is None else maximum
-    _check(instant(checked) < instant(ceiling) <= instant(basis["maximum"]), "EXPIRED")
+    _check(instant(frozen) <= instant(calculated) <= instant(checked) and instant(calculated) < instant(ceiling), "EXPIRED")
     economic["valid_until"] = min(economic["valid_until"], ceiling, key=instant)
     if basis["funding"]: economic["valid_until"] = min(economic["valid_until"], basis["funding"]["projection"]["valid_until"], key=instant)
     for row in [*economic["quotes"], *economic["fx"]]: row["valid_until"] = min(row["valid_until"], ceiling, key=instant)
     kernel = {"schema_version": "investor-model-epoch-transition-input-v1", "epoch_id": epoch_id,
         "history": {**{key: history[key] for key in FIELDS}, "corrected_coverage": history["head_projection"]["corporate_action_coverage"]},
-        "corrections": basis["corrections"], "projection": economic, "input_hash": content_hash(raw["document"]), "planned_funding": basis["funding"]["request"] if basis["funding"] else None, "now": checked}
+        "corrections": basis["corrections"], "projection": economic, "input_hash": content_hash(raw["document"]), "planned_funding": basis["funding"]["request"] if basis["funding"] else None, "now": calculated}
     first = advance_corrected_model_epoch(kernel)
     epoch = {"schema_version": "investor-model-epoch-definition-v1", "epoch_id": epoch_id, "workspace_id": workspace, "actor_id": actor,
         "model_id": definition["model_id"], "model_hash": content_hash(definition), "model_control": basis["control"], "original_head_id": history["proof"]["head_checkpoint_id"],
@@ -141,7 +156,7 @@ def _assemble(db, workspace, actor, epoch_id, basis, raw, checked, frozen, maxim
     kernel.update(projection=projection, input_hash=content_hash(document)); candidate = advance_corrected_model_epoch(kernel)
     proof = {"schema_version": "investor-model-epoch-source-proof-v1", "workspace_id": workspace, "actor_id": actor, "model_id": definition["model_id"], "epoch": ref,
         "input_hash": content_hash(document), "projection_hash": content_hash(projection), "original_head_id": epoch["original_head_id"], "original_chain_hash": history["proof"]["checkpoint_chain_hash"],
-        "checked_at": checked, "valid_until": economic["valid_until"], "status": "qualified_sources_prepared_not_registered",
+        "checked_at": calculated, "valid_until": economic["valid_until"], "status": "qualified_sources_prepared_not_registered",
         "coverage_basis": "selected_reports_and_owner_assumptions_not_objective_absence", "source_evidence_verified": True,
         **{key: False for key in ("epoch_registered", "current_source_eligibility_restored", "checkpoint_created", "monitoring_resumed", "trading_permission")},
         "provider_calls": 0, "database_writes": 0, "distribution": "private_owner_only_not_ai"}

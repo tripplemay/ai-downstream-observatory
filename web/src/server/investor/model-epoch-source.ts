@@ -15,6 +15,8 @@ import { readBoundPlannedFundingMonitor, readPlannedFundingMonitor } from "./pla
 import { replayInvestorMonitorData } from "./monitor-source";
 import { replayCorrectedModelEpoch } from "./model-epoch-transition";
 import { validateModelEpochSource, validateInvestorMonitorDataDocument } from "./kernel-contracts";
+import { readModelEpochRegistrationHeader } from "./model-epoch-registration";
+import type { PlannedFundingBinding } from "./planned-funding-monitor";
 
 type Obj = Record<string, unknown>;
 function check(value: unknown, code = "INVALID"): asserts value { if (!value) throw new Error("INVESTOR_MODEL_EPOCH_SOURCE_" + code); }
@@ -45,14 +47,14 @@ function descendant(db: Database.Database, workspace: string, actor: { id: strin
   check(false, "ACTION_LINEAGE_LIMIT");
 }
 
-function settings(db: Database.Database, workspace: string, definition: Obj, reference: Obj, now: string) {
+function settings(db: Database.Database, workspace: string, definition: Obj, reference: Obj, now: string, metadataAt = now) {
   const evidence = obj(reference.reference_evidence), request = actionRead(db, "investor_research_requests", evidence.request_id, workspace);
   const run = actionJson(actionRead(db, "investor_research_runs", evidence.run_id, workspace).document_json), parameters = obj(obj(run.result).selected_parameters);
   const source = readInvestorResearchSource(db, workspace, request as Parameters<typeof readInvestorResearchSource>[2], now);
   check(source && !source.unavailable_reason && source.payload && hash(parameters) === evidence.selected_parameters_hash);
   const execution = obj(obj(source.payload.plan).execution), tolerance = obj(parameters.tolerance), maximum = execution.max_fx_age_seconds;
   check(typeof maximum === "number" && Number.isSafeInteger(maximum));
-  const selected = monitorCostsAt(db, workspace, definition, now);
+  const selected = monitorCostsAt(db, workspace, definition, metadataAt);
   return { policy: { version: "investor-monitor-bootstrap-quality-v3", weight_band: tolerance.weight, absolute_band_cny: tolerance.absolute_cny,
     max_fx_age_seconds: Math.min(604800, maximum), costs: selected?.costs ?? null }, funding_intent: null, max_quote_age_seconds: 604800,
     ...(selected ? { cost_assumptions: selected.binding } : {}) };
@@ -68,16 +70,31 @@ export function auditedEpochInput(document: Obj) {
 /** Independent current-permission/source replay of a preview, not registration,
  * an HTTP DTO or an ordinary monitor input/checkpoint reader. */
 export function replayModelEpochSource(db: Database.Database, workspace: string, actor: { id: string }, rawEpoch: unknown, rawInput: unknown, now: string, implementationHash: string) {
+  return derive(db, workspace, actor, rawEpoch, rawInput, now, implementationHash).source;
+}
+
+/** The recorded clock is available only through an actual authenticated journal. */
+export function replayRegisteredModelEpochSource(db: Database.Database, workspace: string, actor: { id: string }, epochId: string, now: string) {
+  return db.transaction(() => {
+    const recorded = readModelEpochRegistrationHeader(db, workspace, actor, epochId, now);
+    return derive(db, workspace, actor, recorded.epoch, recorded.input, now, text(recorded.record.implementation_hash), recorded);
+  }).deferred();
+}
+
+function derive(db: Database.Database, workspace: string, actor: { id: string }, rawEpoch: unknown, rawInput: unknown, now: string, implementationHash: string,
+  recorded?: ReturnType<typeof readModelEpochRegistrationHeader>) {
   validateModelEpochSource("definition", rawEpoch); validateModelEpochSource("input", rawInput);
   return db.transaction(() => {
     check((db.prepare("SELECT owner_id FROM investor_workspaces WHERE id=?").get(workspace) as Obj | undefined)?.owner_id === actor.id);
     const epoch = obj(rawEpoch), document = obj(rawInput), frozen = text(document.created_at), at = time(now), modelId = text(epoch.model_id);
+    const calculated = recorded ? text(recorded.record.calculated_at) : now;
+    check(time(frozen) <= time(calculated) && time(calculated) <= at);
     check(epoch.workspace_id === workspace && epoch.actor_id === actor.id && modelId === document.model_id && epoch.created_at === frozen && time(frozen) <= at
       && same(document.epoch, { id: epoch.epoch_id, content_hash: hash(epoch) }), "EPOCH_CHANGED");
     const model = actionRead(db, "investor_models", modelId, workspace), reference = readEvidenceReference(db, workspace, text(model.plan_id), now);
     check(reference && !reference.unavailable_reason);
     const refs = rows(obj(epoch.binding).corrections), corrections: Obj[] = [], handovers = new Map<string, Obj>(), seen = new Set<string>();
-    let history: ReturnType<typeof readRegisteredCorrectionHistory> | null = null, maximum = text(reference.document.valid_until);
+    let history: ReturnType<typeof readRegisteredCorrectionHistory> | null = null, maximum = text(reference.document.valid_until), originalMaximum = maximum;
     for (const ref of refs) {
       const id = text(ref.correction_id); check(!seen.has(id), "CORRECTION_SCOPE"); seen.add(id);
       const doc = readCorrectionConsentBaseline(db, workspace, actor, id, now), current = readRegisteredCorrectionHistory(db, workspace, actor, id, now);
@@ -94,19 +111,33 @@ export function replayModelEpochSource(db: Database.Database, workspace: string,
       check(hash(ledger) === baseline.corrected_actions_hash, "CORRECTION_CHANGED");
       corrections.push({ baseline, corrected_actions: ledger, confirmation_hash: ref.confirmation_hash, handover_id: ref.handover_id, handover_hash: ref.handover_hash, handover_at: handover.created_at });
       handovers.set(listing, handover); maximum = minimum([maximum, doc.valid_until, handover.source_valid_until, history.proof.source_valid_until]);
+      originalMaximum = minimum([originalMaximum, doc.valid_until, handover.source_valid_until, obj(baseline.original_history).source_valid_until]);
     }
     check(history && same(history.definition, actionJson(model.document_json)));
     const definition = history.definition, head = db.prepare("SELECT id,content_hash FROM investor_evidence_model_checkpoints WHERE workspace_id=? AND model_id=? ORDER BY sequence DESC LIMIT 1").get(workspace, modelId) as Obj | undefined;
-    check(head && head.id === history.proof.head_checkpoint_id && head.content_hash === hash(history.head), "LATEST_HEAD_CHANGED");
-    const control = db.prepare("SELECT * FROM investor_model_controls WHERE workspace_id=? AND model_id=? ORDER BY version DESC LIMIT 1").get(workspace, modelId) as Obj | undefined;
+    if (!recorded) check(head && head.id === history.proof.head_checkpoint_id && head.content_hash === hash(history.head), "LATEST_HEAD_CHANGED");
+    else check(epoch.original_head_id === history.proof.head_checkpoint_id, "ORIGINAL_HEAD_CHANGED");
+    const control = (recorded ? db.prepare("SELECT * FROM investor_model_controls WHERE workspace_id=? AND model_id=? AND created_at<=? ORDER BY version DESC LIMIT 1").get(workspace, modelId, calculated)
+      : db.prepare("SELECT * FROM investor_model_controls WHERE workspace_id=? AND model_id=? ORDER BY version DESC LIMIT 1").get(workspace, modelId)) as Obj | undefined;
     check(control && time(control.created_at) <= time(frozen), "CONTROL_CHANGED");
-    const funding = readPlannedFundingMonitor(db, actor, workspace, modelId, now);
+    let funding: ReturnType<typeof readPlannedFundingMonitor> = null;
+    if (recorded) {
+      check(control.enabled === 1, "RECORDED_CONTROL_CHANGED");
+      const selected = db.prepare("SELECT id,content_hash FROM investor_funding_plans WHERE workspace_id=? AND created_at<=? ORDER BY version DESC LIMIT 1").get(workspace, calculated) as Obj | undefined;
+      check(Boolean(selected) === Boolean(document.funding_binding), "RECORDED_FUNDING_CHANGED");
+      if (selected) {
+        const binding = obj(document.funding_binding);
+        check(binding.funding_plan_id === selected.id && binding.funding_plan_hash === selected.content_hash, "RECORDED_FUNDING_CHANGED");
+        funding = readBoundPlannedFundingMonitor(db, actor, workspace, binding as PlannedFundingBinding, calculated, now);
+        check(funding.context_hash === document.funding_context_hash, "RECORDED_FUNDING_CHANGED");
+      }
+    } else funding = readPlannedFundingMonitor(db, actor, workspace, modelId, now);
     const frozenFunding = funding ? readBoundPlannedFundingMonitor(db, actor, workspace, funding.request.binding, frozen, now) : null;
     check((funding?.context_hash ?? null) === (frozenFunding?.context_hash ?? null), "FUNDING_CHANGED");
-    const rawDocument = auditedEpochInput(document), raw = replayInvestorMonitorData(db, workspace, definition, reference.document.targets as unknown as Obj[], rawDocument, now);
+    const rawDocument = auditedEpochInput(document), raw = replayInvestorMonitorData(db, workspace, definition, reference.document.targets as unknown as Obj[], rawDocument, now, calculated);
     check(!raw.unavailable_reason && raw.projection && raw.catalog, raw.unavailable_reason ?? "CURRENT_INPUTS_NOT_READY");
-    check(same(rawDocument.settings, settings(db, workspace, definition, reference.document as unknown as Obj, now)), "SETTINGS_CHANGED");
-    const originalProjection = raw.projection; check(Array.isArray(originalProjection.quality_gaps) && originalProjection.quality_gaps.length === 0 && at < time(originalProjection.valid_until), "CURRENT_INPUTS_NOT_READY");
+    check(same(rawDocument.settings, settings(db, workspace, definition, reference.document as unknown as Obj, now, recorded ? frozen : now)), "SETTINGS_CHANGED");
+    const originalProjection = raw.projection; check(Array.isArray(originalProjection.quality_gaps) && originalProjection.quality_gaps.length === 0 && time(calculated) < time(originalProjection.valid_until), "CURRENT_INPUTS_NOT_READY");
     const selected = new Map<string, ReturnType<typeof readInvestorSourceReview>>();
     for (const segment of rows(document.segments)) for (const ref of rows(obj(segment.snapshot).review_refs)) {
       const source = readInvestorSourceReview(db, workspace, ref, now); if (source.source.kind !== "actions") continue;
@@ -128,14 +159,14 @@ export function replayModelEpochSource(db: Database.Database, workspace: string,
       if (time(action.effective_at) > time(obj(history.head.market_cutoffs)[text(target.market)])) { future.push(action); continue; }
       const old = indexed.get(text(action.id)); check(old && same(economics(old), economics(action)) && time(old.known_at) <= time(action.known_at), "HISTORICAL_ACTION_CHANGED");
     }
-    const ceiling = text(epoch.valid_until); check(at < time(ceiling) && time(ceiling) <= time(maximum), "EXPIRED");
+    const ceiling = text(epoch.valid_until); check(at < time(ceiling) && at < time(maximum) && time(ceiling) <= time(recorded ? originalMaximum : maximum), "EXPIRED");
     const economic = structuredClone(originalProjection); economic.corporate_actions = [...carry, ...future].sort(byId);
     economic.valid_until = minimum([economic.valid_until, ceiling, ...(funding ? [funding.projection.valid_until] : [])]);
     for (const row of [...rows(economic.quotes), ...rows(economic.fx)]) row.valid_until = minimum([row.valid_until, ceiling]);
     const kernel: Obj = { schema_version: "investor-model-epoch-transition-input-v1", epoch_id: epoch.epoch_id,
       history: { definition: history.definition, origin: history.origin, head: history.head, origin_projection: history.origin_projection,
         head_projection: history.head_projection, original_actions: history.original_actions, corrected_coverage: history.head_projection.corporate_action_coverage },
-      corrections, projection: economic, input_hash: hash(rawDocument), planned_funding: funding?.request ?? null, now };
+      corrections, projection: economic, input_hash: hash(rawDocument), planned_funding: funding?.request ?? null, now: calculated };
     const first = replayCorrectedModelEpoch(kernel, implementationHash);
     const rebuiltEpoch = { schema_version: "investor-model-epoch-definition-v1", epoch_id: epoch.epoch_id, workspace_id: workspace, actor_id: actor.id,
       model_id: modelId, model_hash: hash(definition), model_control: { id: control.id, content_hash: hash(control) }, original_head_id: history.proof.head_checkpoint_id,
@@ -150,9 +181,10 @@ export function replayModelEpochSource(db: Database.Database, workspace: string,
     Object.assign(kernel, { projection, input_hash: hash(document) }); const candidate = replayCorrectedModelEpoch(kernel, implementationHash);
     const proof = { schema_version: "investor-model-epoch-source-proof-v1", workspace_id: workspace, actor_id: actor.id, model_id: modelId, epoch: ref,
       input_hash: hash(document), projection_hash: hash(projection), original_head_id: epoch.original_head_id, original_chain_hash: history.proof.checkpoint_chain_hash,
-      checked_at: now, valid_until: economic.valid_until, status: "qualified_sources_prepared_not_registered", coverage_basis: "selected_reports_and_owner_assumptions_not_objective_absence",
+      checked_at: calculated, valid_until: economic.valid_until, status: "qualified_sources_prepared_not_registered", coverage_basis: "selected_reports_and_owner_assumptions_not_objective_absence",
       source_evidence_verified: true, epoch_registered: false, current_source_eligibility_restored: false, checkpoint_created: false, monitoring_resumed: false, trading_permission: false,
       provider_calls: 0, database_writes: 0, distribution: "private_owner_only_not_ai" };
-    validateModelEpochSource("proof", proof); return { epoch_definition: rebuiltEpoch, input: rebuiltInput, projection, proof, kernel_input: kernel, candidate };
+    validateModelEpochSource("proof", proof);
+    return { source: { epoch_definition: rebuiltEpoch, input: rebuiltInput, projection, proof, kernel_input: kernel, candidate }, read_valid_until: minimum([maximum, ceiling]) };
   }).deferred();
 }

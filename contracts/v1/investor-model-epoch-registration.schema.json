@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://etf-workbench.invalid/contracts/v1/investor-model-epoch-registration.schema.json",
-  "oneOf": [{"$ref": "#/$defs/preview"}, {"$ref": "#/$defs/submit"}, {"$ref": "#/$defs/request"}, {"$ref": "#/$defs/registration"}],
+  "oneOf": [{"$ref": "#/$defs/preview"}, {"$ref": "#/$defs/submit"}, {"$ref": "#/$defs/request"}, {"$ref": "#/$defs/registration"}, {"$ref": "#/$defs/replay_proof"}],
   "$defs": {
     "id": {"$ref": "common.schema.json#/$defs/id"},
     "hash": {"$ref": "common.schema.json#/$defs/hash"},
@@ -61,6 +61,21 @@
         "workspace_revision": {"$ref": "#/$defs/revision"}, "preview": {"$ref": "#/$defs/reference"},
         "body": {"$ref": "#/$defs/submit"}, "monitor_request": {"$ref": "#/$defs/monitor_request"},
         "created_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"}, "trading_permission": {"const": false}
+      }
+    },
+    "replay_proof": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "workspace_id", "actor_id", "model_id", "epoch", "registration_hash", "input", "checkpoint", "checked_at", "evaluated_at", "read_valid_until", "status", "registered_bindings_verified", "source_evidence_verified", "checkpoint_replayed", "current_source_eligibility_restored", "monitoring_resumed", "trading_permission", "database_writes", "provider_calls", "distribution"],
+      "properties": {
+        "schema_version": {"const": "investor-model-epoch-replay-proof-v1"},
+        "workspace_id": {"$ref": "#/$defs/id"}, "actor_id": {"$ref": "#/$defs/id"}, "model_id": {"$ref": "#/$defs/id"},
+        "epoch": {"$ref": "#/$defs/reference"}, "registration_hash": {"$ref": "#/$defs/hash"},
+        "input": {"$ref": "#/$defs/reference"}, "checkpoint": {"$ref": "#/$defs/reference"},
+        "checked_at": {"$ref": "#/$defs/instant"}, "evaluated_at": {"$ref": "#/$defs/instant"}, "read_valid_until": {"$ref": "#/$defs/instant"},
+        "status": {"const": "registered_first_state_replayed_paused"},
+        "registered_bindings_verified": {"const": true}, "source_evidence_verified": {"const": true}, "checkpoint_replayed": {"const": true},
+        "current_source_eligibility_restored": {"const": false}, "monitoring_resumed": {"const": false}, "trading_permission": {"const": false},
+        "database_writes": {"const": 0}, "provider_calls": {"const": 0}, "distribution": {"const": "private_owner_only_not_ai"}
       }
     },
     "registration": {
