@@ -11,7 +11,7 @@ from .action_review_draft import _changes, _draft_binding_hash, _prepare_action_
 from .data_evidence import _fact_validation_scope
 from .model_runtime import _clock
 from .no_new_actions import check_no_new_action_extension
-from .retained_monitor_history import read_retained_monitor_history
+from .retained_monitor_history import read_registered_correction_history
 from .reviewed_actions import _historical_basis
 
 
@@ -48,7 +48,7 @@ def _replay_baseline(db, workspace, actor, identifier, at, stop_requested):
     _check(all(instant(value["capture"]["created_at"]) <= instant(known)
         and instant(value["draft"]["source"]["retrieved_at"]) <= instant(known) for value in captures.values()))
     snapshots = {kind: value["draft"] for kind, value in captures.items()}
-    history = read_retained_monitor_history(db, workspace, actor, doc["model_id"], now=at, stop_requested=stop_requested)
+    history = read_registered_correction_history(db, workspace, actor, identifier, now=at, stop_requested=stop_requested)
     strip = lambda value: {key: item for key, item in value.items() if key not in ("checked_at", "source_valid_until")}
     _check(strip(history["proof"]) == strip(baseline["original_history"]) and content_hash(history["definition"]) == baseline["model_hash"]
         and content_hash(history["head"]) == baseline["original_checkpoint_hash"] and content_hash(history["head_projection"]) == baseline["original_projection_hash"], "HISTORY_CHANGED")
@@ -99,6 +99,11 @@ def prepare_corrected_action_source(db, workspace, actor, identifier, *, now=Non
     with transaction(db, immediate=False), _fact_validation_scope(), localcontext() as decimals:
         decimals.prec = 128
         doc, history, anchor = _replay_baseline(db, workspace, actor, identifier, at, stop_requested)
+        head = db.execute("SELECT id,content_hash FROM investor_evidence_model_checkpoints WHERE workspace_id=? AND model_id=? ORDER BY sequence DESC LIMIT 1",
+            (workspace, doc["model_id"])).fetchone()
+        _check(head is not None and head["id"] == history["proof"]["head_checkpoint_id"] and head["content_hash"] == content_hash(history["head"]), "HISTORY_CHANGED")
+        model_control = db.execute("SELECT * FROM investor_model_controls WHERE workspace_id=? AND model_id=? ORDER BY version DESC LIMIT 1", (workspace, doc["model_id"])).fetchone()
+        _check(model_control is not None and content_hash(dict(model_control)) == history["proof"]["control_hash"], "CONTROL_CHANGED")
         _, original, _, _ = consent._impact(db, workspace, actor, doc["impact_request_id"], at)
         _, witness = consent.review._preview_header(db, workspace, actor, original["body"]["preview_id"])
         _, context = _prepare_action_review_draft(db, workspace, actor, witness["authority_id"], now=at)

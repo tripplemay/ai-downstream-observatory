@@ -5,7 +5,7 @@ from copy import deepcopy
 from worker.accounting.decimal_math import canonical, decimal, financial
 from worker.market.contracts import validate_contract
 from worker.orchestration.db import canonical_json, content_hash, transaction
-from .data_evidence import _assert, _fact_validation_scope, _owner, resolve_capture, resolve_review, review_header
+from .data_evidence import _assert, _fact_validation_scope, _object, _owner, resolve_capture, resolve_review, review_header
 from .data_snapshot import _assemble_dataset
 from .evidence_monitor_runtime import _funding_at, _payload
 from .legacy_action_transition import LEGACY, _carry_actions, _check_unprocessed_history, _stop
@@ -252,10 +252,39 @@ def _source(db, workspace, actor, definition, document, at, bindings, protocols,
 
 def read_retained_monitor_history(db, workspace, actor, model_id, *, now=None, stop_requested=None):
     """Reprove every recorded source and state; never approve a changed event."""
+    return _read_history(db, workspace, actor, model_id, _clock(now), stop_requested)
+
+
+def read_registered_correction_history(db, workspace, actor, correction_id, *, now=None, stop_requested=None):
+    """Replay only the original prefix bound by an authenticated owner consent."""
+    from .correction_consent import _registered_correction_document
+
     at = _clock(now)
+    with transaction(db, immediate=False):
+        _stop(stop_requested)
+        doc = _registered_correction_document(db, workspace, actor, correction_id, at)
+        baseline = doc["baseline"]; registered = baseline["original_history"]
+        validate_contract(registered, SCHEMA)
+        _check(doc["created_at"] <= at < doc["valid_until"] and registered["checked_at"] <= doc["created_at"])
+        impact = _object(db.execute("SELECT document_json FROM investor_correction_impact_results WHERE id=? AND workspace_id=?",
+            (doc["impact_result_id"], workspace)).fetchone()["document_json"])["impact"]
+        strip = lambda value: {key: item for key, item in value.items() if key not in ("checked_at", "source_valid_until")}
+        _check(strip(registered) == strip(impact["original_history"]))
+        result = _read_history(db, workspace, actor, doc["model_id"], at, stop_requested, registered)
+        _check(strip(result["proof"]) == strip(registered) and content_hash(result["definition"]) == baseline["model_hash"]
+            and content_hash(result["head"]) == baseline["original_checkpoint_hash"]
+            and content_hash(result["head_projection"]) == baseline["original_projection_hash"])
+        return result
+
+
+def _read_history(db, workspace, actor, model_id, at, stop_requested, registered=None):
     with transaction(db, immediate=False), _fact_validation_scope():
         _owner(db, workspace, actor); model, definition, reference = current_monitor_model(db, workspace, model_id, at)
-        headers = db.execute("SELECT * FROM investor_evidence_model_checkpoints WHERE workspace_id=? AND model_id=? ORDER BY sequence LIMIT 1001", (workspace, model_id)).fetchall()
+        if registered is None:
+            headers = db.execute("SELECT * FROM investor_evidence_model_checkpoints WHERE workspace_id=? AND model_id=? ORDER BY sequence LIMIT 1001", (workspace, model_id)).fetchall()
+        else:
+            headers = db.execute("SELECT * FROM investor_evidence_model_checkpoints WHERE workspace_id=? AND model_id=? AND sequence<=? ORDER BY sequence LIMIT 1001",
+                (workspace, model_id, registered["head_checkpoint_sequence"])).fetchall()
         _check(0 < len(headers) <= 1000)
         previous, origin, first_projection, final_projection, ledger, bindings, protocols = None, None, None, None, {}, [], []
         expiry = read_deadline = definition["valid_until"]
@@ -263,6 +292,7 @@ def read_retained_monitor_history(db, workspace, actor, model_id, *, now=None, s
             _stop(stop_requested)
             _check(header["sequence"] == sequence and header["previous_hash"] == (content_hash(previous) if previous else None)
                 and header["created_at"] <= at < header["valid_until"]
+                and (registered is None or header["created_at"] <= registered["checked_at"])
                 and not db.execute("SELECT 1 FROM investor_monitor_payload_purges WHERE kind='checkpoint' AND entity_id=?", (header["id"],)).fetchone())
             row, document = _input(db, workspace, model_id, header["input_id"], at)
             expiry = min(expiry, document["valid_until"]); _check(header["valid_until"] == expiry)
@@ -282,7 +312,9 @@ def read_retained_monitor_history(db, workspace, actor, model_id, *, now=None, s
             bindings.append({**dict(header), "input_hash": row["content_hash"]}); protocols.append(document["schema_version"])
             if origin is None: origin, first_projection = stored, source["projection"]
             previous, final_projection = stored, source["projection"]
-        control = _latest(db, "investor_model_controls", model_id, "version DESC")
+        control = (_latest(db, "investor_model_controls", model_id, "version DESC") if registered is None else db.execute(
+            "SELECT * FROM investor_model_controls WHERE model_id=? AND workspace_id=? AND created_at<=? ORDER BY version DESC LIMIT 1",
+            (model_id, workspace, registered["checked_at"])).fetchone())
         _check(control is not None and control["created_at"] <= at)
         _stop(stop_requested)
         actions = [value["action"] for _, value in sorted(ledger.items())]

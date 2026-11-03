@@ -7,7 +7,7 @@ import { checkNoNewActionCandidate } from "./action-maintenance-candidate";
 import { readCorrectionConsentBaseline } from "./correction-consent";
 import { readActionReviewPreviewWitness } from "./action-review-lineage";
 import { readManagedActionComparisonBasis, readManagedActionCurrentCaptures, readManagedActionReportCaptures } from "./managed-action-source";
-import { readRetainedMonitorHistory } from "./retained-monitor-history";
+import { readRegisteredCorrectionHistory } from "./retained-monitor-history";
 import { validateCorrectedActionSource } from "./kernel-contracts";
 
 type Obj = Record<string, unknown>;
@@ -20,6 +20,11 @@ const minimum = (values: unknown[]) => values.map(time).reduce((a, b) => a < b ?
 export function prepareCorrectedActionSource(db: Database.Database, workspace: string, actor: { id: string }, identifier: string, now: string) {
   return db.transaction(() => {
     const doc = readCorrectionConsentBaseline(db, workspace, actor, identifier, now);
+    const head = db.prepare("SELECT id,content_hash FROM investor_evidence_model_checkpoints WHERE workspace_id=? AND model_id=? ORDER BY sequence DESC LIMIT 1").get(workspace, doc.model_id) as Obj | undefined;
+    const baseline = object(doc.baseline), original = object(baseline.original_history);
+    check(head && head.id === original.head_checkpoint_id && head.content_hash === baseline.original_checkpoint_hash);
+    const modelControl = db.prepare("SELECT * FROM investor_model_controls WHERE workspace_id=? AND model_id=? ORDER BY version DESC LIMIT 1").get(workspace, doc.model_id) as Obj | undefined;
+    check(modelControl && hash(modelControl) === original.control_hash);
     const request = actionRead(db, "investor_correction_impact_requests", doc.impact_request_id, workspace), body = object(actionJson(request.document_json).body);
     const witness = readActionReviewPreviewWitness(db, workspace, actor.id, body.preview_id, now);
     const before = readManagedActionComparisonBasis(db, workspace, witness.authority_id, now), policy = before.grant.doc;
@@ -58,7 +63,7 @@ function assemble(db: Database.Database, workspace: string, actor: { id: string 
   for (const value of Object.values(current.values)) check(time(value.row.created_at) <= time(checked));
   const candidate = checkNoNewActionCandidate(base, anchor.snapshots, current.snapshots, text(policy.provider_symbol), text(policy.listing_id));
   check(Array.isArray(doc.outstanding_new_report_dates) && doc.outstanding_new_report_dates.length === 0);
-  const facts = { ...structuredClone(base), range_end: candidate.candidate_range_end }, history = readRetainedMonitorHistory(db, workspace, actor, text(doc.model_id), now);
+  const facts = { ...structuredClone(base), range_end: candidate.candidate_range_end }, history = readRegisteredCorrectionHistory(db, workspace, actor, text(doc.confirmation_id), now);
   const maximum = minimum([doc.valid_until, history.proof.source_valid_until, policy.valid_until, ...before.limits, ...before.historicalLimits, ...current.limits]);
   const sourceUntil = sourceLimit ? time(sourceLimit) : maximum;
   check(time(now) < maximum && sourceUntil <= maximum);

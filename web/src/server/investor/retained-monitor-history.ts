@@ -14,6 +14,7 @@ import { readLegacyTransitionConfirmationReceipt, readLegacyTransitionPreviewWit
   auditedLegacyTransitionDocument } from "./legacy-action-transition";
 import { replayEvidenceModel } from "./evidence-model-state";
 import { readBoundPlannedFundingMonitor } from "./planned-funding-source";
+import { readCorrectionConsentReceipt } from "./correction-consent";
 import type { PlannedFundingBinding } from "./planned-funding-monitor";
 import { validateInvestorModelDocument, validateInvestorMonitorDataDocument, validateInvestorEvidenceCheckpoint,
   validateInvestorSourceDocument, validateRetainedMonitorHistoryProof } from "./kernel-contracts";
@@ -228,6 +229,27 @@ function source(db:Database.Database,workspace:string,actor:{id:string},definiti
 
 /** Reconstruct recorded history only; all raw access uses now, never an old permission clock. */
 export function readRetainedMonitorHistory(db:Database.Database,workspace:string,actor:{id:string},modelId:string,now:string) {
+  return readHistory(db,workspace,actor,modelId,now);
+}
+
+/** Only an authenticated consent may select a past prefix; this is not the current state reader. */
+export function readRegisteredCorrectionHistory(db:Database.Database,workspace:string,actor:{id:string},correctionId:string,now:string) {
+  return db.transaction(()=>{
+    readCorrectionConsentReceipt(db,workspace,actor,correctionId,now);
+    const doc=actionJson(actionRead(db,"investor_correction_consents",correctionId,workspace).document_json,8388608),baseline=obj(doc.baseline),registered=obj(baseline.original_history);
+    validateRetainedMonitorHistoryProof(registered);
+    check(time(doc.created_at)<=time(now) && time(now)<time(doc.valid_until) && time(registered.checked_at)<=time(doc.created_at));
+    const strip=(value:Obj)=>Object.fromEntries(Object.entries(value).filter(([key])=>!["checked_at","source_valid_until"].includes(key)));
+    const impact=obj(actionJson(actionRead(db,"investor_correction_impact_results",doc.impact_result_id,workspace).document_json,5242880).impact);
+    check(same(strip(registered),strip(obj(impact.original_history))));
+    const result=readHistory(db,workspace,actor,text(doc.model_id),now,registered);
+    check(same(strip(result.proof),strip(registered)) && hash(result.definition)===baseline.model_hash
+      && hash(result.head)===baseline.original_checkpoint_hash && hash(result.head_projection)===baseline.original_projection_hash);
+    return result;
+  }).deferred();
+}
+
+function readHistory(db:Database.Database,workspace:string,actor:{id:string},modelId:string,now:string,registered:Obj|null=null) {
   return db.transaction(()=>{
     const checked=time(now);check(checked%1000n===0n);now=new Date(Number(checked/1000n)).toISOString();
     check((db.prepare("SELECT owner_id FROM investor_workspaces WHERE id=?").get(workspace) as Obj|undefined)?.owner_id===actor.id);
@@ -245,11 +267,14 @@ export function readRetainedMonitorHistory(db:Database.Database,workspace:string
       && (definition.schema_version==="investor-model-definition-v2")===(reference.document.schema_version==="investor-reference-plan-v2")
       && (reference.document.schema_version!=="investor-reference-plan-v2" || same(definition.fixed_policy,reference.document.fixed_policy))
       && !fixedPolicyUnsupported(reference.document));
-    const headers=db.prepare("SELECT * FROM investor_evidence_model_checkpoints WHERE workspace_id=? AND model_id=? ORDER BY sequence LIMIT 1001").all(workspace,modelId) as Obj[];
+    const headers=(registered
+      ?db.prepare("SELECT * FROM investor_evidence_model_checkpoints WHERE workspace_id=? AND model_id=? AND sequence<=? ORDER BY sequence LIMIT 1001").all(workspace,modelId,registered.head_checkpoint_sequence)
+      :db.prepare("SELECT * FROM investor_evidence_model_checkpoints WHERE workspace_id=? AND model_id=? ORDER BY sequence LIMIT 1001").all(workspace,modelId)) as Obj[];
     check(headers.length>0 && headers.length<=1000);const bindings:Obj[]=[],protocols:string[]=[],ledger:Ledger=new Map();
     let previous:Obj|null=null,origin:Obj|null=null,firstProjection:Obj|null=null,finalProjection:Obj|null=null,expiry=text(definition.valid_until),readDeadline=expiry;
     for(const [index,header] of headers.entries()) {
       check(header.sequence===index+1 && header.previous_hash===(previous?hash(previous):null) && time(header.created_at)<=time(now) && time(now)<time(header.valid_until)
+        && (!registered || time(header.created_at)<=time(registered.checked_at))
         && !db.prepare("SELECT 1 FROM investor_monitor_payload_purges WHERE kind='checkpoint' AND entity_id=?").get(header.id));
       const bound=input(db,workspace,actor,modelId,header.input_id,now);expiry=minimum([expiry,bound.document.valid_until]);check(header.valid_until===expiry);
       const rebuilt=source(db,workspace,actor,definition,bound.document,now,bindings,protocols,ledger);readDeadline=minimum([readDeadline,rebuilt.readValidUntil]);
@@ -264,7 +289,10 @@ export function readRetainedMonitorHistory(db:Database.Database,workspace:string
       bindings.push({...header,input_hash:bound.row.content_hash});protocols.push(text(bound.document.schema_version));if(!origin){origin=stored;firstProjection=rebuilt.projection;}
       previous=stored;finalProjection=rebuilt.projection;
     }
-    const control=db.prepare("SELECT * FROM investor_model_controls WHERE model_id=? ORDER BY version DESC LIMIT 1").get(modelId) as Obj|undefined;check(control && time(control.created_at)<=time(now));
+    const control=(registered
+      ?db.prepare("SELECT * FROM investor_model_controls WHERE model_id=? AND workspace_id=? AND created_at<=? ORDER BY version DESC LIMIT 1").get(modelId,workspace,registered.checked_at)
+      :db.prepare("SELECT * FROM investor_model_controls WHERE model_id=? ORDER BY version DESC LIMIT 1").get(modelId)) as Obj|undefined;
+    check(control && time(control.created_at)<=time(now));
     check(origin && previous && firstProjection && finalProjection);
     const actions=[...ledger].sort(([a],[b])=>cmp(a,b)).map(([,value])=>value.action);
     const proof={schema_version:"investor-retained-monitor-history-v1",workspace_id:workspace,actor_id:actor.id,model_id:modelId,model_hash:model.content_hash,control_hash:hash(control),

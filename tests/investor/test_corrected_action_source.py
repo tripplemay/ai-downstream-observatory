@@ -11,6 +11,7 @@ from tests.investor import test_correction_consent as consent_fixture
 from tests.investor.test_reviewed_action_successor import UpdatedCollector
 from tests.market.test_vanguard_distributions import archive, row
 from worker.investor import corrected_action_source as corrected, correction_consent as consent, eodhd_sources, managed_actions
+from worker.investor.retained_monitor_history import read_registered_correction_history, read_retained_monitor_history
 from worker.orchestration.db import WorkbenchError, canonical_json, content_hash, open_database
 
 
@@ -108,6 +109,69 @@ class CorrectedActionSourceTests(unittest.TestCase):
         with self.assertRaises(WorkbenchError): self.prepare()
         self.assertEqual(consent.read_correction_consent_receipt(self.db, "w", OWNER, self.identifier, now=AT)["confirmation_id"], self.identifier)
         self.assert_no_finance()
+
+    def test_registered_prefix_does_not_hide_a_bad_tail_from_current_readers_or_fresh_source_preparation(self):
+        identifier = self.confirmed(); value = self.prepare()
+        original = read_registered_correction_history(self.db, "w", OWNER, identifier, now=AT)
+        self.assertEqual(original, read_retained_monitor_history(self.db, "w", OWNER, original["definition"]["model_id"], now=AT))
+        before = list(self.db.iterdump()); model = original["definition"]["model_id"]
+        self.db.execute("SAVEPOINT fictional_bad_tail")
+        try:
+            self.db.execute("DROP TRIGGER investor_evidence_checkpoint_insert")
+            self.db.execute("""INSERT INTO investor_evidence_model_checkpoints
+                SELECT 'fictional-untrusted-tail',workspace_id,model_id,input_id,sequence+1,content_hash,
+                    content_hash,projection_hash,created_at,valid_until FROM investor_evidence_model_checkpoints
+                WHERE model_id=? ORDER BY sequence DESC LIMIT 1""", (model,))
+            # This has no valid new payload. It is deliberately not a v6/epoch fixture.
+            with self.assertRaises(WorkbenchError): read_retained_monitor_history(self.db, "w", OWNER, model, now=AT)
+            self.assertEqual(read_registered_correction_history(self.db, "w", OWNER, identifier, now=AT), original)
+            self.assertEqual(corrected.read_correction_consent_baseline(self.db, "w", OWNER, identifier, now=AT)["confirmation_id"], identifier)
+            self.assertEqual(corrected.replay_corrected_action_source(self.db, "w", OWNER, value["proof"], now=AT), value)
+            with self.assertRaisesRegex(WorkbenchError, "HISTORY_CHANGED"): self.prepare()
+        finally: self.db.execute("ROLLBACK TO fictional_bad_tail"); self.db.execute("RELEASE fictional_bad_tail")
+        self.assertEqual(before, list(self.db.iterdump()))
+        self.db.execute("SAVEPOINT fictional_later_control")
+        try:
+            self.db.execute("DROP TRIGGER investor_model_control_insert")
+            self.db.execute("""INSERT INTO investor_model_controls
+                SELECT 'fictional-later-control',workspace_id,model_id,version+1,0,actor_id,audit_id,'2026-11-07T06:00:04.003Z'
+                FROM investor_model_controls WHERE model_id=? ORDER BY version DESC LIMIT 1""", (model,))
+            later = "2026-11-07T06:00:04.004Z"
+            self.assertEqual(read_registered_correction_history(self.db, "w", OWNER, identifier, now=later)["head"], original["head"])
+            self.assertNotEqual(read_retained_monitor_history(self.db, "w", OWNER, model, now=later)["proof"]["control_hash"], original["proof"]["control_hash"])
+            with self.assertRaisesRegex(WorkbenchError, "CONTROL_CHANGED"): self.prepare(now=later)
+        finally: self.db.execute("ROLLBACK TO fictional_later_control"); self.db.execute("RELEASE fictional_later_control")
+        for actor, scope, receipt in (("foreign", "w", identifier), (OWNER, "foreign", identifier), (OWNER, "w", original["proof"]["head_checkpoint_id"])):
+            with self.assertRaises(WorkbenchError): read_registered_correction_history(self.db, scope, actor, receipt, now=AT)
+        self.db.execute("SAVEPOINT fictional_rebound_prefix")
+        try:
+            for trigger in ("investor_correction_consent_update", "investor_correction_consent_result_update", "audit_events_no_update"):
+                self.db.execute("DROP TRIGGER " + trigger)
+            row = self.db.execute("SELECT * FROM investor_correction_consents WHERE id=?", (identifier,)).fetchone()
+            doc = json.loads(row["document_json"]); doc["baseline"]["original_history"]["checkpoint_chain_hash"] = "0" * 64; digest = content_hash(doc)
+            self.db.execute("UPDATE investor_correction_consents SET document_json=?,content_hash=? WHERE id=?", (canonical_json(doc), digest, identifier))
+            self.db.execute("UPDATE audit_events SET payload_json=? WHERE id=?", (canonical_json({"content_hash": digest}), row["audit_id"]))
+            result = self.db.execute("SELECT * FROM investor_correction_consent_results WHERE confirmation_id=?", (identifier,)).fetchone()
+            output = json.loads(result["document_json"]); output["confirmation_hash"] = digest; digest = content_hash(output)
+            self.db.execute("UPDATE investor_correction_consent_results SET document_json=?,content_hash=? WHERE id=?", (canonical_json(output), digest, result["id"]))
+            self.db.execute("UPDATE audit_events SET payload_json=? WHERE id=?", (canonical_json({"content_hash": digest}), result["audit_id"]))
+            consent.read_correction_consent_receipt(self.db, "w", OWNER, identifier, now=AT)
+            with patch("worker.investor.retained_monitor_history._read_history", side_effect=AssertionError("REBOUND_PREFIX_NOT_REPLAYED")):
+                with self.assertRaises(WorkbenchError): read_registered_correction_history(self.db, "w", OWNER, identifier, now=AT)
+        finally: self.db.execute("ROLLBACK TO fictional_rebound_prefix"); self.db.execute("RELEASE fictional_rebound_prefix")
+        self.db.execute("SAVEPOINT fictional_missing_prefix")
+        try:
+            self.db.execute("DROP TRIGGER investor_evidence_checkpoint_payload_delete")
+            self.db.execute("DELETE FROM investor_evidence_checkpoint_payloads WHERE checkpoint_id=?", (original["proof"]["origin_checkpoint_id"],))
+            with self.assertRaises(WorkbenchError): read_registered_correction_history(self.db, "w", OWNER, identifier, now=AT)
+        finally: self.db.execute("ROLLBACK TO fictional_missing_prefix"); self.db.execute("RELEASE fictional_missing_prefix")
+        with closing(open_database(self.path, read_only=True)) as db:
+            self.assertEqual(read_registered_correction_history(db, "w", OWNER, identifier, now=AT), original)
+            self.assertEqual(db.total_changes, 0)
+        with self.assertRaises(WorkbenchError): read_registered_correction_history(self.db, "w", OWNER, identifier, now="2026-12-01T06:00:04.002Z")
+        self.assertEqual(before, list(self.db.iterdump())); self.assert_no_finance()
+        eodhd_sources.set_authority_enabled(self.db, "w", OWNER, self.value["member"]["eodhd_authority_id"], False, now=AT)
+        with self.assertRaises(WorkbenchError): read_registered_correction_history(self.db, "w", OWNER, identifier, now=AT)
 
 
 if __name__ == "__main__": unittest.main()

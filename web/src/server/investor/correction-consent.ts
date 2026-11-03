@@ -7,7 +7,7 @@ import { validateCorrectionConsent } from "./kernel-contracts";
 import { readCorrectionImpactResponse } from "./correction-impact-jobs";
 import { readActionReviewPreviewWitness, compareActionSourceChanges } from "./action-review-lineage";
 import { readManagedActionComparisonBasis, readManagedActionReportCaptures, readManagedActionControlWitness } from "./managed-action-source";
-import { readRetainedMonitorHistory } from "./retained-monitor-history";
+import { readRegisteredCorrectionHistory } from "./retained-monitor-history";
 import { correctionActionLedger, deriveCorrectionHypothesis } from "./action-correction-impact";
 import { compareActionRestatement } from "./action-restatement-kernel";
 
@@ -94,7 +94,7 @@ export function readCorrectionConsentBaseline(db: Database.Database, workspace: 
     check(before.grant.row.content_hash === witness.authority_hash && originalControl.content_hash === witness.control_hash && time(originalControl.created_at) <= time(witness.checked_at));
     const captures = readManagedActionReportCaptures(db, workspace, witness.authority_id, object(doc.capture_refs), now);
     for (const value of Object.values(captures.values)) check(time(value.row.created_at) <= time(at) && time(value.draft.source.retrieved_at) <= time(at));
-    const history = readRetainedMonitorHistory(db, workspace, actor, text(doc.model_id), now);
+    const history = readRegisteredCorrectionHistory(db, workspace, actor, id, now);
     const strip = (value: Obj) => Object.fromEntries(Object.entries(value).filter(([key]) => !["checked_at", "source_valid_until"].includes(key)));
     check(same(strip(history.proof), strip(object(stored.original_history))) && hash(history.definition) === stored.model_hash
       && hash(history.head) === stored.original_checkpoint_hash && hash(history.head_projection) === stored.original_projection_hash);
