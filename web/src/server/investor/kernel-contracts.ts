@@ -52,6 +52,7 @@ import actionCorrectionImpact from "../../../../contracts/v1/investor-action-cor
 import correctionImpactJob from "../../../../contracts/v1/investor-correction-impact-job.schema.json";
 import correctionConsent from "../../../../contracts/v1/investor-correction-consent.schema.json";
 import correctedActionSource from "../../../../contracts/v1/investor-corrected-action-source.schema.json";
+import correctedActionHandover from "../../../../contracts/v1/investor-corrected-action-handover.schema.json";
 import actionMaintenance from "../../../../contracts/v1/investor-action-maintenance.schema.json";
 import calendarContinuation from "../../../../contracts/v1/investor-calendar-continuation.schema.json";
 import dataSnapshot from "../../../../contracts/v1/investor-data-snapshot.schema.json";
@@ -119,6 +120,7 @@ ajv.addSchema(actionCorrectionImpact);
 ajv.addSchema(correctionImpactJob);
 ajv.addSchema(correctionConsent);
 ajv.addSchema(correctedActionSource);
+ajv.addSchema(correctedActionHandover);
 ajv.addSchema(actionMaintenance);
 for (const schema of [legacyTransitionSource, legacyTransitionJob, monitorDataInputV5, monitorDataProjectionV3]) ajv.addSchema(schema);
 for (const schema of [policyV2, policyV3, policyInput, strategyResultV2, strategyResultV3, settledPlan]) ajv.addSchema(schema);
@@ -193,6 +195,9 @@ export function validateCorrectionConsent(kind: "submit" | "request" | "confirma
 export function validateCorrectedActionSource(value: unknown) { requireTrue(ajv.getSchema(correctedActionSource.$id)!(value)); }
 export function validateInvestorActionReviewDocument(kind: "preview" | "confirmation" | "append_proof" | "preview_request" | "submit", value: unknown) {
   const version = (value as JsonObject | null)?.schema_version;
+  if (kind === "submit" && version === "investor-corrected-action-handover-submit-v1" || kind === "confirmation" && version === "investor-corrected-action-handover-confirmation-v1") {
+    requireTrue(ajv.getSchema(correctedActionHandover.$id + "#/$defs/" + kind)!(value)); return;
+  }
   if ((kind === "submit" && version === "investor-unchanged-action-recovery-submit-v1")
     || (kind === "confirmation" && version === "investor-unchanged-action-recovery-confirmation-v1")) {
     validateUnchangedActionRecovery(kind, value); return;
@@ -201,6 +206,9 @@ export function validateInvestorActionReviewDocument(kind: "preview" | "confirma
   requireTrue(ajv.getSchema(schema.$id + "#/$defs/" + kind)!(value));
 }
 export function validateInvestorActionReviewJob(kind: "request" | "result", value: unknown) {
+  if (kind === "request" && (value as JsonObject | null)?.schema_version === "investor-action-review-job-request-v3") {
+    requireTrue(ajv.getSchema(correctedActionHandover.$id + "#/$defs/job_request")!(value)); return;
+  }
   if (kind === "request" && (value as JsonObject | null)?.schema_version === "investor-action-review-job-request-v2") {
     validateUnchangedActionRecovery("job_request", value); return;
   }

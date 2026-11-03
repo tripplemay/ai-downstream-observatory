@@ -9,6 +9,7 @@ import { readManagedActionProgressRecord } from "./managed-action-source";
 import { readActionReviewConfirmationReceipt, readActionReviewPreviewWitness } from "./action-review-lineage";
 import { validateInvestorActionReviewDocument, validateInvestorActionReviewJob } from "./kernel-contracts";
 import { unchangedRecoveryInputSchema } from "./unchanged-action-recovery-schemas";
+import { correctedHandoverInputSchema } from "./corrected-action-handover-schemas";
 
 type Obj = Record<string, unknown>;
 const JOB = "investor_action_review";
@@ -46,9 +47,12 @@ export function enqueueActionReviewJob(db: Database.Database, actor: { id: strin
 export function enqueueUnchangedActionRecoveryJob(db: Database.Database, actor: { id: string }, raw: unknown, now = new Date().toISOString()) {
   return enqueueParsedReviewJob(db, actor, unchangedRecoveryInputSchema.parse(raw), now);
 }
+export function enqueueCorrectedActionHandoverJob(db: Database.Database, actor: { id: string }, raw: unknown, now = new Date().toISOString()) {
+  return enqueueParsedReviewJob(db, actor, correctedHandoverInputSchema.parse(raw), now);
+}
 
 function enqueueParsedReviewJob(db: Database.Database, actor: { id: string },
-  input: ReturnType<typeof actionReviewInputSchema.parse> | ReturnType<typeof unchangedRecoveryInputSchema.parse>, now: string) {
+  input: ReturnType<typeof actionReviewInputSchema.parse> | ReturnType<typeof unchangedRecoveryInputSchema.parse> | ReturnType<typeof correctedHandoverInputSchema.parse>, now: string) {
   time(now); assertWritableDatabase(db);
   if (input.kind === "confirmation") validateInvestorActionReviewDocument("submit", input.body);
   return db.transaction(() => {
@@ -88,7 +92,7 @@ function enqueueParsedReviewJob(db: Database.Database, actor: { id: string },
       AND NOT EXISTS(SELECT 1 FROM investor_action_review_confirmations c WHERE c.previous_authority_id=a.id) LIMIT 2`).all(ws.id,grant.doc.provider_symbol) as Obj[];
     check(leaves.length === 1 && leaves[0].id === authorityId,"RULE_UNAVAILABLE");
     const id = randomUUID(), digest = hash(body), audit = randomUUID();
-    const doc = { schema_version: body.schema_version === "investor-unchanged-action-recovery-submit-v1" ? "investor-action-review-job-request-v2" : "investor-action-review-job-request-v1", request_id: id, workspace_id: ws.id,
+    const doc = { schema_version: body.schema_version === "investor-corrected-action-handover-submit-v1" ? "investor-action-review-job-request-v3" : body.schema_version === "investor-unchanged-action-recovery-submit-v1" ? "investor-action-review-job-request-v2" : "investor-action-review-job-request-v1", request_id: id, workspace_id: ws.id,
       provider_symbol: grant.doc.provider_symbol, kind: input.kind, body, request_hash: digest, created_at: now, valid_until: until };
     validateInvestorActionReviewJob("request", doc); const hashed = hash(doc);
     db.prepare("INSERT INTO audit_events(id,actor_id,action,object_type,object_id,payload_json,created_at) VALUES(?,?,'investor_enqueue_action_review','investor_action_review_job_request',?,?,?)")

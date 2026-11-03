@@ -6,7 +6,7 @@ import { actionNyParts } from "./action-source-parsers";
 import { validateCorrectionConsent } from "./kernel-contracts";
 import { readCorrectionImpactResponse } from "./correction-impact-jobs";
 import { readActionReviewPreviewWitness, compareActionSourceChanges } from "./action-review-lineage";
-import { readManagedActionComparisonBasis, readManagedActionReportCaptures } from "./managed-action-source";
+import { readManagedActionComparisonBasis, readManagedActionReportCaptures, readManagedActionControlWitness } from "./managed-action-source";
 import { readRetainedMonitorHistory } from "./retained-monitor-history";
 import { correctionActionLedger, deriveCorrectionHypothesis } from "./action-correction-impact";
 import { compareActionRestatement } from "./action-restatement-kernel";
@@ -90,7 +90,8 @@ export function readCorrectionConsentBaseline(db: Database.Database, workspace: 
     const witness = readActionReviewPreviewWitness(db, workspace, actor.id, body.preview_id, now);
     check(time(witness.created_at) <= time(doc.created_at) && time(doc.created_at) < time(witness.valid_until));
     const before = readManagedActionComparisonBasis(db, workspace, witness.authority_id, now);
-    check(before.grant.row.content_hash === witness.authority_hash && before.grant.current.id === witness.control_id && before.grant.current.content_hash === witness.control_hash);
+    const originalControl = readManagedActionControlWitness(db, workspace, witness.authority_id, witness.control_id, now);
+    check(before.grant.row.content_hash === witness.authority_hash && originalControl.content_hash === witness.control_hash && time(originalControl.created_at) <= time(witness.checked_at));
     const captures = readManagedActionReportCaptures(db, workspace, witness.authority_id, object(doc.capture_refs), now);
     for (const value of Object.values(captures.values)) check(time(value.row.created_at) <= time(at) && time(value.draft.source.retrieved_at) <= time(at));
     const history = readRetainedMonitorHistory(db, workspace, actor, text(doc.model_id), now);
@@ -103,7 +104,7 @@ export function readCorrectionConsentBaseline(db: Database.Database, workspace: 
     const floor = receipts.reduce((a, b) => time(a) >= time(b) ? a : b);
     const maximum = [before.grant.doc.valid_until, ...before.limits, ...before.historicalLimits, ...captures.limits].map(time).reduce((a, b) => a < b ? a : b);
     const basis = { workspace, owner: actor.id, authority_id: before.grant.row.id, authority_hash: before.grant.row.content_hash,
-      control_id: before.grant.current.id, control_hash: before.grant.current.content_hash, publication_id: before.publicationId,
+      control_id: originalControl.id, control_hash: originalControl.content_hash, publication_id: before.publicationId,
       previous_review_hash: before.prior.row.content_hash, previous_facts_hash: hash(before.prior.facts), previous_snapshot_hash: hash(before.previous),
       current_snapshot_hash: hash(captures.snapshots), current_bindings: captures.bindings, changes, knowledge_not_before: floor,
       maximum_valid_until: new Date(Number(maximum / 1000n)).toISOString() };

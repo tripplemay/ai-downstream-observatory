@@ -320,6 +320,12 @@
       "version": 63,
       "file": "0063_investor_correction_consent.sql",
       "sha256": "8fb74d9acba1928eb35eb71af5f4c0d62886d9ac815dbe9141f84d5f2a302783"
+    },
+    {
+      "version": 64,
+      "file": "0064_investor_corrected_action_handover.sql",
+      "foreign_key_rebuild": true,
+      "sha256": "dc131776b984322ca7fb9ce00bae6c1d384ce4c4812892d1b7c4ba62beeeb136"
     }
   ]
 }

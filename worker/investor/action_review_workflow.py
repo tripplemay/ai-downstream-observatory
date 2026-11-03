@@ -23,6 +23,8 @@ def _validate(value, fragment):
     versioned = fragment == "submit" and value.get("schema_version") == recovery.SUBMIT \
         or fragment == "confirmation" and value.get("schema_version") == recovery.CONFIRMATION
     schema = recovery.SCHEMA if versioned else SCHEMA
+    if value.get("schema_version") in ("investor-corrected-action-handover-submit-v1", "investor-corrected-action-handover-confirmation-v1"):
+        schema = "investor-corrected-action-handover.schema.json"
     validate_contract(value, schema, fragment="$defs/" + fragment)
     if "expected_revision" in value:
         _check(type(value["expected_revision"]) is int, "REVISION_INVALID")
@@ -142,6 +144,13 @@ def register_action_review_preview(db, workspace, actor, request, *, now=None, o
 def _verified_confirmation(db, workspace, actor, identifier, at):
     """Full original-byte, owner-answer and immutable control replay, not a receipt lookup."""
     _, doc = _confirmation_header(db, workspace, actor, identifier)
+    if doc["schema_version"] == "investor-corrected-action-handover-confirmation-v1":
+        from .corrected_action_handover import verified_handover
+        return verified_handover(db, workspace, actor, identifier, at)
+    return _verified_confirmation_context(db, workspace, actor, doc, at)
+
+
+def _verified_confirmation_context(db, workspace, actor, doc, at, *, corrected=False):
     _check(doc["created_at"] <= at, "CONFIRMATION_IN_FUTURE")
     old, policy, current_old = managed._authority(db, workspace, doc["previous_authority_id"], at)
     new, next_policy, _ = managed._authority(db, workspace, doc["new_authority_id"], at)
@@ -173,6 +182,10 @@ def _verified_confirmation(db, workspace, actor, identifier, at):
         and all(before["report"]["bindings"][kind][key] == after["report"]["bindings"][kind][key]
             for kind in before["report"]["bindings"] for key in ("authority_id", "authority_hash", "control_id", "control_hash")), "CONFIRMATION_INPUTS_CHANGED")
     prior, previous, publication_id, limits = _historical_basis(db, workspace, actor, old, policy, before, at)
+    if corrected:
+        from .corrected_action_handover import compare_handover_contexts
+        return compare_handover_contexts(db, workspace, actor, doc, old, policy, next_policy, previous_control,
+            before, after, prior, previous, publication_id, limits, at)
     return _compare_confirmation_facts(workspace, actor, doc, old, policy, next_policy, previous_control,
         before, after, prior, previous, publication_id, limits,
         recovery_failure=recovery.failure_witness(db, workspace, old["id"], at) if recovery.is_recovery(doc) else None)
@@ -223,9 +236,12 @@ def _confirmed_event_origins(db, workspace, review, at, seen=None):
     _check(current["review"]["id"] == review["review"]["id"] and current["review"]["content_hash"] == review["review"]["content_hash"]
         and current["facts"] == review["facts"], "CONFIRMATION_INPUTS_CHANGED")
     origins = _confirmed_event_origins(db, workspace, predecessor, at, seen)
+    corrected = doc["schema_version"] == "investor-corrected-action-handover-confirmation-v1"
+    if corrected: origins = {key: value for key, value in origins.items() if key in {event["id"] for event in current["facts"]["events"]}}
     for event in current["facts"]["events"]:
         if event["id"] not in origins:
-            origins[event["id"]] = {"original_review_id": current["review"]["id"], "original_review_hash": current["review"]["content_hash"], "known_at": doc["created_at"]}
+            origins[event["id"]] = {"original_review_id": current["review"]["id"], "original_review_hash": current["review"]["content_hash"],
+                "known_at": doc["source_proof"]["knowledge_at"] if corrected else doc["created_at"]}
     _check(set(origins) == {event["id"] for event in current["facts"]["events"]}, "CONFIRMATION_INPUTS_CHANGED")
     return origins
 
@@ -280,6 +296,9 @@ def _new_facts(context, answers, preview_id, floor):
 
 def prepare_action_review_confirmation(db, workspace, actor, request, *, now=None, clock=None):
     """Prepare exact answers before the fenced writer, never commit on prepare."""
+    if type(request) is dict and request.get("schema_version") == "investor-corrected-action-handover-submit-v1":
+        from .corrected_action_handover import prepare_handover
+        return prepare_handover(db, workspace, actor, request, now=now, clock=clock)
     assert_writable(db); _owner(db, workspace, actor); _validate(request, "submit")
     request = _object(canonical_json(request))
     request_hash, at = content_hash(request), _clock(clock() if clock else now)

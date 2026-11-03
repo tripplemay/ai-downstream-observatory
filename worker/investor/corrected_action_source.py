@@ -31,9 +31,11 @@ def _replay_baseline(db, workspace, actor, identifier, at, stop_requested):
     request = original["body"]
     _, witness = consent.review._preview_header(db, workspace, actor, request["preview_id"])
     _check(instant(witness["created_at"]) <= instant(doc["created_at"]) < instant(witness["valid_until"]))
-    authority, policy, control = managed._authority(db, workspace, witness["authority_id"], at)
+    authority, policy, _ = managed._authority(db, workspace, witness["authority_id"], at)
+    control = db.execute("SELECT * FROM investor_action_controls WHERE id=? AND workspace_id=?", (witness["control_id"], workspace)).fetchone()
+    _check(control is not None); managed._control(db, authority, control, at)
     _check(policy["valid_from"] <= at < policy["valid_until"] and authority["content_hash"] == witness["authority_hash"]
-        and control["id"] == witness["control_id"] and control["content_hash"] == witness["control_hash"], "CONTROL_CHANGED")
+        and control["content_hash"] == witness["control_hash"] and instant(control["created_at"]) <= instant(witness["checked_at"]), "CONTROL_CHANGED")
     anchor = managed._anchor(db, workspace, actor, policy["base_review_id"], policy["listing_review_id"], policy["anchor_captures"], at)
     _check(anchor["binding_hash"] == policy["anchor_binding_hash"] and anchor["base"]["review"]["content_hash"] == policy["base_review_hash"]
         and anchor["listing"]["review"]["content_hash"] == policy["listing_review_hash"]
@@ -100,6 +102,7 @@ def prepare_corrected_action_source(db, workspace, actor, identifier, *, now=Non
         _, original, _, _ = consent._impact(db, workspace, actor, doc["impact_request_id"], at)
         _, witness = consent.review._preview_header(db, workspace, actor, original["body"]["preview_id"])
         _, context = _prepare_action_review_draft(db, workspace, actor, witness["authority_id"], now=at)
+        _check(context["control"]["id"] == witness["control_id"] and context["control"]["content_hash"] == witness["control_hash"], "CONTROL_CHANGED")
         leaves = db.execute("""SELECT a.id FROM investor_action_authorities a WHERE a.workspace_id=? AND json_extract(a.document_json,'$.provider_symbol')=?
           AND NOT EXISTS(SELECT 1 FROM investor_action_review_confirmations c WHERE c.previous_authority_id=a.id) LIMIT 2""",
             (workspace, context["policy"]["provider_symbol"])).fetchall()
@@ -108,6 +111,7 @@ def prepare_corrected_action_source(db, workspace, actor, identifier, *, now=Non
         candidate = check_no_new_action_extension(base, anchor, context["current"], symbol=context["policy"]["provider_symbol"], listing_id=context["policy"]["listing_id"])
         _check(not doc["outstanding_new_report_dates"], "NEW_REPORTS_REQUIRE_REVIEW")
         facts = {**deepcopy(base), "range_end": candidate["candidate_range_end"]}
+        source_until = min(doc["valid_until"], history["proof"]["source_valid_until"], context["maximum_valid_until"], key=instant)
         proof = {"schema_version": "investor-corrected-action-source-proof-v1", "workspace_id": workspace, "model_id": doc["model_id"],
             "confirmation_id": identifier, "confirmation_hash": content_hash(doc), "original_head_id": history["proof"]["head_checkpoint_id"],
             "original_chain_hash": history["proof"]["checkpoint_chain_hash"], "authority_id": witness["authority_id"], "authority_hash": witness["authority_hash"],
@@ -115,10 +119,47 @@ def prepare_corrected_action_source(db, workspace, actor, identifier, *, now=Non
             "anchor_captures": doc["capture_refs"], "current_captures": context["refs"], "extension_hash": content_hash(candidate),
             "previous_coverage_end": base["range_end"], "candidate_coverage_end": facts["range_end"], "source_day": context["report"]["source_day"],
             "knowledge_at": doc["baseline"]["knowledge_at"], "checked_at": at,
-            "valid_until": min(doc["valid_until"], history["proof"]["source_valid_until"], context["maximum_valid_until"], managed._deadline(at, context["policy"]), key=instant),
+            "source_valid_until": source_until, "valid_until": min(source_until, managed._deadline(at, context["policy"]), key=instant),
             "status": "corrected_report_basis_prepared_not_published", "coverage_basis": managed.BASIS, "economic_correction_approved": True,
             **{key: False for key in ("current_source_eligibility_restored", "handover_registered", "maintenance_enabled", "checkpoint_created", "monitoring_resumed", "trading_permission")},
             "provider_calls": 0, "database_writes": 0, "distribution": "private_owner_only_not_ai"}
         _check(instant(at) < instant(proof["valid_until"]), "EXPIRED"); validate_contract(proof, SCHEMA)
         managed._stopped(db, stop_requested)
         return {"proof": proof, "facts": facts}
+
+
+def replay_corrected_action_source(db, workspace, actor, proof, *, now=None):
+    """Authenticate selected retained reports now; not current-day publication authority."""
+    validate_contract(proof, SCHEMA); at = _clock(now)
+    with transaction(db, immediate=False), _fact_validation_scope(), localcontext() as decimals:
+        decimals.prec = 128
+        doc, history, anchor = _replay_baseline(db, workspace, actor, proof["confirmation_id"], at, None)
+        _, original, _, _ = consent._impact(db, workspace, actor, doc["impact_request_id"], at)
+        _, witness = consent.review._preview_header(db, workspace, actor, original["body"]["preview_id"])
+        authority, policy, _ = managed._authority(db, workspace, witness["authority_id"], at)
+        old_anchor = managed._anchor(db, workspace, actor, policy["base_review_id"], policy["listing_review_id"], policy["anchor_captures"], at)
+        _, _, _, old_limits = _historical_basis(db, workspace, actor, authority, policy, old_anchor, at)
+        values, report, limits = managed._captures(db, workspace, actor, policy["listing_review_id"], proof["current_captures"], at)
+        _check(all(report["bindings"][kind][key] == old_anchor["report"]["bindings"][kind][key]
+            for kind in report["bindings"] for key in ("authority_id", "authority_hash", "control_id", "control_hash")))
+        checked = proof["checked_at"]
+        _check(instant(doc["created_at"]) <= instant(checked) <= instant(at) and all(instant(v["capture"]["created_at"]) <= instant(checked) for v in values.values())
+            and report["source_day"] == instant(checked).astimezone(managed.ZONE).date().isoformat())
+        current = {key: value["draft"] for key, value in values.items()}; base = doc["baseline"]["approved_facts"]
+        candidate = check_no_new_action_extension(base, anchor, current, symbol=policy["provider_symbol"], listing_id=policy["listing_id"])
+        facts = {**deepcopy(base), "range_end": candidate["candidate_range_end"]}
+        maximum = min([instant(doc["valid_until"]), instant(history["proof"]["source_valid_until"]), instant(policy["valid_until"]), *old_anchor["limits"], *old_limits, *limits])
+        _check(not doc["outstanding_new_report_dates"] and instant(at) < maximum and instant(proof["source_valid_until"]) <= maximum)
+        expected = {"schema_version": "investor-corrected-action-source-proof-v1", "workspace_id": workspace, "model_id": doc["model_id"],
+            "confirmation_id": doc["confirmation_id"], "confirmation_hash": content_hash(doc), "original_head_id": history["proof"]["head_checkpoint_id"],
+            "original_chain_hash": history["proof"]["checkpoint_chain_hash"], "authority_id": witness["authority_id"], "authority_hash": witness["authority_hash"],
+            "control_id": witness["control_id"], "control_hash": witness["control_hash"], "base_facts_hash": content_hash(base), "candidate_facts_hash": content_hash(facts),
+            "anchor_captures": doc["capture_refs"], "current_captures": proof["current_captures"], "extension_hash": content_hash(candidate),
+            "previous_coverage_end": base["range_end"], "candidate_coverage_end": facts["range_end"], "source_day": report["source_day"],
+            "knowledge_at": doc["baseline"]["knowledge_at"], "checked_at": checked, "source_valid_until": proof["source_valid_until"],
+            "valid_until": min(proof["source_valid_until"], managed._deadline(checked, policy), key=instant),
+            "status": "corrected_report_basis_prepared_not_published", "coverage_basis": managed.BASIS, "economic_correction_approved": True,
+            **{key: False for key in ("current_source_eligibility_restored", "handover_registered", "maintenance_enabled", "checkpoint_created", "monitoring_resumed", "trading_permission")},
+            "provider_calls": 0, "database_writes": 0, "distribution": "private_owner_only_not_ai"}
+        _check(proof == expected and instant(checked) < instant(proof["valid_until"]), "PROOF_CHANGED")
+        return {"proof": expected, "facts": facts}

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-corrected-action-handover.schema.json",
+  "$defs": {
+    "submit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "preview_id", "correction_id", "expected_correction_hash", "expected_revision", "idempotency_key", "enable_rule", "acknowledgements"],
+      "properties": {
+        "schema_version": {"const": "investor-corrected-action-handover-submit-v1"},
+        "preview_id": {"$ref": "common.schema.json#/$defs/id"}, "correction_id": {"$ref": "common.schema.json#/$defs/id"},
+        "expected_correction_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "expected_revision": {"$ref": "investor-action-review-workflow.schema.json#/$defs/revision"}, "idempotency_key": {"$ref": "common.schema.json#/$defs/id"},
+        "enable_rule": {"type": "boolean"}, "acknowledgements": {
+          "type": "object", "additionalProperties": false,
+          "required": ["confirmed_historical_baseline", "current_report_differences_seen", "unchanged_tax_and_event_assumptions", "reported_coverage_not_objective_absence", "separate_new_maintenance_choice", "new_epoch_still_required_no_trading"],
+          "properties": {"confirmed_historical_baseline": {"const": true}, "current_report_differences_seen": {"const": true},
+            "unchanged_tax_and_event_assumptions": {"const": true}, "reported_coverage_not_objective_absence": {"const": true},
+            "separate_new_maintenance_choice": {"const": true}, "new_epoch_still_required_no_trading": {"const": true}}
+        }
+      }
+    },
+    "confirmation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "confirmation_id", "workspace_id", "workspace_revision", "preview_id", "request", "request_hash", "draft_basis_hash", "previous_authority_id", "previous_authority_hash", "previous_control_id", "previous_control_hash", "retired_control_id", "retired_control_hash", "previous_publication_id", "previous_review_id", "previous_review_hash", "new_review_id", "new_review_hash", "new_authority_id", "new_authority_hash", "new_control_id", "new_control_hash", "source_proof", "source_valid_until", "created_at", "monitor_data_readmission_required", "quarantine_cleared", "research_admitted", "trading_permission", "raw_ai_sharing", "provider_calls"],
+      "properties": {
+        "schema_version": {"const": "investor-corrected-action-handover-confirmation-v1"},
+        "confirmation_id": {"$ref": "common.schema.json#/$defs/id"}, "workspace_id": {"$ref": "common.schema.json#/$defs/id"},
+        "workspace_revision": {"$ref": "investor-action-review-workflow.schema.json#/$defs/revision"},
+        "preview_id": {"$ref": "common.schema.json#/$defs/id"}, "request": {"$ref": "#/$defs/submit"}, "request_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "draft_basis_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "previous_authority_id": {"$ref": "common.schema.json#/$defs/id"}, "previous_authority_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "previous_control_id": {"$ref": "common.schema.json#/$defs/id"}, "previous_control_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "retired_control_id": {"$ref": "common.schema.json#/$defs/id"}, "retired_control_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "previous_publication_id": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/id"}]},
+        "previous_review_id": {"$ref": "common.schema.json#/$defs/id"}, "previous_review_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "new_review_id": {"$ref": "common.schema.json#/$defs/id"}, "new_review_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "new_authority_id": {"$ref": "common.schema.json#/$defs/id"}, "new_authority_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "new_control_id": {"$ref": "common.schema.json#/$defs/id"}, "new_control_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "source_proof": {"$ref": "investor-corrected-action-source.schema.json"}, "source_valid_until": {"type": "string", "format": "date-time"},
+        "created_at": {"type": "string", "format": "date-time"}, "monitor_data_readmission_required": {"const": true}, "quarantine_cleared": {"const": false},
+        "research_admitted": {"const": false}, "trading_permission": {"const": false}, "raw_ai_sharing": {"const": false}, "provider_calls": {"const": 0}
+      }
+    },
+    "job_request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "request_id", "workspace_id", "provider_symbol", "kind", "body", "request_hash", "created_at", "valid_until"],
+      "properties": {
+        "schema_version": {"const": "investor-action-review-job-request-v3"}, "kind": {"const": "confirmation"},
+        "request_id": {"$ref": "common.schema.json#/$defs/id"}, "workspace_id": {"$ref": "common.schema.json#/$defs/id"},
+        "provider_symbol": {"enum": ["VT.US", "BND.US"]}, "body": {"$ref": "#/$defs/submit"}, "request_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "created_at": {"type": "string", "format": "date-time"}, "valid_until": {"type": "string", "format": "date-time"}
+      }
+    }
+  }
+}

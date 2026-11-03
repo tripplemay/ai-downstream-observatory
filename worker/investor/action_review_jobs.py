@@ -21,7 +21,9 @@ def _check(value, code="INVALID"):
 
 def _validate(doc, fragment):
     newer = fragment == "request" and doc.get("schema_version") == "investor-action-review-job-request-v2"
-    try: validate_contract(doc, recovery.SCHEMA if newer else SCHEMA, fragment="$defs/job_request" if newer else "$defs/" + fragment)
+    corrected = fragment == "request" and doc.get("schema_version") == "investor-action-review-job-request-v3"
+    schema = "investor-corrected-action-handover.schema.json" if corrected else recovery.SCHEMA if newer else SCHEMA
+    try: validate_contract(doc, schema, fragment="$defs/job_request" if newer or corrected else "$defs/" + fragment)
     except ValueError: raise WorkbenchError("ACTION_REVIEW_JOB_DOCUMENT_INVALID") from None
 
 
@@ -76,7 +78,8 @@ def enqueue_action_review_request(db, workspace, actor, kind, body, *, now=None)
         _check(not workflow._retired(db, workspace, authority_id), "RULE_RETIRED")
         _, policy, _ = managed._authority(db, workspace, authority_id, at)
         identifier = new_id("action-review-job-request")
-        doc = {"schema_version": "investor-action-review-job-request-v2" if recovery.is_recovery(body) else "investor-action-review-job-request-v1", "request_id": identifier, "workspace_id": workspace,
+        version = "investor-action-review-job-request-v3" if body.get("schema_version") == "investor-corrected-action-handover-submit-v1" else "investor-action-review-job-request-v2" if recovery.is_recovery(body) else "investor-action-review-job-request-v1"
+        doc = {"schema_version": version, "request_id": identifier, "workspace_id": workspace,
             "provider_symbol": policy["provider_symbol"], "kind": kind, "body": body, "request_hash": digest, "created_at": at, "valid_until": until}
         _validate(doc, "request"); hashed = content_hash(doc)
         audit = _audit(db, actor, "investor_enqueue_action_review", "investor_action_review_job_request", identifier, {"content_hash": hashed}, at)

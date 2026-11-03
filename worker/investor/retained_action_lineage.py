@@ -1,6 +1,6 @@
 """Retained explicit action knowledge, never a current-source or consent grant."""
 
-from worker.orchestration.db import content_hash, instant, transaction
+from worker.orchestration.db import WorkbenchError, content_hash, instant, transaction
 from . import managed_actions as managed
 from .data_evidence import _assert, _fact_validation_scope, _owner, resolve_review
 from .retained_action_evidence import _manual, _managed
@@ -41,6 +41,8 @@ def _anchor(db, workspace, actor, identifier, at):
 def _confirmation(db, workspace, actor, identifier, at):
     from .action_review_workflow import _confirmation_header, _compare_confirmation_facts
     _, doc = _confirmation_header(db, workspace, actor, identifier)
+    if doc["schema_version"] == "investor-corrected-action-handover-confirmation-v1":
+        raise WorkbenchError("INVESTOR_RETAINED_ACTION_LINEAGE_CURRENT_EPOCH_PROTOCOL_REQUIRED")
     _check(doc["created_at"] <= at)
     before = _anchor(db, workspace, actor, doc["previous_authority_id"], at)
     after = _anchor(db, workspace, actor, doc["new_authority_id"], at)

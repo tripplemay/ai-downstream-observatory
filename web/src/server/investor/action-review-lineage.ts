@@ -15,6 +15,8 @@ import { actionAddDays } from "./action-source-parsers";
 import { checkUnchangedActionRecovery, isUnchangedActionRecovery, readActionRecoveryFailure } from "./unchanged-action-recovery";
 import type { VerifiedSourceReview } from "./source-inputs";
 import { unchangedRecoveryViewSchema } from "./unchanged-action-recovery-schemas";
+import { replayCorrectedActionSource } from "./corrected-action-source";
+import { readManagedActionReportCaptures } from "./managed-action-source";
 
 const Exact = Decimal.clone({ precision: 128, rounding: Decimal.ROUND_HALF_EVEN });
 const kinds = ["issuer", "dividends", "splits"] as const;
@@ -157,6 +159,26 @@ function compareConfirmationContexts(db:Database.Database,workspace:string,actor
   const receipts = Object.values(after.anchor.values).flatMap(value => [text(value.row.created_at), text(value.draft.source.retrieved_at)]);
   const floor = receipts.reduce((a, b) => time(a) >= time(b) ? a : b);
   const maximum = millis([old.doc.valid_until, ...before.limits, ...after.limits, ...before.historicalLimits].map(time).reduce((a, b) => a < b ? a : b));
+  if (doc.schema_version === "investor-corrected-action-handover-confirmation-v1") {
+    const source = replayCorrectedActionSource(db, workspace, { id: text(actor) }, object(doc.source_proof), now), proof = source.proof;
+    check(request.correction_id === proof.confirmation_id && request.expected_correction_hash === proof.confirmation_hash
+      && old.row.id === proof.authority_id && old.row.content_hash === proof.authority_hash
+      && original.id === proof.control_id && original.content_hash === proof.control_hash
+      && hash(source.facts) === hash(after.base.facts) && hash(proof.current_captures) === hash(next.doc.anchor_captures)
+      && next.doc.valid_from === doc.created_at && next.doc.valid_until === proof.source_valid_until
+      && after.base.row.valid_until === proof.source_valid_until && doc.source_valid_until === proof.source_valid_until
+      && time(proof.checked_at) <= time(doc.created_at) && time(doc.created_at) < time(proof.valid_until));
+    const mutable = new Set(["base_review_id", "base_review_hash", "anchor_captures", "anchor_binding_hash", "valid_from", "valid_until"]);
+    const strip = (value: Obj) => Object.fromEntries(Object.entries(value).filter(([key]) => !mutable.has(key)));
+    check(hash(strip(old.doc)) === hash(strip(next.doc)));
+    const selectedReports = readManagedActionReportCaptures(db, workspace, old.row.id, object(proof.current_captures), now);
+    const basisMaximum = millis([old.doc.valid_until, ...before.limits, ...before.historicalLimits, ...selectedReports.limits].map(time).reduce((a, b) => a < b ? a : b));
+    const basis = { workspace, owner: actor, authority_id: old.row.id, authority_hash: old.row.content_hash, control_id: original.id, control_hash: original.content_hash,
+      publication_id: before.publicationId, previous_review_hash: before.prior.row.content_hash, previous_facts_hash: hash(before.prior.facts),
+      previous_snapshot_hash: hash(before.previous), current_snapshot_hash: hash(after.anchor.snapshots), current_bindings: after.anchor.bindings,
+      changes: changes(before.previous, after.anchor.snapshots, text(before.prior.facts.range_end), text(source.facts.range_end)), knowledge_not_before: floor, maximum_valid_until: basisMaximum };
+    check(hash(basis) === doc.draft_basis_hash); return { document: doc, before: before.base, after: after.base };
+  }
   check(next.doc.valid_from === doc.created_at && next.doc.valid_until === maximum && after.base.row.valid_until === maximum);
   const recovering = isUnchangedActionRecovery(doc);
   const failure = recovering ? readActionRecoveryFailure(db, workspace, text(old.row.id), now) : null;
@@ -191,6 +213,7 @@ export function readActionReviewConfirmationContext(db:Database.Database,workspa
 export function readRetainedActionReviewConfirmationContext(db:Database.Database,workspace:string,actor:unknown,id:unknown,now:string) {
   return db.transaction(()=>{
     const {doc,request}=confirmationHeader(db,workspace,actor,id,now);
+    if(doc.schema_version === "investor-corrected-action-handover-confirmation-v1")throw new Error("ACTION_REVIEW_CURRENT_EPOCH_PROTOCOL_REQUIRED");
     const before=readRetainedActionComparisonContext(db,workspace,doc.previous_authority_id,doc.previous_publication_id,text(doc.created_at),now);
     const after=readRetainedActionAnchorContext(db,workspace,doc.new_authority_id,now);
     return {...compareConfirmationContexts(db,workspace,actor,doc,request,before,after,now),
@@ -207,8 +230,10 @@ function eventOrigins(db: Database.Database, workspace: string, review: Verified
   const value = verifiedConfirmation(db, workspace, review.row.actor_id, row.id, now);
   check(value.after.row.id === review.row.id && value.after.row.content_hash === review.row.content_hash && hash(value.after.facts) === hash(review.facts));
   const origins = eventOrigins(db, workspace, value.before, now, visited);
+  const corrected = value.document.schema_version === "investor-corrected-action-handover-confirmation-v1";
+  if (corrected) for (const key of origins.keys()) if (!events.some(event => event.id === key)) origins.delete(key);
   for (const event of events) if (!origins.has(text(event.id))) origins.set(text(event.id), {
-    original_review_id: review.row.id, original_review_hash: review.row.content_hash, known_at: value.document.created_at });
+    original_review_id: review.row.id, original_review_hash: review.row.content_hash, known_at: corrected ? object(value.document.source_proof).knowledge_at : value.document.created_at });
   check(origins.size === events.length && events.every(event => origins.has(text(event.id)))); return origins;
 }
 
