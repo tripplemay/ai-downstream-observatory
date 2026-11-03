@@ -18,8 +18,9 @@ export function InvestorCorrectionConsent({ workspaceId, binding, modelId, impac
   const [data, setData] = useState<CorrectionConsentResponse | null>(null), [answers, setAnswers] = useState<Partial<Record<typeof correctionConsentAcknowledgements[number], boolean>>>({});
   const [busy, setBusy] = useState(false), [uncertain, setUncertain] = useState(false), [error, setError] = useState("");
   const live = useRef(true), invalid = useRef(false), epoch = useRef(0), active = useRef<AbortController | null>(null), pending = useRef<ConsentAttempt | null>(null), tracking = useRef<string | null>(null), reported = useRef<string | null>(null);
+  const checkedSummary = useRef<string | null>(null);
   const verified = session?.verified === true && session.sessionBinding === binding && !invalid.current;
-  const current = useRef({ key, verified, disabled, eligible: false }); current.current = { key, verified, disabled, eligible: false };
+  const current = useRef({ key, verified, disabled, summaryHash, data, answers, eligible: false }); current.current = { key, verified, disabled, summaryHash, data, answers, eligible: false };
   const callbacks = useRef({ onGuardChange, onRegistered }); callbacks.current = { onGuardChange, onRegistered };
   const now = useInvestorDisplayClock(data?.checked_at ?? null, [data?.refresh_after, data?.candidate?.valid_until].filter(Boolean).map(value => Date.parse(value!)).join("|"));
   const waiting = ["queued", "running"].includes(data?.request?.status ?? ""), dirty = Object.values(answers).some(Boolean);
@@ -35,6 +36,7 @@ export function InvestorCorrectionConsent({ workspaceId, binding, modelId, impac
   }, [data?.receipt]);
   async function exchange(attempt?: ConsentAttempt) {
     const start = current.current; if (!live.current || invalid.current || !start.verified || active.current || attempt && start.disabled) return;
+    if(!attempt)checkedSummary.current=start.summaryHash;
     const controller = new AbortController(), sequence = ++epoch.current; active.current = controller;
     if(attempt||pending.current||dirty||waiting)callbacks.current.onGuardChange(true); setBusy(true); setError("");
     const valid = () => live.current && !invalid.current && epoch.current === sequence && current.current.key === start.key && current.current.verified;
@@ -59,6 +61,12 @@ export function InvestorCorrectionConsent({ workspaceId, binding, modelId, impac
   }
   useEffect(() => { if (verified) void exchange(); /* Parent keys immutable scope. */ // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, verified]);
+  useEffect(() => {
+    // A queued comparison may have yielded no candidate in the initial GET.
+    // Qualify each newly displayed summary once, also after an older read settles.
+    if(verified&&summaryHash&&!busy&&!uncertain&&!pending.current&&!tracking.current&&checkedSummary.current!==summaryHash)void exchange();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[key,verified,summaryHash,busy,uncertain,data]);
   useEffect(() => { if (!verified || busy || uncertain || !data || !waiting && !data.candidate) return;
     const timer = setTimeout(() => void exchange(), waiting ? 2500 : Math.max(1000, Date.parse(data.refresh_after) - Date.now() - 3000));
     return () => clearTimeout(timer); /* GET only; never repeat an intent automatically. */ // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -67,7 +75,8 @@ export function InvestorCorrectionConsent({ workspaceId, binding, modelId, impac
   const eligible = verified && !disabled && !busy && !uncertain && !waiting && !data?.read_only && fresh && c?.summary_hash === summaryHash && c?.all_differences_resolved === true;
   current.current.eligible = eligible;
   function submit(event: FormEvent) {
-    event.preventDefault(); if (!live.current || invalid.current || !current.current.eligible || active.current || pending.current || !data) return;
+    event.preventDefault(); if (!live.current || invalid.current || !current.current.eligible || active.current || pending.current || !data
+      ||current.current.key!==key||current.current.summaryHash!==summaryHash||current.current.data!==data||current.current.answers!==answers) return;
     try { const attempt = buildConsentAttempt(data, scope, summaryHash, answers, crypto.randomUUID(),Date.now()); pending.current = attempt; callbacks.current.onGuardChange(true); setUncertain(true); void exchange(attempt); }
     catch (cause) { setError(consentErrorText(cause)); }
   }
@@ -86,11 +95,11 @@ export function InvestorCorrectionConsent({ workspaceId, binding, modelId, impac
     </div>}
     {c && !c.all_differences_resolved && <p role="status" className="text-sm">仍有“暂按原记录比较”的未解决差异。请先在上方修改假设并重新计算，不能把保留选择当作正式更正。</p>}
     {c && !fresh && <p role="status" className="text-sm">本次核验期限已到，已隐藏确认选项；刷新不会延长原比较期限。</p>}
-    {fresh && c?.all_differences_resolved && summaryHash === c.summary_hash && <form onSubmit={submit} className="space-y-3"><fieldset disabled={!eligible} className="space-y-3">
-      <legend className="mb-3 text-sm font-medium">请逐项确认，不自动沿用上一步同意</legend>
-      {correctionConsentAcknowledgements.map(key => <label key={key} className="flex items-start gap-3 text-sm"><input type="checkbox" checked={answers[key] === true}
-        onChange={event => { if (!current.current.eligible) return; callbacks.current.onGuardChange(true); setAnswers(value => ({ ...value, [key]: event.target.checked })); }} /><span>{consentLabels[key]}</span></label>)}
-      <Button disabled={!eligible || !correctionConsentAcknowledgements.every(key => answers[key] === true)}>登记本次历史更正，不恢复监测或交易</Button>
+    {fresh && c?.all_differences_resolved && summaryHash === c.summary_hash && <form onSubmit={submit} className="min-w-0 space-y-3"><fieldset disabled={!eligible} className="min-w-0 space-y-3">
+      <legend className="mb-3 max-w-full text-sm font-medium">请逐项确认，不自动沿用上一步同意</legend>
+      {correctionConsentAcknowledgements.map(key => <label key={key} className="flex min-w-0 items-start gap-3 text-sm"><input type="checkbox" className="mt-1 shrink-0" checked={answers[key] === true}
+        onChange={event => { if (!current.current.eligible) return; callbacks.current.onGuardChange(true); setAnswers(value => ({ ...value, [key]: event.target.checked })); }} /><span className="min-w-0 break-words">{consentLabels[key]}</span></label>)}
+      <Button className="h-auto max-w-full whitespace-normal text-left" disabled={!eligible || !correctionConsentAcknowledgements.every(key => answers[key] === true)}>登记本次历史更正，不恢复监测或交易</Button>
     </fieldset></form>}
     {data?.read_only && <p role="status" className="text-sm">系统只读，只可核对登记状态。</p>}
   </section>;

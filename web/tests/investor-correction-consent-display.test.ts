@@ -8,10 +8,10 @@ import * as client from "../src/components/workbench/investor-correction-consent
 import { readActionReviewJson } from "../src/components/workbench/investor-action-review-client";
 import { consentResponse, consentSummaryHash, confirmedConsent, queuedConsent } from "./correction-consent-client-fixture";
 
-function mount(t: TestContext, impactId: string | null = "fictional-impact") {
+function mount(t: TestContext, impactId: string | null = "fictional-impact", summaryHash: string | null = consentSummaryHash) {
   const locks: boolean[] = [], registered: number[] = [];
   const h = mountInvestorDisplay(t, new URL("../src/components/workbench/investor-correction-consent.tsx", import.meta.url), "InvestorCorrectionConsent",
-    { workspaceId: "w", binding, modelId: "fictional-model", impactId, summaryHash: consentSummaryHash, disabled: false, onGuardChange: (v: boolean) => locks.push(v), onRegistered: () => registered.push(1) },
+    { workspaceId: "w", binding, modelId: "fictional-model", impactId, summaryHash, disabled: false, onGuardChange: (v: boolean) => locks.push(v), onRegistered: () => registered.push(1) },
     { "@/components/session-boundary": { useSessionBoundary: () => ({ verified: true, sessionBinding: binding }) },
       "@/server/investor/correction-consent-schemas": schemas, "./investor-correction-consent-client": client, "./investor-action-review-client": { readActionReviewJson } }, now);
   const reply = async (i: number, v: unknown, status = 200) => { h.requests[i].resolve(new Response(JSON.stringify(v), { status })); await h.waitFor(() => !h.text().includes("正在核对更正受理记录…")); };
@@ -42,9 +42,12 @@ test("actual display deadline hides confirmation even when refresh hangs; change
   await h.advance(now + 12000); await h.waitRequests(2); await h.advance(now + 16000);
   assert.equal(h.node("form"), undefined); stale({ preventDefault() {} }); await h.flush(); assert.equal(h.requests.filter(r => r.method === "POST").length, 0);
   const next = mount(t); await next.ready(); await next.fill(); const handler = next.node("form")!.props.onSubmit as (e: unknown) => void;
-  await next.change({ summaryHash: "d".repeat(64) }); handler({ preventDefault() {} }); await next.flush(); assert.equal(next.requests.length, 1);
-  await next.change({ summaryHash: consentSummaryHash }); await next.fill(); await next.change({ disabled: true }); handler({ preventDefault() {} }); await next.flush(); assert.equal(next.requests.length, 1);
-  await next.invalidate(); assert.equal(next.node("form"), undefined); handler({ preventDefault() {} }); await next.flush(); assert.equal(next.requests.length, 1);
+  await next.change({ summaryHash: "d".repeat(64) }); handler({ preventDefault() {} }); await next.waitRequests(2);assert.equal(next.requests[1].method,"GET");
+  await next.reply(1,consentResponse({candidate:{...consentResponse().candidate!,summary_hash:"d".repeat(64)}}));handler({preventDefault(){}});await next.flush();
+  assert.equal(next.requests.filter(r=>r.method==="POST").length,0);
+  await next.change({ summaryHash: consentSummaryHash });await next.waitRequests(3);await next.reply(2,consentResponse());handler({preventDefault(){}});await next.flush();
+  assert.equal(next.requests.filter(r=>r.method==="POST").length,0);await next.fill(); await next.change({ disabled: true }); handler({ preventDefault() {} }); await next.flush(); assert.equal(next.requests.length, 3);
+  await next.invalidate(); assert.equal(next.node("form"), undefined); handler({ preventDefault() {} }); await next.flush(); assert.equal(next.requests.length, 3);
 });
 test("reload reads historical registration by model without needing a still-current comparison or exposing an approval form", async t => {
   const h = mount(t, null); await h.waitRequests(1); assert.match(h.requests[0].url, /model=fictional-model/);
@@ -61,4 +64,20 @@ test("known source rejection is not presented as an unknown transport result; un
   const queued=queuedConsent(intent);
   await next.reply(0,{...queued,request:{...queued.request!,status:"rejected",code:"CORRECTION_CONSENT_SOURCE_UNAVAILABLE"}});
   assert.match(next.text(),/本次未登记更正基线/);assert.doesNotMatch(next.text(),/连接失败不代表未受理/);assert.equal(next.node("form"),undefined);
+});
+test("a newly displayed completed comparison requalifies an initially empty confirmation without any POST",async t=>{
+  const h=mount(t,"fictional-impact",null);await h.waitRequests(1);await h.reply(0,consentResponse({candidate:null}));
+  assert.equal(h.node("form"),undefined);await h.change({summaryHash:consentSummaryHash});await h.waitRequests(2);
+  assert.equal(h.requests[1].method,"GET");await h.reply(1,consentResponse());assert.equal(h.nodes().filter(r=>r.type==="input").length,7);
+  assert.equal(h.requests.filter(r=>r.method==="POST").length,0);
+});
+test("a late empty initial read cannot suppress the new comparison; failed requalification never becomes an automatic retry loop",async t=>{
+  const h=mount(t,"fictional-impact",null);await h.waitRequests(1);await h.change({summaryHash:consentSummaryHash});assert.equal(h.requests.length,1);
+  await h.reply(0,consentResponse({candidate:null}));await h.waitRequests(2);await h.fail(1);assert.equal(h.node("form"),undefined);
+  await h.advance(now+10000);assert.equal(h.requests.length,2);assert.equal(h.requests.filter(r=>r.method==="POST").length,0);
+});
+test("compact confirmation removes intrinsic fieldset/button minimums and retains a visible nonshrinking checkbox",async t=>{
+  const h=mount(t);await h.ready();assert.match(String(h.node("fieldset")!.props.className),/min-w-0/);
+  const button=h.button("登记本次历史更正，不恢复监测或交易")!;assert.match(String(button.props.className),/max-w-full/);assert.match(String(button.props.className),/whitespace-normal/);
+  for(const checkbox of h.nodes().filter(r=>r.type==="input"))assert.match(String(checkbox.props.className),/shrink-0/);
 });

@@ -59,10 +59,10 @@ class ActionCollector:
             "draft": parse_eodhd_actions(raw, **parameters, retrieved_at=self.at)}
 
 
-def collect(db, dates, issuer_id, at, *, updated):
+def collect(db, dates, issuer_id, at, *, updated, gross="4.32109"):
     old, event = dates["old"], dates["event"]
     records = [row("987.1234", exDividendDate=old.isoformat(), recordDate=old.isoformat(), payableDate=(old + timedelta(days=7)).isoformat())]
-    if updated: records.append(row("4.32109", exDividendDate=event.isoformat(), recordDate=event.isoformat(), payableDate=(event + timedelta(days=7)).isoformat()))
+    if updated: records.append(row(gross, exDividendDate=event.isoformat(), recordDate=event.isoformat(), payableDate=(event + timedelta(days=7)).isoformat()))
     issuer = IssuerCollector(at=at, raw=archive(*records))
     end = instant(at).astimezone(ZONE).date(); start = end - timedelta(days=364)
     milliseconds, clock, parse_time = issuer_sources._milliseconds, issuer_sources._clock, issuer_sources.instant
@@ -85,23 +85,23 @@ def collect(db, dates, issuer_id, at, *, updated):
     return {"issuer": 1, "eodhd": 4}
 
 
-def prepare(db, at):
+def prepare(db, at, *, dates=None, listing_id="synthetic-current-3141"):
     assert not db.execute("SELECT 1 FROM investor_workspaces").fetchone()
-    dates = timeline(at); seed = day_at(dates["seed"], 12); registered = day_at(dates["seed"] - timedelta(days=1), 12)
+    dates = timeline(at) if dates is None else dates; seed = day_at(dates["seed"], 12); registered = day_at(dates["seed"] - timedelta(days=1), 12)
     expiry = stamp(instant(at) + timedelta(days=30))
     db.execute("INSERT INTO investor_workspaces VALUES('w','owner',0,?)", (registered,))
     def reviewed(kind, facts, name):
         source = data_evidence.store_source(db, "w", "owner", kind, {"title": "FICTIONAL current HTTP " + name,
             "reference": "synthetic://current-action-http/" + name, "excerpt": "Invented source, not provider or tax certification"}, now=registered)
         return data_evidence.review_source(db, "w", "owner", source["id"], "approved", facts, "Fictional isolated acceptance only", expiry, now=registered)
-    listing = reviewed("listing", {"listing_id": "synthetic-current-3141", "provider_symbol": "VT.US", "market": "US", "currency": "USD",
+    listing = reviewed("listing", {"listing_id": listing_id, "provider_symbol": "VT.US", "market": "US", "currency": "USD",
         "quantity_step": "1", "tradable_from": "2020-01-01T00:00:00Z", "tradable_until": None, "product_type": "ETF", "leveraged": False,
         "inverse": False, "role": "growth", "fee_rate": "0.001", "fee_as_of": registered[:10],
         "economic_exposure": "Fictional test exposure", "historical_universe_basis": "retrospectively_selected_not_survivorship_free"}, "listing")
     old = dates["old"]
-    base = reviewed("actions", {"listing_id": "synthetic-current-3141", "range_start": (dates["seed"] - timedelta(days=364)).isoformat(),
+    base = reviewed("actions", {"listing_id": listing_id, "range_start": (dates["seed"] - timedelta(days=364)).isoformat(),
         "range_end": (old + timedelta(days=7)).isoformat(), "coverage": "reviewed_complete", "tax_assumption": "FICTIONAL explicit test tax assumption",
-        "events": [{"id": "fictional-current-old-dividend", "listing_id": "synthetic-current-3141", "type": "dividend", "at": day_at(old, 10),
+        "events": [{"id": "fictional-current-old-dividend", "listing_id": listing_id, "type": "dividend", "at": day_at(old, 10),
             "published_at": day_at(old - timedelta(days=1), 10), "pay_at": day_at(old + timedelta(days=7), 16), "gross_per_unit": "987.1234",
             "tax_per_unit": "98.71234", "source_evidence": "synthetic://current-action-http/old-event"}]}, "baseline")
     issuer = issuer_sources.register_authority(db, "w", "owner", issuer_policy(fund_id="3141", valid_from=registered, valid_until=expiry), now=registered)
