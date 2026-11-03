@@ -2,7 +2,7 @@ import type Database from "better-sqlite3";
 import { canonical, hash } from "../ledger/service";
 import { parseStrictJson } from "../strict-json";
 import { priceInstant } from "../market-price-source";
-import { modelAssessmentObservation, validateEpochContinuation, validateInvestorEvidenceMonitor, validateModelEpochCheckpoint, validateModelEpochRegistration } from "./kernel-contracts";
+import { modelAssessmentObservation, validateInvestorEvidenceMonitor, validateModelEpochCheckpoint, validateModelEpochRegistration } from "./kernel-contracts";
 import { readModelEpochRegistrationHeader } from "./model-epoch-registration";
 import { replayRegisteredModelEpochSource } from "./model-epoch-source";
 import { modelWatchSchema, observationSchema } from "./schemas";
@@ -10,6 +10,7 @@ import type { InvestorProfileVersion } from "./types";
 import { monitorCostsAt } from "./monitor-costs";
 import { readBoundPlannedFundingMonitor } from "./planned-funding-source";
 import type { PlannedFundingBinding } from "./planned-funding-monitor";
+import { readEpochContinuationChain, readEpochContinuationHeader } from "./epoch-continuation";
 
 type Obj = Record<string, unknown>;
 function check(value: unknown, code = "INVALID"): asserts value { if (!value) throw new Error("INVESTOR_REGISTERED_MODEL_EPOCH_" + code); }
@@ -105,33 +106,22 @@ export function readModelEpochMonitorRun(db: Database.Database, workspace: strin
   return { row: h.run, model: h.model, definition: h.definition, request: h.monitor, run: h.runDocument, observation, unavailable_reason: reason };
 }
 
-/** Ongoing Python publications have no independent Node chain verifier yet.
- * Recognize only the actual journal and return a gap, never its stored NAV. */
+/** Historical full-chain verification is not current source selection. */
 export function readPendingEpochContinuationRun(db: Database.Database, workspace: string, runId: string, now: string) {
   const actor = owner(db, workspace);
-  const p = db.prepare("SELECT * FROM investor_epoch_continuations WHERE monitor_run_id=? AND workspace_id=?").get(runId, workspace) as Obj | undefined;
-  check(p && p.actor_id === actor.id);
-  const doc = obj(parseStrictJson(text(p.document_json))); validateEpochContinuation("publication", doc);
-  check(canonical(doc) === p.document_json && hash(doc) === p.content_hash && doc.publication_id === p.id && doc.epoch && obj(doc.epoch).id === p.epoch_id);
+  const p = db.prepare("SELECT id,epoch_id FROM investor_epoch_continuations WHERE monitor_run_id=? AND workspace_id=?").get(runId, workspace) as Obj | undefined; check(p);
+  const publication = readEpochContinuationHeader(db, workspace, actor, text(p.id), now);
   const h = readModelEpochRegistrationHeader(db, workspace, actor, text(p.epoch_id), now);
-  const row = db.prepare("SELECT * FROM investor_evidence_monitor_runs WHERE id=? AND workspace_id=? AND model_id=?").get(runId, workspace, h.model.id) as Obj | undefined;
-  const request = db.prepare("SELECT * FROM investor_evidence_monitor_requests WHERE id=? AND workspace_id=? AND model_id=?").get(p.request_id, workspace, h.model.id) as Obj | undefined;
-  const planned = db.prepare("SELECT * FROM investor_epoch_continuation_requests WHERE id=? AND workspace_id=? AND model_id=?").get(p.request_id, workspace, h.model.id) as Obj | undefined;
-  check(row && request && planned && row.id === p.monitor_run_id && doc.monitor_run_id === runId && row.request_id === planned.id
-    && row.checkpoint_id === p.checkpoint_id && row.observation_id === doc.observation_id && row.job_id === p.job_id);
-  const intent = obj(parseStrictJson(text(planned.document_json))); validateEpochContinuation("request", intent);
-  const bound = obj(parseStrictJson(text(request.document_json))); validateEpochContinuation("monitor_request", bound);
-  check(canonical(intent) === planned.document_json && hash(intent) === planned.content_hash && same(doc.request, { id: planned.id, content_hash: planned.content_hash })
-    && same(intent.epoch, h.record.epoch) && same(doc.epoch, h.record.epoch) && intent.registration_hash === h.row.content_hash
-    && same(bound, intent.monitor_request) && hash(bound) === planned.input_version && request.input_version === planned.input_version
-    && request.input_id === p.input_id && same(doc.input, { id: p.input_id, content_hash: obj(intent.source_proof).input_hash }));
-  const run = obj(parseStrictJson(text(row.document_json))); validateInvestorEvidenceMonitor("run", run);
-  check(canonical(run) === row.document_json && hash(run) === row.content_hash && run.input_version === request.input_version && run.request_id === request.id
-    && run.created_at === row.created_at && time(row.created_at) <= time(now));
-  const reason = "MONITOR_EPOCH_CHAIN_VERIFICATION_PENDING";
-  const observation = observationSchema.parse({ ...blocked(h, reason), input_version: request.input_version, evaluated_at: doc.calculated_at,
-    reasons: ["后续状态的独立链核验与普通启用交互尚未接通；不将后台保存的结果直接作为当前结论。"] });
-  return { row, model: h.model, definition: h.definition, request, run, observation, unavailable_reason: reason };
+  let reason = "MONITOR_EPOCH_CURRENT_SOURCE_SELECTION_PENDING";
+  try {
+    const chain = readEpochContinuationChain(db, workspace, actor, text(p.epoch_id), now, text(p.id));
+    check(same(chain.definition, h.definition) && chain.last_publication?.id === p.id);
+  } catch { reason = "MONITOR_EPOCH_REPLAY_UNAVAILABLE"; }
+  const observation = observationSchema.parse({ ...blocked(h, reason), input_version: publication.monitor.input_version, evaluated_at: publication.doc.calculated_at,
+    reasons: [reason === "MONITOR_EPOCH_CURRENT_SOURCE_SELECTION_PENDING"
+      ? "历史连续链已独立核验；当前来源选择与普通启用交互仍待接通，不将历史结果直接作为当前结论。"
+      : "当前权限或连续状态未能完整核验，隐藏历史净值和变化；不将缺少结论当作无需调整。"] });
+  return { row: publication.run, model: h.model, definition: h.definition, request: publication.monitor, run: publication.runDocument, observation, unavailable_reason: reason };
 }
 
 export function readModelEpochWatch(db: Database.Database, workspace: string, model: Obj, definition: Obj, profile: InvestorProfileVersion, now: string, referenceAvailable: boolean) {

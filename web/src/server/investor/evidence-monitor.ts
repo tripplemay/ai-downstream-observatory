@@ -14,6 +14,7 @@ import type { InvestorObservationRecord, InvestorProfileVersion } from "./types"
 import { readBoundPlannedFundingMonitor } from "./planned-funding-source";
 import type { PlannedFundingBinding } from "./planned-funding-monitor";
 import { readModelEpochMonitorRun, readModelEpochWatch, readRegisteredModelEpoch, readPendingEpochContinuationRun } from "./registered-model-epoch";
+import { readEpochContinuationChain } from "./epoch-continuation";
 
 type Obj = Record<string, unknown>;
 function check(value: unknown): asserts value { if (!value) throw new Error("INVESTOR_EVIDENCE_INVALID"); }
@@ -83,9 +84,11 @@ export function readEvidenceCheckpoint(db: Database.Database, workspace: string,
   if (protocol?.protocol === "investor-monitor-data-input-v6") {
     const epoch = db.prepare("SELECT id FROM investor_model_epochs WHERE checkpoint_id=? AND workspace_id=? AND model_id=?").get(id, workspace, model.id) as Obj | undefined;
     if (!epoch) {
-      const p = db.prepare("SELECT monitor_run_id FROM investor_epoch_continuations WHERE checkpoint_id=? AND workspace_id=? AND model_id=? ORDER BY sequence LIMIT 1").get(id, workspace, model.id) as Obj | undefined; check(p);
-      readPendingEpochContinuationRun(db, workspace, text(p.monitor_run_id), now);
-      return { checkpoint: null, unavailable_reason: "MONITOR_EPOCH_CHAIN_VERIFICATION_PENDING" };
+      const p = db.prepare("SELECT id,epoch_id FROM investor_epoch_continuations WHERE checkpoint_id=? AND workspace_id=? AND model_id=? AND json_extract(document_json,'$.checkpoint_reused')=0 ORDER BY sequence LIMIT 1").get(id, workspace, model.id) as Obj | undefined; check(p);
+      const actor = db.prepare("SELECT owner_id FROM investor_workspaces WHERE id=?").get(workspace) as Obj | undefined; check(actor);
+      const chain = readEpochContinuationChain(db, workspace, { id: text(actor.owner_id) }, text(p.epoch_id), now, text(p.id));
+      check(hash(chain.definition) === hash(definition) && chain.head.checkpoint.id === id);
+      return { checkpoint: obj(chain.source.candidate).checkpoint as Obj, unavailable_reason: null };
     }
     const actor = db.prepare("SELECT owner_id FROM investor_workspaces WHERE id=?").get(workspace) as Obj | undefined; check(actor);
     const replay = readRegisteredModelEpoch(db, workspace, { id: text(actor.owner_id) }, text(epoch.id), now);

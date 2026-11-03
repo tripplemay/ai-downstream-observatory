@@ -2,7 +2,7 @@ import type Database from "better-sqlite3";
 import { Decimal } from "../ledger/decimal";
 import { hash } from "../ledger/service";
 import { priceInstant } from "../market-price-source";
-import { readRegisteredModelEpoch } from "./registered-model-epoch";
+import { readEpochContinuationChain } from "./epoch-continuation";
 import { auditedEpochInput, modelEpochActionBaseline, modelEpochSourceSettings, verifyModelEpochActionDescendant } from "./model-epoch-source";
 import { readInvestorSourceReview, type VerifiedSourceReview } from "./source-inputs";
 import { readEvidenceReference } from "./reference-evidence";
@@ -83,23 +83,23 @@ function currentFx(db: Database.Database, workspace: string, targets: Obj[], set
   return selected.sort();
 }
 
-/** Current preparation only. A real root journal is mandatory; no state may be supplied by callers. */
+/** Current preparation only. The actual full chain supplies the predecessor. */
 export function replayModelEpochContinuationSource(db: Database.Database, workspace: string, actor: { id: string }, epochId: string, rawInput: unknown, now: string, implementationHash: string) {
   validateModelEpochSource("input", rawInput);
   return db.transaction(() => {
     const document = obj(rawInput), frozen = text(document.created_at), at = time(now); check(time(frozen) <= at);
-    const saved = readRegisteredModelEpoch(db, workspace, actor, epochId, now), root = saved.source, record = saved.registration;
-    const definition = obj(obj(root.kernel_input).history).definition as Obj, previous = root.candidate.checkpoint; check(previous);
-    const modelId = text(definition.model_id), epoch = obj(record.epoch);
+    const chain = readEpochContinuationChain(db, workspace, actor, epochId, now), saved = chain.root, root = saved.source, prior = chain.source, record = chain.head;
+    const definition = chain.definition, previous = obj(obj(prior.candidate).checkpoint);
+    const modelId = text(definition.model_id), epoch = obj(saved.registration.epoch);
     check(same(document.epoch, epoch), "EPOCH_CHANGED");
     const head = db.prepare("SELECT id,content_hash,input_id FROM investor_evidence_model_checkpoints WHERE workspace_id=? AND model_id=? ORDER BY sequence DESC LIMIT 1").get(workspace, modelId) as Obj | undefined;
     const latest = db.prepare("SELECT id,content_hash FROM investor_monitor_evidence_inputs WHERE workspace_id=? AND model_id=? ORDER BY rowid DESC LIMIT 1").get(workspace, modelId) as Obj | undefined;
-    check(head && latest && head.id === obj(record.checkpoint).id && head.content_hash === hash(previous) && head.input_id === obj(record.input).id && same(latest, record.input), "LATEST_HEAD_CHANGED");
+    check(head && latest && head.id === record.checkpoint.id && head.content_hash === hash(previous) && same(latest, record.input), "LATEST_HEAD_CHANGED");
     const control = db.prepare("SELECT * FROM investor_model_controls WHERE workspace_id=? AND model_id=? ORDER BY version DESC LIMIT 1").get(workspace, modelId) as Obj | undefined;
     check(control && control.enabled === 1 && time(control.created_at) <= time(frozen)
       && same({ id: control.id, content_hash: hash(control) }, root.epoch_definition.model_control), "CONTROL_CHANGED");
     const funding = readPlannedFundingMonitor(db, actor, workspace, modelId, now);
-    check(same(funding?.request.binding ?? null, root.input.funding_binding ?? null), "FUNDING_PLAN_CHANGED");
+    check(same(funding?.request.binding ?? null, obj(prior.input).funding_binding ?? null), "FUNDING_PLAN_CHANGED");
     const frozenFunding = funding ? readBoundPlannedFundingMonitor(db, actor, workspace, funding.request.binding, frozen, now) : null;
     check((funding?.context_hash ?? null) === (frozenFunding?.context_hash ?? null), "FUNDING_CONTEXT_CHANGED");
     const reference = readEvidenceReference(db, workspace, text(definition.plan_id), now); check(!reference.unavailable_reason);
@@ -108,7 +108,7 @@ export function replayModelEpochContinuationSource(db: Database.Database, worksp
     check(same(rawDocument.settings, modelEpochSourceSettings(db, workspace, definition, reference.document as unknown as Obj, now)), "SETTINGS_CHANGED");
     const economic = structuredClone(raw.projection);
     check(Array.isArray(economic.quality_gaps) && !economic.quality_gaps.length && at < time(economic.valid_until), "CURRENT_INPUTS_NOT_READY");
-    const selected = actions(db, workspace, rawDocument, now, true), anchors = actions(db, workspace, root.input, now);
+    const selected = actions(db, workspace, rawDocument, now, true), anchors = actions(db, workspace, obj(prior.input), now);
     check(same([...selected.keys()].sort(), [...anchors.keys()].sort()), "ACTION_SELECTION_CHANGED");
     for (const [listing, current] of selected) verifyModelEpochActionDescendant(db, workspace, actor, current.row.id,
       { new_review_id: modelEpochActionBaseline(db, workspace, anchors.get(listing)!.row.id, now) }, now);
@@ -119,14 +119,14 @@ export function replayModelEpochContinuationSource(db: Database.Database, worksp
     check(same([...selectedFx].sort(), currentFx(db, workspace, rows(definition.targets), obj(rawDocument.settings), now)), "FX_SELECTION_CHANGED");
     const targets = new Map(rows(definition.targets).map(row => [text(row.listing_id), row]));
     const historical = (row: Obj) => { const target = targets.get(text(row.listing_id)); check(target); return time(row.effective_at) <= time(obj(previous.market_cutoffs)[text(target.market)]); };
-    const carry = rows(obj(root.projection.economic_projection).corporate_actions).filter(historical).sort(byId), indexed = new Map(carry.map(row => [text(row.id), row]));
+    const carry = rows(obj(obj(prior.projection).economic_projection).corporate_actions).filter(historical).sort(byId), indexed = new Map(carry.map(row => [text(row.id), row]));
     check(indexed.size === carry.length && same(Object.fromEntries(carry.map(row => [text(row.id), hash(row)])), previous.processed_actions), "PREVIOUS_LEDGER_CHANGED");
     const future: Obj[] = [], economics = (row: Obj) => Object.fromEntries(Object.entries(row).filter(([key]) => key !== "known_at"));
     for (const action of rows(economic.corporate_actions)) {
       if (!historical(action)) { future.push(action); continue; }
       const old = indexed.get(text(action.id)); check(old && same(economics(old), economics(action)) && time(old.known_at) <= time(action.known_at), "HISTORICAL_ACTION_CHANGED");
     }
-    const ceiling = minimum([saved.proof.read_valid_until, root.epoch_definition.valid_until]); check(at < time(ceiling), "EXPIRED");
+    const ceiling = minimum([chain.read_valid_until, root.epoch_definition.valid_until]); check(at < time(ceiling), "EXPIRED");
     economic.corporate_actions = [...carry, ...future].sort(byId);
     economic.valid_until = minimum([economic.valid_until, ceiling, ...(funding ? [funding.projection.valid_until] : [])]);
     for (const row of [...rows(economic.quotes), ...rows(economic.fx)]) row.valid_until = minimum([row.valid_until, ceiling]);

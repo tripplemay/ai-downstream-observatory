@@ -106,6 +106,7 @@ def publication_header(db, workspace, actor, identifier):
         and doc["input"] == _ref(admitted) and doc["checkpoint"] == _ref(checkpoint) and doc["monitor_run_id"] == run["id"]
         and doc["observation_id"] == run["observation_id"] and doc["job_id"] == job["id"]
         and doc["workspace_revision"] == planned["workspace_revision"] + 1 and doc["source_ceiling"] == planned["source_ceiling"]
+        and doc["implementation_hash"] == planned["implementation_hash"]
         and admitted["document_json"] == canonical_json(planned["input"]) and admitted["content_hash"] == content_hash(planned["input"])
         and admitted["actor_id"] == actor and admitted["created_at"] == planned["input"]["created_at"] and admitted["valid_until"] == planned["input"]["valid_until"]
         and job["job_type"] == JOB_TYPE and job["command_request_id"] is None and job["scope"] == workspace
@@ -290,7 +291,8 @@ def read_epoch_continuation_chain(db, workspace, actor, epoch_id, *, now=None, p
         if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='investor_epoch_continuations'").fetchone():
             target = publication_header(db, workspace, actor, publication_id)[0] if publication_id is not None else None
             if target: _check(target["epoch_id"] == epoch_id, "OUT_OF_SCOPE")
-            headers = db.execute("SELECT id FROM investor_epoch_continuations WHERE epoch_id=? AND sequence<=? ORDER BY sequence LIMIT 1001", (epoch_id, target["sequence"] if target else 1000)).fetchall()
+            headers = db.execute("SELECT id FROM investor_epoch_continuations WHERE epoch_id=? AND (? IS NULL OR sequence<=?) ORDER BY sequence LIMIT 1001", (epoch_id, target["sequence"] if target else None, target["sequence"] if target else None)).fetchall()
+            _check(len(headers) <= 1000 and (target is None or len(headers) == target["sequence"]), "CHAIN_CHANGED")
         for index, head in enumerate(headers, 1):
             managed._stopped(db, stop_requested); row, doc = publication_header(db, workspace, actor, head["id"])
             _, planned = _request(db, workspace, actor, row["request_id"])
