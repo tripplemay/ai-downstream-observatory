@@ -24,8 +24,8 @@ class CorrectionConsentTests(unittest.TestCase):
     setUp = runtime.InvestorRuntimeTests.setUp
     assert_no_finance = runtime.InvestorRuntimeTests.assert_no_finance
 
-    def seed(self, *, retain=False, tamper=False):
-        self.enterContext(offline_protocol_fixture()); self.value = settled_correction_case(self.db, self.path)
+    def seed(self, *, retain=False, tamper=False, mode="replace"):
+        self.enterContext(offline_protocol_fixture()); self.value = settled_correction_case(self.db, self.path, mode=mode)
         if retain: self.value["request"]["decisions"][0].update(choice="retain", events=[])
         self.original_request = impact.enqueue_correction_impact(self.db, "w", OWNER, self.value["request"], now=CHECKED)
         for _ in range(12):

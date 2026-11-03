@@ -15,8 +15,8 @@ from worker.orchestration.jobs import claim_job, complete_job, run_one
 from worker.orchestration.runtime import command_handler, run_pending_once
 
 
-def settled_correction_case(db, path):
-    value = correction_case(db, path)
+def settled_correction_case(db, path, *, mode="replace"):
+    value = correction_case(db, path, mode=mode)
     with offline_protocol_fixture():
         # Finish the already-due periodic evaluation before the owner's source
         # witness. A competing evaluation must still invalidate an older CAS.
