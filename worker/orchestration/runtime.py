@@ -303,6 +303,9 @@ def command_handler(connection, clock=None, lease_seconds=300, stop_requested=No
             from worker.investor.model_runtime import prepare_monitor_job
             return prepare_monitor_job(connection, job, lease, clock=clock, stop_requested=stop_requested)
         if job["job_type"] == "investor_evidence_monitor" and role == "core":
+            if job["period"].startswith("epoch-continuation-request:"):
+                from worker.investor.epoch_continuation import prepare_epoch_continuation_job
+                return prepare_epoch_continuation_job(connection, job, lease, clock=clock, stop_requested=stop_requested)
             if job["period"].startswith("model-epoch-request:"):
                 from worker.investor.model_epoch_registration import prepare_model_epoch_registration_job
                 return prepare_model_epoch_registration_job(connection, job, lease, clock=clock, stop_requested=stop_requested)
@@ -458,6 +461,8 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
         admit_completed_feeds(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         refresh_monitor_sources(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         bootstrap_monitor_inputs(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        from worker.investor.epoch_continuation import discover_epoch_continuations
+        discover_epoch_continuations(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         sync_research_requests(connection, limit=discovery_limit, now=clock())
         purge_due_funded_results(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         sync_funded_study_requests(connection, limit=discovery_limit, now=clock())

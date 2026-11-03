@@ -54,9 +54,17 @@ def resolve_checkpoint(db, workspace, definition, checkpoint_id, now):
         epoch = db.execute("SELECT id,model_id FROM investor_model_epochs WHERE checkpoint_id=? AND workspace_id=?", (checkpoint_id, workspace)).fetchone()
         from .registered_model_epoch import read_registered_model_epoch
         owner = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (workspace,)).fetchone()
-        _assert(owner is not None and epoch is not None and epoch["model_id"] == definition["model_id"])
-        replay = read_registered_model_epoch(db, workspace, owner[0], epoch["id"], now=now)
-        _assert(replay["source"]["kernel_input"]["history"]["definition"] == definition)
+        _assert(owner is not None)
+        if epoch is not None:
+            _assert(epoch["model_id"] == definition["model_id"])
+            replay = read_registered_model_epoch(db, workspace, owner[0], epoch["id"], now=now)
+            _assert(replay["source"]["kernel_input"]["history"]["definition"] == definition)
+            return replay["source"]["candidate"]["checkpoint"], None
+        from .epoch_continuation import read_epoch_continuation_chain
+        publication = db.execute("SELECT id,epoch_id FROM investor_epoch_continuations WHERE checkpoint_id=? AND workspace_id=? AND model_id=? AND json_extract(document_json,'$.checkpoint_reused')=0 ORDER BY sequence LIMIT 1", (checkpoint_id, workspace, definition["model_id"])).fetchone()
+        _assert(publication is not None)
+        replay = read_epoch_continuation_chain(db, workspace, owner[0], publication["epoch_id"], now=now, publication_id=publication["id"])
+        _assert(replay["definition"] == definition)
         return replay["source"]["candidate"]["checkpoint"], None
     head = db.execute("SELECT * FROM investor_evidence_model_checkpoints WHERE id=? AND workspace_id=? AND model_id=?", (checkpoint_id, workspace, definition["model_id"])).fetchone()
     _assert(head is not None and 1 <= head["sequence"] <= 1000)

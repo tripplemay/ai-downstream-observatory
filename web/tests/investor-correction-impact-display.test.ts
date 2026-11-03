@@ -9,11 +9,12 @@ import * as client from "../src/components/workbench/investor-correction-impact-
 import {readActionReviewJson} from "../src/components/workbench/investor-action-review-client";
 
 function mount(t:TestContext,modelId:string|null="fictional-model"){
-  let nonce=0;const locks:boolean[]=[];
+  let nonce=0;const locks:boolean[]=[],attemptClocks:(number|undefined)[]=[];
   const h=mountInvestorDisplay(t,new URL("../src/components/workbench/investor-correction-impact.tsx",import.meta.url),"InvestorCorrectionImpact",
     {view:correctionView(),modelId,workspaceId:"w",binding,disabled:false,onGuardChange:(value:boolean)=>locks.push(value)},
     {"@/components/ui/input":{Input:"Input"},"@/components/session-boundary":{useSessionBoundary:()=>({verified:true,sessionBinding:binding})},
-      "./investor-correction-impact-client":client,"./investor-action-review-client":{readActionReviewJson},"./investor-correction-consent":{InvestorCorrectionConsent:"InvestorCorrectionConsent"}},now,{crypto:{randomUUID:()=>`fictional-impact-${++nonce}`,subtle:webcrypto.subtle}});
+      "./investor-correction-impact-client":{...client,buildCorrectionAttempt:(...args:Parameters<typeof client.buildCorrectionAttempt>)=>{attemptClocks.push(args[5]);return client.buildCorrectionAttempt(...args);}},
+      "./investor-action-review-client":{readActionReviewJson},"./investor-correction-consent":{InvestorCorrectionConsent:"InvestorCorrectionConsent"}},now,{crypto:{randomUUID:()=>`fictional-impact-${++nonce}`,subtle:webcrypto.subtle}});
   async function reply(index:number,value:unknown,status=200){h.requests[index].resolve(new Response(JSON.stringify(value),{status}));await h.waitFor(()=>!h.text().includes("正在核对本次请求…"));}
   async function ready(){await h.waitRequests(1);await reply(0,correctionResponse({request:null}));}
   async function edit(index:number,value:string){(h.nodes().filter(row=>row.type==="Input")[index].props.onChange as (event:unknown)=>void)({target:{value}});await h.flush();}
@@ -21,7 +22,7 @@ function mount(t:TestContext,modelId:string|null="fictional-model"){
   async function ack(){(h.nodes().filter(row=>row.type==="input").at(-1)!.props.onChange as (event:unknown)=>void)({target:{checked:true}});await h.flush();}
   async function fill(){await choose("replace");await edit(0,"Fictional explicit comparison only");await edit(1,"2026-11-02T14:30");await edit(2,"2026-11-09T21:00");await edit(3,"0.432109");await ack();}
   const submit=()=>(h.node("form")!.props.onSubmit as (event:unknown)=>void)({preventDefault(){}});
-  return {...h,locks,reply,ready,edit,choose,ack,fill,submit};
+  return {...h,locks,attemptClocks,reply,ready,edit,choose,ack,fill,submit};
 }
 
 test("historical correction opens with GET-only recovery, blank choices and assumptions, no implicit consent or model creation",async t=>{
@@ -35,6 +36,7 @@ test("historical correction opens with GET-only recovery, blank choices and assu
 
 test("one explicit intent, queued GET polling and an original-price result never approve correction or trading",async t=>{
   const h=mount(t);await h.ready();await h.fill();h.submit();h.submit();await h.waitRequests(2);assert.equal(h.requests[1].method,"POST");
+  assert.deepEqual(h.attemptClocks,[now]);
   const body=JSON.parse(h.requests[1].options.body as string);assert.equal(body.decisions[0].events[0].tax_per_unit,"0.432109");assert.equal(body.model_id,"fictional-model");
   assert.equal("gross_per_unit" in body.decisions[0].events[0],false);
   const queued=correctionResponse({lookup_nonce:body.idempotency_key,request:{...correctionResponse().request!,intent_hash:hash(body)}});
@@ -43,6 +45,14 @@ test("one explicit intent, queued GET polling and an original-price result never
   assert.match(h.text(),/原检查点/);assert.match(h.text(),/10002.5/);assert.match(h.text(),/不是当前行情/);assert.match(h.text(),/正式更正须在下方另行确认/);
   assert.equal(h.requests.filter(row=>row.method==="POST").length,1);
   await h.edit(0,"Changed unsubmitted hypothesis");assert.doesNotMatch(h.text(),/10002.5/);
+});
+
+test("a retained submit handler checks the live component clock at the exact deadline even before a display tick",async t=>{
+  const h=mount(t);await h.ready();await h.fill();const submit=h.node("form")!.props.onSubmit as (event:unknown)=>void;
+  const expiry=Date.parse(correctionView().preview.valid_until);h.setWall(expiry);
+  submit({preventDefault(){}});await h.flush();
+  assert.deepEqual(h.attemptClocks,[expiry]);assert.equal(h.requests.length,1);
+  assert.match(h.text(),/原预览期限已到/);assert.equal(h.requests.filter(row=>row.method==="POST").length,0);
 });
 
 test("unknown submission keeps original bytes, empty nonce lookup never clears uncertainty and exact retry is explicit",async t=>{

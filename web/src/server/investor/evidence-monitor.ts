@@ -13,7 +13,7 @@ import { modelWatchSchema, observationSchema, type InvestorObservation } from ".
 import type { InvestorObservationRecord, InvestorProfileVersion } from "./types";
 import { readBoundPlannedFundingMonitor } from "./planned-funding-source";
 import type { PlannedFundingBinding } from "./planned-funding-monitor";
-import { readModelEpochMonitorRun, readModelEpochWatch, readRegisteredModelEpoch } from "./registered-model-epoch";
+import { readModelEpochMonitorRun, readModelEpochWatch, readRegisteredModelEpoch, readPendingEpochContinuationRun } from "./registered-model-epoch";
 
 type Obj = Record<string, unknown>;
 function check(value: unknown): asserts value { if (!value) throw new Error("INVESTOR_EVIDENCE_INVALID"); }
@@ -81,7 +81,12 @@ export function readEvidenceCheckpoint(db: Database.Database, workspace: string,
   if (id === null) return { checkpoint: null, unavailable_reason: null };
   const protocol = db.prepare("SELECT json_extract(i.document_json,'$.schema_version') protocol FROM investor_evidence_model_checkpoints c JOIN investor_monitor_evidence_inputs i ON i.id=c.input_id AND i.workspace_id=c.workspace_id AND i.model_id=c.model_id WHERE c.id=? AND c.workspace_id=? AND c.model_id=?").get(id, workspace, model.id) as Obj | undefined;
   if (protocol?.protocol === "investor-monitor-data-input-v6") {
-    const epoch = db.prepare("SELECT id FROM investor_model_epochs WHERE checkpoint_id=? AND workspace_id=? AND model_id=?").get(id, workspace, model.id) as Obj | undefined; check(epoch);
+    const epoch = db.prepare("SELECT id FROM investor_model_epochs WHERE checkpoint_id=? AND workspace_id=? AND model_id=?").get(id, workspace, model.id) as Obj | undefined;
+    if (!epoch) {
+      const p = db.prepare("SELECT monitor_run_id FROM investor_epoch_continuations WHERE checkpoint_id=? AND workspace_id=? AND model_id=? ORDER BY sequence LIMIT 1").get(id, workspace, model.id) as Obj | undefined; check(p);
+      readPendingEpochContinuationRun(db, workspace, text(p.monitor_run_id), now);
+      return { checkpoint: null, unavailable_reason: "MONITOR_EPOCH_CHAIN_VERIFICATION_PENDING" };
+    }
     const actor = db.prepare("SELECT owner_id FROM investor_workspaces WHERE id=?").get(workspace) as Obj | undefined; check(actor);
     const replay = readRegisteredModelEpoch(db, workspace, { id: text(actor.owner_id) }, text(epoch.id), now);
     check(hash(obj(replay.source.kernel_input.history).definition) === hash(definition));
@@ -118,6 +123,8 @@ export function readEvidenceMonitorRun(db: Database.Database, workspace: string,
       const epoch = db.prepare("SELECT id FROM investor_model_epochs WHERE monitor_run_id=? AND workspace_id=?").get(runId, workspace) as Obj | undefined; check(epoch);
       return readModelEpochMonitorRun(db, workspace, text(epoch.id), now);
     }
+    if (protocol?.protocol === "investor-evidence-monitor-request-v4")
+      return readPendingEpochContinuationRun(db, workspace, runId, now);
     const row = db.prepare(`SELECT u.*,j.status job_status,j.job_type,j.scope job_scope,j.period job_period,j.input_version job_input,j.command_request_id
       FROM investor_evidence_monitor_runs u JOIN job_runs j ON j.id=u.job_id WHERE u.id=? AND u.workspace_id=?`).get(runId, workspace) as Obj | undefined;
     check(row && row.job_status === "succeeded" && row.job_type === "investor_evidence_monitor" && row.command_request_id === null && row.job_scope === workspace && time(row.created_at) <= time(now));

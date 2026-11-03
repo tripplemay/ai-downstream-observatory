@@ -332,6 +332,11 @@
       "file": "0065_investor_model_epoch_registration.sql",
       "foreign_key_rebuild": true,
       "sha256": "2a5ed9e88bbce57185ab77aa2d199cc2f96b90ba255666f7c1cf30072379d0c9"
+    },
+    {
+      "version": 66,
+      "file": "0066_investor_model_epoch_continuations.sql",
+      "sha256": "c83d4bb8bdfa2f8ffa23cef91e42cab81c8e7436374d9902ef8cc5b64c8881d7"
     }
   ]
 }

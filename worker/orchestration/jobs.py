@@ -186,6 +186,9 @@ def complete_job(connection, lease, result, outcome="succeeded", effect=None, no
             raise WorkbenchError("JOB_CLOCK_REGRESSION")
         assert_lease(connection, lease, now=finished)
         finalizing_job = connection.execute("SELECT * FROM job_runs WHERE id=?", (lease.job_id,)).fetchone()
+        if finalizing_job["job_type"] == "investor_evidence_monitor" and finalizing_job["period"].startswith("epoch-continuation-request:"):
+            from worker.investor.epoch_continuation import assert_epoch_continuation_finalization
+            assert_epoch_continuation_finalization(connection, finalizing_job, lease, result, outcome, finished)
         if finalizing_job["job_type"] == "investor_evidence_monitor" and finalizing_job["period"].startswith("model-epoch-request:"):
             from worker.investor.model_epoch_registration import assert_model_epoch_finalization
             assert_model_epoch_finalization(connection, finalizing_job, lease, result, outcome, finished)

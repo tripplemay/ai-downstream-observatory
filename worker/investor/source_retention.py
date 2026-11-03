@@ -58,8 +58,14 @@ def _monitor_reason(db, workspace, definition, input_id, evaluated_at, now):
         from .model_epoch_registration import _header
         epoch = db.execute("SELECT id FROM investor_model_epochs WHERE input_id=? AND workspace_id=? AND model_id=?", (input_id, workspace, definition["model_id"])).fetchone()
         owner = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (workspace,)).fetchone()
-        _assert(epoch is not None and owner is not None)
-        _, record = _header(db, workspace, owner[0], epoch["id"], "registration")
+        _assert(owner is not None)
+        if epoch is not None:
+            _, record = _header(db, workspace, owner[0], epoch["id"], "registration")
+        else:
+            from .epoch_continuation import publication_header
+            continuation = db.execute("SELECT id FROM investor_epoch_continuations WHERE input_id=? AND workspace_id=? AND model_id=?", (input_id, workspace, definition["model_id"])).fetchone()
+            _assert(continuation is not None)
+            _, record = publication_header(db, workspace, owner[0], continuation["id"])
         _assert(record["input"] == {"id": input_id, "content_hash": content_hash(document)})
     else:
         row, document = monitor_evidence_document(db, workspace, definition["model_id"], input_id, now)
@@ -139,6 +145,13 @@ def monitor_payload_unavailable(db, row, kind, now):
         owner = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (workspace,)).fetchone()
         _assert(epoch is not None and owner is not None)
         _, record = _header(db, workspace, owner[0], epoch["id"], "registration")
+        _assert(record["request"]["id"] == request["id"] and record["input"]["id"] == request["input_id"] and record["checkpoint"]["id"] == row["checkpoint_id"])
+    elif bound.get("schema_version") == "investor-evidence-monitor-request-v4":
+        from .epoch_continuation import publication_header
+        publication = db.execute("SELECT id FROM investor_epoch_continuations WHERE monitor_run_id=? AND workspace_id=? AND model_id=?", (row["id"], workspace, model["id"])).fetchone()
+        owner = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (workspace,)).fetchone()
+        _assert(publication is not None and owner is not None)
+        _, record = publication_header(db, workspace, owner[0], publication["id"])
         _assert(record["request"]["id"] == request["id"] and record["input"]["id"] == request["input_id"] and record["checkpoint"]["id"] == row["checkpoint_id"])
     else: _validate_request(bound)
     input_row, _, reason = _monitor_reason(db, workspace, definition, request["input_id"], request["created_at"], now)

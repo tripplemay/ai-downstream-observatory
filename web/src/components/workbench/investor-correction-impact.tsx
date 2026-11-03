@@ -77,7 +77,7 @@ export function InvestorCorrectionImpact({view,modelId,workspaceId,binding,disab
   },[verified,busy,uncertain,waiting,data]);
   function edit(index:number,patch:Partial<CorrectionDraft>){if(!live.current||invalid.current||!current.current.canSubmit)return;setDrafts(rows=>rows.map((row,i)=>i===index?{...row,...patch}:row));setAck(false);setHideSummary(true);}
   function submit(event:FormEvent){event.preventDefault();if(!live.current||invalid.current||!current.current.canSubmit||current.current.key!==key||active.current||pending.current||!modelId)return;try{
-    const attempt=buildCorrectionAttempt(view,modelId,drafts,ack,crypto.randomUUID());pending.current=attempt;setUncertain(true);setHideSummary(true);void exchange(attempt);
+    const attempt=buildCorrectionAttempt(view,modelId,drafts,ack,crypto.randomUUID(),Date.now());pending.current=attempt;setUncertain(true);setHideSummary(true);void exchange(attempt);
   }catch(cause){setError(correctionErrorText(cause));}}
   const expired=now>=Date.parse(view.preview.valid_until),locked=disabled||!verified||busy||uncertain||waiting||!!data?.read_only||expired||consentLocked||registered;
   current.current.canSubmit=!locked;
