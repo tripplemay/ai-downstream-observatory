@@ -54,3 +54,17 @@ test('prepared source proof cannot register epochs, resume monitoring, add write
     assert.equal(validate({ ...proof, ...change }), false);
   assert.doesNotMatch(JSON.stringify(proof), /"(?:quotes|gross_per_unit|tax_per_unit|quantities|cash_by_currency|tax_assumption)":/);
 });
+test('continuation proof is a separate closed structural contract, not registration, admission or resumed monitoring', () => {
+  const ref = { id: 'fictional-only-reference', content_hash: 'a'.repeat(64) };
+  const proof = { schema_version: 'investor-model-epoch-continuation-source-proof-v1', workspace_id: 'fictional-workspace', actor_id: 'fictional-owner', model_id: 'fictional-model',
+    epoch: ref, registration_hash: 'b'.repeat(64), previous_input: ref, previous_checkpoint: ref, model_control: ref,
+    input_hash: 'c'.repeat(64), projection_hash: 'd'.repeat(64), checked_at: '2026-10-21T10:00:03.000Z', valid_until: '2026-10-21T20:00:00.000Z',
+    status: 'qualified_continuation_prepared_not_admitted', epoch_registration_verified: true, previous_state_verified: true, source_evidence_verified: true,
+    continuation_admitted: false, current_source_eligibility_restored: false, checkpoint_created: false, monitoring_resumed: false, trading_permission: false,
+    provider_calls: 0, database_writes: 0, distribution: 'private_owner_only_not_ai' };
+  const validate = ajv.getSchema('https://etf-workbench.invalid/contracts/v1/investor-model-epoch-continuation-source.schema.json#/$defs/proof');
+  assert.equal(validate(proof), true, JSON.stringify(validate.errors));
+  for (const change of [{ continuation_admitted: true }, { monitoring_resumed: true }, { current_source_eligibility_restored: true }, { checkpoint_created: true },
+    { trading_permission: true }, { provider_calls: 1 }, { database_writes: 1 }, { quantities: {} }, { quotes: [] }, { epoch_registration_verified: false }])
+    assert.equal(validate({ ...proof, ...change }), false);
+});

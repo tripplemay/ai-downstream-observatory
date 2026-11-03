@@ -28,16 +28,16 @@ const same = (a: unknown, b: unknown) => hash(a) === hash(b);
 const minimum = (values: unknown[]) => values.map(text).reduce((a, b) => time(a) <= time(b) ? a : b);
 const byId = (a: Obj, b: Obj) => text(a.id) < text(b.id) ? -1 : text(a.id) > text(b.id) ? 1 : 0;
 
-function baseReview(db: Database.Database, workspace: string, identifier: string, now: string) {
+export function modelEpochActionBaseline(db: Database.Database, workspace: string, identifier: string, now: string) {
   if (!identifier.startsWith(MANAGED_ACTION_PREFIX)) return identifier;
   const publication = actionJson(actionRead(db, "investor_action_publications", identifier, workspace).document_json);
   const context = readManagedActionAnchorContext(db, workspace, publication.authority_id, now);
   return text(context.grant.doc.base_review_id);
 }
-function descendant(db: Database.Database, workspace: string, actor: { id: string }, identifier: string, handover: Obj, now: string) {
+export function verifyModelEpochActionDescendant(db: Database.Database, workspace: string, actor: { id: string }, identifier: string, handover: Obj, now: string) {
   const seen = new Set<string>();
   for (let i = 0; i < 256; i++) {
-    identifier = baseReview(db, workspace, identifier, now);
+    identifier = modelEpochActionBaseline(db, workspace, identifier, now);
     if (identifier === handover.new_review_id) return;
     check(!seen.has(identifier), "ACTION_LINEAGE_CHANGED"); seen.add(identifier);
     const row = db.prepare("SELECT id FROM investor_action_review_confirmations WHERE workspace_id=? AND new_review_id=?").get(workspace, identifier) as Obj | undefined;
@@ -47,7 +47,7 @@ function descendant(db: Database.Database, workspace: string, actor: { id: strin
   check(false, "ACTION_LINEAGE_LIMIT");
 }
 
-function settings(db: Database.Database, workspace: string, definition: Obj, reference: Obj, now: string, metadataAt = now) {
+export function modelEpochSourceSettings(db: Database.Database, workspace: string, definition: Obj, reference: Obj, now: string, metadataAt = now) {
   const evidence = obj(reference.reference_evidence), request = actionRead(db, "investor_research_requests", evidence.request_id, workspace);
   const run = actionJson(actionRead(db, "investor_research_runs", evidence.run_id, workspace).document_json), parameters = obj(obj(run.result).selected_parameters);
   const source = readInvestorResearchSource(db, workspace, request as Parameters<typeof readInvestorResearchSource>[2], now);
@@ -136,7 +136,7 @@ function derive(db: Database.Database, workspace: string, actor: { id: string },
     check((funding?.context_hash ?? null) === (frozenFunding?.context_hash ?? null), "FUNDING_CHANGED");
     const rawDocument = auditedEpochInput(document), raw = replayInvestorMonitorData(db, workspace, definition, reference.document.targets as unknown as Obj[], rawDocument, now, calculated);
     check(!raw.unavailable_reason && raw.projection && raw.catalog, raw.unavailable_reason ?? "CURRENT_INPUTS_NOT_READY");
-    check(same(rawDocument.settings, settings(db, workspace, definition, reference.document as unknown as Obj, now, recorded ? frozen : now)), "SETTINGS_CHANGED");
+    check(same(rawDocument.settings, modelEpochSourceSettings(db, workspace, definition, reference.document as unknown as Obj, now, recorded ? frozen : now)), "SETTINGS_CHANGED");
     const originalProjection = raw.projection; check(Array.isArray(originalProjection.quality_gaps) && originalProjection.quality_gaps.length === 0 && time(calculated) < time(originalProjection.valid_until), "CURRENT_INPUTS_NOT_READY");
     const selected = new Map<string, ReturnType<typeof readInvestorSourceReview>>();
     for (const segment of rows(document.segments)) for (const ref of rows(obj(segment.snapshot).review_refs)) {
@@ -147,7 +147,7 @@ function derive(db: Database.Database, workspace: string, actor: { id: string },
     for (const [listing, handover] of handovers) {
       const source = selected.get(listing), asset = raw.catalog[listing];
       check(source && asset?.market === "US" && asset.currency === "USD", "ACTION_SELECTION_CHANGED");
-      descendant(db, workspace, actor, text(source.row.id), handover, now);
+      verifyModelEpochActionDescendant(db, workspace, actor, text(source.row.id), handover, now);
     }
     const changed = new Set(corrections.map(entry => text(obj(obj(entry.baseline).approved_facts).listing_id)));
     const carry = [...history.original_actions.filter(row => !changed.has(text(row.listing_id))), ...corrections.flatMap(entry =>
