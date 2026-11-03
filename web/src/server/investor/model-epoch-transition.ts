@@ -15,12 +15,16 @@ const same = (a: unknown, b: unknown) => hash(a) === hash(b);
 const proof = (value: Obj) => Object.fromEntries(Object.entries(value).filter(([key]) => !["checked_at", "source_valid_until"].includes(key)));
 const actions = (value: Obj[]) => Object.fromEntries(value.map(row => [text(row.id), hash(row)]));
 const byId = (a: Obj, b: Obj) => text(a.id) < text(b.id) ? -1 : text(a.id) > text(b.id) ? 1 : 0;
+function projectionFor(value: Obj, epochId: unknown) {
+  if (value.schema_version !== "investor-monitor-data-projection-v4") return value;
+  check(obj(value.epoch).id === epochId, "PROJECTION_EPOCH_BINDING"); return obj(value.economic_projection);
+}
 
 /** Unpublished arithmetic only: the caller must independently authenticate the
  * retained prefix, registered consents/handovers and actual current sources. */
 export function replayCorrectedModelEpoch(raw: unknown, implementationHash: string) {
   validateModelEpochTransition("input", raw); check(/^[a-f0-9]{64}$/.test(implementationHash), "IMPLEMENTATION_HASH");
-  const value = obj(raw), history = obj(value.history), corrections = rows(value.corrections), projection = obj(value.projection);
+  const value = obj(raw), history = obj(value.history), corrections = rows(value.corrections), projection = projectionFor(obj(value.projection), value.epoch_id);
   const definition = obj(history.definition), head = obj(history.head), origin = obj(history.origin), at = time(value.now);
   const targets = Object.fromEntries(rows(definition.targets).map(row => [text(row.listing_id), row]));
   const original = rows(history.original_actions), oldHashes = actions(original), bindings: Obj[] = [], selected: Obj[] = [];
@@ -77,7 +81,7 @@ export function replayCorrectedModelEpoch(raw: unknown, implementationHash: stri
   let assessment = replayEvidenceAssessment(advanced.document, text(value.now), implementationHash) as Obj;
   let checkpoint: Obj | null = null, request: Obj | null = null;
   if (assessment.outcome !== "insufficient_evidence") {
-    checkpoint = { ...advanced.checkpoint, schema_version: "investor-evidence-model-checkpoint-v4", previous_hash: hash(head), epoch_binding: binding };
+    checkpoint = { ...advanced.checkpoint, schema_version: "investor-evidence-model-checkpoint-v4", previous_hash: hash(head), epoch_binding: binding, projection_hash: hash(value.projection) };
     validateModelEpochCheckpoint(checkpoint);
     const document = { ...advanced.document, model_state_hash: hash(checkpoint) };
     const final = replayEvidenceAssessment(document, text(value.now), implementationHash) as Obj;
@@ -99,7 +103,7 @@ function result(binding: Obj, checkpoint: Obj | null, request: Obj | null, asses
  * required separately; the ordinary legacy reader never accepts v4. */
 export function replayModelEpochContinuation(raw: unknown, implementationHash: string) {
   validateModelEpochTransition("continuation_input", raw); check(/^[a-f0-9]{64}$/.test(implementationHash), "IMPLEMENTATION_HASH");
-  const value = obj(raw), definition = obj(value.definition), previous = obj(value.previous), projection = obj(value.projection), binding = obj(previous.epoch_binding);
+  const value = obj(raw), definition = obj(value.definition), previous = obj(value.previous), binding = obj(previous.epoch_binding), projection = projectionFor(obj(value.projection), binding.epoch_id);
   const targets = Object.fromEntries(rows(definition.targets).map(row => [text(row.listing_id), row]));
   check(binding.model_hash === hash(definition), "CONTINUATION_BINDING");
   const cutoffs = obj(previous.market_cutoffs), historical = rows(projection.corporate_actions).filter(row => Object.hasOwn(targets, text(row.listing_id))
@@ -115,7 +119,7 @@ export function replayModelEpochContinuation(raw: unknown, implementationHash: s
   let checkpoint: Obj | null = null, request: Obj | null = null;
   if (assessment.outcome !== "insufficient_evidence") {
     checkpoint = same(advanced.checkpoint, adapter) ? structuredClone(previous) : {
-      ...advanced.checkpoint, schema_version: "investor-evidence-model-checkpoint-v4", previous_hash: hash(previous), epoch_binding: structuredClone(binding) };
+      ...advanced.checkpoint, schema_version: "investor-evidence-model-checkpoint-v4", previous_hash: hash(previous), epoch_binding: structuredClone(binding), projection_hash: hash(value.projection) };
     validateModelEpochCheckpoint(checkpoint);
     const document = { ...advanced.document, model_state_hash: hash(checkpoint) };
     const final = replayEvidenceAssessment(document, text(value.now), implementationHash) as Obj;

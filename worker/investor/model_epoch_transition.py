@@ -24,6 +24,12 @@ def _proof(value):
 def _actions(value): return {row["id"]: content_hash(row) for row in value}
 
 
+def _projection(value, epoch_id):
+    if value["schema_version"] != "investor-monitor-data-projection-v4": return value
+    _check(value["epoch"]["id"] == epoch_id, "PROJECTION_EPOCH_BINDING")
+    return value["economic_projection"]
+
+
 @financial
 def advance_corrected_model_epoch(value):
     """Recompute approved arithmetic, combine disjoint listings and take a new close.
@@ -34,7 +40,8 @@ def advance_corrected_model_epoch(value):
     """
     with contract_validation_scope():
         validate_contract(value, SCHEMA)
-        history, corrections, projection = (value[key] for key in ("history", "corrections", "projection"))
+        history, corrections = value["history"], value["corrections"]
+        projection = _projection(value["projection"], value["epoch_id"])
         definition, head, origin = (history[key] for key in ("definition", "head", "origin"))
         at = instant(value["now"]); targets = {row["listing_id"]: row for row in definition["targets"]}
         original = history["original_actions"]; old_hashes = _actions(original)
@@ -93,7 +100,7 @@ def advance_corrected_model_epoch(value):
         advanced = advance_evidence_model(definition, projection, bridge, value["now"], input_hash=value["input_hash"], planned_funding=value["planned_funding"])
         candidate, request, assessment = advanced["checkpoint"], None, advanced["assessment"]
         if candidate is not None:
-            candidate.update(schema_version="investor-evidence-model-checkpoint-v4", previous_hash=content_hash(head), epoch_binding=binding)
+            candidate.update(schema_version="investor-evidence-model-checkpoint-v4", previous_hash=content_hash(head), epoch_binding=binding, projection_hash=content_hash(value["projection"]))
             validate_contract(candidate, "investor-evidence-model-checkpoint-v4.schema.json")
             request = advanced["monitor_request"]; request["document"]["model_state_hash"] = content_hash(candidate)
             assessment = assess_model(request["document"], value["now"])
@@ -116,7 +123,8 @@ def continue_corrected_model_epoch(value):
     """Continue an independently requalified v4 chain; never authenticate it here."""
     with contract_validation_scope():
         validate_contract(value, SCHEMA, fragment="$defs/continuation_input")
-        definition, previous, projection = (value[key] for key in ("definition", "previous", "projection"))
+        definition, previous = value["definition"], value["previous"]
+        projection = _projection(value["projection"], previous["epoch_binding"]["epoch_id"])
         binding = previous["epoch_binding"]; targets = {row["listing_id"]: row for row in definition["targets"]}
         _check(binding["model_hash"] == content_hash(definition), "CONTINUATION_BINDING")
         historical = [row for row in projection["corporate_actions"] if row["listing_id"] in targets
@@ -135,7 +143,7 @@ def continue_corrected_model_epoch(value):
         candidate, request, assessment = advanced["checkpoint"], None, advanced["assessment"]
         if candidate is not None:
             if candidate == adapter: candidate = deepcopy(previous)
-            else: candidate.update(schema_version="investor-evidence-model-checkpoint-v4", previous_hash=content_hash(previous), epoch_binding=deepcopy(binding))
+            else: candidate.update(schema_version="investor-evidence-model-checkpoint-v4", previous_hash=content_hash(previous), epoch_binding=deepcopy(binding), projection_hash=content_hash(value["projection"]))
             validate_contract(candidate, "investor-evidence-model-checkpoint-v4.schema.json")
             request = advanced["monitor_request"]; request["document"]["model_state_hash"] = content_hash(candidate)
             assessment = assess_model(request["document"], value["now"])

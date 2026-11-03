@@ -47,6 +47,7 @@ import legacyTransitionSource from "../../../../contracts/v1/investor-legacy-tra
 import legacyTransitionJob from "../../../../contracts/v1/investor-legacy-transition-job.schema.json";
 import actionRestatementKernel from "../../../../contracts/v1/investor-action-restatement-kernel.schema.json";
 import modelEpochTransition from "../../../../contracts/v1/investor-model-epoch-transition.schema.json";
+import modelEpochSource from "../../../../contracts/v1/investor-model-epoch-source.schema.json";
 import evidenceCheckpointV4 from "../../../../contracts/v1/investor-evidence-model-checkpoint-v4.schema.json";
 import retainedActionEvidence from "../../../../contracts/v1/investor-retained-action-evidence.schema.json";
 import retainedMonitorHistory from "../../../../contracts/v1/investor-retained-monitor-history.schema.json";
@@ -117,6 +118,7 @@ ajv.addSchema(legacyActionTransitionPreview);
 ajv.addSchema(legacyTransitionWorkflow);
 ajv.addSchema(actionRestatementKernel);
 ajv.addSchema(modelEpochTransition);
+ajv.addSchema(modelEpochSource);
 ajv.addSchema(evidenceCheckpointV4);
 ajv.addSchema(retainedActionEvidence);
 ajv.addSchema(retainedMonitorHistory);
@@ -189,6 +191,9 @@ export function validateModelEpochTransition(kind: "input" | "continuation_input
   requireTrue(ajv.getSchema(modelEpochTransition.$id + "#/$defs/" + kind)!(value));
 }
 export function validateModelEpochCheckpoint(value: unknown) { requireTrue(ajv.getSchema(evidenceCheckpointV4.$id)!(value)); }
+export function validateModelEpochSource(kind: "definition" | "input" | "projection" | "proof" | "correction_ref", value: unknown) {
+  requireTrue(ajv.getSchema(modelEpochSource.$id + "#/$defs/" + kind)!(value));
+}
 export function validateRetainedActionEvidenceProof(value: unknown) { requireTrue(ajv.getSchema(retainedActionEvidence.$id)!(value)); }
 export function validateRetainedMonitorHistoryProof(value: unknown) { requireTrue(ajv.getSchema(retainedMonitorHistory.$id)!(value)); }
 export function validateActionCorrectionImpact(kind: "request" | "result", value: unknown) {

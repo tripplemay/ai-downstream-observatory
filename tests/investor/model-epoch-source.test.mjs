@@ -1,0 +1,56 @@
+import assert from 'node:assert/strict';
+import { readdirSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
+import test from 'node:test';
+
+const root = new URL('../../', import.meta.url), require = createRequire(new URL('../../web/package.json', import.meta.url));
+const Ajv = require('ajv/dist/2020'), ajv = new Ajv({ strict: true, strictRequired: false }); require('ajv-formats')(ajv);
+for (const name of readdirSync(new URL('contracts/v1/', root)).filter(name => name.endsWith('.schema.json')))
+  ajv.addSchema(JSON.parse(readFileSync(new URL('contracts/v1/' + name, root), 'utf8')));
+const schema = 'https://etf-workbench.invalid/contracts/v1/investor-model-epoch-source.schema.json';
+let saved;
+function fixture() {
+  if (!saved) {
+    const child = spawnSync(process.env.WORKBENCH_TEST_PYTHON ?? process.env.WORKBENCH_PYTHON ?? 'python3', ['-c', `
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import subprocess
+from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture
+from tests.investor.epoch_source_fixture import create,NOW
+from worker.investor.model_epoch_source import prepare_model_epoch_source
+from worker.orchestration.db import open_database,canonical_json
+with TemporaryDirectory(prefix='etf-epoch-source-contract-') as directory,offline_protocol_fixture():
+ path=Path(directory)/'workbench.db'
+ run=subprocess.run(['node','scripts/migrate-workbench.mjs','--db',str(path)],capture_output=True,text=True,timeout=30)
+ assert run.returncode==0,run.stderr
+ db=open_database(path)
+ try:
+  value=create(db,path);before=db.total_changes
+  result=prepare_model_epoch_source(db,'w','owner',**value,now=NOW)
+  assert db.total_changes==before
+  print(canonical_json(result))
+ finally:db.close()
+`], { cwd: root, encoding: 'utf8', timeout: 120000, maxBuffer: 2097152, env: { PATH: process.env.PATH, NODE_ENV: 'test' } });
+    assert.ok(!child.error, child.error?.code); assert.equal(child.status, 0, child.stderr); saved = JSON.parse(child.stdout);
+  }
+  return structuredClone(saved);
+}
+test('distinct closed v6 metadata and v4 projection require a qualified source derivation, not ordinary input relabelling', () => {
+  const value = fixture();
+  for (const [kind, field] of [['definition', 'epoch_definition'], ['input', 'input'], ['projection', 'projection'], ['proof', 'proof']]) {
+    const validate = ajv.getSchema(schema + '#/$defs/' + kind);
+    assert.equal(validate(value[field]), true, JSON.stringify(validate.errors));
+  }
+  assert.equal(value.input.schema_version, 'investor-monitor-data-input-v6');
+  assert.equal(value.proof.source_evidence_verified, true); assert.equal(value.proof.epoch_registered, false);
+  const old = ajv.getSchema('https://etf-workbench.invalid/contracts/v1/investor-monitor-data-input-v4.schema.json');
+  assert.equal(old(value.input), false);
+});
+test('prepared source proof cannot register epochs, resume monitoring, add writes/calls or leak raw prices/amounts', () => {
+  const { proof } = fixture(), validate = ajv.getSchema(schema + '#/$defs/proof');
+  for (const change of [{ epoch_registered: true }, { current_source_eligibility_restored: true }, { checkpoint_created: true }, { monitoring_resumed: true },
+    { trading_permission: true }, { provider_calls: 1 }, { database_writes: 1 }, { facts: {} }, { quotes: [] }, { tax_assumption: 'invented' }])
+    assert.equal(validate({ ...proof, ...change }), false);
+  assert.doesNotMatch(JSON.stringify(proof), /"(?:quotes|gross_per_unit|tax_per_unit|quantities|cash_by_currency|tax_assumption)":/);
+});

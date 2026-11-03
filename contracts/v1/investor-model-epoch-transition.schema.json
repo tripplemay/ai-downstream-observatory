@@ -5,6 +5,7 @@
   "$defs": {
     "id": {"$ref": "common.schema.json#/$defs/id"}, "hash": {"$ref": "common.schema.json#/$defs/hash"},
     "instant": {"$ref": "investor-planned-funding-monitor.schema.json#/$defs/instant"},
+    "current_projection": {"oneOf": [{"$ref": "investor-action-restatement-kernel.schema.json#/$defs/projection"}, {"$ref": "investor-model-epoch-source.schema.json#/$defs/projection"}]},
     "history": {"type": "object", "additionalProperties": false,
       "required": ["definition", "origin", "head", "origin_projection", "head_projection", "original_actions", "corrected_coverage"],
       "properties": {
@@ -26,7 +27,7 @@
       "properties": {
         "schema_version": {"const": "investor-model-epoch-transition-input-v1"}, "epoch_id": {"$ref": "#/$defs/id"}, "history": {"$ref": "#/$defs/history"},
         "corrections": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$ref": "#/$defs/correction"}},
-        "projection": {"$ref": "investor-action-restatement-kernel.schema.json#/$defs/projection"}, "input_hash": {"$ref": "#/$defs/hash"},
+        "projection": {"$ref": "#/$defs/current_projection"}, "input_hash": {"$ref": "#/$defs/hash"},
         "planned_funding": {"oneOf": [{"type": "null"}, {"$ref": "investor-planned-funding-monitor.schema.json"}]}, "now": {"$ref": "#/$defs/instant"}
       }},
     "correction_binding": {"type": "object", "additionalProperties": false,
@@ -40,7 +41,7 @@
       "required": ["schema_version", "definition", "previous", "projection", "input_hash", "planned_funding", "now"],
       "properties": {
         "schema_version": {"const": "investor-model-epoch-continuation-input-v1"}, "definition": {"$ref": "#/$defs/history/properties/definition"},
-        "previous": {"$ref": "investor-evidence-model-checkpoint-v4.schema.json"}, "projection": {"$ref": "investor-action-restatement-kernel.schema.json#/$defs/projection"},
+        "previous": {"$ref": "investor-evidence-model-checkpoint-v4.schema.json"}, "projection": {"$ref": "#/$defs/current_projection"},
         "input_hash": {"$ref": "#/$defs/hash"}, "planned_funding": {"oneOf": [{"type": "null"}, {"$ref": "investor-planned-funding-monitor.schema.json"}]}, "now": {"$ref": "#/$defs/instant"}
       }},
     "binding": {"type": "object", "additionalProperties": false,
