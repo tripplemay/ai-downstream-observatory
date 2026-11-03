@@ -303,6 +303,9 @@ def command_handler(connection, clock=None, lease_seconds=300, stop_requested=No
             from worker.investor.model_runtime import prepare_monitor_job
             return prepare_monitor_job(connection, job, lease, clock=clock, stop_requested=stop_requested)
         if job["job_type"] == "investor_evidence_monitor" and role == "core":
+            if job["period"].startswith("model-epoch-request:"):
+                from worker.investor.model_epoch_registration import prepare_model_epoch_registration_job
+                return prepare_model_epoch_registration_job(connection, job, lease, clock=clock, stop_requested=stop_requested)
             from worker.investor.evidence_monitor_runtime import prepare_evidence_monitor_job
             return prepare_evidence_monitor_job(connection, job, lease, clock=clock, stop_requested=stop_requested)
         if job["job_type"] not in supported:

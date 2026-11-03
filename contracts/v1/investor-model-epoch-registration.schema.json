@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-model-epoch-registration.schema.json",
+  "oneOf": [{"$ref": "#/$defs/preview"}, {"$ref": "#/$defs/submit"}, {"$ref": "#/$defs/request"}, {"$ref": "#/$defs/registration"}],
+  "$defs": {
+    "id": {"$ref": "common.schema.json#/$defs/id"},
+    "hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "instant": {"$ref": "investor-reference-plan.schema.json#/$defs/instant"},
+    "reference": {"$ref": "investor-model-epoch-source.schema.json#/$defs/reference"},
+    "revision": {"type": "integer", "minimum": 0, "maximum": 9007199254740990},
+    "acknowledgements": {
+      "type": "object", "additionalProperties": false,
+      "required": ["separate_current_epoch", "displayed_source_and_correction_bindings", "reported_coverage_not_objective_absence", "economic_carry_not_point_in_time", "preserve_original_model_and_history", "no_strategy_cash_or_trading_change"],
+      "properties": {
+        "separate_current_epoch": {"const": true}, "displayed_source_and_correction_bindings": {"const": true},
+        "reported_coverage_not_objective_absence": {"const": true}, "economic_carry_not_point_in_time": {"const": true},
+        "preserve_original_model_and_history": {"const": true}, "no_strategy_cash_or_trading_change": {"const": true}
+      }
+    },
+    "preview": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "preview_id", "workspace_id", "actor_id", "model_id", "workspace_revision", "epoch_definition", "input", "source_proof", "previous_input_id", "change_fence", "implementation_hash", "created_at", "valid_until", "epoch_registered", "trading_permission"],
+      "properties": {
+        "schema_version": {"const": "investor-model-epoch-preview-v1"}, "preview_id": {"$ref": "#/$defs/id"},
+        "workspace_id": {"$ref": "#/$defs/id"}, "actor_id": {"$ref": "#/$defs/id"}, "model_id": {"$ref": "#/$defs/id"},
+        "workspace_revision": {"$ref": "#/$defs/revision"},
+        "epoch_definition": {"$ref": "investor-model-epoch-source.schema.json#/$defs/definition"},
+        "input": {"$ref": "investor-model-epoch-source.schema.json#/$defs/input"},
+        "source_proof": {"$ref": "investor-model-epoch-source.schema.json#/$defs/proof"},
+        "previous_input_id": {"$ref": "#/$defs/id"}, "change_fence": {"$ref": "#/$defs/hash"},
+        "implementation_hash": {"$ref": "#/$defs/hash"}, "created_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"},
+        "epoch_registered": {"const": false}, "trading_permission": {"const": false}
+      }
+    },
+    "submit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "preview_id", "expected_preview_hash", "expected_revision", "idempotency_key", "acknowledgements"],
+      "properties": {
+        "schema_version": {"const": "investor-model-epoch-submit-v1"}, "preview_id": {"$ref": "#/$defs/id"},
+        "expected_preview_hash": {"$ref": "#/$defs/hash"}, "expected_revision": {"$ref": "#/$defs/revision"},
+        "idempotency_key": {"$ref": "#/$defs/id"}, "acknowledgements": {"$ref": "#/$defs/acknowledgements"}
+      }
+    },
+    "monitor_request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "engine_version", "model_hash", "profile_hash", "control_id", "input_hash", "checkpoint_hash", "epoch", "epoch_request_id"],
+      "properties": {
+        "schema_version": {"const": "investor-evidence-monitor-request-v3"},
+        "engine_version": {"const": "investor-evidence-model-watcher-epoch-v1"},
+        "model_hash": {"$ref": "#/$defs/hash"}, "profile_hash": {"$ref": "#/$defs/hash"},
+        "control_id": {"$ref": "#/$defs/id"}, "input_hash": {"$ref": "#/$defs/hash"}, "checkpoint_hash": {"$ref": "#/$defs/hash"},
+        "epoch": {"$ref": "#/$defs/reference"}, "epoch_request_id": {"$ref": "#/$defs/id"}
+      }
+    },
+    "request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "request_id", "workspace_id", "actor_id", "model_id", "workspace_revision", "preview", "body", "monitor_request", "created_at", "valid_until", "trading_permission"],
+      "properties": {
+        "schema_version": {"const": "investor-model-epoch-request-v1"}, "request_id": {"$ref": "#/$defs/id"},
+        "workspace_id": {"$ref": "#/$defs/id"}, "actor_id": {"$ref": "#/$defs/id"}, "model_id": {"$ref": "#/$defs/id"},
+        "workspace_revision": {"$ref": "#/$defs/revision"}, "preview": {"$ref": "#/$defs/reference"},
+        "body": {"$ref": "#/$defs/submit"}, "monitor_request": {"$ref": "#/$defs/monitor_request"},
+        "created_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"}, "trading_permission": {"const": false}
+      }
+    },
+    "registration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "epoch", "request", "workspace_id", "actor_id", "model_id", "workspace_revision", "input", "checkpoint", "monitor_run_id", "observation_id", "job_id", "implementation_hash", "source_proof", "calculated_at", "created_at", "publication_deadline", "valid_until", "source_registered", "first_state_published", "monitoring_resumed", "historical_observations_rewritten", "trading_permission", "provider_calls", "distribution"],
+      "properties": {
+        "schema_version": {"const": "investor-model-epoch-registration-v1"}, "epoch": {"$ref": "#/$defs/reference"},
+        "request": {"$ref": "#/$defs/reference"}, "workspace_id": {"$ref": "#/$defs/id"}, "actor_id": {"$ref": "#/$defs/id"},
+        "model_id": {"$ref": "#/$defs/id"}, "workspace_revision": {"$ref": "#/$defs/revision"},
+        "input": {"$ref": "#/$defs/reference"}, "checkpoint": {"$ref": "#/$defs/reference"},
+        "monitor_run_id": {"$ref": "#/$defs/id"}, "observation_id": {"$ref": "#/$defs/id"}, "job_id": {"$ref": "#/$defs/id"},
+        "implementation_hash": {"$ref": "#/$defs/hash"}, "source_proof": {"$ref": "investor-model-epoch-source.schema.json#/$defs/proof"},
+        "calculated_at": {"$ref": "#/$defs/instant"}, "created_at": {"$ref": "#/$defs/instant"}, "publication_deadline": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"},
+        "source_registered": {"const": true}, "first_state_published": {"const": true}, "monitoring_resumed": {"const": false},
+        "historical_observations_rewritten": {"const": false}, "trading_permission": {"const": false}, "provider_calls": {"const": 0},
+        "distribution": {"const": "private_owner_only_not_ai"}
+      }
+    }
+  }
+}

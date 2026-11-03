@@ -95,6 +95,8 @@ def discover_evidence_monitor_requests(db, *, limit=100, now=None):
           AND m.plan_id=(SELECT plan_id FROM investor_plan_selections WHERE workspace_id=m.workspace_id ORDER BY created_at DESC,rowid DESC LIMIT 1)
           AND json_extract(m.document_json,'$.data_mode')='reconstructed' AND json_extract(m.document_json,'$.valid_until')>?
           AND EXISTS(SELECT 1 FROM investor_monitor_evidence_inputs WHERE model_id=m.id)
+          AND (SELECT json_extract(document_json,'$.schema_version') FROM investor_monitor_evidence_inputs WHERE model_id=m.id
+            ORDER BY created_at DESC,rowid DESC LIMIT 1)!='investor-monitor-data-input-v6'
           ORDER BY COALESCE((SELECT MAX(created_at) FROM investor_evidence_monitor_requests WHERE model_id=m.id),'') ASC,m.id LIMIT ?""", (at, limit)).fetchall()
         for model in models:
             try: _, definition, _ = current_monitor_model(db, model["workspace_id"], model["id"], at)

@@ -326,6 +326,12 @@
       "file": "0064_investor_corrected_action_handover.sql",
       "foreign_key_rebuild": true,
       "sha256": "dc131776b984322ca7fb9ce00bae6c1d384ce4c4812892d1b7c4ba62beeeb136"
+    },
+    {
+      "version": 65,
+      "file": "0065_investor_model_epoch_registration.sql",
+      "foreign_key_rebuild": true,
+      "sha256": "2a5ed9e88bbce57185ab77aa2d199cc2f96b90ba255666f7c1cf30072379d0c9"
     }
   ]
 }
