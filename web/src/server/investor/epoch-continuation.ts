@@ -2,7 +2,7 @@ import type Database from "better-sqlite3";
 import { canonical, hash } from "../ledger/service";
 import { priceInstant } from "../market-price-source";
 import { parseStrictJson } from "../strict-json";
-import { actionAudit, actionJson, actionRead } from "./action-source-proof";
+import { actionAudit, actionJson, actionRead, actionJobStartedByMillisecond } from "./action-source-proof";
 import { readModelEpochRegistrationHeader } from "./model-epoch-registration";
 import { readRegisteredModelEpoch } from "./registered-model-epoch";
 import { auditedEpochInput, modelEpochActionBaseline, modelEpochSourceSettings, verifyModelEpochActionDescendant } from "./model-epoch-source";
@@ -109,7 +109,7 @@ export function readEpochContinuationHeader(db: Database.Database, workspace: st
     && [admitted, checkpoint, run, monitor].every(value => value.model_id === row.model_id)
     && job.job_type === "investor_evidence_monitor" && job.command_request_id === null && job.scope === workspace && job.period === request.id
     && job.input_version === request.input_version && job.status === "succeeded" && attempt && attempt.status === "succeeded" && attempt.fencing_token === job.fencing_token
-    && time(request.created_at) <= time(job.created_at) && time(job.created_at) <= time(attempt.started_at) && time(attempt.started_at) <= time(doc.calculated_at)
+    && time(request.created_at) <= time(job.created_at) && time(job.created_at) <= time(attempt.started_at) && actionJobStartedByMillisecond(text(attempt.started_at),text(doc.calculated_at))
     && time(doc.calculated_at) <= time(doc.created_at) && time(doc.created_at) <= time(attempt.finished_at) && time(attempt.finished_at) < time(doc.publication_deadline)
     && time(attempt.finished_at) <= time(now) && time(doc.publication_deadline) <= time(minimum([request.valid_until, proof.valid_until, row.valid_until]))
     && proof.checked_at === doc.calculated_at && proof.input_hash === admitted.content_hash && proof.projection_hash === input.projection_hash

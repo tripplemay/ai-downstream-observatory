@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 import { canonical, hash } from "../ledger/service";
 import { priceInstant } from "../market-price-source";
-import { actionAudit, actionJson, actionRead } from "./action-source-proof";
+import { actionAudit, actionJson, actionRead, actionJobStartedByMillisecond } from "./action-source-proof";
 import { validateInvestorEvidenceMonitor, validateInvestorModelDocument, validateModelEpochRegistration, validateModelEpochSource } from "./kernel-contracts";
 
 type Obj = Record<string, unknown>;
@@ -63,7 +63,7 @@ export function readModelEpochRegistrationHeader(db: Database.Database, workspac
   const attempt = db.prepare("SELECT * FROM job_attempts WHERE job_id=? AND attempt=?").get(job.id, job.attempt_count) as Obj | undefined;
   check(attempt && attempt.status === "succeeded" && attempt.fencing_token === job.fencing_token
     && time(request.created_at) <= time(job.created_at) && time(job.created_at) <= time(attempt.started_at)
-    && time(attempt.started_at) <= time(record.calculated_at) && time(record.created_at) <= time(attempt.finished_at)
+    && actionJobStartedByMillisecond(text(attempt.started_at),text(record.calculated_at)) && time(record.created_at) <= time(attempt.finished_at)
     && time(attempt.finished_at) < time(record.publication_deadline) && time(attempt.finished_at) <= time(now));
   check(same(actionJson(job.result_json), { epoch_id: epochId, monitor_run_id: run.id, observation_id: record.observation_id,
     checkpoint_id: checkpoint.id, status: "epoch_registered_not_resumed", live_advice_eligible: false }));

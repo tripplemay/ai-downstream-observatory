@@ -85,18 +85,38 @@ test("compact confirmation removes intrinsic fieldset/button minimums and retain
   for(const checkbox of h.nodes().filter(r=>r.type==="input"))assert.match(String(checkbox.props.className),/shrink-0/);
 });
 function mountEpoch(t:TestContext){
-  const locks:boolean[]=[];
+  const locks:boolean[]=[],changed:number[]=[];
   let nonce=0;
   const h=mountInvestorDisplay(t,new URL("../src/components/workbench/investor-epoch-control.tsx",import.meta.url),"InvestorEpochControl",
-    {workspaceId:"w",modelId:"fictional-model",binding,disabled:false,onGuardChange:(v:boolean)=>locks.push(v),onChanged:()=>{}},
+    {workspaceId:"w",modelId:"fictional-model",binding,disabled:false,onGuardChange:(v:boolean)=>locks.push(v),onChanged:()=>changed.push(1)},
     {"@/components/session-boundary":{useSessionBoundary:()=>({verified:true,sessionBinding:binding})},"@/server/investor/epoch-control-schemas":epochSchemas,
       "./investor-epoch-control-client":epochClient,"./investor-action-review-client":{readActionReviewJson}},now,
     {crypto:{randomUUID:()=>"fictional-epoch-command-"+(++nonce),subtle:globalThis.crypto.subtle}});
   const reply=async(i:number,value:unknown,status=200)=>{h.requests[i].resolve(new Response(JSON.stringify(value),{status}));await h.waitFor(()=>!h.text().includes("正在核对受理记录…"));};
   const fill=async()=>{for(let index=0;index<3;index++){const input=h.nodes().filter(row=>row.type==="input")[index];(input.props.onChange as (e:unknown)=>void)({target:{checked:true}});await h.flush();}};
   const submit=()=>{(h.node("form")!.props.onSubmit as (e:unknown)=>void)({preventDefault(){}});};
-  return {...h,reply,fill,submit,locks};
+  return {...h,reply,fill,submit,locks,changed};
 }
+test("epoch metadata advances after the enable receipt recheck the parent, but unchanged reads and queued intents do not unlock it",async t=>{
+  const h=mountEpoch(t);await h.waitRequests(1);await h.reply(0,epochResponse());
+  const initial=h.changed.length;await h.click("核对观察开关");await h.waitRequests(2);await h.reply(1,epochResponse());assert.equal(h.changed.length,initial);
+  await h.fill();h.submit();await h.waitRequests(3);const intent=JSON.parse(h.requests[2].options.body as string),queued=queuedEpochControl(intent);
+  await h.reply(2,queued,202);assert.equal(h.changed.length,initial);assert.equal(h.locks.at(-1),true);
+  await h.advance(now+2500);await h.waitRequests(4);
+  const applied={...queued,workspace_revision:2,checked_at:new Date(now+2500).toISOString(),refresh_after:new Date(now+17500).toISOString(),
+    epoch:{...queued.epoch!,enabled:true,control_id:"fictional-enabled",control_version:1},
+    request:{...queued.request!,status:"applied",code:"EPOCH_CONTROL_APPLIED"},
+    receipt:{control_id:"fictional-enabled",intent_hash:queued.request!.intent_hash,epoch_id:intent.epoch_id,enabled:true}};
+  await h.reply(3,applied);assert.equal(h.changed.length,initial+1);assert.equal(h.locks.at(-1),false);
+  await h.click("核对观察开关");await h.waitRequests(5);await h.reply(4,applied);assert.equal(h.changed.length,initial+1);
+  await h.click("核对观察开关");await h.waitRequests(6);
+  const published={...applied,workspace_revision:3,epoch:{...applied.epoch,checkpoint:{id:"fictional-next-checkpoint",content_hash:"c".repeat(64)}}};
+  await h.reply(5,published);assert.equal(h.changed.length,initial+2);
+  await h.click("核对观察开关");await h.waitRequests(7);await h.reply(6,{...published,workspace_revision:4,
+    epoch:{...published.epoch,enabled:false,control_id:"fictional-other-tab-pause",control_version:2}});
+  assert.equal(h.changed.length,initial+3);assert.match(h.text(),/本阶段尚未启用或已暂停/);
+  assert.equal(h.requests.filter(row=>row.method==="POST").length,1);
+});
 test("epoch control submits one explicit activation, polls no automatic POST, and allows a distinct pause while activation is queued",async t=>{
   const h=mountEpoch(t);await h.waitRequests(1);await h.reply(0,epochResponse());assert.equal(h.locks.at(-1),false);
   assert.deepEqual(h.nodes().filter(n=>n.type==="input").map(n=>n.props.checked),[false,false,false]);

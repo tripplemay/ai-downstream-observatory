@@ -43,6 +43,25 @@ class EpochContinuationTests(unittest.TestCase):
         value["result"] = json.loads(value["result_json"])
         return value
 
+    def test_microsecond_attempt_start_and_millisecond_record_keep_exact_bucket_boundary(self):
+        self.assertTrue(runtime._job_started_by_millisecond("2026-10-20T10:00:03.000999Z", FIRST))
+        self.assertFalse(runtime._job_started_by_millisecond("2026-10-20T10:00:03.001000Z", FIRST))
+        with self.assertRaisesRegex(WorkbenchError, "CLOCK_PRECISION_CHANGED"):
+            runtime._job_started_by_millisecond(FIRST, "2026-10-20T10:00:03.000001Z")
+        self.seed(); self.activate()
+        # Preserve fine attempt logs while the producer records its real ms bucket.
+        runtime.discover_epoch_continuations(self.db, now=FIRST)
+        clock = lambda: "2026-10-20T10:00:03.000073Z"
+        result = run_one(self.db, "fictional-microsecond-attempt", command_handler(self.db, clock=lambda: FIRST), job_type=runtime.JOB_TYPE, clock=clock)
+        self.assertEqual(result["status"], "succeeded", result)
+        publication = json.loads(result["result_json"])["publication_id"]
+        row, doc = runtime.publication_header(self.db, "w", "owner", publication)
+        attempt = self.db.execute("SELECT started_at FROM job_attempts WHERE job_id=?", (row["job_id"],)).fetchone()[0]
+        self.assertEqual(attempt, "2026-10-20T10:00:03.000073Z")
+        self.assertEqual(doc["calculated_at"], FIRST)
+        chain = runtime.read_epoch_continuation_chain(self.db, "w", "owner", self.epoch_id, now="2026-10-20T10:00:03.001Z")
+        self.assertEqual(chain["last_publication"]["id"], publication)
+
     def test_explicit_activation_default_core_next_close_and_query_only_full_chain_without_trading_or_reset(self):
         self.seed(); before = list(self.db.iterdump())
         self.assertEqual(runtime.discover_epoch_continuations(self.db, now=FIRST), [])

@@ -89,6 +89,13 @@ def _request(db, workspace, actor, identifier):
     return row, doc
 
 
+def _job_started_by_millisecond(started, recorded):
+    # Domain stamps truncate to milliseconds; preserve the attempt's finer log.
+    at = instant(recorded)
+    _check(at.microsecond % 1000 == 0, "CLOCK_PRECISION_CHANGED")
+    return instant(started) < at + timedelta(milliseconds=1)
+
+
 def publication_header(db, workspace, actor, identifier):
     """Metadata authentication only; source/payload replay is a separate step."""
     row, doc = _seal(db, workspace, actor, identifier, "publication")
@@ -112,8 +119,9 @@ def publication_header(db, workspace, actor, identifier):
         and job["job_type"] == JOB_TYPE and job["command_request_id"] is None and job["scope"] == workspace
         and job["period"] == request["id"] and job["input_version"] == request["input_version"] and job["status"] == "succeeded"
         and attempt is not None and attempt["status"] == "succeeded" and attempt["fencing_token"] == job["fencing_token"]
-        and instant(request["created_at"]) <= instant(job["created_at"]) <= instant(attempt["started_at"]) <= instant(doc["calculated_at"])
-        <= instant(doc["created_at"]) <= instant(attempt["finished_at"]) < instant(doc["publication_deadline"])
+        and instant(request["created_at"]) <= instant(job["created_at"]) <= instant(attempt["started_at"])
+        and _job_started_by_millisecond(attempt["started_at"], doc["calculated_at"])
+        and instant(doc["calculated_at"]) <= instant(doc["created_at"]) <= instant(attempt["finished_at"]) < instant(doc["publication_deadline"])
         and instant(doc["publication_deadline"]) <= min(instant(request["valid_until"]), instant(doc["source_proof"]["valid_until"]), instant(row["valid_until"]))
         and doc["source_proof"]["checked_at"] == doc["calculated_at"] and doc["source_proof"]["input_hash"] == admitted["content_hash"]
         and doc["source_proof"]["previous_input"] == planned["previous_input"] and doc["source_proof"]["previous_checkpoint"] == planned["previous_checkpoint"]

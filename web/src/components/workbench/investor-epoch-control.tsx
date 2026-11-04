@@ -29,8 +29,12 @@ export function InvestorEpochControl({workspaceId,modelId,binding,disabled,onGua
   useEffect(()=>{generation.current++;active.current?.abort();active.current=null;pending.current=null;tracking.current=null;reported.current=null;invalid.current=false;
     setData(null);setAnswers({});setBusy(false);setUncertain(false);setError("");},[key]);
   useEffect(()=>{callbacks.current.onGuardChange(verified&&(uncertain||dirty||waiting||busy&&!!pending.current));},[verified,busy,uncertain,dirty,waiting]);
-  useEffect(()=>{const marker=data?.receipt?.control_id??(["rejected","superseded"].includes(data?.request?.status??"")?data!.request!.id:null);
-    if(!marker||reported.current===marker)return;reported.current=marker;setAnswers({});callbacks.current.onChanged();},[data?.receipt,data?.request]);
+  useEffect(()=>{
+    if(!verified||!data||busy||uncertain||dirty||waiting)return;
+    // Control acceptance and its later observation are separate publications.
+    const marker=[data.workspace_revision,data.epoch?.id,data.epoch?.control_id,data.epoch?.checkpoint.id,data.epoch?.checkpoint.content_hash].join(":");
+    if(reported.current===marker)return;reported.current=marker;callbacks.current.onChanged();
+  },[data,verified,busy,uncertain,dirty,waiting]);
   async function exchange(attempt?:EpochControlAttempt){
     const start=current.current;if(!live.current||invalid.current||!start.verified||active.current||attempt&&start.disabled)return;
     const controller=new AbortController(),sequence=++generation.current;active.current=controller;setBusy(true);setError("");

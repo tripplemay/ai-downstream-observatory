@@ -13,10 +13,19 @@ import { Decimal } from "../src/server/ledger/decimal";
 import { assertCurrentEpochSourceSelection } from "../src/server/investor/current-epoch-sources";
 import { readEvidenceReference } from "../src/server/investor/reference-evidence";
 import {submitEpochControl,readEpochControlResponse} from "../src/server/investor/epoch-control-jobs";
+import {actionJobStartedByMillisecond} from "../src/server/investor/action-source-proof";
 
 type Obj = Record<string, unknown>;
 const now = "2026-10-21T10:00:03.000Z";
 function obj(value: unknown): Obj { assert.ok(value && typeof value === "object" && !Array.isArray(value)); return value as Obj; }
+test("millisecond publication buckets accept finer same-bucket attempt starts but reject the exact next millisecond",()=>{
+  const recorded="2026-11-04T18:34:55.367Z";
+  assert.equal(actionJobStartedByMillisecond("2026-11-04T18:34:55.367073Z",recorded),true);
+  assert.equal(actionJobStartedByMillisecond("2026-11-04T18:34:55.367999Z",recorded),true);
+  assert.equal(actionJobStartedByMillisecond("2026-11-04T18:34:55.368000Z",recorded),false);
+  assert.equal(actionJobStartedByMillisecond("2026-11-04T18:34:55.369000Z",recorded),false);
+  assert.throws(()=>actionJobStartedByMillisecond(recorded,"2026-11-04T18:34:55.367001Z"));
+});
 test("ordinary owner activation queues one real core check; immediate metadata-only pause invalidates stale enable work without changing global control",t=>{
   const f=investorFixture();t.after(f.close);const at="2026-10-20T10:00:03.000Z",actor={id:"owner"},binding="a".repeat(64);
   const seeded=actionPython(f.filename,`

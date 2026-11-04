@@ -3,7 +3,7 @@ import type Database from "better-sqlite3";
 import { assertWritableDatabase } from "../workbench-db";
 import { canonical, hash } from "../ledger/service";
 import { priceInstant as time } from "../market-price-source";
-import { actionAudit, actionJson, actionRead } from "./action-source-proof";
+import { actionAudit, actionJson, actionRead, actionJobStartedByMillisecond } from "./action-source-proof";
 import { readModelEpochRegistrationHeader } from "./model-epoch-registration";
 import { readEpochControlHeader } from "./epoch-continuation";
 import { validateEpochContinuation, validateEpochControlJob } from "./kernel-contracts";
@@ -113,7 +113,7 @@ export function readEpochControlResponse(db:Database.Database,actor:{id:string},
         actionAudit(db,ws.id as string,result,"investor_finish_epoch_control","investor_epoch_control_result");
         const attempt=db.prepare("SELECT * FROM job_attempts WHERE job_id=? AND attempt=1").get(job.id) as Obj|undefined;
         check(attempt&&attempt.status==="succeeded"&&attempt.fencing_token===job.fencing_token&&attempt.error_json===null
-          &&time(row.created_at as string)<=time(attempt.started_at as string)&&time(attempt.started_at as string)<=time(result.created_at as string)
+          &&time(row.created_at as string)<=time(attempt.started_at as string)&&actionJobStartedByMillisecond(attempt.started_at as string,result.created_at as string)
           &&time(result.created_at as string)<=time(attempt.finished_at as string)&&attempt.finished_at===job.updated_at&&time(job.updated_at as string)<=time(now)
           &&hash(actionJson(job.result_json))===hash({request_id:row.id,result_id:result.id,outcome:result.outcome,code:result.code,trading_permission:false})
           &&time(doc.valid_until as string)<=time(row.valid_until as string),"RESULT_CHANGED");
