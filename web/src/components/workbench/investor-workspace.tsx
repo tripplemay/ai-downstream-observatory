@@ -30,6 +30,7 @@ import { initialCloseProgressRequest } from "@/server/investor/initial-close-pro
 import { InvestorActionMaintenance } from "./investor-action-maintenance";
 import { InvestorActionReview } from "./investor-action-review";
 import { InvestorLegacyTransition } from "./investor-legacy-transition";
+import { InvestorEpochControl } from "./investor-epoch-control";
 import type { ResearchExecutionReview, ResearchCashIntentReview } from "@/server/investor/research-execution";
 
 export type InvestorView = "overview" | "plan" | "observations" | "accounts";
@@ -213,7 +214,7 @@ function CurrentResearchModel({ value }: { value: ResearchModelComposition }) {
     <p className="mt-2 break-words text-xs text-muted-foreground">本次评估：{value.evaluated_at} · 整体输入截止：{value.data_cutoff}。各市场收盘分别核对，不代表同时完成。</p>
   </section>;
 }
-function ModelWatch({ watch: storedWatch, disabled, onToggle, nowMs }: { watch: InvestorModelWatch; disabled: boolean; onToggle: () => void; nowMs: number }) {
+function ModelWatch({ watch: storedWatch, disabled, onToggle, nowMs, controlPending=false }: { watch: InvestorModelWatch; disabled: boolean; onToggle: () => void; nowMs: number; controlPending?:boolean }) {
   const watch = currentModelWatchDisplay(storedWatch, nowMs);
   const states = { awaiting_inputs: "观察任务已登记，等待合格行情", awaiting_evaluation: "监测输入已登记，等待后台复核", queued: "后台复核已排队", running: "后台正在复核模型",
     retrying: "复核尚未完成，等待重试", blocked: "监测证据不足，不能判断是否调整", synthetic_preview: "合成模型复核完成，仅用于软件测试",
@@ -223,9 +224,10 @@ function ModelWatch({ watch: storedWatch, disabled, onToggle, nowMs }: { watch: 
   return <Card id="research-model-watch" title="持续观察"><div className="flex flex-wrap items-start justify-between gap-3"><div>
     <p role="status" className="text-sm font-medium">{states[watch.status]}</p>
     <p className="mt-2 text-xs text-muted-foreground">最后复核：{watch.completed_at ?? "尚未完成"} · 下一次：{watch.next_check_at ?? "输入更新后"}</p>
-  </div><Button variant="outline" disabled={disabled} onClick={onToggle}>{watch.enabled ? "暂停观察任务" : "恢复观察任务"}</Button></div>
+  </div>{watch.control_scope!=="epoch"&&<Button variant="outline" disabled={disabled} onClick={onToggle}>{watch.enabled ? "暂停观察任务" : "恢复观察任务"}</Button>}</div>
+    {controlPending&&<p role="status" className="mt-3 text-sm">研究观察开关正在核对，旧净值和变化暂不作为当前结论。</p>}
     {watch.acquisition && <InvestorAcquisitionPanel value={watch.acquisition} nowMs={nowMs} modelValidUntil={watch.valid_until} />}
-    {watch.model_nav_cny !== null && <p className="mt-3 rounded-lg border border-amber-500/40 p-3 text-sm">{watch.source_qualification === "owner_reviewed_reconstructed" ? "历史重建参考模型估值" : "合成测试估值"} {formatResearchMoney(watch.model_nav_cny)} CNY · 归一化起点 10,000 CNY · 检查点 {watch.checkpoint_sequence}。不是你的本金、账户资产或扣费后收益。</p>}
+    {!controlPending&&watch.model_nav_cny !== null && <p className="mt-3 rounded-lg border border-amber-500/40 p-3 text-sm">{watch.source_qualification === "owner_reviewed_reconstructed" ? "历史重建参考模型估值" : "合成测试估值"} {formatResearchMoney(watch.model_nav_cny)} CNY · 归一化起点 10,000 CNY · 检查点 {watch.checkpoint_sequence}。不是你的本金、账户资产或扣费后收益。</p>}
     <p className="mt-3 text-sm text-muted-foreground">研究模型与真实账户独立；保存方案登记观察任务，不代表行情已合格。分红和拆分独立处理，计划投入和采纳建议不会自动改变持仓或生成交易。</p>
   </Card>;
 }
@@ -303,15 +305,17 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
   const [pending, setPending] = useState<{ body: string; binding: string; workspace: string | null } | null>(null);
   const alive = useRef(true), invalidated = useRef(false), generation = useRef(0), refreshInFlight = useRef(false);
   const accountScope = useRef(false), [accountScopeLocked, setAccountScopeLocked] = useState(false);
-  const scopeLocks = useRef({ account: false, costs: false, reviews:false, legacy:false }), [scopeState, setScopeState] = useState({ account: false, costs: false,reviews:false,legacy:false });
-  const lockScope = useCallback((scope: "account" | "costs" | "reviews" | "legacy", value: boolean) => {
+  const [epochRecheck,setEpochRecheck]=useState(false);
+  const scopeLocks = useRef({ account: false, costs: false, reviews:false, legacy:false,epoch:false }), [scopeState, setScopeState] = useState({ account: false, costs: false,reviews:false,legacy:false,epoch:false });
+  const lockScope = useCallback((scope: "account" | "costs" | "reviews" | "legacy" | "epoch", value: boolean) => {
     const next = { ...scopeLocks.current, [scope]: value }; scopeLocks.current = next;
-    accountScope.current = next.account || next.costs || next.reviews || next.legacy; setAccountScopeLocked(accountScope.current); setScopeState(next);
+    accountScope.current = next.account || next.costs || next.reviews || next.legacy || next.epoch; setAccountScopeLocked(accountScope.current); setScopeState(next);
   }, []);
   const lockAccountScope = useCallback((value: boolean) => lockScope("account", value), [lockScope]);
   const lockCostScope = useCallback((value: boolean) => lockScope("costs", value), [lockScope]);
   const lockReviewScope = useCallback((value:boolean)=>lockScope("reviews",value),[lockScope]);
   const lockLegacyScope = useCallback((value:boolean)=>lockScope("legacy",value),[lockScope]);
+  const lockEpochScope = useCallback((value:boolean)=>lockScope("epoch",value),[lockScope]);
   const note = useRef<HTMLTextAreaElement>(null);
   function invalidate() { invalidated.current = true; generation.current++; setData(null); setPending(null); setError("SESSION_CHANGED"); setBusy(false); }
   useEffect(() => {
@@ -330,7 +334,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
     return () => { window.removeEventListener("beforeunload", beforeUnload); document.removeEventListener("click", navigate, true); };
   }, [pending]);
   const sessionVerified = boundary === null || (boundary.verified && boundary.sessionBinding === initialSessionBinding);
-  const baseLocked = busy || !sessionVerified || !data || data.read_only || pending !== null || invalidated.current;
+  const baseLocked = busy || !sessionVerified || !data || data.read_only || pending !== null || invalidated.current || epochRecheck;
   const comparisonScopeLocked = !sessionVerified || !data || data.read_only || pending !== null || invalidated.current || editing || !!error;
   const locked = baseLocked || accountScopeLocked;
   async function request(init: RequestInit) {
@@ -350,7 +354,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
     if (!response.ok) throw new Error("INVESTOR_UNAVAILABLE");
     const state = parseInvestorState(value, initialSessionBinding);
     if (!alive.current || invalidated.current || generation.current !== sequence || accountScope.current) return false;
-    setData(state); return true;
+    setData(state);setEpochRecheck(false); return true;
   }
   async function refresh(clearError = true) {
     if (busy || refreshInFlight.current || !sessionVerified || invalidated.current || accountScope.current) return;
@@ -361,6 +365,10 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
     catch (e) { if (alive.current && !invalidated.current && sequence === generation.current) setError(e instanceof Error ? e.message : "INVESTOR_UNAVAILABLE"); }
     finally { refreshInFlight.current = false; if (clearError && alive.current && sequence === generation.current) setBusy(false); }
   }
+  useEffect(()=>{if(!epochRecheck||!sessionVerified||accountScopeLocked||busy||error)return;
+    const timer=setInterval(()=>void refresh(false),1000);return()=>clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[epochRecheck,sessionVerified,accountScopeLocked,busy,error]);
   useEffect(() => {
     if (view === "observations" || busy || pending || editing || accountScopeLocked || !sessionVerified || invalidated.current) return;
     const interval = investorPollInterval(data);
@@ -401,7 +409,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
     finally { if (alive.current && sequence === generation.current) setBusy(false); }
   }
   function command(intent: Record<string, unknown>, fromAccounts: boolean | "costs" = false) {
-    if (scopeLocks.current.reviews || scopeLocks.current.legacy) return;
+    if (scopeLocks.current.reviews || scopeLocks.current.legacy || scopeLocks.current.epoch) return;
     if ((fromAccounts === "costs" ? baseLocked || scopeState.account || scopeState.reviews || scopeState.legacy : fromAccounts ? baseLocked || scopeState.costs || scopeState.reviews || scopeState.legacy : locked) || !data) return;
     if (intent.action === "review" && currentInvestorDisplay(data, Math.max(displayClock.current, Date.now())).outcome !== "decision_required") {
       setError("INVESTOR_OBSERVATION_NOT_CURRENT"); return;
@@ -414,8 +422,8 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
   }
   const display = data ? currentInvestorDisplay(data, displayNow) : null;
   const latest = data?.latest, profile = data?.profile, plan = display?.plan ?? null;
-  const currentOutcome = display?.outcome === "not_started" ? null : display?.outcome ?? null;
-  const composition = data && sessionVerified && pending === null && !invalidated.current ? currentResearchModelComposition(data, displayNow) : null;
+  const currentOutcome = scopeState.epoch||epochRecheck?"insufficient_evidence":display?.outcome === "not_started" ? null : display?.outcome ?? null;
+  const composition = data && sessionVerified && pending === null && !invalidated.current && !scopeState.epoch && !epochRecheck ? currentResearchModelComposition(data, displayNow) : null;
   const policyReview = currentOutcome !== "insufficient_evidence" && latest?.document.model_change?.policy_evaluation
     ? <PolicyReview value={latest.document.model_change.policy_evaluation} /> : null;
   const title = view === "plan" ? "组合方案" : view === "observations" ? "观察记录" : view === "accounts" ? "账户资料" : "ETF 投资工作台";
@@ -471,24 +479,28 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
           </summary>
           <div className="flex min-w-0 flex-col gap-6 p-3 pt-0 md:p-5 md:pt-0">{policyReview}{riskPanel}{researchDetails}</div>
         </details> : researchDetails}
-        {data.model_watch && <ModelWatch watch={data.model_watch} nowMs={displayNow} disabled={locked || !data.model_watch.enabled && !canResumeInvestorWatch(data, displayNow)}
+        {data.model_watch && <ModelWatch watch={data.model_watch} nowMs={displayNow} controlPending={scopeState.epoch||epochRecheck} disabled={locked || !data.model_watch.enabled && !canResumeInvestorWatch(data, displayNow)}
           onToggle={() => command({ action: "set_monitoring", model_id: data.model_watch!.id, enabled: !data.model_watch!.enabled })} />}
+        {data.workspace_id&&data.model_watch?.control_scope==="epoch"&&<InvestorEpochControl key={`epoch:${initialSessionBinding}:${data.workspace_id}:${data.model_watch.id}`}
+          workspaceId={data.workspace_id} modelId={data.model_watch.id} binding={initialSessionBinding}
+          disabled={baseLocked||editing||scopeState.account||scopeState.costs||scopeState.reviews||scopeState.legacy} onGuardChange={lockEpochScope}
+          onChanged={()=>{generation.current++;setEpochRecheck(true);lockEpochScope(false);void refresh(false);}}/>}
         {data.action_maintenance ? <InvestorActionMaintenance value={data.action_maintenance} nowMs={displayNow}>
           {data.action_drafts && <InvestorActionDrafts value={data.action_drafts} nowMs={displayNow} />}
         </InvestorActionMaintenance> : data.action_drafts && <InvestorActionDrafts value={data.action_drafts} nowMs={displayNow} />}
         {data.workspace_id&&<InvestorActionReview key={`${initialSessionBinding}:${data.workspace_id}`} workspaceId={data.workspace_id} binding={initialSessionBinding}
           modelId={data.model_watch?.id??null}
-          disabled={baseLocked||editing||scopeState.account||scopeState.costs||scopeState.legacy} onScopeChange={lockReviewScope} onRefresh={()=>void refresh(false)}/>}
+          disabled={baseLocked||editing||scopeState.account||scopeState.costs||scopeState.legacy||scopeState.epoch} onScopeChange={lockReviewScope} onRefresh={()=>void refresh(false)}/>}
         {view === "plan"&&data.workspace_id&&data.model_watch&&<InvestorLegacyTransition key={`legacy:${initialSessionBinding}:${data.workspace_id}:${data.model_watch.id}`} workspaceId={data.workspace_id} binding={initialSessionBinding}
-          disabled={baseLocked||editing||scopeState.account||scopeState.costs||scopeState.reviews} onScopeChange={lockLegacyScope} onRefresh={()=>void refresh(false)}/>}
+          disabled={baseLocked||editing||scopeState.account||scopeState.costs||scopeState.reviews||scopeState.epoch} onScopeChange={lockLegacyScope} onRefresh={()=>void refresh(false)}/>}
         {data.monitor_costs && (data.monitor_costs.editable || data.monitor_costs.version > 0) && <InvestorMonitorCostPanel
           key={`${data.monitor_costs.model_id}:${data.monitor_costs.version}`} state={data.monitor_costs} nowMs={displayNow}
-          disabled={baseLocked || editing || scopeState.account || scopeState.reviews || scopeState.legacy} onCommand={intent => command(intent, "costs")} onEditingChange={lockCostScope} />}
+          disabled={baseLocked || editing || scopeState.account || scopeState.reviews || scopeState.legacy || scopeState.epoch} onCommand={intent => command(intent, "costs")} onEditingChange={lockCostScope} />}
         {view !== "overview" && evidenceGaps}
         <div className="grid gap-6 lg:grid-cols-2"><Card title="你的研究边界"><dl className="space-y-3 text-sm"><div className="flex justify-between gap-3"><dt className="text-muted-foreground">投资期限</dt><dd>{profile.document.horizon_years} 年</dd></div><div className="flex justify-between gap-3"><dt className="text-muted-foreground">损失承受范围</dt><dd>{profile.document.loss_tolerance ? `约 ${Number(profile.document.loss_tolerance) * 100}%` : "尚未确认"}</dd></div><div className="flex justify-between gap-3"><dt className="text-muted-foreground">研究市场</dt><dd>{profile.document.markets.map(m => marketLabels[m]).join(" / ")}</dd></div><div className="flex justify-between gap-3"><dt className="text-muted-foreground">计划初始预算</dt><dd>{profile.document.illustrative_budget_cny ? `${profile.document.illustrative_budget_cny} CNY（非现金）` : "未填写"}</dd></div></dl><Button className="mt-4" variant="outline" disabled={locked} onClick={() => setEditing(value => !value)}>{editing ? "收起编辑" : "修改研究偏好"}</Button></Card>
           <Card title="下一次复核"><div className="flex items-start gap-3"><Clock3 className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" /><div className="space-y-2 text-sm">{display?.stale ? <><p role="status">已知期限已到，等待核对新评估。请刷新状态；旧观察仅作历史记录。</p><p className="text-xs text-muted-foreground">没有成功核对的新结果，不代表后台已完成复核或无需调整。</p></> : <>{display?.researchBlocker ? <p>{display.researchBlocker.action}</p> : latest?.document.next_conditions.map((condition, i) => <p key={i}>{condition}</p>)}<p className="text-xs text-muted-foreground">{latest?.document.monitoring === "active" ? `持续监测 · ${latest.document.next_review_at ?? "等待数据更新"}` : "持续监测尚未启用，不把手动检查当作后台已运行。"}</p></>}</div></div></Card>
         </div>
-        <Card title="策略解释与反证"><div className="flex items-start gap-3"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" /><div className="min-w-0 flex-1"><p className="text-sm">规则结论由确定性核验产生；AI 仅提供单独标注的解释与反证，不生成价格或替你批准交易。</p>{display?.stale && <p role="status" className="mt-3 text-sm">当前观察已到期，停止展示旧 AI 正文与生成入口；刷新并核对新观察后再请求解释。</p>}<InvestorAiPanel state={data} binding={initialSessionBinding} disabled={locked || editing || !!display?.stale} /><details className="mt-4 text-sm"><summary className="cursor-pointer">查看已记录输入版本与历史证据</summary><pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify({ profile_hash: profile.content_hash, observation: latest }, null, 2)}</pre></details></div></div></Card>
+        <Card title="策略解释与反证"><div className="flex items-start gap-3"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" /><div className="min-w-0 flex-1"><p className="text-sm">规则结论由确定性核验产生；AI 仅提供单独标注的解释与反证，不生成价格或替你批准交易。</p>{display?.stale && <p role="status" className="mt-3 text-sm">当前观察已到期，停止展示旧 AI 正文与生成入口；刷新并核对新观察后再请求解释。</p>}{!scopeState.epoch&&!epochRecheck&&<InvestorAiPanel state={data} binding={initialSessionBinding} disabled={locked || editing || !!display?.stale} />}<details className="mt-4 text-sm"><summary className="cursor-pointer">查看已记录输入版本与历史证据</summary><pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify({ profile_hash: profile.content_hash, observation: latest }, null, 2)}</pre></details></div></div></Card>
       </>}
       {view === "observations" && <InvestorHistoryPanel workspaceId={data.workspace_id} binding={initialSessionBinding} disabled={!sessionVerified || pending !== null || invalidated.current} observationId={historyObservationId} />}
       {view === "overview" && profile && <Card title="最近观察">{data.observations.length === 0 ? <p className="text-sm text-muted-foreground">尚无观察记录。先保存研究偏好，不需要创建真实账户。</p> : <div className="space-y-3">{data.observations.slice(0, 3).map(row => <article key={row.id} id={`research-observation-${row.id}`} className="rounded-xl border p-4"><div className="flex flex-wrap justify-between gap-2"><h3 className="text-sm font-semibold">{labels[row.document.outcome]}</h3><time className="text-xs text-muted-foreground">{row.document.evaluated_at}</time></div><p className="mt-2 text-sm text-muted-foreground">{row.document.reasons[0]}</p><p className="mt-2 text-xs text-muted-foreground">约束 v{row.document.profile_version} · 数据截止 {row.document.data_cutoff ?? "未知"}</p>{data.decisions.filter(decision => decision.observation_id === row.id).map(decision => <p key={decision.id} className="mt-3 border-t pt-3 text-sm">你的决定：{decisionLabels[decision.decision]} · {decision.note || "无备注"} <span className="text-xs text-muted-foreground">（审阅记录，非成交）</span></p>)}</article>)}</div>}<p className="mt-3 text-xs text-muted-foreground">总览只展示近期摘要与部分决定，完整历史请进入观察归档。</p><Link className="mt-4 inline-block text-sm underline" href="/workbench/observations" prefetch={false}>查看观察归档</Link></Card>}

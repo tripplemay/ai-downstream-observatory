@@ -7,6 +7,9 @@ import * as schemas from "../src/server/investor/correction-consent-schemas";
 import * as client from "../src/components/workbench/investor-correction-consent-client";
 import { readActionReviewJson } from "../src/components/workbench/investor-action-review-client";
 import { consentResponse, consentSummaryHash, confirmedConsent, queuedConsent } from "./correction-consent-client-fixture";
+import * as epochSchemas from "../src/server/investor/epoch-control-schemas";
+import * as epochClient from "../src/components/workbench/investor-epoch-control-client";
+import {epochResponse,queuedEpochControl,pausedEpochControl} from "./epoch-control-client-fixture";
 
 function mount(t: TestContext, impactId: string | null = "fictional-impact", summaryHash: string | null = consentSummaryHash) {
   const locks: boolean[] = [], registered: number[] = [];
@@ -80,4 +83,37 @@ test("compact confirmation removes intrinsic fieldset/button minimums and retain
   const h=mount(t);await h.ready();assert.match(String(h.node("fieldset")!.props.className),/min-w-0/);
   const button=h.button("登记本次历史更正，不恢复监测或交易")!;assert.match(String(button.props.className),/max-w-full/);assert.match(String(button.props.className),/whitespace-normal/);
   for(const checkbox of h.nodes().filter(r=>r.type==="input"))assert.match(String(checkbox.props.className),/shrink-0/);
+});
+function mountEpoch(t:TestContext){
+  const locks:boolean[]=[];
+  let nonce=0;
+  const h=mountInvestorDisplay(t,new URL("../src/components/workbench/investor-epoch-control.tsx",import.meta.url),"InvestorEpochControl",
+    {workspaceId:"w",modelId:"fictional-model",binding,disabled:false,onGuardChange:(v:boolean)=>locks.push(v),onChanged:()=>{}},
+    {"@/components/session-boundary":{useSessionBoundary:()=>({verified:true,sessionBinding:binding})},"@/server/investor/epoch-control-schemas":epochSchemas,
+      "./investor-epoch-control-client":epochClient,"./investor-action-review-client":{readActionReviewJson}},now,
+    {crypto:{randomUUID:()=>"fictional-epoch-command-"+(++nonce),subtle:globalThis.crypto.subtle}});
+  const reply=async(i:number,value:unknown,status=200)=>{h.requests[i].resolve(new Response(JSON.stringify(value),{status}));await h.waitFor(()=>!h.text().includes("正在核对受理记录…"));};
+  const fill=async()=>{for(let index=0;index<3;index++){const input=h.nodes().filter(row=>row.type==="input")[index];(input.props.onChange as (e:unknown)=>void)({target:{checked:true}});await h.flush();}};
+  const submit=()=>{(h.node("form")!.props.onSubmit as (e:unknown)=>void)({preventDefault(){}});};
+  return {...h,reply,fill,submit,locks};
+}
+test("epoch control submits one explicit activation, polls no automatic POST, and allows a distinct pause while activation is queued",async t=>{
+  const h=mountEpoch(t);await h.waitRequests(1);await h.reply(0,epochResponse());assert.equal(h.locks.at(-1),false);
+  assert.deepEqual(h.nodes().filter(n=>n.type==="input").map(n=>n.props.checked),[false,false,false]);
+  h.submit();await h.flush();assert.equal(h.requests.length,1);await h.fill();h.submit();h.submit();await h.waitRequests(2);
+  const enabled=JSON.parse(h.requests[1].options.body as string);await h.reply(1,queuedEpochControl(enabled),202);
+  assert.equal(h.button("取消待启用并暂停本阶段")?.props.disabled,false);await h.click("取消待启用并暂停本阶段");await h.waitRequests(3);
+  const pause=JSON.parse(h.requests[2].options.body as string);assert.equal(pause.enabled,false);assert.notEqual(pause.idempotency_key,enabled.idempotency_key);
+  await h.reply(2,pausedEpochControl(pause));assert.match(h.text(),/本阶段尚未启用或已暂停/);assert.equal(h.locks.at(-1),false);
+});
+test("epoch control lost responses retain exact bytes; deadline, session, parent locks and unmount defeat old submit handlers",async t=>{
+  const h=mountEpoch(t);await h.waitRequests(1);await h.reply(0,epochResponse());await h.fill();h.submit();await h.waitRequests(2);
+  const body=h.requests[1].options.body as string;await h.fail(1);await h.click("核对观察开关");await h.waitRequests(3);assert.match(h.requests[2].url,/nonce=/);
+  await h.fail(2);await h.advance(now+10000);assert.equal(h.requests.length,3);await h.click("明确重试原请求");await h.waitRequests(4);assert.equal(h.requests[3].options.body,body);
+  const next=mountEpoch(t);await next.waitRequests(1);await next.reply(0,epochResponse());await next.fill();const stale=next.node("form")!.props.onSubmit as (e:unknown)=>void;
+  await next.advance(now+15000);stale({preventDefault(){}});await next.flush();assert.equal(next.requests.filter(r=>r.method==="POST").length,0);
+  await next.change({disabled:true});stale({preventDefault(){}});await next.flush();assert.equal(next.requests.filter(r=>r.method==="POST").length,0);
+  await next.invalidate();stale({preventDefault(){}});await next.flush();assert.equal(next.requests.filter(r=>r.method==="POST").length,0);
+  const closed=mountEpoch(t);await closed.waitRequests(1);await closed.reply(0,epochResponse());await closed.fill();const old=closed.node("form")!.props.onSubmit as (e:unknown)=>void;
+  closed.close();old({preventDefault(){}});await closed.flush();assert.equal(closed.requests.filter(r=>r.method==="POST").length,0);assert.equal(closed.locks.at(-1),false);
 });

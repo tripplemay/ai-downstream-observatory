@@ -44,7 +44,7 @@ function mount(t: { after: (fn: () => void) => void }, state = displayState(), v
       "./investor-model-composition": { currentResearchModelComposition },
       "@/server/investor/schemas": schemas, "@/server/investor/loss-scenarios": losses, "./research-format": research, "./investor-client": client,
       "@/server/investor/initial-close-progress": { initialCloseProgressRequest },
-      ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel", "history-panel", "monitor-cost-panel","action-review","legacy-transition"]
+      ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel", "history-panel", "monitor-cost-panel","action-review","legacy-transition","epoch-control"]
         .map(name => { const component = "Investor" + name.split("-").map(value => value[0].toUpperCase() + value.slice(1)).join("");
           return ["./investor-" + name, { [component]: component }]; })),
       "./investor-acquisition": { acquisitionDeadlines, InvestorAcquisitionPanel: "InvestorAcquisitionPanel" },
@@ -67,6 +67,17 @@ test("qualified model composition leads the overview while reference evidence st
   assert.match(h.words(fold), /Historical|历史研究参考组合/);
   assert.ok(h.nodes().indexOf(current) < h.nodes().indexOf(fold));
   assert.equal(h.requests.length, 0); assert.equal(JSON.stringify(state), original);
+});
+test("epoch-scoped controls replace the generic toggle; pending control hides derivatives and only a new authenticated read restores them",async t=>{
+  const state=compositionDisplayState();state.model_watch!.control_scope="epoch";const h=mount(t,state);await h.flush();
+  const control=h.node("InvestorEpochControl")!;assert.ok(control);assert.equal(h.button("暂停观察任务"),undefined);assert.ok(h.card("当前研究模型"));
+  (control.props.onGuardChange as (value:boolean)=>void)(true);await h.flush();
+  assert.equal(h.card("当前研究模型"),undefined);assert.equal(h.node("InvestorAiPanel"),undefined);assert.equal(h.headline(),"证据不足");
+  assert.match(h.words(h.card("持续观察")),/旧净值和变化暂不作为当前结论/);
+  (h.node("InvestorEpochControl")!.props.onChanged as ()=>void)();await h.waitRequests(1);assert.equal(h.requests[0].method,"GET");
+  await h.flush();assert.equal(h.card("当前研究模型"),undefined);
+  await h.reply(0,{...state,session_binding:binding});assert.ok(h.card("当前研究模型"));assert.ok(h.node("InvestorAiPanel"));
+  assert.equal(h.requests.filter(row=>row.method==="POST").length,0);
 });
 test("model composition hides on known expiry despite an edit lock and never revives after clock rollback", async t => {
   const h = mount(t, compositionDisplayState()); await h.flush(); assert.ok(h.card("当前研究模型"));

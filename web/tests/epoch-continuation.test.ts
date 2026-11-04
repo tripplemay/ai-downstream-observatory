@@ -12,10 +12,63 @@ import { canonical, hash } from "../src/server/ledger/service";
 import { Decimal } from "../src/server/ledger/decimal";
 import { assertCurrentEpochSourceSelection } from "../src/server/investor/current-epoch-sources";
 import { readEvidenceReference } from "../src/server/investor/reference-evidence";
+import {submitEpochControl,readEpochControlResponse} from "../src/server/investor/epoch-control-jobs";
 
 type Obj = Record<string, unknown>;
 const now = "2026-10-21T10:00:03.000Z";
 function obj(value: unknown): Obj { assert.ok(value && typeof value === "object" && !Array.isArray(value)); return value as Obj; }
+test("ordinary owner activation queues one real core check; immediate metadata-only pause invalidates stale enable work without changing global control",t=>{
+  const f=investorFixture();t.after(f.close);const at="2026-10-20T10:00:03.000Z",actor={id:"owner"},binding="a".repeat(64);
+  const seeded=actionPython(f.filename,`
+from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture
+from tests.investor.test_epoch_continuation import EpochContinuationTests
+with offline_protocol_fixture():
+ case=EpochContinuationTests();case.db=db;case.path=Path(sys.argv[1]);case.seed()
+ print(json.dumps({'body':case.body(),'model':case.saved['registration']['model_id']}))
+`,"core_readmission");
+  const body=seeded.body as Obj,model=String(seeded.model),before=f.db.prepare("SELECT count(*) n FROM investor_epoch_controls").get() as {n:number};
+  const initial=readEpochControlResponse(f.db,actor,binding,{model},at);assert.equal(initial.epoch?.enabled,false);assert.equal(initial.epoch?.control_version,0);
+  const intent=submitEpochControl(f.db,actor,body,at);assert.deepEqual(submitEpochControl(f.db,actor,body,at),intent);
+  assert.equal((f.db.prepare("SELECT count(*) n FROM investor_epoch_controls").get() as {n:number}).n,before.n);
+  assert.equal(readEpochControlResponse(f.db,actor,binding,{nonce:body.idempotency_key as string},at).request?.status,"queued");
+  const global=f.db.prepare("SELECT * FROM investor_model_controls ORDER BY version").all();
+  actionPython(f.filename,`
+from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture
+from worker.orchestration.runtime import run_pending_once
+with offline_protocol_fixture():
+ result=run_pending_once(db,'fictional-web-owner-control',clock=lambda:'${at}')
+ assert result['status']=='succeeded',result
+ assert json.loads(result['result_json'])['outcome']=='applied'
+ print('{}')
+`,"core_readmission");
+  const applied=readEpochControlResponse(f.db,actor,binding,{nonce:body.idempotency_key as string},at);
+  assert.equal(applied.request?.status,"applied");assert.equal(applied.epoch?.enabled,true);assert.equal(applied.receipt?.enabled,true);
+  const currentBody={...body,expected_revision:applied.workspace_revision,idempotency_key:"fictional-stale-queued-enable"};
+  submitEpochControl(f.db,actor,currentBody,at);
+  assert.throws(()=>submitEpochControl(f.db,actor,{...currentBody,idempotency_key:"fictional-second-enable"},at),/BUSY/);
+  const pause={...currentBody,idempotency_key:"fictional-immediate-pause",enabled:false};submitEpochControl(f.db,actor,pause,at);
+  const paused=readEpochControlResponse(f.db,actor,binding,{nonce:pause.idempotency_key},at);
+  assert.equal(paused.epoch?.enabled,false);assert.equal(paused.receipt?.enabled,false);
+  assert.equal(readEpochControlResponse(f.db,actor,binding,{nonce:currentBody.idempotency_key},at).request?.status,"superseded");
+  assert.deepEqual(submitEpochControl(f.db,actor,pause,at),submitEpochControl(f.db,actor,pause,at));
+  actionPython(f.filename,`
+from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture
+from worker.orchestration.runtime import run_pending_once
+from worker.investor.epoch_continuation import _control
+with offline_protocol_fixture():
+ control=_control(db,'w','owner','${paused.receipt!.control_id}')[1]
+ assert control['body']['enabled'] is False
+ result=run_pending_once(db,'fictional-web-obsolete-enable',clock=lambda:'${at}')
+ assert result['status']=='succeeded',result
+ assert json.loads(result['result_json'])['outcome']=='rejected'
+ print('{}')
+`,"core_readmission");
+  assert.equal(readEpochControlResponse(f.db,actor,binding,{nonce:currentBody.idempotency_key},at).request?.status,"rejected");
+  assert.equal(readEpochControlResponse(f.db,actor,binding,{model},at).epoch?.enabled,false);
+  assert.deepEqual(f.db.prepare("SELECT * FROM investor_model_controls ORDER BY version").all(),global);
+  assert.throws(()=>readEpochControlResponse(f.db,{id:"foreign"},binding,{model},at));
+  for(const table of ["portfolios","accounts","ledger_events","postings"])assert.equal((f.db.prepare(`SELECT count(*) n FROM ${table}`).get() as {n:number}).n,0);
+});
 test("actual ongoing research requires independent full replay and current unambiguous sources; expiry or changed evidence hides derivatives", t => {
   const f = investorFixture(); t.after(f.close);
   const metadata = actionPython(f.filename, `

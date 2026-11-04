@@ -198,5 +198,5 @@ export function readModelEpochWatch(db: Database.Database, workspace: string, mo
     enabled, status, created_at: model.created_at, completed_at: read.row.created_at, next_check_at: read.observation.next_review_at,
     checkpoint_sequence: Number((db.prepare("SELECT sequence FROM investor_evidence_model_checkpoints WHERE id=?").get(read.row.checkpoint_id) as Obj).sequence),
     initial_notional_cny: "10000", model_nav_cny: ["research_observe", "research_decision"].includes(status) ? read.observation.model_change?.model_nav_cny ?? null : null,
-    evaluation_input_version: read.request.input_version, source_qualification: "owner_reviewed_reconstructed", live_advice_eligible: false });
+    evaluation_input_version: read.request.input_version, source_qualification: "owner_reviewed_reconstructed", control_scope: "epoch", live_advice_eligible: false });
 }

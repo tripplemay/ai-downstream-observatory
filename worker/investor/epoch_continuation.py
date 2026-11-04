@@ -168,35 +168,53 @@ def _fence(db, workspace, actor):
 def _revision(db, workspace, actor, expected): registration._revision(db, workspace, actor, expected)
 
 
-def set_epoch_continuation_control(db, workspace, actor, body, *, owner_interaction=False, now=None, clock=None, stop_requested=None):
+def prepare_epoch_continuation_control(db, workspace, actor, body, *, owner_interaction=False, now=None, clock=None, stop_requested=None):
     _validate(body, "control_submit"); _check(owner_interaction is True, "OWNER_INTERACTION_REQUIRED")
+    body = _object(canonical_json(body))
     at = _clock(now); assert_writable(db)
     with transaction(db, immediate=False), _fact_validation_scope():
         _owner(db, workspace, actor); managed._stopped(db, stop_requested)
         existing = db.execute("SELECT id FROM investor_epoch_controls WHERE workspace_id=? AND idempotency_key=?", (workspace, body["idempotency_key"])).fetchone()
         if existing:
-            _, prior = _control(db, workspace, actor, existing["id"]); _check(prior["body"] == body, "IDEMPOTENCY_CONFLICT"); return prior
+            _, prior = _control(db, workspace, actor, existing["id"]); _check(prior["body"] == body, "IDEMPOTENCY_CONFLICT")
+            def duplicate(connection):
+                _check(connection is db, "PREPARED_CONNECTION_CHANGED"); assert_writable(db); managed._stopped(db, stop_requested)
+                _, current = _control(db, workspace, actor, existing["id"]); _check(current == prior, "SOURCE_CHANGED")
+                return current
+            duplicate.deadline = prior["valid_until"]
+            return duplicate
         _revision(db, workspace, actor, body["expected_revision"])
         root, record = registration._header(db, workspace, actor, body["epoch_id"], "registration")
         head = db.execute("SELECT id,content_hash FROM investor_evidence_model_checkpoints WHERE workspace_id=? AND model_id=? ORDER BY sequence DESC LIMIT 1", (workspace, root["model_id"])).fetchone()
         _check(root["content_hash"] == body["expected_registration_hash"] and head is not None and _ref(head) == body["expected_checkpoint"], "HEAD_CHANGED")
+        ceiling = root["valid_until"]
         if body["enabled"]:
-            source.prepare_model_epoch_continuation(db, workspace, actor, root["id"], now=at, stop_requested=stop_requested)
-        fence = _fence(db, workspace, actor)
-    with transaction(db):
-        current = _clock(clock() if clock else at); assert_writable(db); _revision(db, workspace, actor, body["expected_revision"])
-        managed._stopped(db, stop_requested)
-        _check(instant(at) <= instant(current) < instant(root["valid_until"]) and _fence(db, workspace, actor) == fence, "SOURCE_CHANGED")
-        version = db.execute("SELECT COALESCE(MAX(version),0)+1 FROM investor_epoch_controls WHERE epoch_id=?", (root["id"],)).fetchone()[0]
-        identifier = new_id("epoch-control")
-        doc = {"schema_version": "investor-epoch-control-v1", "control_id": identifier, "workspace_id": workspace, "actor_id": actor, "model_id": root["model_id"],
-            "epoch": record["epoch"], "registration_hash": root["content_hash"], "version": version, "workspace_revision": body["expected_revision"] + 1,
-            "body": body, "created_at": current, "valid_until": root["valid_until"], "trading_permission": False}
-        _validate(doc, "control"); digest = content_hash(doc); audit = _audit(db, actor, "investor_control_epoch_continuation", "investor_epoch_control", identifier, {"content_hash": digest}, current)
-        db.execute("INSERT INTO investor_epoch_controls VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (identifier, workspace, root["model_id"], root["id"], version, int(body["enabled"]),
-            body["idempotency_key"], canonical_json(doc), digest, actor, current, root["valid_until"], audit))
-        db.execute("UPDATE investor_workspaces SET revision=revision+1 WHERE id=?", (workspace,))
-        return doc
+            prepared = source.prepare_model_epoch_continuation(db, workspace, actor, root["id"], now=at, stop_requested=stop_requested)
+            ceiling = min(ceiling, prepared["proof"]["valid_until"], key=instant)
+        fence, implementation = _fence(db, workspace, actor), implementation_hash()
+    def commit(connection):
+        _check(connection is db, "PREPARED_CONNECTION_CHANGED")
+        with transaction(db):
+            current = _clock(clock() if clock else at); assert_writable(db); _revision(db, workspace, actor, body["expected_revision"])
+            managed._stopped(db, stop_requested)
+            _check(instant(at) <= instant(current) < instant(ceiling) and _fence(db, workspace, actor) == fence
+                and implementation_hash() == implementation, "SOURCE_CHANGED")
+            version = db.execute("SELECT COALESCE(MAX(version),0)+1 FROM investor_epoch_controls WHERE epoch_id=?", (root["id"],)).fetchone()[0]
+            identifier = new_id("epoch-control")
+            doc = {"schema_version": "investor-epoch-control-v1", "control_id": identifier, "workspace_id": workspace, "actor_id": actor, "model_id": root["model_id"],
+                "epoch": record["epoch"], "registration_hash": root["content_hash"], "version": version, "workspace_revision": body["expected_revision"] + 1,
+                "body": body, "created_at": current, "valid_until": root["valid_until"], "trading_permission": False}
+            _validate(doc, "control"); digest = content_hash(doc); audit = _audit(db, actor, "investor_control_epoch_continuation", "investor_epoch_control", identifier, {"content_hash": digest}, current)
+            db.execute("INSERT INTO investor_epoch_controls VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (identifier, workspace, root["model_id"], root["id"], version, int(body["enabled"]),
+                body["idempotency_key"], canonical_json(doc), digest, actor, current, root["valid_until"], audit))
+            db.execute("UPDATE investor_workspaces SET revision=revision+1 WHERE id=?", (workspace,))
+            return doc
+    commit.deadline = ceiling
+    return commit
+
+
+def set_epoch_continuation_control(db, workspace, actor, body, **options):
+    return prepare_epoch_continuation_control(db, workspace, actor, body, **options)(db)
 
 
 def discover_epoch_continuations(db, *, limit=100, now=None, stop_requested=None):

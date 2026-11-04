@@ -213,6 +213,7 @@ export const modelWatchSchema = z.object({
   model_nav_cny: nonnegativeDerived.refine(value => /[1-9]/.test(value)).nullable(),
   source_qualification: z.enum(["not_available", "synthetic_test_only", "owner_reviewed_reconstructed"]),
   acquisition: acquisitionSchema.optional(),
+  control_scope: z.literal("epoch").optional(),
   live_advice_eligible: z.literal(false),
 }).strict().refine(value => (value.completed_at === null || value.completed_at >= value.created_at)
   && (value.enabled ? value.status !== "paused" : value.status === "paused")

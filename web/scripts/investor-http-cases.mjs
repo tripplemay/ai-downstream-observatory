@@ -85,6 +85,28 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
     assert.deepEqual(financial(), initialFinancial);
     return { maximum_body_bytes: 32768, duplicate_json_rejected: true, auth_scope_not_client_supplied: true };
   });
+  await check('HTTP-I22', 'epoch controls authenticate and bind the session before strict small intents; no implicit workspace or activation', async () => {
+    const route=`${endpoint}/epoch-control`,facts=financial();
+    const counts=()=>read(db=>Object.fromEntries(['investor_epoch_controls','investor_epoch_control_requests','investor_epoch_control_results','job_runs','audit_events'].map(table=>[table,db.prepare(`SELECT count(*) n FROM ${table}`).get().n])));
+    const before=counts(),body={schema_version:'investor-epoch-control-submit-v1',epoch_id:'fictional-unregistered-epoch',expected_registration_hash:'a'.repeat(64),
+      expected_checkpoint:{id:'fictional-checkpoint',content_hash:'b'.repeat(64)},expected_revision:1,idempotency_key:'fictional-http-epoch-intent',enabled:true,
+      acknowledgements:{current_epoch_seen:true,continuous_research_only:true,preserve_history_and_human_trading:true}};
+    const send=(value,extra={})=>jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json',...extra}),body:typeof value==='string'?value:JSON.stringify(value)});
+    assert.equal((await jsonRequest(`${route}?model=fictional-model`)).status,401);
+    assert.equal((await jsonRequest(route,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:'{'})).status,401);
+    assert.equal((await jsonRequest(`${route}?model=fictional-model`,{headers:{Cookie:cookie}})).status,400);
+    assert.equal((await jsonRequest(`${route}?model=fictional-model`,{headers:headers({'X-Workbench-Session-Binding':'b'.repeat(64)})})).status,401);
+    for(const query of ['actor_id=other','model=a&nonce=b','model=a&model=b'])assert.equal((await jsonRequest(`${route}?${query}`,{headers:headers()})).status,400);
+    assert.equal((await send(body,{Origin:'https://wrong.example.test'})).status,403);
+    assert.equal((await send(body,{'X-Workbench-Session-Binding':'b'.repeat(64)})).status,401);
+    for(const value of [{...body,prices:[]},{...body,acknowledgements:{}},'{"enabled":true,"enabled":false}'])assert.equal((await send(value)).status,400);
+    const huge=await jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json'}),duplex:'half',body:(async function*(){yield Buffer.alloc(16385,120);})()});
+    assert.equal(huge.status,413);
+    const missing=await send(body);assert.equal(missing.status,409);assert.equal(missing.json.error,'EPOCH_CONTROL_WORKSPACE_REQUIRED');
+    assert.equal(missing.headers.get('cache-control'),'private, no-store');assert.doesNotMatch(JSON.stringify(missing.json),/workbench\.db|SELECT|\/Users\//);
+    assert.equal(read(db=>db.prepare('SELECT count(*) n FROM investor_workspaces').get().n),0);assert.deepEqual(counts(),before);assert.deepEqual(financial(),facts);
+    return {implicit_activation:false,implicit_workspace:false,source_or_ai_calls:0,maximum_body_bytes:16384,new_epoch_positive_journey_verified:false};
+  });
   await check('HTTP-I20', 'AI explanation endpoint has current-session and strict small-body boundaries; reads never generate AI or financial facts', async () => {
     const route = `${endpoint}/ai-explanation`, body = { observation_id: 'fictional-observation', binding_hash: 'a'.repeat(64) };
     const facts = financial(), count = () => read(db => db.prepare('SELECT count(*) n FROM audit_events').get().n), before = count();

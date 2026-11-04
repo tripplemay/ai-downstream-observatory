@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-epoch-control-jobs.schema.json",
+  "$defs": {
+    "id": {"type":"string","minLength":1,"maxLength":128},
+    "hash": {"type":"string","pattern":"^[a-f0-9]{64}$"},
+    "instant": {"type":"string","format":"date-time"},
+    "request": {
+      "type":"object","additionalProperties":false,
+      "required":["schema_version","request_id","workspace_id","model_id","epoch_id","actor_id","body","request_hash","created_at","valid_until","trading_permission"],
+      "properties": {
+        "schema_version":{"const":"investor-epoch-control-request-v1"},
+        "request_id":{"$ref":"#/$defs/id"},"workspace_id":{"$ref":"#/$defs/id"},"model_id":{"$ref":"#/$defs/id"},"epoch_id":{"$ref":"#/$defs/id"},"actor_id":{"$ref":"#/$defs/id"},
+        "body":{"allOf":[{"$ref":"investor-epoch-continuation.schema.json#/$defs/control_submit"},{"type":"object","properties":{"enabled":{"const":true}}}]},
+        "request_hash":{"$ref":"#/$defs/hash"},"created_at":{"$ref":"#/$defs/instant"},"valid_until":{"$ref":"#/$defs/instant"},"trading_permission":{"const":false}
+      }
+    },
+    "result": {
+      "type":"object","additionalProperties":false,
+      "required":["schema_version","result_id","request_id","workspace_id","actor_id","request_hash","job_id","fencing_token","outcome","code","control_id","control_hash","created_at","valid_until","trading_permission"],
+      "properties": {
+        "schema_version":{"const":"investor-epoch-control-result-v1"},"result_id":{"$ref":"#/$defs/id"},"request_id":{"$ref":"#/$defs/id"},"workspace_id":{"$ref":"#/$defs/id"},"actor_id":{"$ref":"#/$defs/id"},
+        "request_hash":{"$ref":"#/$defs/hash"},"job_id":{"$ref":"#/$defs/id"},"fencing_token":{"type":"integer","minimum":1},
+        "outcome":{"enum":["applied","rejected"]},"code":{"enum":["EPOCH_CONTROL_APPLIED","EPOCH_CONTROL_EXPIRED","EPOCH_CONTROL_CHANGED","EPOCH_CONTROL_SOURCE_UNAVAILABLE"]},
+        "control_id":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/id"}]},"control_hash":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/hash"}]},
+        "created_at":{"$ref":"#/$defs/instant"},"valid_until":{"$ref":"#/$defs/instant"},"trading_permission":{"const":false}
+      },
+      "allOf":[{"if":{"properties":{"outcome":{"const":"applied"}}},"then":{"properties":{"code":{"const":"EPOCH_CONTROL_APPLIED"},"control_id":{"$ref":"#/$defs/id"},"control_hash":{"$ref":"#/$defs/hash"}}},"else":{"properties":{"code":{"not":{"const":"EPOCH_CONTROL_APPLIED"}},"control_id":{"type":"null"},"control_hash":{"type":"null"}}}}]
+    }
+  }
+}

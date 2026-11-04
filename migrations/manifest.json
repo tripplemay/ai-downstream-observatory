@@ -337,6 +337,11 @@
       "version": 66,
       "file": "0066_investor_model_epoch_continuations.sql",
       "sha256": "c83d4bb8bdfa2f8ffa23cef91e42cab81c8e7436374d9902ef8cc5b64c8881d7"
+    },
+    {
+      "version": 67,
+      "file": "0067_investor_epoch_control_jobs.sql",
+      "sha256": "c99de73f1dbe638dc808a8dc8ace37ac1425e2f263b32870462b52e99468ce99"
     }
   ]
 }

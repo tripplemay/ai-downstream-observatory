@@ -50,6 +50,7 @@ import modelEpochTransition from "../../../../contracts/v1/investor-model-epoch-
 import modelEpochSource from "../../../../contracts/v1/investor-model-epoch-source.schema.json";
 import modelEpochContinuationSource from "../../../../contracts/v1/investor-model-epoch-continuation-source.schema.json";
 import epochContinuation from "../../../../contracts/v1/investor-epoch-continuation.schema.json";
+import epochControlJobs from "../../../../contracts/v1/investor-epoch-control-jobs.schema.json";
 import modelEpochRegistration from "../../../../contracts/v1/investor-model-epoch-registration.schema.json";
 import evidenceCheckpointV4 from "../../../../contracts/v1/investor-evidence-model-checkpoint-v4.schema.json";
 import retainedActionEvidence from "../../../../contracts/v1/investor-retained-action-evidence.schema.json";
@@ -124,6 +125,7 @@ ajv.addSchema(modelEpochTransition);
 ajv.addSchema(modelEpochSource);
 ajv.addSchema(modelEpochContinuationSource);
 ajv.addSchema(epochContinuation);
+ajv.addSchema(epochControlJobs);
 ajv.addSchema(modelEpochRegistration);
 ajv.addSchema(evidenceCheckpointV4);
 ajv.addSchema(retainedActionEvidence);
@@ -205,6 +207,9 @@ export function validateModelEpochContinuationSource(value: unknown) {
 }
 export function validateEpochContinuation(kind: "control_submit" | "control" | "request" | "monitor_request" | "publication", value: unknown) {
   requireTrue(ajv.getSchema(epochContinuation.$id + "#/$defs/" + kind)!(value));
+}
+export function validateEpochControlJob(kind: "request" | "result", value: unknown) {
+  requireTrue(ajv.getSchema(epochControlJobs.$id + "#/$defs/" + kind)!(value));
 }
 export function validateModelEpochRegistration(kind: "preview" | "submit" | "request" | "registration" | "monitor_request" | "replay_proof", value: unknown) {
   requireTrue(ajv.getSchema(modelEpochRegistration.$id + "#/$defs/" + kind)!(value));

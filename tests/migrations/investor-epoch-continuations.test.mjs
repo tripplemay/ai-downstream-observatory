@@ -83,4 +83,16 @@ finally:db.close()
   }
   assert.deepEqual(db.pragma('foreign_key_check'), []); assert.equal(db.pragma('integrity_check', { simple: true }), 'ok');
   assert.equal(migrateWorkbench(filename, { directory: target }).applied, 0);
+  const v67=copy('v67',67),next={...manifest.migrations[66]},original67=readFileSync(join(v67,next.file),'utf8');
+  const oldRows=snapshot(),oldSchema=db.prepare('SELECT * FROM sqlite_master ORDER BY type,name').all();
+  const invalid67=original67+"\nINSERT INTO investor_epoch_control_requests(id) VALUES('fictional-late-owner-failure');\n";
+  writeFileSync(join(v67,next.file),invalid67);next.sha256=createHash('sha256').update(invalid67).digest('hex');
+  writeFileSync(join(v67,'manifest.json'),JSON.stringify({...manifest,migrations:[...manifest.migrations.slice(0,66),next]}));
+  assert.throws(()=>migrateWorkbench(filename,{directory:v67}),/NOT NULL|binding differs/);
+  assert.deepEqual(snapshot(),oldRows);assert.deepEqual(db.prepare('SELECT * FROM sqlite_master ORDER BY type,name').all(),oldSchema);
+  writeFileSync(join(v67,next.file),original67);writeFileSync(join(v67,'manifest.json'),JSON.stringify({...manifest,migrations:manifest.migrations.slice(0,67)}));
+  assert.equal(migrateWorkbench(filename,{directory:v67}).applied,1);assert.equal(verifyWorkbenchSchema(db,v67).version,67);
+  assert.deepEqual(snapshot().filter(row=>row.table!=='schema_migrations'),oldRows.filter(row=>row.table!=='schema_migrations'));
+  for(const name of ['investor_epoch_control_requests','investor_epoch_control_results'])assert.equal(db.prepare(`SELECT count(*) n FROM ${name}`).get().n,0);
+  assert.deepEqual(db.pragma('foreign_key_check'),[]);
 });

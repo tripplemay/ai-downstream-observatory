@@ -2,6 +2,7 @@
 
 from contextlib import closing
 import json
+import sqlite3
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +12,7 @@ from tests.investor.epoch_continuation_source_fixture import create, next_source
 from tests.investor.epoch_source_fixture import NOW as FIRST
 from tests.investor.registered_epoch_fixture import reseal_wrong_continuation_state
 from worker.investor import epoch_continuation as runtime, model_epoch_continuation_source as source, eodhd_sources
+from worker.investor import epoch_control_jobs as owner_controls
 from worker.investor.evidence_monitor_runtime import resolve_checkpoint
 from worker.orchestration.db import WorkbenchError, open_database, instant
 from worker.orchestration.runtime import run_pending_once, command_handler
@@ -174,6 +176,67 @@ class EpochContinuationTests(unittest.TestCase):
         first = runtime._key(value, activation, "2026-10-20T15:59:58.000Z")
         self.assertEqual(first, runtime._key(value, activation, "2026-10-20T15:59:59.000Z"))
         self.assertNotEqual(first, runtime._key(value, activation, "2026-10-20T16:00:00.000Z"))
+
+    def test_owner_intent_default_core_fenced_control_and_pause_never_infer_activation_or_trade(self):
+        self.seed(); body=self.body(); revision=body["expected_revision"]
+        intent=owner_controls.enqueue_epoch_control(self.db,"w","owner",body,now=FIRST)
+        self.assertEqual(owner_controls.enqueue_epoch_control(self.db,"w","owner",body,now=FIRST),intent)
+        self.assertEqual(self.db.execute("SELECT revision FROM investor_workspaces WHERE id='w'").fetchone()[0],revision)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM investor_epoch_controls").fetchone()[0],0)
+        with self.assertRaisesRegex(WorkbenchError,"DUPLICATE_CONFLICT"):
+            owner_controls.enqueue_epoch_control(self.db,"w","owner",{**body,"expected_revision":revision+1},now=FIRST)
+        with self.assertRaises(WorkbenchError):owner_controls.request_header(self.db,"w","foreign",intent["request_id"],FIRST)
+        original=source.prepare_model_epoch_continuation
+        def no_reserved_writer(*args,**kwargs):
+            other=open_database(self.path)
+            try:other.execute("BEGIN IMMEDIATE");other.execute("ROLLBACK")
+            finally:other.close()
+            return original(*args,**kwargs)
+        with patch.object(source,"prepare_model_epoch_continuation",side_effect=no_reserved_writer):applied=self.run_core(FIRST)
+        self.assertEqual(applied["result"]["outcome"],"applied")
+        self.assertEqual(applied["max_attempts"],1)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM investor_epoch_continuations").fetchone()[0],0)
+        self.assertEqual(self.run_core(FIRST)["result"]["status"],"epoch_continuation_published")
+        for scenario in ("pause_and_revoke","late_abort","final_clock"):
+            self.db.execute("SAVEPOINT fictional_owner_control")
+            try:
+                body=self.body(key="fictional-owner-"+scenario)
+                intent=owner_controls.enqueue_epoch_control(self.db,"w","owner",body,now=FIRST)
+                owner_controls.discover_epoch_controls(self.db,now=FIRST)
+                lease=claim_job(self.db,"fictional-control-fence",lease_seconds=900,job_type=owner_controls.JOB_TYPE,now=FIRST)
+                job=dict(self.db.execute("SELECT * FROM job_runs WHERE id=?",(lease.job_id,)).fetchone())
+                with self.assertRaisesRegex(WorkbenchError,"DIFFERENT_WORKER_ROLE"):
+                    command_handler(self.db,clock=lambda:FIRST,role="longport")(job,lease)
+                with self.assertRaisesRegex(WorkbenchError,"JOB_CHANGED"):
+                    owner_controls.prepare_epoch_control_job(self.db,{**job,"period":"fictional-forged-request"},lease,clock=lambda:FIRST)
+                times=[FIRST];descriptor=owner_controls.prepare_epoch_control_job(self.db,job,lease,clock=lambda:times[0])
+                if scenario=="pause_and_revoke":
+                    grant=self.db.execute("SELECT id FROM investor_eodhd_authorities WHERE workspace_id='w'").fetchone()[0]
+                    eodhd_sources.set_authority_enabled(self.db,"w","owner",grant,False,now=FIRST)
+                    paused=runtime.set_epoch_continuation_control(self.db,"w","owner",self.body(False,"fictional-pause-stale-enable"),owner_interaction=True,now=FIRST)
+                    before=list(self.db.execute("SELECT id,enabled FROM investor_epoch_controls ORDER BY version"))
+                    complete_job(self.db,lease,{},effect=descriptor["effect"],now=FIRST,clock=lambda:FIRST)
+                    result=json.loads(self.db.execute("SELECT document_json FROM investor_epoch_control_results WHERE request_id=?",(intent["request_id"],)).fetchone()[0])
+                    self.assertEqual(result["outcome"],"rejected");self.assertEqual(result["code"],"EPOCH_CONTROL_CHANGED")
+                    self.assertEqual(list(self.db.execute("SELECT id,enabled FROM investor_epoch_controls ORDER BY version")),before)
+                    self.assertFalse(paused["body"]["enabled"])
+                else:
+                    before=list(self.db.iterdump())
+                    if scenario=="late_abort":
+                        self.db.execute("CREATE TRIGGER fictional_control_result_abort BEFORE INSERT ON investor_epoch_control_results BEGIN SELECT RAISE(ABORT,'fictional late control failure');END")
+                        before=list(self.db.iterdump())
+                        with self.assertRaisesRegex(sqlite3.IntegrityError,"fictional late control failure"):
+                            complete_job(self.db,lease,{},effect=descriptor["effect"],now=FIRST,clock=lambda:FIRST)
+                    else:
+                        deadline=intent["valid_until"];audit=owner_controls._audit
+                        def finish_at_deadline(*args,**kwargs):
+                            result=audit(*args,**kwargs);times[0]=deadline;return result
+                        with patch.object(owner_controls,"_audit",side_effect=finish_at_deadline),self.assertRaisesRegex(WorkbenchError,"FINALIZATION_EXPIRED"):
+                            complete_job(self.db,lease,{},effect=descriptor["effect"],now=FIRST,clock=lambda:times[0])
+                    self.assertEqual(before,list(self.db.iterdump()))
+            finally:self.db.execute("ROLLBACK TO fictional_owner_control");self.db.execute("RELEASE fictional_owner_control")
+        for table in ("portfolios","accounts","ledger_events","postings"):
+            self.assertEqual(self.db.execute("SELECT count(*) FROM "+table).fetchone()[0],0)
 
 
 if __name__ == "__main__": unittest.main()

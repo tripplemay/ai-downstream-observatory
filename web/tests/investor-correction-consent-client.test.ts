@@ -3,6 +3,8 @@ import test from "node:test";
 import { buildConsentAttempt, parseConsentResponse } from "../src/components/workbench/investor-correction-consent-client";
 import { consentAnswers, consentResponse, consentScope, consentSummaryHash, confirmedConsent, queuedConsent } from "./correction-consent-client-fixture";
 import { reviewNow } from "./action-review-client-fixture";
+import { buildEpochControlAttempt,parseEpochControlResponse } from "../src/components/workbench/investor-epoch-control-client";
+import { epochAnswers,epochResponse,epochScope,queuedEpochControl,pausedEpochControl } from "./epoch-control-client-fixture";
 
 test("formal correction requires the exact displayed comparison and seven new acknowledgements, never hypothetical or retain consent", () => {
   const response = consentResponse(), scope = consentScope;
@@ -28,4 +30,18 @@ test("strict readback binds session/model/impact/original nonce and intent hash;
   await assert.rejects(() => parseConsentResponse(consentResponse(), consentScope, undefined, reviewNow + 15000));
   const noMatch = consentResponse({ candidate: null, lookup_nonce: attempt.nonce });
   assert.equal((await parseConsentResponse(noMatch, consentScope, attempt, reviewNow)).request, null);
+});
+test("epoch activation is a fresh separate intent; metadata-only pause, exact nonce and source-free readback do not become value grants",async()=>{
+  const value=epochResponse();
+  assert.throws(()=>buildEpochControlAttempt(value,epochScope,true,{},"fictional-epoch-nonce",reviewNow),/ACK_REQUIRED/);
+  assert.throws(()=>buildEpochControlAttempt(value,epochScope,true,epochAnswers,"fictional-epoch-nonce",reviewNow+15000),/EXPIRED/);
+  const attempt=buildEpochControlAttempt(value,epochScope,true,epochAnswers,"fictional-epoch-nonce",reviewNow);
+  const queued=queuedEpochControl(attempt.intent);await parseEpochControlResponse(queued,epochScope,attempt,reviewNow);
+  for(const patch of [{session_binding:"d".repeat(64)},{lookup_nonce:"foreign"},{model_id:"foreign"},{request:{...queued.request!,intent_hash:"d".repeat(64)}},
+    {epoch:{...value.epoch!,price:"1"}},{trading_permission:true}])await assert.rejects(()=>parseEpochControlResponse({...queued,...patch},epochScope,attempt,reviewNow));
+  const pause=buildEpochControlAttempt(queued,epochScope,false,{},"fictional-pause-nonce",reviewNow);
+  await parseEpochControlResponse(pausedEpochControl(pause.intent),epochScope,pause,reviewNow);
+  assert.equal(pause.intent.enabled,false);assert.deepEqual(pause.intent.acknowledgements,epochAnswers);
+  const newer={...queued,epoch:{...queued.epoch!,id:"fictional-new-epoch"}};
+  assert.equal((await parseEpochControlResponse(newer,epochScope,attempt,reviewNow)).request?.epoch_id,attempt.intent.epoch_id,"historical recovery must not claim to control the new epoch");
 });
