@@ -13,6 +13,7 @@ from tests.market.test_vanguard_distributions import archive, row
 from worker.investor import corrected_action_source as corrected, correction_consent as consent, eodhd_sources, managed_actions
 from worker.investor.retained_monitor_history import read_registered_correction_history, read_retained_monitor_history
 from worker.orchestration.db import WorkbenchError, canonical_json, content_hash, open_database
+from worker.market.contracts import contract_validation_scope
 
 
 OWNER = "synthetic-investor"
@@ -27,6 +28,8 @@ class CorrectedActionSourceTests(unittest.TestCase):
     enqueue = consent_fixture.CorrectionConsentTests.enqueue
     finish = consent_fixture.CorrectionConsentTests.finish
 
+    # Share only pure shape work during construction, not during the test.
+    @contract_validation_scope()
     def confirmed(self, *, mode="replace"):
         self.seed(mode=mode); result = self.finish(self.enqueue()); self.assertEqual(result["outcome"], "confirmed", result)
         self.identifier = result["confirmation_id"]

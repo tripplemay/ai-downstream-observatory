@@ -7,12 +7,15 @@ from unittest.mock import patch
 from tests.investor import epoch_source_fixture as first, epoch_registration_fixture as registration
 from worker.investor import data_evidence, managed_actions
 from worker.orchestration.db import instant
+from worker.market.contracts import contract_validation_scope
 
 
 NOW = "2026-10-21T10:00:03.000Z"
 SERIES = {"authority_id": "fictional-epoch-continuation-fx", "revision_policy": "append_only_no_restatements"}
 
 
+# Keep existing pure-shape limits, and discard the scope before test mutations.
+@contract_validation_scope()
 def create(db, path):
     reviewed = data_evidence.review_source
     def explicit_fictional_facts(connection, workspace, actor, source_id, decision, facts, reason, valid_until, **kwargs):

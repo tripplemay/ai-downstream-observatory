@@ -24,6 +24,7 @@ class EpochContinuationTests(unittest.TestCase):
 
     def seed(self):
         self.saved = create(self.db, self.path); self.epoch_id = self.saved["registration"]["epoch"]["id"]
+        self.assertIsNone(contracts._VALIDATION_SCOPE.get(), "fixture construction must not retain a shape scope in the actual test")
 
     def body(self, enabled=True, key="fictional-explicit-epoch-activation"):
         head = self.db.execute("SELECT id,content_hash FROM investor_evidence_model_checkpoints ORDER BY sequence DESC LIMIT 1").fetchone()
