@@ -1,6 +1,7 @@
 """Bounded pure-validation reuse; invented facts and stub transport only."""
 
-from contextlib import nullcontext, redirect_stdout
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from copy import deepcopy
 import io
 import json
@@ -8,11 +9,15 @@ import unittest
 from unittest.mock import patch
 
 from tests.investor import evidence_fixture as fixture, test_data_evidence as evidence, test_runtime as queue
+from tests.investor import fixture_dataset_shapes as shapes
+from tests.research.fixtures import dataset
 from worker.investor import data_evidence, data_snapshot, source_inputs
 from worker.investor.data_evidence import _fact_validation_scope, resolve_capture, resolve_review, review_source, validate_facts
 from worker.market.contracts import validate_contract
 from worker.market.providers import longport
 from worker.orchestration.db import WorkbenchError
+from worker.market import contracts
+from worker.research import snapshot
 
 
 def rights():
@@ -204,6 +209,105 @@ class SnapshotValidationReuseTests(unittest.TestCase):
             resolved = resolve_review(self.db, "w", replacement["id"], "rights", now=queue.NOW)
             self.assertEqual(resolved["review"]["id"], replacement["id"])
         self.assert_no_finance()
+
+
+def large_dataset():
+    value = dataset(); observations = value["observations"]
+    value["observations"] = [{**row, "id": row["id"] + ":copy:" + str(index), "revision_id": "copy:" + str(index)}
+                             for index in range(12) for row in observations]
+    assert len(json.dumps(value).encode()) > 65536
+    return value
+
+
+class FixtureDatasetShapesTests(unittest.TestCase):
+    def test_exact_shape_reuse_restores_original_and_keeps_every_dataset_semantic_check(self):
+        original, validate = snapshot.validate_contract, snapshot.validate_dataset
+        value = large_dataset()
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            snapshot.validate_dataset(value); snapshot.validate_dataset(deepcopy(value))
+            self.assertEqual((metrics["validated"], metrics["hits"]), (1, 1))
+            self.assertIs(snapshot.validate_dataset, validate)
+            bad = deepcopy(value); bad["observations"].append(deepcopy(bad["observations"][0]))
+            for _ in range(2):
+                with self.assertRaisesRegex(WorkbenchError, "DUPLICATE_RESEARCH_OBSERVATION"):
+                    snapshot.validate_dataset(bad)
+            # Shape reuse never skips duplicate-row or other semantic checks.
+            self.assertEqual((metrics["validated"], metrics["hits"]), (2, 2))
+        self.assertIs(snapshot.validate_contract, original)
+        self.assertIs(contracts.validate_contract, original)
+
+    def test_full_bytes_numeric_types_and_original_raw_hashes_do_not_alias(self):
+        value = large_dataset()
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            snapshot.validate_dataset(value)
+            variants = []
+            for alias in (0, 0.0):
+                bad = deepcopy(value); bad["historical_archive_verified"] = alias; variants.append(bad)
+            bad = deepcopy(value); bad["observations"][0]["value"] = "not-a-decimal"; variants.append(bad)
+            bad = deepcopy(value); bad["assets"] = tuple(bad["assets"]); variants.append(bad)
+            for bad in variants:
+                for _ in range(2):
+                    with self.assertRaises(WorkbenchError): snapshot.validate_dataset(bad)
+            self.assertEqual(metrics["hits"], 0)
+            changed = deepcopy(value); changed["observations"][0]["value"] = "12.5"
+            # An unchanged source label/hash never aliases changed full bytes.
+            self.assertEqual(changed["observations"][0]["raw_hash"], value["observations"][0]["raw_hash"])
+            validated = metrics["validated"]
+            snapshot.validate_dataset(changed)
+            self.assertEqual(metrics["validated"], validated + 1)
+            self.assertEqual(metrics["hits"], 0)
+            snapshot.validate_dataset(deepcopy(value)); self.assertEqual(metrics["hits"], 1)
+
+    def test_schema_and_format_changes_cannot_reuse_an_old_success(self):
+        value = large_dataset(); schemas, _, checker = contracts._schemas()
+        mode = schemas[shapes.SCHEMA]["properties"]["mode"]
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            snapshot.validate_dataset(value)
+            with patch.dict(mode, {"enum": ["historical_point_in_time"]}):
+                with self.assertRaises(WorkbenchError): snapshot.validate_dataset(value)
+            with patch.dict(checker.checkers, {"date-time": (lambda _: False, ())}):
+                with self.assertRaises(WorkbenchError): snapshot.validate_dataset(value)
+            self.assertEqual(metrics["hits"], 0)
+            snapshot.validate_dataset(value); self.assertEqual(metrics["hits"], 1)
+
+    def test_scopes_entry_caps_and_uncacheable_values_never_bypass_original_validation(self):
+        value = large_dataset(); original = snapshot.validate_contract
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            for index in range(shapes.MAX_ENTRIES + 2):
+                changed = deepcopy(value); changed["source_evidence"] = "Fictional scope " + str(index)
+                snapshot.validate_dataset(changed)
+            snapshot.validate_dataset(changed)
+            self.assertEqual(metrics["entries"], shapes.MAX_ENTRIES)
+            self.assertEqual(metrics["hits"], 0)
+            with shapes.fixture_dataset_shapes() as nested: self.assertIs(nested, metrics)
+        self.assertIs(snapshot.validate_contract, original)
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as fresh:
+            snapshot.validate_dataset(value); self.assertEqual((fresh["validated"], fresh["hits"]), (1, 0))
+        for guard in ({"MAX_BYTES": 128}, {"MAX_NODES": 2}):
+            with patch.multiple(shapes, **guard), redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as limited:
+                snapshot.validate_dataset(value); snapshot.validate_dataset(value)
+                self.assertEqual((limited["validated"], limited["hits"], limited["entries"]), (2, 0, 0))
+
+    def test_other_threads_do_not_share_success_and_exception_exit_restores_alias(self):
+        value = large_dataset(); original = snapshot.validate_contract
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            snapshot.validate_dataset(value)
+            with ThreadPoolExecutor(max_workers=1) as pool: pool.submit(snapshot.validate_dataset, value).result()
+            self.assertEqual((metrics["validated"], metrics["hits"]), (1, 0))
+        with self.assertRaisesRegex(RuntimeError, "FICTIONAL_EXIT"), redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes():
+            raise RuntimeError("FICTIONAL_EXIT")
+        self.assertIs(snapshot.validate_contract, original)
+        self.assertIsNone(shapes._ACTIVE.get())
+
+    def test_a_mutating_format_callback_does_not_create_a_stale_shape_entry(self):
+        value = large_dataset(); _, _, checker = contracts._schemas()
+        original = checker.checkers["date-time"]
+        def mutate(instant):
+            value["source_evidence"] += "."
+            return original[0](instant)
+        with patch.dict(checker.checkers, {"date-time": (mutate, original[1])}), redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            snapshot.validate_dataset(value)
+            self.assertEqual(metrics["entries"], 0)
 
 
 if __name__ == "__main__":

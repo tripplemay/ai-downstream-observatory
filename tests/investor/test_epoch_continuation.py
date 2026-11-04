@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from tests.investor import test_current_correction_fixture as setup
+from tests.investor import fixture_dataset_shapes as shapes
 from tests.investor.epoch_continuation_source_fixture import create, next_sources, NOW
 from tests.investor.epoch_source_fixture import NOW as FIRST
 from tests.investor.registered_epoch_fixture import reseal_wrong_continuation_state
@@ -14,6 +15,8 @@ from worker.investor.evidence_monitor_runtime import resolve_checkpoint
 from worker.orchestration.db import WorkbenchError, open_database, instant
 from worker.orchestration.runtime import run_pending_once, command_handler
 from worker.orchestration.jobs import run_one, claim_job, complete_job
+from worker.market import contracts
+from worker.research import snapshot
 
 
 class EpochContinuationTests(unittest.TestCase):
@@ -59,6 +62,14 @@ class EpochContinuationTests(unittest.TestCase):
         before = list(self.db.iterdump())
         with closing(open_database(self.path, read_only=True)) as db:
             chain = runtime.read_epoch_continuation_chain(db, "w", "owner", self.epoch_id, now=NOW)
+            metrics = shapes._ACTIVE.get()["metrics"]; hits = metrics["hits"]
+            self.assertGreater(hits, 0)
+            # Compare the same retained originals and arithmetic with the fixture
+            # memo explicitly bypassed, using the actual production validator.
+            with patch.object(snapshot, "validate_contract", wraps=contracts.validate_contract) as uncached:
+                self.assertEqual(runtime.read_epoch_continuation_chain(db, "w", "owner", self.epoch_id, now=NOW), chain)
+                self.assertTrue(any(call.args[1] == shapes.SCHEMA for call in uncached.call_args_list))
+            self.assertEqual(metrics["hits"], hits)
             historical = runtime.read_epoch_continuation_chain(db, "w", "owner", self.epoch_id, now="2026-10-21T21:00:00.000Z")
             self.assertEqual(chain["source"], historical["source"])
             replayed, reason = resolve_checkpoint(db, "w", chain["definition"], chain["head"]["checkpoint"]["id"], NOW)

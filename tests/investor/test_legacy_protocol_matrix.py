@@ -13,6 +13,7 @@ from tests.investor import test_action_review_workflow as review_fixture
 from tests.investor import action_reconciliation_fixture as sources, test_managed_actions as managed_fixture
 from tests.investor.confirmed_capture_fixture import FictionalReceiver
 from tests.investor.fixtures import monitor_input
+from tests.investor.fixture_dataset_shapes import fixture_dataset_shapes
 from tests.investor.test_reviewed_action_successor import UpdatedCollector
 from tests.market.test_vanguard_distributions import archive, row
 from worker.investor import action_review_workflow as review, confirmed_capture, confirmed_feed, managed_actions
@@ -43,6 +44,7 @@ def offline_protocol_fixture():
                        "worker.market.providers.vanguard_capture.collect_vanguard_distribution_draft",
                        "worker.market.providers.eodhd_capture.collect_eodhd_action_draft", "worker.market.providers.ecb_current.collect_current_fx_draft"):
             stack.enter_context(patch(target, side_effect=AssertionError("NO_NETWORK_OR_CREDENTIALS")))
+        stack.enter_context(fixture_dataset_shapes())
         yield
 
 
