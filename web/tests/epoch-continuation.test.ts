@@ -10,11 +10,13 @@ import { readEpochContinuationChain, readEpochContinuationHeader } from "../src/
 import { replayModelEpochContinuationSource } from "../src/server/investor/model-epoch-continuation-source";
 import { canonical, hash } from "../src/server/ledger/service";
 import { Decimal } from "../src/server/ledger/decimal";
+import { assertCurrentEpochSourceSelection } from "../src/server/investor/current-epoch-sources";
+import { readEvidenceReference } from "../src/server/investor/reference-evidence";
 
 type Obj = Record<string, unknown>;
 const now = "2026-10-21T10:00:03.000Z";
 function obj(value: unknown): Obj { assert.ok(value && typeof value === "object" && !Array.isArray(value)); return value as Obj; }
-test("independent query-only full chain replays reuse and next-close states; historical proof is not current-source eligibility", t => {
+test("actual ongoing research requires independent full replay and current unambiguous sources; expiry or changed evidence hides derivatives", t => {
   const f = investorFixture(); t.after(f.close);
   const metadata = actionPython(f.filename, `
 from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture
@@ -62,11 +64,36 @@ print(json.dumps({'prefix':prefix,'prepared':prepared}))
   const prepared = obj(additional.prepared), implementation = String(obj(obj(prepared.candidate).assessment).implementation_hash);
   assert.deepEqual(replayModelEpochContinuationSource(reader, "w", { id: "owner" }, epochId, prepared.input, now, implementation), prepared);
   const current = readEvidenceMonitorRun(reader, "w", String(result.monitor_run_id), now);
-  assert.equal(current.unavailable_reason, "MONITOR_EPOCH_CURRENT_SOURCE_SELECTION_PENDING");
-  assert.equal(current.observation.outcome, "insufficient_evidence"); assert.equal(current.observation.model_change, undefined);
+  assert.equal(current.unavailable_reason, null);
+  const assessment = obj(obj(obj(expected.source).candidate).assessment);
+  assert.equal(current.observation.outcome, assessment.outcome); assert.equal(current.observation.monitoring, "active");
+  assert.equal(current.observation.model_change?.model_nav_cny, assessment.model_nav_cny);
+  const expired = readEvidenceMonitorRun(reader, "w", String(result.monitor_run_id), current.observation.next_review_at!);
+  assert.equal(expired.unavailable_reason, "MONITOR_COST_ASSUMPTIONS_CHANGED"); assert.equal(expired.observation.model_change, undefined);
+  const superseded = readEvidenceMonitorRun(reader, "w", String(obj(metadata.first_result).monitor_run_id), now);
+  assert.equal(superseded.unavailable_reason, "MONITOR_EPOCH_RUN_SUPERSEDED"); assert.equal(superseded.observation.model_change, undefined);
   const state = getInvestorState(reader, { id: "owner" }, now);
-  assert.equal(state.observations[0].document.outcome, "insufficient_evidence");
-  assert.equal(state.model_watch?.model_nav_cny, null);
+  assert.equal(current.observation.next_review_at, state.monitor_costs?.valid_until, "the fictional owner's fee evidence is the earliest current deadline");
+  assert.equal(state.observations[0].document.outcome, assessment.outcome);
+  assert.equal(state.model_watch?.status, assessment.outcome === "observe" ? "research_observe" : "research_decision");
+  assert.equal(state.model_watch?.model_nav_cny, assessment.model_nav_cny);
+  assert.equal(getInvestorState(reader, { id: "owner" }, current.observation.next_review_at!).model_watch?.model_nav_cny, null);
+  f.db.exec("SAVEPOINT fictional_current_human_decision");
+  try {
+    const intent = { action: "review" as const, observation_id: String(result.observation_id), decision: "defer" as const,
+      expected_revision: state.revision, idempotency_key: "fictional-current-epoch-human-defer", note: "Fictional observation only; no trade" };
+    if (current.observation.outcome === "decision_required") {
+      const first = executeInvestorCommand(f.db, { id: "owner" }, intent, now);
+      assert.deepEqual(executeInvestorCommand(f.db, { id: "owner" }, intent, now), first);
+      assert.equal((f.db.prepare("SELECT count(*) n FROM investor_decisions WHERE observation_id=?").get(result.observation_id) as { n: number }).n, 1);
+      const revision = (f.db.prepare("SELECT revision FROM investor_workspaces WHERE id='w'").get() as { revision: number }).revision;
+      assert.throws(() => executeInvestorCommand(f.db, { id: "owner" }, { ...intent, expected_revision: revision, idempotency_key: "fictional-new-review-after-current-deadline" },
+        current.observation.next_review_at!), /INVESTOR_NO_DECISION_REQUIRED/);
+    } else assert.throws(() => executeInvestorCommand(f.db, { id: "owner" }, intent, now), /INVESTOR_NO_DECISION_REQUIRED/);
+    assert.deepEqual(readEpochContinuationChain(f.db, "w", { id: "owner" }, epochId, now).source, expected.source);
+    for (const table of ["portfolios", "accounts", "ledger_events", "postings"])
+      assert.equal((f.db.prepare("SELECT count(*) n FROM " + table).get() as { n: number }).n, 0);
+  } finally { f.db.exec("ROLLBACK TO fictional_current_human_decision; RELEASE fictional_current_human_decision"); }
   const model = reader.prepare("SELECT * FROM investor_models WHERE id=?").get(obj(expected.definition).model_id) as Obj;
   assert.deepEqual(readEvidenceCheckpoint(reader, "w", model, obj(expected.definition), obj(obj(expected.head).checkpoint).id, now).checkpoint, obj(obj(obj(expected.source).candidate).checkpoint));
   assert.equal((reader.prepare("SELECT total_changes() n").get() as { n: number }).n, 0);
@@ -77,16 +104,22 @@ print(json.dumps({'prefix':prefix,'prepared':prepared}))
       expected_cost_version: state.monitor_costs!.version, expected_revision: state.revision, idempotency_key: "fictional-continuation-cost-choice",
       acknowledged_research_only: true, costs: null, validity_days: null }, later);
     assert.deepEqual(readEpochContinuationChain(f.db, "w", { id: "owner" }, epochId, later).source, expected.source);
+    const beforeCost = readEvidenceMonitorRun(f.db, "w", String(result.monitor_run_id), later);
+    assert.equal(beforeCost.unavailable_reason, null); assert.equal(beforeCost.observation.next_review_at, "2026-10-21T10:00:05.001Z");
+    assert.equal(readEvidenceMonitorRun(f.db, "w", String(result.monitor_run_id), "2026-10-21T10:00:05.001Z").unavailable_reason, "MONITOR_COST_ASSUMPTIONS_CHANGED");
     let revision = (f.db.prepare("SELECT revision FROM investor_workspaces WHERE id='w'").get() as { revision: number }).revision;
     executeInvestorCommand(f.db, { id: "owner" }, { action: "save_funding_plan", expected_revision: revision, idempotency_key: "fictional-continuation-funding-choice",
       funding_plan: { schema_version: "investor-funding-plan-v1", start_date: "2026-10-22", horizon_years: 1, evaluation_timezone: "Asia/Shanghai",
         initial_capital_cny: "100.01", annual_contribution_cny: "10.01", first_annual_date: "2027-01-01", entry_method: "three_tranches_60_days",
         actual_arrivals_confirmed: false, execution_authorized: false, live_advice_eligible: false } }, later);
     assert.deepEqual(readEpochContinuationChain(f.db, "w", { id: "owner" }, epochId, later).source, expected.source);
+    assert.equal(readEvidenceMonitorRun(f.db, "w", String(result.monitor_run_id), later).unavailable_reason, "MONITOR_FUNDING_PLAN_CHANGED");
     revision = (f.db.prepare("SELECT revision FROM investor_workspaces WHERE id='w'").get() as { revision: number }).revision;
     executeInvestorCommand(f.db, { id: "owner" }, { action: "set_monitoring", model_id: String(model.id), enabled: false,
       expected_revision: revision, idempotency_key: "fictional-continuation-global-pause" }, later);
     assert.deepEqual(readEpochContinuationChain(f.db, "w", { id: "owner" }, epochId, later).source, expected.source);
+    assert.equal(readEvidenceMonitorRun(f.db, "w", String(result.monitor_run_id), later).unavailable_reason, "MONITOR_EPOCH_MONITORING_PAUSED");
+    assert.equal(getInvestorState(f.db, { id: "owner" }, later).model_watch?.status, "paused");
     assert.throws(() => replayModelEpochContinuationSource(f.db, "w", { id: "owner" }, epochId, prepared.input, later, implementation), /CONTROL_CHANGED/);
   } finally { f.db.exec("ROLLBACK TO fictional_later_epoch_choices; RELEASE fictional_later_epoch_choices"); }
   f.db.exec("SAVEPOINT fictional_unknown_continuation_tail");
@@ -96,6 +129,7 @@ print(json.dumps({'prefix':prefix,'prepared':prepared}))
       content_hash,content_hash,projection_hash,created_at,valid_until FROM investor_evidence_model_checkpoints WHERE id=?`).run(obj(obj(expected.head).checkpoint).id);
     assert.deepEqual(readEpochContinuationChain(f.db, "w", { id: "owner" }, epochId, now), expected);
     assert.throws(() => replayModelEpochContinuationSource(f.db, "w", { id: "owner" }, epochId, prepared.input, now, implementation), /LATEST_HEAD_CHANGED/);
+    assert.equal(readEvidenceMonitorRun(f.db, "w", String(result.monitor_run_id), now).unavailable_reason, "MONITOR_EPOCH_CONTINUATION_NOT_VERIFIED");
   } finally { f.db.exec("ROLLBACK TO fictional_unknown_continuation_tail; RELEASE fictional_unknown_continuation_tail"); }
   f.db.exec("SAVEPOINT fictional_resealed_continuation");
   try {
@@ -114,17 +148,117 @@ print(json.dumps({'prefix':prefix,'prepared':prepared}))
     f.db.prepare("UPDATE investor_evidence_monitor_runs SET document_json=?,content_hash=? WHERE id=?").run(canonical(run), hash(run), result.monitor_run_id);
     readEpochContinuationHeader(f.db, "w", { id: "owner" }, String(result.publication_id), now);
     assert.throws(() => readEpochContinuationChain(f.db, "w", { id: "owner" }, epochId, now), /CHECKPOINT_CHANGED/);
+    const bad = readEvidenceMonitorRun(f.db, "w", String(result.monitor_run_id), now);
+    assert.equal(bad.observation.outcome, "insufficient_evidence"); assert.equal(bad.observation.model_change, undefined);
   } finally { f.db.exec("ROLLBACK TO fictional_resealed_continuation; RELEASE fictional_resealed_continuation"); }
   assert.deepEqual(replay(), expected);
+  for (const kind of ["fx", "actions"]) {
+    const duplicate = actionPython(f.filename, `
+from tests.investor import current_correction_fixture as current
+from worker.investor import data_evidence
+document=json.loads(db.execute('SELECT document_json FROM investor_monitor_evidence_inputs ORDER BY rowid DESC LIMIT 1').fetchone()[0])
+values=[]
+for segment in document['segments']:
+ for ref in segment['snapshot']['review_refs']:
+  try:values.append(data_evidence.resolve_review(db,'w',ref['review_id'],'${kind}',now='${now}'))
+  except Exception:pass
+assert values
+facts=values[0]['facts'].copy()
+if '${kind}'=='fx':facts.pop('monitor_series',None)
+value=current.reviewed(db,'${kind}',facts,'${now}',values[0]['review']['valid_until'],'unrelated-equal-${kind}-still-ambiguous')
+print(json.dumps({'source_id':value['source_id'],'valid_until':value['valid_until']}))
+`);
+    const ambiguous = readEvidenceMonitorRun(reader, "w", String(result.monitor_run_id), now);
+    assert.equal(ambiguous.observation.outcome, "insufficient_evidence"); assert.equal(ambiguous.observation.model_change, undefined);
+    actionPython(f.filename, `
+from worker.investor import data_evidence
+data_evidence.review_source(db,'w','owner','${duplicate.source_id}','rejected',None,'Fictional separate rejection restores unambiguous selection','${duplicate.valid_until}',now='${now}')
+print('{}')
+`);
+    assert.equal(readEvidenceMonitorRun(reader, "w", String(result.monitor_run_id), now).unavailable_reason, null);
+  }
+  actionPython(f.filename, `
+from datetime import datetime
+from decimal import Decimal
+from zoneinfo import ZoneInfo
+from unittest.mock import patch
+from hashlib import sha256
+from worker.investor import confirmed_capture as captures,data_evidence
+from worker.market.providers import longport_confirmed as receiver
+from worker.orchestration.db import canonical_json,content_hash
+from tests.investor.confirmed_capture_fixture import stamp
+at='${now}'
+bases=db.execute("SELECT * FROM investor_price_captures WHERE json_extract(receipt_json,'$.request.end_date')='2026-10-20' ORDER BY id").fetchall()
+targets=[{**{kind+'_review_id':row[kind+'_review_id'] for kind in ('rights','listing','calendar')},'session_date':'2026-10-20'} for row in bases]
+prices={value['records'][0]['listing_id']:Decimal(value['records'][0]['value']) for value in [data_evidence.resolve_capture(db,'w',row['id'],now=at) for row in bases]}
+def receive(request,**kwargs):
+ assert not kwargs['stop_requested']()
+ started=stamp(captures.instant(at));frames=[{'frame':'ready','watch_id':request['watch_id'],'request_hash':content_hash(request),'started_at':started,'sdk_version':'4.3.7','adapter_version':receiver.ADAPTER_VERSION}]
+ for sequence,target in enumerate(request['targets'],1):
+  price=prices[target['mapping']['listing_id']]
+  candle={'timestamp':datetime(2026,10,20,tzinfo=ZoneInfo('America/New_York')),'open':price,'high':price,'low':price,'close':price,'turnover':price*1000,'volume':1000,'trade_session':0}
+  value=receiver.normalize_confirmed_day(candle,target,watch_id=request['watch_id'],started_at=started,received_at=started)
+  frames.append({'frame':'bar','sequence':sequence,'projection':value['projection'],'sha256':value['projection_sha256']})
+ frames.append({'frame':'finished','watch_id':request['watch_id'],'events':len(request['targets']),'reason':'watch_window_elapsed'})
+ raw=b''.join(canonical_json(frame).encode()+b'\\n' for frame in frames)
+ return {'qualification':captures.OFFICIAL,'protocol_bytes':raw,'protocol_sha256':sha256(raw).hexdigest(),'call_started_at':started,'call_returned_at':started}
+millis,parse=captures._milliseconds,captures.instant
+with patch.object(receiver,'collect_confirmed_days',side_effect=receive),patch.object(captures,'_milliseconds',side_effect=lambda value=None:millis(at if value is None else value)),patch.object(captures,'instant',side_effect=lambda value=None:parse(at if value is None else value)):
+ value=captures.collect_confirmed_prices(db,'w','owner',targets,watch_seconds=1)
+assert value['qualification']=='isolated_official_sdk_callback' and value['status']=='complete'
+print('{}')
+`);
+  // Equal SDK and callback receipts must agree, not silently replace one another.
+  assert.equal(readEvidenceMonitorRun(reader, "w", String(result.monitor_run_id), now).unavailable_reason, null);
+  actionPython(f.filename, `
+from datetime import datetime
+from decimal import Decimal
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
+from worker.investor import data_evidence as evidence
+from worker.market.providers import longport
+from worker.orchestration.db import instant
+at='2026-10-21T10:00:04.000Z'
+base=db.execute("SELECT * FROM investor_price_captures WHERE json_extract(receipt_json,'$.request.end_date')='2026-10-20' ORDER BY created_at DESC,id LIMIT 1").fetchone()
+request=json.loads(base['receipt_json'])['request'];price=Decimal('12.345678')
+bars=[{'timestamp':datetime(2026,10,20,tzinfo=ZoneInfo('America/New_York')),'open':price,'high':price,'low':price,'close':price,'volume':1000,'turnover':price*1000,'trade_session':0}]
+projection=longport._normalize(bars,request=request,sdk_version='4.3.7',call_started_at=at,call_returned_at=at,datetime_basis='runtime_utc_from_unix_timestamp',collector_runtime='isolated_official_sdk')
+millis,parse=evidence._milliseconds,evidence.instant
+with patch.object(longport,'_collect_isolated',return_value=projection),patch.object(evidence,'_milliseconds',side_effect=lambda value=None:millis(at if value is None else value)),patch.object(evidence,'instant',side_effect=lambda value=None:parse(at if value is None else value)):
+ evidence.collect_prices(db,'w','owner',base['rights_review_id'],base['listing_review_id'],base['calendar_review_id'],'2026-10-20','2026-10-20')
+print('{}')
+`);
+  const conflictAt = "2026-10-21T10:00:04.000Z", definition = obj(expected.definition), source = obj(expected.source);
+  const reference = readEvidenceReference(reader, "w", String(definition.plan_id), conflictAt);
+  assert.deepEqual(replay(conflictAt).source, expected.source);
+  assert.throws(() => assertCurrentEpochSourceSelection(reader, "w", reference.document.targets as unknown as Obj[], definition, obj(source.input), obj(obj(source.projection).economic_projection), conflictAt), /PRICES_CONFLICT/);
+  const conflicting = readEvidenceMonitorRun(reader, "w", String(result.monitor_run_id), conflictAt);
+  assert.equal(conflicting.unavailable_reason, "MONITOR_EPOCH_CURRENT_SOURCE_SELECTION_CHANGED"); assert.equal(conflicting.observation.model_change, undefined);
+  actionPython(f.filename, `
+from worker.investor import epoch_continuation as runtime
+head=dict(db.execute('SELECT id,content_hash FROM investor_evidence_model_checkpoints ORDER BY sequence DESC LIMIT 1').fetchone())
+root=db.execute('SELECT content_hash FROM investor_model_epochs WHERE id=?',('${epochId}',)).fetchone()[0]
+body={'schema_version':'investor-epoch-control-submit-v1','epoch_id':'${epochId}','expected_registration_hash':root,'expected_checkpoint':head,
+ 'expected_revision':db.execute("SELECT revision FROM investor_workspaces WHERE id='w'").fetchone()[0],'idempotency_key':'fictional-explicit-pause-despite-price-conflict','enabled':False,
+ 'acknowledgements':{key:True for key in runtime.ACKS}}
+runtime.set_epoch_continuation_control(db,'w','owner',body,owner_interaction=True,now='2026-10-21T10:00:05.000Z')
+print('{}')
+`);
+  const pausedAt = "2026-10-21T10:00:05.000Z";
+  assert.deepEqual(replay(pausedAt).source, expected.source);
+  const paused = readEvidenceMonitorRun(reader, "w", String(result.monitor_run_id), pausedAt);
+  assert.equal(paused.unavailable_reason, "MONITOR_EPOCH_CONTINUATION_PAUSED"); assert.equal(paused.observation.model_change, undefined);
+  assert.equal(getInvestorState(reader, { id: "owner" }, pausedAt).model_watch?.status, "paused");
   actionPython(f.filename, `
 from worker.investor import eodhd_sources
 grant=db.execute("SELECT id FROM investor_eodhd_authorities WHERE workspace_id='w'").fetchone()[0]
-eodhd_sources.set_authority_enabled(db,'w','owner',grant,False,now='${now}')
+eodhd_sources.set_authority_enabled(db,'w','owner',grant,False,now='2026-10-21T10:00:06.000Z')
 print('{}')
 `);
-  assert.throws(() => replay());
-  const revoked = readEvidenceMonitorRun(reader, "w", String(result.monitor_run_id), now);
+  assert.throws(() => replay("2026-10-21T10:00:06.000Z"));
+  const revoked = readEvidenceMonitorRun(reader, "w", String(result.monitor_run_id), "2026-10-21T10:00:06.000Z");
   assert.equal(revoked.observation.outcome, "insufficient_evidence"); assert.equal(revoked.observation.model_change, undefined);
   for (const table of ["portfolios", "accounts", "ledger_events", "postings"])
     assert.equal((reader.prepare("SELECT count(*) n FROM " + table).get() as { n: number }).n, 0);
+  assert.equal((reader.prepare("SELECT total_changes() n").get() as { n: number }).n, 0);
 });

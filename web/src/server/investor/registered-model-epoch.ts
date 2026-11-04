@@ -4,13 +4,15 @@ import { parseStrictJson } from "../strict-json";
 import { priceInstant } from "../market-price-source";
 import { modelAssessmentObservation, validateInvestorEvidenceMonitor, validateModelEpochCheckpoint, validateModelEpochRegistration } from "./kernel-contracts";
 import { readModelEpochRegistrationHeader } from "./model-epoch-registration";
-import { replayRegisteredModelEpochSource } from "./model-epoch-source";
+import { modelEpochSourceSettings, replayRegisteredModelEpochSource } from "./model-epoch-source";
 import { modelWatchSchema, observationSchema } from "./schemas";
 import type { InvestorProfileVersion } from "./types";
 import { monitorCostsAt } from "./monitor-costs";
 import { readBoundPlannedFundingMonitor } from "./planned-funding-source";
 import type { PlannedFundingBinding } from "./planned-funding-monitor";
-import { readEpochContinuationChain, readEpochContinuationHeader } from "./epoch-continuation";
+import { readEpochContinuationChain, readEpochContinuationHeader, readEpochControlHeader } from "./epoch-continuation";
+import { readEvidenceReference } from "./reference-evidence";
+import { assertCurrentEpochSourceSelection } from "./current-epoch-sources";
 
 type Obj = Record<string, unknown>;
 function check(value: unknown, code = "INVALID"): asserts value { if (!value) throw new Error("INVESTOR_REGISTERED_MODEL_EPOCH_" + code); }
@@ -106,37 +108,95 @@ export function readModelEpochMonitorRun(db: Database.Database, workspace: strin
   return { row: h.run, model: h.model, definition: h.definition, request: h.monitor, run: h.runDocument, observation, unavailable_reason: reason };
 }
 
-/** Historical full-chain verification is not current source selection. */
-export function readPendingEpochContinuationRun(db: Database.Database, workspace: string, runId: string, now: string) {
-  const actor = owner(db, workspace);
-  const p = db.prepare("SELECT id,epoch_id FROM investor_epoch_continuations WHERE monitor_run_id=? AND workspace_id=?").get(runId, workspace) as Obj | undefined; check(p);
-  const publication = readEpochContinuationHeader(db, workspace, actor, text(p.id), now);
-  const h = readModelEpochRegistrationHeader(db, workspace, actor, text(p.epoch_id), now);
-  let reason = "MONITOR_EPOCH_CURRENT_SOURCE_SELECTION_PENDING";
+function currentEpochReason(db: Database.Database, workspace: string, actor: { id: string }, chain: ReturnType<typeof readEpochContinuationChain>,
+  publication: ReturnType<typeof readEpochContinuationHeader>, now: string) {
+  const definition = chain.definition, modelId = text(definition.model_id), source = chain.source, document = obj(source.input);
+  const latest = db.prepare("SELECT id FROM investor_epoch_continuations WHERE workspace_id=? AND epoch_id=? ORDER BY sequence DESC LIMIT 1").get(workspace, publication.row.epoch_id) as Obj | undefined;
+  if (latest?.id !== publication.row.id) return "MONITOR_EPOCH_RUN_SUPERSEDED";
+  const checkpoint = db.prepare("SELECT id,content_hash FROM investor_evidence_model_checkpoints WHERE workspace_id=? AND model_id=? ORDER BY sequence DESC LIMIT 1").get(workspace, modelId);
+  const input = db.prepare("SELECT id,content_hash FROM investor_monitor_evidence_inputs WHERE workspace_id=? AND model_id=? ORDER BY rowid DESC LIMIT 1").get(workspace, modelId);
+  if (!same(checkpoint, chain.head.checkpoint) || !same(input, chain.head.input)) return "MONITOR_EPOCH_CONTINUATION_NOT_VERIFIED";
+  const activation = db.prepare("SELECT id FROM investor_epoch_controls WHERE workspace_id=? AND epoch_id=? ORDER BY version DESC LIMIT 1").get(workspace, publication.row.epoch_id) as Obj | undefined;
+  if (!activation) return "MONITOR_EPOCH_CONTINUATION_NOT_ENABLED";
+  const active = readEpochControlHeader(db, workspace, actor, text(activation.id), now);
+  if (!active.row.enabled) return "MONITOR_EPOCH_CONTINUATION_PAUSED";
+  if (active.row.id !== obj(publication.doc.activation).id || time(active.row.valid_until) <= time(now)) return "MONITOR_EPOCH_ACTIVATION_CHANGED";
+  const control = db.prepare("SELECT * FROM investor_model_controls WHERE workspace_id=? AND model_id=? ORDER BY version DESC LIMIT 1").get(workspace, modelId) as Obj | undefined;
+  if (!control || time(control.created_at) > time(now)) return "MONITOR_EPOCH_CONTROL_CHANGED";
+  if (!control.enabled) return "MONITOR_EPOCH_MONITORING_PAUSED";
+  if (!same({ id: control.id, content_hash: hash(control) }, chain.root.source.epoch_definition.model_control)) return "MONITOR_EPOCH_CONTROL_CHANGED";
+  const profile = db.prepare("SELECT * FROM investor_profiles WHERE workspace_id=? ORDER BY version DESC LIMIT 1").get(workspace) as Obj | undefined;
+  const selected = db.prepare("SELECT plan_id,created_at FROM investor_plan_selections WHERE workspace_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1").get(workspace) as Obj | undefined;
+  if (!profile || profile.id !== definition.profile_id || profile.content_hash !== definition.profile_hash || profile.version !== definition.profile_version
+    || time(profile.created_at) > time(now) || !selected || selected.plan_id !== definition.plan_id || time(selected.created_at) > time(now)) return "MONITOR_EPOCH_REFERENCE_CHANGED";
+  const latestFunding = db.prepare("SELECT id,content_hash FROM investor_funding_plans WHERE workspace_id=? ORDER BY version DESC LIMIT 1").get(workspace) as Obj | undefined;
+  const binding = document.funding_binding ? obj(document.funding_binding) : null;
+  if (Boolean(latestFunding) !== Boolean(binding) || latestFunding && (latestFunding.id !== binding?.funding_plan_id || latestFunding.content_hash !== binding?.funding_plan_hash)) return "MONITOR_FUNDING_PLAN_CHANGED";
+  if (binding) {
+    const funding = readBoundPlannedFundingMonitor(db, actor, workspace, binding as PlannedFundingBinding, now, now);
+    if (funding.projection.status === "expired") return "MONITOR_FUNDING_PLAN_WINDOW_EXPIRED";
+    if (funding.context_hash !== document.funding_context_hash) return "MONITOR_FUNDING_CONTEXT_CHANGED";
+  }
+  const costs = monitorCostsAt(db, workspace, definition, now), settings = obj(document.settings);
+  if (!same(costs?.binding ?? null, settings.cost_assumptions ?? null) || !same(costs?.costs ?? null, obj(settings.policy).costs)) return "MONITOR_COST_ASSUMPTIONS_CHANGED";
+  if ([definition.valid_until, chain.read_valid_until, obj(source.proof).valid_until, publication.runDocument.next_check_at].some(deadline => time(now) >= time(deadline))) return "MONITOR_EPOCH_CURRENT_DATA_NOT_READY";
+  const reference = readEvidenceReference(db, workspace, text(definition.plan_id), now);
+  if (reference.unavailable_reason || reference.row.content_hash !== definition.plan_hash) return "MONITOR_EPOCH_REFERENCE_CHANGED";
+  if (!same(settings, modelEpochSourceSettings(db, workspace, definition, reference.document as unknown as Obj, now))) return "MONITOR_EPOCH_CURRENT_SETTINGS_CHANGED";
   try {
-    const chain = readEpochContinuationChain(db, workspace, actor, text(p.epoch_id), now, text(p.id));
-    check(same(chain.definition, h.definition) && chain.last_publication?.id === p.id);
-  } catch { reason = "MONITOR_EPOCH_REPLAY_UNAVAILABLE"; }
-  const observation = observationSchema.parse({ ...blocked(h, reason), input_version: publication.monitor.input_version, evaluated_at: publication.doc.calculated_at,
-    reasons: [reason === "MONITOR_EPOCH_CURRENT_SOURCE_SELECTION_PENDING"
-      ? "历史连续链已独立核验；当前来源选择与普通启用交互仍待接通，不将历史结果直接作为当前结论。"
-      : "当前权限或连续状态未能完整核验，隐藏历史净值和变化；不将缺少结论当作无需调整。"] });
-  return { row: publication.run, model: h.model, definition: h.definition, request: publication.monitor, run: publication.runDocument, observation, unavailable_reason: reason };
+    assertCurrentEpochSourceSelection(db, workspace, reference.document.targets as unknown as Obj[], definition, document, obj(obj(source.projection).economic_projection), now);
+  } catch { return "MONITOR_EPOCH_CURRENT_SOURCE_SELECTION_CHANGED"; }
+  return null;
+}
+
+/** Actual retained replay plus independent current selection, in one snapshot. */
+export function readEpochContinuationRun(db: Database.Database, workspace: string, runId: string, now: string) {
+  return db.transaction(() => {
+    const actor = owner(db, workspace);
+    const p = db.prepare("SELECT id,epoch_id FROM investor_epoch_continuations WHERE monitor_run_id=? AND workspace_id=?").get(runId, workspace) as Obj | undefined; check(p);
+    const publication = readEpochContinuationHeader(db, workspace, actor, text(p.id), now);
+    const h = readModelEpochRegistrationHeader(db, workspace, actor, text(p.epoch_id), now);
+    let reason: string | null = null, observation;
+    try {
+      const chain = readEpochContinuationChain(db, workspace, actor, text(p.epoch_id), now, text(p.id));
+      check(same(chain.definition, h.definition) && chain.last_publication?.id === p.id);
+      reason = currentEpochReason(db, workspace, actor, chain, publication, now);
+      if (!reason) {
+        const candidate = obj(chain.source.candidate), request = obj(candidate.monitor_request);
+        const converted = modelAssessmentObservation({ action: "monitor", document: request.document, now: text(request.now) }, candidate.assessment);
+        const nextCost = db.prepare("SELECT effective_from FROM investor_monitor_cost_assumptions WHERE workspace_id=? AND model_id=? AND effective_from>? ORDER BY effective_from,version LIMIT 1")
+          .get(workspace, h.model.id, now) as Obj | undefined;
+        const expiry = minimum([publication.runDocument.next_check_at, chain.read_valid_until, obj(chain.source.proof).valid_until, h.definition.valid_until,
+          ...(nextCost ? [nextCost.effective_from] : [])]);
+        observation = observationSchema.parse({ ...converted, input_version: publication.monitor.input_version, next_review_at: expiry, monitoring: "active",
+          gaps: converted.gaps.map(gap => ({ ...gap, affected_markets: [...gap.affected_markets].sort() })) });
+      }
+    } catch { reason = "MONITOR_EPOCH_REPLAY_UNAVAILABLE"; }
+    observation ??= observationSchema.parse({ ...blocked(h, reason!), input_version: publication.monitor.input_version, evaluated_at: publication.doc.calculated_at,
+      reasons: ["当前权限、启用控制、来源选择或连续状态未能完整核验，隐藏历史净值和变化；不将缺少结论当作无需调整。"] });
+    return { row: publication.run, model: h.model, definition: h.definition, request: publication.monitor, run: publication.runDocument, observation, unavailable_reason: reason };
+  }).deferred();
 }
 
 export function readModelEpochWatch(db: Database.Database, workspace: string, model: Obj, definition: Obj, profile: InvestorProfileVersion, now: string, referenceAvailable: boolean) {
   const epoch = db.prepare("SELECT id FROM investor_model_epochs WHERE workspace_id=? AND model_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1").get(workspace, model.id) as Obj | undefined;
-  check(epoch); const read = readModelEpochMonitorRun(db, workspace, text(epoch.id), now);
+  check(epoch);
+  const continuation = db.prepare("SELECT monitor_run_id FROM investor_epoch_continuations WHERE workspace_id=? AND epoch_id=? ORDER BY sequence DESC LIMIT 1").get(workspace, epoch.id) as Obj | undefined;
+  const read = continuation ? readEpochContinuationRun(db, workspace, text(continuation.monitor_run_id), now) : readModelEpochMonitorRun(db, workspace, text(epoch.id), now);
   check(same(read.definition, definition));
   const control = db.prepare("SELECT * FROM investor_model_controls WHERE workspace_id=? AND model_id=? ORDER BY version DESC LIMIT 1").get(workspace, model.id) as Obj | undefined;
   check(control && [0, 1].includes(control.enabled as number) && time(control.created_at) <= time(now));
   const input = db.prepare("SELECT id FROM investor_monitor_evidence_inputs WHERE workspace_id=? AND model_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1").get(workspace, model.id) as Obj | undefined;
-  let status = read.unavailable_reason !== "MONITOR_EPOCH_CONTINUATION_NOT_ENABLED" || !referenceAvailable || definition.profile_id !== profile.id || definition.profile_hash !== profile.content_hash
-    || input?.id !== read.request.input_id ? "outdated" : "blocked";
+  const activation = db.prepare("SELECT enabled FROM investor_epoch_controls WHERE workspace_id=? AND epoch_id=? ORDER BY version DESC LIMIT 1").get(workspace, epoch.id) as Obj | undefined;
+  const enabled = control.enabled === 1 && (!activation || activation.enabled === 1);
+  let status = read.unavailable_reason ? read.unavailable_reason === "MONITOR_EPOCH_CONTINUATION_NOT_ENABLED" ? "blocked" : "outdated"
+    : read.observation.outcome === "observe" ? "research_observe" : read.observation.outcome === "decision_required" ? "research_decision" : "blocked";
+  if (!referenceAvailable || definition.profile_id !== profile.id || definition.profile_hash !== profile.content_hash || input?.id !== read.request.input_id) status = "outdated";
   if (time(definition.valid_until) <= time(now)) status = "expired";
-  if (!control.enabled) status = "paused";
+  if (!enabled) status = "paused";
   return modelWatchSchema.parse({ id: model.id, profile_id: definition.profile_id, plan_id: model.plan_id, plan_hash: definition.plan_hash, valid_until: definition.valid_until,
-    enabled: control.enabled === 1, status, created_at: model.created_at, completed_at: read.row.created_at, next_check_at: null,
+    enabled, status, created_at: model.created_at, completed_at: read.row.created_at, next_check_at: read.observation.next_review_at,
     checkpoint_sequence: Number((db.prepare("SELECT sequence FROM investor_evidence_model_checkpoints WHERE id=?").get(read.row.checkpoint_id) as Obj).sequence),
-    initial_notional_cny: "10000", model_nav_cny: null, evaluation_input_version: read.request.input_version, source_qualification: "owner_reviewed_reconstructed", live_advice_eligible: false });
+    initial_notional_cny: "10000", model_nav_cny: ["research_observe", "research_decision"].includes(status) ? read.observation.model_change?.model_nav_cny ?? null : null,
+    evaluation_input_version: read.request.input_version, source_qualification: "owner_reviewed_reconstructed", live_advice_eligible: false });
 }

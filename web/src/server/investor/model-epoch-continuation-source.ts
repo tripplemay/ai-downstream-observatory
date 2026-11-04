@@ -83,6 +83,17 @@ function currentFx(db: Database.Database, workspace: string, targets: Obj[], set
   return selected.sort();
 }
 
+/** Selection checks only, not source/state authentication or an admission grant. */
+export function assertCurrentEpochAuxiliarySources(db: Database.Database, workspace: string, definition: Obj, document: Obj, now: string) {
+  const selected = actions(db, workspace, document, now, true);
+  check(same([...selected.keys()].sort(), rows(definition.targets).map(row => text(row.listing_id)).sort()), "ACTION_SELECTION_CHANGED");
+  const selectedFx = new Set<string>();
+  for (const segment of rows(document.segments)) for (const ref of rows(obj(segment.snapshot).review_refs)) {
+    const value = readInvestorSourceReview(db, workspace, ref, now); if (value.source.kind === "fx") selectedFx.add(value.row.id);
+  }
+  check(same([...selectedFx].sort(), currentFx(db, workspace, rows(definition.targets), obj(document.settings), now)), "FX_SELECTION_CHANGED");
+}
+
 /** Current preparation only. The actual full chain supplies the predecessor. */
 export function replayModelEpochContinuationSource(db: Database.Database, workspace: string, actor: { id: string }, epochId: string, rawInput: unknown, now: string, implementationHash: string) {
   validateModelEpochSource("input", rawInput);

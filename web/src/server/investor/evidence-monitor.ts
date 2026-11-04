@@ -13,7 +13,7 @@ import { modelWatchSchema, observationSchema, type InvestorObservation } from ".
 import type { InvestorObservationRecord, InvestorProfileVersion } from "./types";
 import { readBoundPlannedFundingMonitor } from "./planned-funding-source";
 import type { PlannedFundingBinding } from "./planned-funding-monitor";
-import { readModelEpochMonitorRun, readModelEpochWatch, readRegisteredModelEpoch, readPendingEpochContinuationRun } from "./registered-model-epoch";
+import { readModelEpochMonitorRun, readModelEpochWatch, readRegisteredModelEpoch, readEpochContinuationRun } from "./registered-model-epoch";
 import { readEpochContinuationChain } from "./epoch-continuation";
 
 type Obj = Record<string, unknown>;
@@ -127,7 +127,7 @@ export function readEvidenceMonitorRun(db: Database.Database, workspace: string,
       return readModelEpochMonitorRun(db, workspace, text(epoch.id), now);
     }
     if (protocol?.protocol === "investor-evidence-monitor-request-v4")
-      return readPendingEpochContinuationRun(db, workspace, runId, now);
+      return readEpochContinuationRun(db, workspace, runId, now);
     const row = db.prepare(`SELECT u.*,j.status job_status,j.job_type,j.scope job_scope,j.period job_period,j.input_version job_input,j.command_request_id
       FROM investor_evidence_monitor_runs u JOIN job_runs j ON j.id=u.job_id WHERE u.id=? AND u.workspace_id=?`).get(runId, workspace) as Obj | undefined;
     check(row && row.job_status === "succeeded" && row.job_type === "investor_evidence_monitor" && row.command_request_id === null && row.job_scope === workspace && time(row.created_at) <= time(now));
