@@ -88,10 +88,22 @@ def core(db):
     return {"jobs": results, "actual_application_clock": True, "real_provider_called": False}
 
 
+def wait_for_discovery(db):
+    # Normal discovery skips a contended snapshot; rescan without claiming a job.
+    deadline = time.monotonic() + 30
+    while True:
+        initial_close.discover_initial_closes(db)
+        if db.execute("SELECT count(*) FROM investor_initial_close_requests").fetchone()[0]: return
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, "FICTIONAL_DISCOVERY_NOT_READY"
+        time.sleep(min(0.25, remaining))
+
+
 def provider(db):
     workspace, _ = scope(db)
     models = db.execute("SELECT id FROM investor_models WHERE workspace_id=?", (workspace,)).fetchall(); assert len(models) == 1
     assert db.execute("SELECT count(*) FROM investor_monitor_evidence_inputs").fetchone()[0] == 0
+    wait_for_discovery(db)
     value = run_pending_once(db, "fictional-current-first-discovery", role="longport")
     assert value is None, "FICTIONAL_EXPECTED_FUTURE_WINDOW"
     row = db.execute("SELECT r.*,j.status job_status,j.attempt_count,j.max_attempts FROM investor_initial_close_requests r JOIN job_runs j ON j.period=r.id AND j.scope=r.workspace_id AND j.job_type=?",

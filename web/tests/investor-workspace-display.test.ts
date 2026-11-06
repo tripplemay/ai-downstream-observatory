@@ -372,6 +372,61 @@ test("main navigation is compact and never speculatively fetches other expensive
   }
   assert.equal(h.requests.length, 0);
 });
+test("profile and plan saves move focus to the result only after a verified receipt and authenticated state read", async t => {
+  for (const action of ["save_profile", "save_plan"]) {
+    const state = displayState(), h = mount(t, state); await h.flush();
+    const heading = h.nodes().find(node => node.props["data-testid"] === "investor-result-heading")!;
+    assert.ok(heading); assert.equal(heading.type, "h2"); assert.equal(heading.props.tabIndex, -1);
+    const calls: string[] = [];
+    (heading.props.ref as { current: unknown }).current = {
+      focus: (options: unknown) => { assert.equal(JSON.stringify(options), '{"preventScroll":true}'); calls.push("focus"); },
+      scrollIntoView: (options: unknown) => { assert.equal(JSON.stringify(options), '{"block":"start"}'); calls.push("scroll"); },
+    };
+    (h.node("InvestorRiskPanel")!.props.onCommand as (value: unknown) => void)(action === "save_plan"
+      ? { action, plan_id: state.plan!.id } : { action, profile: state.profile!.document });
+    await h.waitRequests(1); assert.deepEqual(calls, []);
+    await h.reply(0, { workspace_id: state.workspace_id, revision: state.revision + 1, action,
+      resource_id: "fictional-saved-result", audit_id: "fictional-save-audit", session_binding: binding });
+    await h.waitRequests(2); assert.equal(h.requests[1].method, "GET"); assert.deepEqual(calls, []);
+    await h.reply(1, { ...state, revision: state.revision + 1, session_binding: binding });
+    assert.deepEqual(calls, ["focus", "scroll"]);
+    await h.click("刷新状态"); await h.reply(2, { ...state, revision: state.revision + 1, session_binding: binding });
+    assert.deepEqual(calls, ["focus", "scroll"]); assert.equal(h.requests.filter(row => row.method === "POST").length, 1); h.close();
+  }
+});
+test("lost, rejected, unauthenticated and invalidated saves never move focus or infer a completed transition", async t => {
+  for (const outcome of ["lost", "rejected", "bad_receipt", "bad_read", "read_only", "invalidated", "unmounted"]) {
+    const state = displayState(), h = mount(t, state); await h.flush();
+    const heading = h.nodes().find(node => node.props["data-testid"] === "investor-result-heading")!;
+    assert.ok(heading); const calls: string[] = [];
+    (heading.props.ref as { current: unknown }).current = { focus: () => calls.push("focus"), scrollIntoView: () => calls.push("scroll") };
+    (h.node("InvestorRiskPanel")!.props.onCommand as (value: unknown) => void)({ action: "save_profile", profile: state.profile!.document });
+    await h.waitRequests(1);
+    if (outcome === "lost") await h.fail(0);
+    else if (outcome === "rejected") await h.reply(0, { error: "INVESTOR_REVISION_CONFLICT" }, 409);
+    else {
+      await h.reply(0, { workspace_id: state.workspace_id, revision: state.revision + 1, action: "save_profile",
+        resource_id: "fictional-saved-result", audit_id: "fictional-save-audit", session_binding: outcome === "bad_receipt" ? "wrong-binding" : binding });
+      if (outcome !== "bad_receipt") {
+        await h.waitRequests(2);
+        if (outcome === "invalidated") await h.invalidate();
+        if (outcome === "unmounted") h.close();
+        await h.reply(1, { ...state, read_only: outcome === "read_only", revision: state.revision + 1, session_binding: outcome === "bad_read" ? "wrong-binding" : binding });
+      }
+    }
+    assert.deepEqual(calls, []); assert.equal(h.requests.filter(row => row.method === "POST").length, 1); h.close();
+  }
+});
+test("other verified commands do not move the reader away from the active panel", async t => {
+  const state = displayState(), h = mount(t, state); await h.flush();
+  const heading = h.nodes().find(node => node.props["data-testid"] === "investor-result-heading")!, calls: string[] = [];
+  (heading.props.ref as { current: unknown }).current = { focus: () => calls.push("focus"), scrollIntoView: () => calls.push("scroll") };
+  await h.click("重新检查研究条件"); await h.waitRequests(1);
+  await h.reply(0, { workspace_id: state.workspace_id, revision: state.revision + 1, action: "evaluate",
+    resource_id: "fictional-new-evaluation", audit_id: "fictional-evaluation-audit", session_binding: binding });
+  await h.waitRequests(2); await h.reply(1, { ...state, revision: state.revision + 1, session_binding: binding });
+  assert.deepEqual(calls, []); assert.deepEqual(h.requests.map(row => row.method), ["POST", "GET"]);
+});
 test("background refresh is single-flight and does not lock risk editing; explicit refresh still locks", async t => {
   const state = historicalDisplayState(true), h = mount(t, state, "plan"); await h.flush();
   await h.advance(before + 5000); assert.equal(h.requests.length, 1); assert.equal(h.requests[0].method, "GET");

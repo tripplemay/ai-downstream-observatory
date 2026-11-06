@@ -305,6 +305,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
   const [data, setData] = useState<InvestorState | null>(initial), [editing, setEditing] = useState(initial.profile === null);
   const [busy, setBusy] = useState(true), [hydrated, setHydrated] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const [pending, setPending] = useState<{ body: string; binding: string; workspace: string | null } | null>(null);
+  const resultHeading = useRef<HTMLHeadingElement>(null), [focusResult, setFocusResult] = useState<number | null>(null);
   const alive = useRef(true), invalidated = useRef(false), generation = useRef(0), refreshInFlight = useRef(false);
   const accountScope = useRef(false), [accountScopeLocked, setAccountScopeLocked] = useState(false);
   const [epochRecheck,setEpochRecheck]=useState(false);
@@ -337,6 +338,14 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
     return () => { window.removeEventListener("beforeunload", beforeUnload); document.removeEventListener("click", navigate, true); };
   }, [pending]);
   const sessionVerified = boundary === null || (boundary.verified && boundary.sessionBinding === initialSessionBinding);
+  useEffect(() => {
+    if (focusResult === null) return;
+    setFocusResult(null);
+    if (!alive.current || invalidated.current || generation.current !== focusResult || !sessionVerified
+        || !data?.profile || data.read_only || pending !== null || accountScope.current) return;
+    resultHeading.current?.focus({ preventScroll: true });
+    resultHeading.current?.scrollIntoView({ block: "start" });
+  }, [focusResult, sessionVerified, data, pending]);
   const baseLocked = busy || !sessionVerified || !data || data.read_only || pending !== null || invalidated.current || epochRecheck;
   const comparisonScopeLocked = !sessionVerified || !data || data.read_only || pending !== null || invalidated.current || editing || !!error;
   const locked = baseLocked || accountScopeLocked;
@@ -407,7 +416,9 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
       const recordedCash = receipt.action === "record_linked_cash_fact";
       const requestedValuation = receipt.action === "request_linked_valuation";
       setNotice(requestedValuation ? "估值请求已受理，正在核对状态；尚不代表结果完整或可交易。" : recordedCash ? "资金回录已受理，正在核对最新状态；不是新的转账操作，重复来源可能复用原事实。" : recordedTrade ? "人工回录已受理，正在核对最新状态；系统没有下单，重复来源可能复用原事实。" : "记录已保存，正在核对最新状态；这不是成交或交易批准。");
-      if (await load(sequence)) { setEditing(false); setNotice(requestedValuation ? "估值已排队；核对估值任务结束后，在下方重新核对持仓对照。只有独立复核通过的完整结果才展示净值。" : recordedCash ? "资金事实已保存或复用原记录；未发起转账或确认计划资金。请重新独立对账，并核对估值版本。" : recordedTrade ? "人工事实回录已保存或复用原记录；系统没有下单或验证券商成交。请重新独立对账，并核对估值版本。" : "记录已保存；不代表已成交或已批准交易。"); }
+      if (await load(sequence)) { setEditing(false); setNotice(requestedValuation ? "估值已排队；核对估值任务结束后，在下方重新核对持仓对照。只有独立复核通过的完整结果才展示净值。" : recordedCash ? "资金事实已保存或复用原记录；未发起转账或确认计划资金。请重新独立对账，并核对估值版本。" : recordedTrade ? "人工事实回录已保存或复用原记录；系统没有下单或验证券商成交。请重新独立对账，并核对估值版本。" : "记录已保存；不代表已成交或已批准交易。");
+        if (receipt.action === "save_profile" || receipt.action === "save_plan") setFocusResult(sequence);
+      }
     } catch (e) { if (alive.current && !invalidated.current) setError(e instanceof Error ? e.message : "INVESTOR_UNAVAILABLE"); }
     finally { if (alive.current && sequence === generation.current) setBusy(false); }
   }
@@ -460,7 +471,7 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
       {(editing || !profile) && view !== "observations" && <section className={panel}><ProfileForm key={profile?.id ?? "first"} initial={profile?.document ?? null} disabled={locked} onSave={document => command({ action: "save_profile", profile: document })} /></section>}
       {view !== "observations" && profile && <>
         <section className={`min-w-0 rounded-2xl border p-5 md:p-7 ${currentOutcome === "decision_required" ? "border-blue-500/30 bg-blue-500/5" : currentOutcome === "observe" ? "border-emerald-500/30 bg-emerald-500/5" : "border-amber-500/30 bg-amber-500/5"}`}>
-          <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-sm text-muted-foreground">{display?.referenceProgress ? "研究进度与当前监测" : "今天的研究结论"}</p><h2 className="mt-2 text-2xl font-semibold">{display?.referenceProgress?.title ?? (currentOutcome ? labels[currentOutcome] : "等待首次评估")}</h2>
+          <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-sm text-muted-foreground">{display?.referenceProgress ? "研究进度与当前监测" : "今天的研究结论"}</p><h2 ref={resultHeading} tabIndex={-1} data-testid="investor-result-heading" className="mt-2 scroll-mt-24 text-2xl font-semibold">{display?.referenceProgress?.title ?? (currentOutcome ? labels[currentOutcome] : "等待首次评估")}</h2>
             {display?.referenceProgress && <><p data-testid="current-monitor-outcome" className="mt-3 text-sm font-medium">当前监测：{currentOutcome ? labels[currentOutcome] : "等待首次评估"}</p><p className="mt-2 max-w-3xl text-sm">{display.referenceProgress.detail}</p></>}
             <p className="mt-2 max-w-3xl text-sm">{(currentOutcome === "insufficient_evidence" && (display?.stale || latest?.document.outcome !== "insufficient_evidence") ? display?.gaps[0]?.detail : display?.researchBlocker?.detail ?? latest?.document.reasons[0]) ?? "尚无可复核的研究评估，不能据此判断是否需要调整。"}</p></div>
             {display?.referenceProgress ? <div className="flex flex-wrap gap-3"><Button asChild variant="outline" className="h-11"><Link href={display.referenceProgress.href} prefetch={false}>{display.referenceProgress.action}</Link></Button><details className="text-sm"><summary className="cursor-pointer rounded-lg p-3">手动研究检查</summary><Button variant="outline" disabled={locked} onClick={() => command({ action: "evaluate" })}>重新检查研究条件</Button></details></div>

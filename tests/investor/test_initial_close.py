@@ -7,7 +7,7 @@ import sqlite3
 import unittest
 from unittest.mock import patch
 
-from tests.investor import evidence_fixture, test_initial_prices as history, test_monitor_data as data
+from tests.investor import current_first_close_fixture, evidence_fixture, test_initial_prices as history, test_monitor_data as data
 from tests.investor.confirmed_capture_fixture import FictionalReceiver
 from worker.investor import confirmed_capture, confirmed_feed, initial_close, initial_prices
 from worker.investor.data_evidence import review_source
@@ -201,6 +201,50 @@ class InitialCloseTests(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT count(*) FROM investor_initial_close_requests").fetchone()[0], 0)
         self.assertEqual(self.db.execute("SELECT count(*) FROM audit_events WHERE action='investor_schedule_initial_close'").fetchone()[0], 0)
         self.assert_no_finance()
+
+    def test_fixture_waits_for_normal_rediscovery_after_a_benign_concurrent_writer_without_dispatch(self):
+        self.prepare(); second = open_database(self.path); self.addCleanup(second.close)
+        original_context, original_discover, original_audit = initial_prices._context, initial_close.discover_initial_closes, initial_close._audit
+        replayed, conflicts = [], []
+        def concurrent(*args, **kwargs):
+            result = original_context(*args, **kwargs)
+            if not replayed:
+                second.execute("UPDATE job_runs SET updated_at=? WHERE job_type=?", (stamp(EARLY), initial_prices.JOB_TYPE))
+            replayed.append(1)
+            return result
+        discovered = []
+        def discover(db):
+            value = original_discover(db, now=EARLY); discovered.append(value); return value
+        def audit(*args, **kwargs):
+            try: return original_audit(*args, **kwargs)
+            except sqlite3.OperationalError as error:
+                conflicts.append(error.sqlite_errorcode); raise
+        with patch.object(initial_prices, "_context", side_effect=concurrent), \
+                patch.object(initial_close, "discover_initial_closes", side_effect=discover), \
+                patch.object(initial_close, "_audit", side_effect=audit), \
+                patch.object(current_first_close_fixture.time, "sleep") as sleep, \
+                patch.object(longport_confirmed, "collect_confirmed_days") as sdk:
+            current_first_close_fixture.wait_for_discovery(self.db)
+        self.assertEqual(discovered[0], []); self.assertEqual(len(discovered), 2)
+        self.assertEqual(conflicts, [sqlite3.SQLITE_BUSY_SNAPSHOT])
+        self.assertEqual(len(discovered[1]), 1); self.assertEqual(sleep.call_count, 1); sdk.assert_not_called()
+        row = self.db.execute("SELECT status,attempt_count,max_attempts FROM job_runs WHERE job_type=?", (initial_close.JOB_TYPE,)).fetchone()
+        self.assertEqual(tuple(row), ("queued", 0, 1))
+        self.assertEqual(self.db.execute("SELECT count(*) FROM job_attempts WHERE job_id IN (SELECT id FROM job_runs WHERE job_type=?)", (initial_close.JOB_TYPE,)).fetchone()[0], 0)
+        self.assertEqual(original_discover(self.db, now=EARLY), [])
+        self.assertEqual(self.db.execute("SELECT count(*) FROM investor_initial_close_requests").fetchone()[0], 1)
+        self.assert_no_finance()
+
+    def test_fixture_discovery_wait_is_bounded_and_never_dispatches_or_mutates_an_unready_plan(self):
+        before = list(self.db.iterdump())
+        with patch.object(initial_close, "discover_initial_closes", return_value=[]) as discover, \
+                patch.object(current_first_close_fixture.time, "monotonic", side_effect=(0, 30)), \
+                patch.object(current_first_close_fixture.time, "sleep") as sleep, \
+                patch.object(longport_confirmed, "collect_confirmed_days") as sdk:
+            with self.assertRaisesRegex(AssertionError, "FICTIONAL_DISCOVERY_NOT_READY"):
+                current_first_close_fixture.wait_for_discovery(self.db)
+        self.assertEqual(discover.call_count, 1); sleep.assert_not_called(); sdk.assert_not_called()
+        self.assertEqual(list(self.db.iterdump()), before); self.assert_no_finance()
 
     def test_stop_after_request_audit_rolls_back_the_whole_discovery_before_job_registration(self):
         self.prepare(); before=list(self.db.iterdump()); stopped=[False]; original=initial_close._audit
