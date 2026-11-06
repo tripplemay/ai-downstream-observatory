@@ -6,12 +6,12 @@ import unittest
 from unittest.mock import patch
 
 from tests.investor import epoch_source_fixture as fixture, test_current_correction_fixture as setup
-from worker.investor import model_epoch_registration as registration, model_epoch_source as source, eodhd_sources, data_evidence
+from worker.investor import model_epoch_registration as registration, model_epoch_source as source, eodhd_sources, data_evidence, epoch_preview_jobs as previews
 from worker.investor.evidence_monitor_runtime import discover_evidence_monitor_requests
 from worker.investor.monitor_admission import monitor_evidence_document
 from worker.orchestration.db import WorkbenchError, canonical_json, content_hash, instant
 from worker.orchestration.jobs import claim_job, complete_job
-from worker.orchestration.runtime import command_handler
+from worker.orchestration.runtime import command_handler, run_pending_once
 
 
 CALCULATED = "2026-10-20T10:00:04.000Z"
@@ -23,8 +23,15 @@ TABLES = ("investor_model_epochs", "investor_monitor_evidence_inputs", "investor
 class ModelEpochRegistrationTests(unittest.TestCase):
     setUp = setup.CurrentCorrectionFixtureTests.setUp
 
-    def seed(self):
-        self.inputs = fixture.create(self.db, self.path)
+    def seed(self, linked_fx=False):
+        reviewed = data_evidence.review_source
+        def explicit_series(db, workspace, actor, identifier, decision, facts, *args, **kwargs):
+            if db.execute("SELECT kind FROM investor_data_sources WHERE id=?", (identifier,)).fetchone()[0] == "fx":
+                facts = {**deepcopy(facts), "monitor_series": {"authority_id": "fictional-automatic-epoch-fx", "revision_policy": "append_only_no_restatements"}}
+            return reviewed(db, workspace, actor, identifier, decision, facts, *args, **kwargs)
+        if linked_fx:
+            with patch.object(data_evidence, "review_source", side_effect=explicit_series): self.inputs = fixture.create(self.db, self.path)
+        else: self.inputs = fixture.create(self.db, self.path)
 
     def revision(self): return self.db.execute("SELECT revision FROM investor_workspaces WHERE id='w'").fetchone()[0]
 
@@ -48,13 +55,85 @@ class ModelEpochRegistrationTests(unittest.TestCase):
     def snapshot(self):
         return {table: [tuple(row) for row in self.db.execute("SELECT rowid,* FROM " + table + " ORDER BY rowid")] for table in TABLES}
 
+    def test_async_preview_default_core_is_single_attempt_fenced_and_never_registers_or_activates_an_epoch(self):
+        self.seed(linked_fx=True); initial = self.snapshot(); revision = self.revision()
+        model = self.db.execute("SELECT content_hash FROM investor_models WHERE id=?", (self.inputs["model_id"],)).fetchone()
+        body = {"schema_version": "investor-epoch-preview-submit-v1", "model_id": self.inputs["model_id"], "expected_model_hash": model[0],
+            "expected_revision": revision, "idempotency_key": "fictional-owner-async-epoch-preview", "acknowledged_preview_only": True}
+        before = list(self.db.iterdump())
+        for invalid in ({**body, "acknowledged_preview_only": False}, {**body, "quotes": []}, {**body, "expected_revision": True}):
+            with self.assertRaises(ValueError): previews.enqueue_epoch_preview(self.db, "w", "owner", invalid, now=fixture.NOW)
+        with self.assertRaises(WorkbenchError): previews.enqueue_epoch_preview(self.db, "w", "foreign", body, now=fixture.NOW)
+        self.assertEqual(before, list(self.db.iterdump()))
+        request = previews.enqueue_epoch_preview(self.db, "w", "owner", body, now=fixture.NOW)
+        frozen = list(self.db.iterdump())
+        self.assertEqual(request, previews.enqueue_epoch_preview(self.db, "w", "owner", body, now=fixture.NOW))
+        self.assertEqual(frozen, list(self.db.iterdump())); self.assertEqual(self.revision(), revision)
+        with self.assertRaisesRegex(WorkbenchError, "DUPLICATE_CONFLICT"):
+            previews.enqueue_epoch_preview(self.db, "w", "owner", {**body, "expected_model_hash": "a" * 64}, now=fixture.NOW)
+        with self.assertRaisesRegex(WorkbenchError, "BUSY"):
+            previews.enqueue_epoch_preview(self.db, "w", "owner", {**body, "idempotency_key": "fictional-second-active-preview"}, now=fixture.NOW)
+        self.db.execute("SAVEPOINT fictional_preview_boundaries")
+        try:
+            previews.discover_epoch_previews(self.db, now=CALCULATED)
+            lease = claim_job(self.db, "fictional-preview-lease", 1200, previews.JOB_TYPE, now=CALCULATED)
+            job = dict(self.db.execute("SELECT * FROM job_runs WHERE id=?", (lease.job_id,)).fetchone())
+            with self.assertRaisesRegex(WorkbenchError, "DIFFERENT_WORKER_ROLE"):
+                command_handler(self.db, role="longport", clock=lambda: CALCULATED)(job, lease)
+            with patch.object(registration, "prepare_model_epoch_preview", side_effect=AssertionError("NO_STOPPED_PREPARATION")) as replay:
+                with self.assertRaisesRegex(WorkbenchError, "WORKER_STOP_REQUESTED"):
+                    command_handler(self.db, clock=lambda: CALCULATED, stop_requested=lambda: True)(job, lease)
+            replay.assert_not_called()
+            effect = command_handler(self.db, clock=lambda: CALCULATED)(job, lease)["effect"]; baseline = list(self.db.iterdump())
+            with self.assertRaisesRegex(WorkbenchError, "FINALIZATION_EXPIRED"):
+                complete_job(self.db, lease, {}, effect=effect, now=CALCULATED, clock=lambda: request["valid_until"])
+            self.assertEqual(baseline, list(self.db.iterdump()))
+            self.db.execute("CREATE TRIGGER fictional_preview_late_failure BEFORE INSERT ON investor_epoch_preview_results BEGIN SELECT RAISE(ABORT,'fictional preview late failure'); END")
+            with self.assertRaisesRegex(Exception, "fictional preview late failure"):
+                complete_job(self.db, lease, {}, effect=effect, now=CALCULATED)
+            self.db.execute("DROP TRIGGER fictional_preview_late_failure"); self.assertEqual(baseline, list(self.db.iterdump()))
+            grant = self.db.execute("SELECT id FROM investor_eodhd_authorities WHERE workspace_id='w'").fetchone()[0]
+            eodhd_sources.set_authority_enabled(self.db, "w", "owner", grant, False, now=CALCULATED)
+            with patch.object(source, "prepare_model_epoch_source", side_effect=AssertionError("NO_RAW_REPLAY_IN_WRITER")):
+                complete_job(self.db, lease, {}, effect=effect, now=CALCULATED)
+            rejected = json.loads(self.db.execute("SELECT document_json FROM investor_epoch_preview_results").fetchone()[0])
+            self.assertEqual(rejected["outcome"], "rejected"); self.assertIsNone(rejected["preview_id"])
+            self.assertEqual(self.db.execute("SELECT count(*) FROM investor_model_epoch_previews").fetchone()[0], 0)
+            self.assertEqual(self.revision(), revision)
+        finally: self.db.execute("ROLLBACK TO fictional_preview_boundaries"); self.db.execute("RELEASE fictional_preview_boundaries")
+        self.assertEqual(frozen, list(self.db.iterdump()))
+        for _ in range(32):
+            result = run_pending_once(self.db, "fictional-preview-default-core", clock=lambda: CALCULATED)
+            row = self.db.execute("SELECT * FROM investor_epoch_preview_results WHERE request_id=?", (request["request_id"],)).fetchone()
+            if row: break
+            self.assertIsNotNone(result)
+        self.assertIsNotNone(row); value = json.loads(row["document_json"]); previews._validate(value, "result")
+        self.assertEqual(value["outcome"], "preview_ready"); self.assertEqual(value["code"], "EPOCH_PREVIEW_READY")
+        preview = registration._header(self.db, "w", "owner", value["preview_id"], "preview")[1]
+        self.assertEqual(content_hash(preview), value["preview_hash"]); self.assertEqual(self.revision(), revision + 1)
+        completed = self.db.execute("SELECT * FROM job_runs WHERE id=?", (row["job_id"],)).fetchone()
+        self.assertEqual(completed["status"], "succeeded"); self.assertEqual(completed["max_attempts"], 1); self.assertEqual(completed["attempt_count"], 1)
+        self.assertEqual(json.loads(completed["result_json"]), previews.job_result(value))
+        self.assertEqual(previews.discover_epoch_previews(self.db, now=CALCULATED), [])
+        after = self.snapshot()
+        for name in TABLES:
+            if name != "audit_events": self.assertEqual(after[name], initial[name], name)
+        for name in ("investor_model_epochs", "investor_epoch_controls", "portfolios", "accounts", "ledger_events", "postings"):
+            self.assertEqual(self.db.execute("SELECT count(*) FROM " + name).fetchone()[0], 0)
+        retained = list(self.db.iterdump()); self.db.execute("PRAGMA query_only=ON")
+        try:
+            self.assertEqual(previews.request_header(self.db, "w", "owner", request["request_id"], request["valid_until"])[1], request)
+        finally: self.db.execute("PRAGMA query_only=OFF")
+        self.assertEqual(retained, list(self.db.iterdump()))
+        self.assertEqual(previews.enqueue_epoch_preview(self.db, "w", "owner", body, now=request["valid_until"]), request)
+        self.assertEqual(retained, list(self.db.iterdump()))
+        for name in ("investor_epoch_preview_requests", "investor_epoch_preview_results"):
+            with self.assertRaises(Exception): self.db.execute("DELETE FROM " + name)
+        self.assertEqual(list(self.db.execute("PRAGMA foreign_key_check")), [])
+        self.assertEqual(self.db.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+
     def test_owner_preview_and_separate_acknowledged_intent_atomically_store_new_source_state_run_and_paused_observation(self):
-        reviewed = data_evidence.review_source
-        def explicit_series(db, workspace, actor, identifier, decision, facts, *args, **kwargs):
-            if db.execute("SELECT kind FROM investor_data_sources WHERE id=?", (identifier,)).fetchone()[0] == "fx":
-                facts = {**deepcopy(facts), "monitor_series": {"authority_id": "fictional-automatic-epoch-fx", "revision_policy": "append_only_no_restatements"}}
-            return reviewed(db, workspace, actor, identifier, decision, facts, *args, **kwargs)
-        with patch.object(data_evidence, "review_source", side_effect=explicit_series): self.seed()
+        self.seed(linked_fx=True)
         initial = self.snapshot(); revision = self.revision()
         before = list(self.db.iterdump()); changes = self.db.total_changes
         self.db.execute("PRAGMA query_only=ON")

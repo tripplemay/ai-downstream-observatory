@@ -347,6 +347,11 @@
       "version": 68,
       "file": "0068_investor_epoch_notification_reads.sql",
       "sha256": "0576568c13913538eeda7d964799de458ad3a140e9fc9be5451809cb2856b666"
+    },
+    {
+      "version": 69,
+      "file": "0069_investor_epoch_preview_jobs.sql",
+      "sha256": "24fd5a3e4391c60356914910c254e07ebe1c20ba5d8c6a194903e027163e40d2"
     }
   ]
 }

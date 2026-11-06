@@ -13,8 +13,10 @@ import { buildConsentAttempt } from "../src/components/workbench/investor-correc
 import { consentAnswers, consentResponse, consentScope, consentSummaryHash } from "./correction-consent-client-fixture";
 import { reviewNow } from "./action-review-client-fixture";
 import {verifyEpochControlRoute} from "./epoch-control-route-fixture";
+import {verifyEpochPreviewRoute} from "./epoch-preview-route-fixture";
 
 test("epoch control route preserves owner/session/origin guards, strict 16KiB intent bounds and private opaque responses",verifyEpochControlRoute);
+test("epoch preview route accepts only explicit 4KiB owner intent and preserves strict transport, session and metadata-only GET boundaries",verifyEpochPreviewRoute);
 
 const binding = consentScope.binding, input = buildConsentAttempt(consentResponse(), consentScope, consentSummaryHash, consentAnswers, "fictional-consent", reviewNow).intent;
 const compiled = ts.transpileModule(readFileSync(new URL("../src/app/api/workbench/investor/correction-consent/route.ts", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;

@@ -107,6 +107,27 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
     assert.equal(read(db=>db.prepare('SELECT count(*) n FROM investor_workspaces').get().n),0);assert.deepEqual(counts(),before);assert.deepEqual(financial(),facts);
     return {implicit_activation:false,implicit_workspace:false,source_or_ai_calls:0,maximum_body_bytes:16384,new_epoch_positive_journey_verified:false};
   });
+  await check('HTTP-I23', 'epoch preview accepts only explicit session-bound small intents and never creates implicit research or finance', async () => {
+    const route=endpoint+'/epoch-preview',facts=financial();
+    const counts=()=>read(db=>Object.fromEntries(['investor_epoch_preview_requests','investor_epoch_preview_results','investor_model_epoch_previews','investor_model_epochs','job_runs','audit_events']
+      .map(table=>[table,db.prepare('SELECT count(*) n FROM '+table).get().n])));
+    const before=counts(),body={schema_version:'investor-epoch-preview-submit-v1',model_id:'fictional-model',expected_model_hash:'a'.repeat(64),
+      expected_revision:1,idempotency_key:'fictional-http-preview-intent',acknowledged_preview_only:true};
+    const send=(value,extra={})=>jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json',...extra}),body:typeof value==='string'?value:JSON.stringify(value)});
+    assert.equal((await jsonRequest(route+'?model=fictional-model')).status,401);
+    assert.equal((await jsonRequest(route,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:'{'})).status,401);
+    assert.equal((await jsonRequest(route+'?model=fictional-model',{headers:{Cookie:cookie}})).status,400);
+    for(const query of ['actor_id=other','model=a&nonce=b','model=a&model=b'])assert.equal((await jsonRequest(route+'?'+query,{headers:headers()})).status,400);
+    assert.equal((await send(body,{Origin:'https://wrong.example.test'})).status,403);
+    assert.equal((await send(body,{'X-Workbench-Session-Binding':'b'.repeat(64)})).status,401);
+    for(const value of [{...body,prices:[]},{...body,acknowledged_preview_only:false},'{"acknowledged_preview_only":true,"acknowledged_preview_only":false}'])assert.equal((await send(value)).status,400);
+    const huge=await jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json'}),duplex:'half',body:(async function*(){yield Buffer.alloc(4097,120);})()});
+    assert.equal(huge.status,413);
+    const missing=await send(body);assert.equal(missing.status,409);assert.equal(missing.json.error,'EPOCH_PREVIEW_WORKSPACE_REQUIRED');
+    assert.equal(missing.headers.get('cache-control'),'private, no-store');
+    assert.equal(read(db=>db.prepare('SELECT count(*) n FROM investor_workspaces').get().n),0);assert.deepEqual(counts(),before);assert.deepEqual(financial(),facts);
+    return {maximum_body_bytes:4096,implicit_research:false,source_or_ai_calls:0,positive_preview_http_journey_verified:false};
+  });
   await check('HTTP-I20', 'AI explanation endpoint has current-session and strict small-body boundaries; reads never generate AI or financial facts', async () => {
     const route = `${endpoint}/ai-explanation`, body = { observation_id: 'fictional-observation', binding_hash: 'a'.repeat(64) };
     const facts = financial(), count = () => read(db => db.prepare('SELECT count(*) n FROM audit_events').get().n), before = count();

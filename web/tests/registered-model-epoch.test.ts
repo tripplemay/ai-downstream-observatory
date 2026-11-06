@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import Database from "better-sqlite3";
+import {writeFileSync,unlinkSync} from "node:fs";
+import path from "node:path";
 import { investorFixture } from "./investor-fixture";
 import { actionPython } from "./action-maintenance-fixture";
 import { readRegisteredModelEpoch } from "../src/server/investor/registered-model-epoch";
@@ -8,10 +10,75 @@ import { readModelEpochRegistrationHeader } from "../src/server/investor/model-e
 import { readEvidenceCheckpoint, readEvidenceMonitorRun } from "../src/server/investor/evidence-monitor";
 import { getInvestorState, executeInvestorCommand } from "../src/server/investor/service";
 import { validateInvestorMonitorDataDocument, validateModelEpochRegistration } from "../src/server/investor/kernel-contracts";
+import {submitEpochPreview,readEpochPreviewResponse} from "../src/server/investor/epoch-preview-jobs";
 
 type Obj = Record<string, unknown>;
 const actor = { id: "owner" }, now = "2026-10-20T10:00:03.000Z", stale = "2026-10-20T21:00:03.000Z";
 function obj(value: unknown): Obj { assert.ok(value && typeof value === "object" && !Array.isArray(value)); return value as Obj; }
+test("Node owner preview intent reaches default core and query-only metadata without source payload access, registration, activation or trading",t=>{
+  const f=investorFixture();t.after(f.close);const binding="0".repeat(64);
+  const created=actionPython(f.filename,[
+    "from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture",
+    "from tests.investor.test_model_epoch_registration import ModelEpochRegistrationTests",
+    "with offline_protocol_fixture():",
+    " case=ModelEpochRegistrationTests();case.db=db;case.path=Path(sys.argv[1]);case.seed(linked_fx=True)",
+    " model=db.execute('SELECT content_hash FROM investor_models WHERE id=?',(case.inputs['model_id'],)).fetchone()[0]",
+    " print(json.dumps({'model':case.inputs['model_id'],'hash':model,'revision':case.revision()}))",
+  ].join("\n"),"core_readmission");
+  const initial=readEpochPreviewResponse(f.db,actor,binding,{model:String(created.model)},now);assert.equal(initial.request,null);
+  const before=JSON.stringify(f.db.prepare("SELECT * FROM investor_model_controls ORDER BY rowid").all());
+  const input={schema_version:"investor-epoch-preview-submit-v1",model_id:created.model,expected_model_hash:created.hash,
+    expected_revision:created.revision,idempotency_key:"fictional-node-async-epoch-preview",acknowledged_preview_only:true};
+  for(const invalid of [{...input,acknowledged_preview_only:false},{...input,quotes:[]},{...input,expected_revision:true}])
+    assert.throws(()=>submitEpochPreview(f.db,actor,invalid,now));
+  assert.throws(()=>submitEpochPreview(f.db,{id:"foreign"},input,now));
+  const request=submitEpochPreview(f.db,actor,input,now);assert.deepEqual(submitEpochPreview(f.db,actor,input,now),request);
+  assert.throws(()=>submitEpochPreview(f.db,actor,{...input,expected_model_hash:"a".repeat(64)},now),/DUPLICATE_CONFLICT/);
+  const pending=readEpochPreviewResponse(f.db,actor,binding,{nonce:input.idempotency_key},now);assert.equal(pending.request?.status,"queued");assert.equal(pending.preview,null);
+  assert.equal(pending.workspace_revision,created.revision);
+  const result=actionPython(f.filename,[
+    "from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture",
+    "from worker.orchestration.runtime import run_pending_once",
+    "with offline_protocol_fixture():",
+    " for index in range(32):",
+    "  run_pending_once(db,'fictional-node-preview-default-core',clock=lambda:'2026-10-20T10:00:04.000Z')",
+    "  row=db.execute('SELECT document_json FROM investor_epoch_preview_results WHERE request_id=?',('"+request.request_id+"',)).fetchone()",
+    "  if row:break",
+    " assert row is not None",
+    " print(row[0])",
+  ].join("\n"),"core_readmission");
+  assert.equal(result.outcome,"preview_ready");
+  const reader=new Database(f.filename,{readonly:true});t.after(()=>reader.close());reader.pragma("query_only=ON");
+  const at="2026-10-20T10:00:05.000Z",ready=readEpochPreviewResponse(reader,actor,binding,{nonce:input.idempotency_key},at);
+  assert.equal(ready.request?.status,"preview_ready");assert.equal(ready.preview?.id,result.preview_id);assert.equal(ready.preview?.content_hash,result.preview_hash);
+  assert.equal(ready.preview?.historical_metadata_only,true);assert.equal(ready.preview?.epoch_registered,false);assert.equal(ready.preview?.monitoring_resumed,false);
+  assert.equal(ready.preview?.current_source_eligibility_restored,false);
+  assert.doesNotMatch(JSON.stringify(ready),/"(?:quotes|quantities|source_proof|settings|epoch_definition|cash_by_currency)":/);
+  assert.equal((reader.prepare("SELECT total_changes() n").get() as {n:number}).n,0);
+  assert.equal(readEpochPreviewResponse(reader,actor,binding,{nonce:input.idempotency_key},String(result.valid_until)).request?.status,"expired");
+  const job=obj(f.db.prepare("SELECT id,result_json FROM job_runs WHERE job_type='investor_epoch_preview'").get());
+  f.db.prepare("UPDATE job_runs SET result_json='{}' WHERE id=?").run(job.id);
+  assert.throws(()=>readEpochPreviewResponse(reader,actor,binding,{nonce:input.idempotency_key},at),/RESULT_CHANGED/);
+  f.db.prepare("UPDATE job_runs SET result_json=? WHERE id=?").run(job.result_json,job.id);
+  f.db.exec("SAVEPOINT fictional_missing_preview_sources");
+  try{f.db.exec("DROP TABLE investor_price_payloads");
+    assert.deepEqual(readEpochPreviewResponse(f.db,actor,binding,{nonce:input.idempotency_key},at).preview,ready.preview);
+  }finally{f.db.exec("ROLLBACK TO fictional_missing_preview_sources; RELEASE fictional_missing_preview_sources");}
+  actionPython(f.filename,[
+    "from worker.investor import eodhd_sources",
+    "grant=db.execute(\"SELECT id FROM investor_eodhd_authorities WHERE workspace_id='w'\").fetchone()[0]",
+    "eodhd_sources.set_authority_enabled(db,'w','owner',grant,False,now='"+at+"')",
+    "print('{}')",
+  ].join("\n"));
+  assert.deepEqual(readEpochPreviewResponse(reader,actor,binding,{nonce:input.idempotency_key},at).preview,ready.preview);
+  const marker=path.join(f.directory,"RESTORE_PENDING_REVIEW");writeFileSync(marker,"Fictional recovery");
+  try{assert.equal(readEpochPreviewResponse(reader,actor,binding,{nonce:input.idempotency_key},at).read_only,true);
+    assert.throws(()=>submitEpochPreview(f.db,actor,input,at),/READ_ONLY/);
+  }finally{unlinkSync(marker);}
+  assert.equal(JSON.stringify(f.db.prepare("SELECT * FROM investor_model_controls ORDER BY rowid").all()),before);
+  for(const table of ["investor_model_epochs","investor_epoch_controls","portfolios","accounts","ledger_events","postings","approval_events","execution_reports"])
+    assert.equal((f.db.prepare("SELECT count(*) n FROM "+table).get() as {n:number}).n,0);
+});
 function seed(filename: string, automatic = false) {
   return actionPython(filename, `
 from contextlib import ExitStack
