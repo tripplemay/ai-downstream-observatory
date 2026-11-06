@@ -113,13 +113,16 @@ def _header(db, workspace, actor, identifier, kind):
     return row, doc
 
 
-def prepare_model_epoch_preview(db, workspace, actor, model_id, references, windows, *, expected_revision, owner_interaction=False, now=None, clock=None, stop_requested=None):
+def prepare_model_epoch_preview(db, workspace, actor, model_id, references=None, windows=None, *, expected_revision, owner_interaction=False, now=None, clock=None, stop_requested=None):
     """Prepare normal source bytes outside the writer; never accept caller settings."""
     assert_writable(db); _owner(db, workspace, actor)
     _check(owner_interaction is True, "OWNER_INTERACTION_REQUIRED")
     at = _clock(clock() if clock else now)
     with transaction(db, immediate=False), _fact_validation_scope():
         _revision(db, workspace, actor, expected_revision); managed._stopped(db, stop_requested)
+        _check((references is None) == (windows is None), "INPUT_INVALID")
+        if references is None:
+            references, windows = source.select_current_model_epoch_inputs(db, workspace, actor, model_id, now=at, stop_requested=stop_requested)
         value = source.prepare_model_epoch_source(db, workspace, actor, model_id, new_id("model-epoch"), references, windows, now=at, stop_requested=stop_requested)
         control = db.execute("SELECT enabled FROM investor_model_controls WHERE id=? AND workspace_id=? AND model_id=?", (value["epoch_definition"]["model_control"]["id"], workspace, model_id)).fetchone()
         _check(control is not None and control["enabled"] == 1, "MODEL_NOT_ENABLED")
@@ -152,7 +155,7 @@ def prepare_model_epoch_preview(db, workspace, actor, model_id, references, wind
     return commit
 
 
-def register_model_epoch_preview(db, workspace, actor, model_id, references, windows, **options):
+def register_model_epoch_preview(db, workspace, actor, model_id, references=None, windows=None, **options):
     return prepare_model_epoch_preview(db, workspace, actor, model_id, references, windows, **options)(db)
 
 

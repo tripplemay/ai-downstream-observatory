@@ -12,12 +12,26 @@ import { validateInvestorMonitorDataDocument, validateModelEpochRegistration } f
 type Obj = Record<string, unknown>;
 const actor = { id: "owner" }, now = "2026-10-20T10:00:03.000Z", stale = "2026-10-20T21:00:03.000Z";
 function obj(value: unknown): Obj { assert.ok(value && typeof value === "object" && !Array.isArray(value)); return value as Obj; }
-function seed(filename: string) {
+function seed(filename: string, automatic = false) {
   return actionPython(filename, `
+from contextlib import ExitStack
+from copy import deepcopy
+from unittest.mock import patch
 from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture
 from tests.investor.epoch_registration_fixture import create
+from worker.investor import data_evidence,model_epoch_registration as registration
 from worker.investor.registered_model_epoch import read_registered_model_epoch
-with offline_protocol_fixture():
+reviewed=data_evidence.review_source;original_preview=registration.register_model_epoch_preview
+def explicit_series(connection,workspace,actor,identifier,decision,facts,*args,**kwargs):
+ if connection.execute('SELECT kind FROM investor_data_sources WHERE id=?',(identifier,)).fetchone()[0]=='fx':
+  facts={**deepcopy(facts),'monitor_series':{'authority_id':'fictional-automatic-epoch-fx','revision_policy':'append_only_no_restatements'}}
+ return reviewed(connection,workspace,actor,identifier,decision,facts,*args,**kwargs)
+def automatic_preview(connection,workspace,actor,model,*ignored,**kwargs):
+ return original_preview(connection,workspace,actor,model,**kwargs)
+with offline_protocol_fixture(),ExitStack() as stack:
+ if ${automatic ? "True" : "False"}:
+  stack.enter_context(patch.object(data_evidence,'review_source',side_effect=explicit_series))
+  stack.enter_context(patch.object(registration,'register_model_epoch_preview',side_effect=automatic_preview))
  saved=create(db,Path(sys.argv[1]));identifier=saved['registration']['epoch']['id']
  value=read_registered_model_epoch(db,'w','owner',identifier,now='${now}')
  later=read_registered_model_epoch(db,'w','owner',identifier,now='${stale}')
@@ -25,8 +39,8 @@ print(json.dumps({'value':value,'later':later}))
 `, "core_readmission");
 }
 
-test("independent query-only journal/source/state replay reaches ordinary paused reads; stale or resealed state cannot become current NAV", t => {
-  const f = investorFixture(); t.after(f.close); const expected = seed(f.filename), value = obj(expected.value), record = obj(value.registration);
+test("independent query-only journal/source/state replay reaches ordinary paused reads from automatically selected inputs; stale or resealed state cannot become current NAV", t => {
+  const f = investorFixture(); t.after(f.close); const expected = seed(f.filename, true), value = obj(expected.value), record = obj(value.registration);
   const epochId = String(obj(record.epoch).id), runId = String(record.monitor_run_id), source = obj(value.source), definition = obj(obj(source.kernel_input).history).definition;
   const reader = new Database(f.filename, { readonly: true }); t.after(() => reader.close()); reader.pragma("query_only=ON");
   const replay = () => readRegisteredModelEpoch(reader, "w", actor, epochId, now);

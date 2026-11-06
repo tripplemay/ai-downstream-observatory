@@ -6,10 +6,10 @@ import unittest
 from unittest.mock import patch
 
 from tests.investor import epoch_source_fixture as fixture, test_current_correction_fixture as setup
-from worker.investor import model_epoch_registration as registration, model_epoch_source as source, eodhd_sources
+from worker.investor import model_epoch_registration as registration, model_epoch_source as source, eodhd_sources, data_evidence
 from worker.investor.evidence_monitor_runtime import discover_evidence_monitor_requests
 from worker.investor.monitor_admission import monitor_evidence_document
-from worker.orchestration.db import WorkbenchError, canonical_json, content_hash
+from worker.orchestration.db import WorkbenchError, canonical_json, content_hash, instant
 from worker.orchestration.jobs import claim_job, complete_job
 from worker.orchestration.runtime import command_handler
 
@@ -49,8 +49,47 @@ class ModelEpochRegistrationTests(unittest.TestCase):
         return {table: [tuple(row) for row in self.db.execute("SELECT rowid,* FROM " + table + " ORDER BY rowid")] for table in TABLES}
 
     def test_owner_preview_and_separate_acknowledged_intent_atomically_store_new_source_state_run_and_paused_observation(self):
-        self.seed(); initial = self.snapshot(); revision = self.revision()
-        preview = self.preview(); self.assertEqual(preview["workspace_revision"], revision + 1)
+        reviewed = data_evidence.review_source
+        def explicit_series(db, workspace, actor, identifier, decision, facts, *args, **kwargs):
+            if db.execute("SELECT kind FROM investor_data_sources WHERE id=?", (identifier,)).fetchone()[0] == "fx":
+                facts = {**deepcopy(facts), "monitor_series": {"authority_id": "fictional-automatic-epoch-fx", "revision_policy": "append_only_no_restatements"}}
+            return reviewed(db, workspace, actor, identifier, decision, facts, *args, **kwargs)
+        with patch.object(data_evidence, "review_source", side_effect=explicit_series): self.seed()
+        initial = self.snapshot(); revision = self.revision()
+        before = list(self.db.iterdump()); changes = self.db.total_changes
+        self.db.execute("PRAGMA query_only=ON")
+        try:
+            references, windows = source.select_current_model_epoch_inputs(self.db, "w", "owner", self.inputs["model_id"], now=fixture.NOW)
+            self.assertEqual(references, self.inputs["references"])
+            self.assertEqual(len(windows), 1); self.assertEqual(windows[0]["end_date"], self.inputs["windows"][0]["end_date"])
+        finally: self.db.execute("PRAGMA query_only=OFF")
+        self.assertEqual(before, list(self.db.iterdump())); self.assertEqual(changes, self.db.total_changes)
+        original_head = json.loads(initial["investor_evidence_checkpoint_payloads"][-1][-1])
+        self.assertEqual(windows[0]["start_date"], instant(original_head["market_cutoffs"]["US"]).astimezone(fixture.current.actions.ZONE).date().isoformat())
+        for candidates, code in (([], "CORRECTIONS_NOT_READY"), ([{**references[0], "handover_id": None}], "CORRECTIONS_NOT_READY"),
+                ([references[0], references[0]], "CORRECTION_SELECTION_AMBIGUOUS"), (references * 65, "CORRECTION_SELECTION_LIMIT")):
+            with self.assertRaisesRegex(WorkbenchError, code): source._selected_correction_references(candidates)
+        key = ("fictional-listing", windows[0]["start_date"]); prices = {key: "100"}
+        self.assertFalse(source._extend_capture_scope(prices, {key: "100"}))
+        for supplied, code in (({key: "101"}, "CAPTURE_PRICES_CONFLICT"),
+                ({key: "100", ("fictional-other", key[1]): "20"}, "CAPTURE_SCOPE_AMBIGUOUS")):
+            with self.assertRaisesRegex(WorkbenchError, code): source._extend_capture_scope(prices, supplied)
+            self.assertEqual(prices, {key: "100"})
+        self.assertTrue(source._extend_capture_scope(prices, {("fictional-other", key[1]): "20"}))
+        with patch.object(source, "_basis", side_effect=AssertionError("NO_UNAUTHORIZED_SOURCE_REPLAY")) as replay:
+            for actor, stopped in (("foreign", False), ("owner", True)):
+                with self.assertRaises(WorkbenchError):
+                    source.select_current_model_epoch_inputs(self.db, "w", actor, self.inputs["model_id"], now=fixture.NOW, stop_requested=lambda: stopped)
+            with patch.object(source, "MAX_CORRECTION_CANDIDATES", 0):
+                with self.assertRaisesRegex(WorkbenchError, "CORRECTION_SELECTION_LIMIT"):
+                    source.select_current_model_epoch_inputs(self.db, "w", "owner", self.inputs["model_id"], now=fixture.NOW)
+        replay.assert_not_called()
+        self.assertEqual(before, list(self.db.iterdump()))
+        preview = registration.register_model_epoch_preview(self.db, "w", "owner", self.inputs["model_id"],
+            expected_revision=revision, owner_interaction=True, now=fixture.NOW)
+        self.assertEqual(preview["workspace_revision"], revision + 1)
+        self.assertEqual([{key: row[key] for key in ("correction_id", "confirmation_hash", "handover_id", "handover_hash")}
+            for row in preview["epoch_definition"]["binding"]["corrections"]], references)
         self.assertEqual(self.snapshot(), {**initial, "audit_events": self.snapshot()["audit_events"]})
         self.db.execute("SAVEPOINT fictional_unregistered_epoch_input")
         try:
@@ -83,6 +122,10 @@ class ModelEpochRegistrationTests(unittest.TestCase):
         self.assertEqual(doc["calculated_at"], CALCULATED); self.assertEqual(doc["created_at"], PUBLISHED)
         self.assertEqual(doc["epoch"], preview["input"]["epoch"])
         self.assertEqual(registration._header(self.db, "w", "owner", row["id"], "registration")[1], doc)
+        before_registered_lookup = list(self.db.iterdump())
+        with self.assertRaisesRegex(WorkbenchError, "ALREADY_REGISTERED"):
+            source.select_current_model_epoch_inputs(self.db, "w", "owner", self.inputs["model_id"], now=PUBLISHED)
+        self.assertEqual(before_registered_lookup, list(self.db.iterdump()))
         checkpoint = json.loads(self.db.execute("SELECT payload FROM investor_evidence_checkpoint_payloads WHERE checkpoint_id=?", (row["checkpoint_id"],)).fetchone()[0])
         original = json.loads(initial["investor_evidence_checkpoint_payloads"][-1][-1])
         self.assertEqual(checkpoint["previous_hash"], content_hash(original)); self.assertEqual(checkpoint["sequence"], original["sequence"] + 1)
@@ -116,6 +159,28 @@ class ModelEpochRegistrationTests(unittest.TestCase):
 
     def test_stale_fence_expired_lease_stop_and_late_failure_never_publish_a_partial_epoch_or_duplicate_old_state(self):
         self.seed(); before = list(self.db.iterdump())
+        with self.assertRaisesRegex(WorkbenchError, "FX_AUTHORITY_AMBIGUOUS"):
+            registration.register_model_epoch_preview(self.db, "w", "owner", self.inputs["model_id"],
+                expected_revision=self.revision(), owner_interaction=True, now=fixture.NOW)
+        self.assertEqual(before, list(self.db.iterdump()))
+        with patch.object(source, "select_current_model_epoch_inputs", side_effect=AssertionError("NO_UNREQUESTED_SELECTION")) as selection:
+            for kwargs in ({}, {"owner_interaction": True, "expected_revision": self.revision() - 1},
+                    {"owner_interaction": True, "references": self.inputs["references"]}):
+                options = {"expected_revision": self.revision(), **kwargs}
+                with self.assertRaises(WorkbenchError):
+                    registration.register_model_epoch_preview(self.db, "w", "owner", self.inputs["model_id"], now=fixture.NOW, **options)
+        selection.assert_not_called(); self.assertEqual(before, list(self.db.iterdump()))
+        self.db.execute("SAVEPOINT fictional_auto_epoch_revocation")
+        try:
+            grant = self.db.execute("SELECT id FROM investor_eodhd_authorities WHERE workspace_id='w'").fetchone()[0]
+            eodhd_sources.set_authority_enabled(self.db, "w", "owner", grant, False, now=fixture.NOW)
+            withdrawn = list(self.db.iterdump())
+            with patch("worker.investor.monitor_bootstrap.plan_bootstrap", side_effect=AssertionError("NO_REVOKED_QUOTE_SELECTION")) as quotes:
+                with self.assertRaises(WorkbenchError):
+                    source.select_current_model_epoch_inputs(self.db, "w", "owner", self.inputs["model_id"], now=fixture.NOW)
+            quotes.assert_not_called(); self.assertEqual(withdrawn, list(self.db.iterdump()))
+        finally: self.db.execute("ROLLBACK TO fictional_auto_epoch_revocation"); self.db.execute("RELEASE fictional_auto_epoch_revocation")
+        self.assertEqual(before, list(self.db.iterdump()))
         with self.assertRaisesRegex(WorkbenchError, "OWNER_INTERACTION_REQUIRED"):
             registration.register_model_epoch_preview(self.db, "w", "owner", self.inputs["model_id"], self.inputs["references"], self.inputs["windows"], expected_revision=self.revision(), now=fixture.NOW)
         self.assertEqual(before, list(self.db.iterdump()))

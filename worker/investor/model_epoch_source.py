@@ -1,13 +1,16 @@
 """Current qualified source preparation for a distinct, not-yet-admitted epoch."""
 
 from copy import deepcopy
+from zoneinfo import ZoneInfo
 
 from worker.market.contracts import validate_contract
+from worker.market.providers.longport import _MARKETS
 from worker.orchestration.db import WorkbenchError, content_hash, instant, transaction
 from . import action_review_workflow as review, managed_actions as managed
 from .action_correction_impact import _ledger
 from .corrected_action_source import read_correction_consent_baseline
-from .data_evidence import _fact_validation_scope, _object, _owner, resolve_review
+from .data_evidence import _fact_validation_scope, _object, _owner, resolve_capture, resolve_review
+from .confirmed_capture import resolve_confirmed_capture
 from .model_epoch_transition import advance_corrected_model_epoch
 from .model_runtime import _clock
 from .monitor_admission import current_monitor_model
@@ -20,6 +23,7 @@ from .source_inputs import _review_kind
 
 SCHEMA = "investor-model-epoch-source.schema.json"
 FIELDS = ("definition", "origin", "head", "origin_projection", "head_projection", "original_actions")
+MAX_CORRECTION_CANDIDATES = 64
 
 
 def _check(value, code="INVALID"):
@@ -96,6 +100,80 @@ def _basis(db, workspace, actor, model_id, references, checked, frozen, stop_req
     frozen_funding = read_bound_planned_funding_monitor(db, workspace, actor, funding["request"]["binding"], evaluated_at=frozen, now=checked) if funding else None
     _check((funding["context_hash"] if funding else None) == (frozen_funding["context_hash"] if frozen_funding else None), "FUNDING_CHANGED")
     return {**basis, "control": {"id": control["id"], "content_hash": content_hash(dict(control))}, "funding": funding}
+
+
+def _selected_correction_references(rows):
+    _check(len(rows) <= MAX_CORRECTION_CANDIDATES, "CORRECTION_SELECTION_LIMIT")
+    _check(rows and all(row["handover_id"] is not None for row in rows), "CORRECTIONS_NOT_READY")
+    _check(len({row["correction_id"] for row in rows}) == len(rows), "CORRECTION_SELECTION_AMBIGUOUS")
+    return [dict(row) for row in rows]
+
+
+def _extend_capture_scope(covered, supplied):
+    overlap = covered.keys() & supplied.keys()
+    _check(all(covered[key] == supplied[key] for key in overlap), "CAPTURE_PRICES_CONFLICT")
+    if supplied.keys() <= covered.keys(): return False
+    _check(not overlap, "CAPTURE_SCOPE_AMBIGUOUS")
+    covered.update(supplied)
+    return True
+
+
+def select_current_model_epoch_inputs(db, workspace, actor, model_id, *, now=None, stop_requested=None):
+    """Select only retained, already approved inputs; never approve or admit them."""
+    from .monitor_bootstrap import plan_bootstrap
+    checked = _clock(now)
+    with transaction(db, immediate=False), _fact_validation_scope():
+        _owner(db, workspace, actor); managed._stopped(db, stop_requested)
+        _check(not db.execute("SELECT 1 FROM investor_model_epochs WHERE workspace_id=? AND model_id=? LIMIT 1", (workspace, model_id)).fetchone(), "ALREADY_REGISTERED")
+        rows = db.execute("""SELECT c.id correction_id,c.content_hash confirmation_hash,h.id handover_id,h.content_hash handover_hash
+          FROM investor_correction_consents c LEFT JOIN investor_action_review_confirmations h
+            ON h.workspace_id=c.workspace_id AND json_extract(h.document_json,'$.request.correction_id')=c.id
+            AND json_extract(h.document_json,'$.schema_version')='investor-corrected-action-handover-confirmation-v1' AND h.created_at<=?
+          WHERE c.workspace_id=? AND c.model_id=? AND c.created_at<=? AND c.valid_until>?
+          ORDER BY c.id,h.id LIMIT ?""", (checked, workspace, model_id, checked, checked, MAX_CORRECTION_CANDIDATES + 1)).fetchall()
+        references = _selected_correction_references(rows)
+        basis = _basis(db, workspace, actor, model_id, references, checked, checked, stop_requested)
+        managed._stopped(db, stop_requested)
+        _, definition, _, windows, _ = plan_bootstrap(db, workspace, model_id, checked)
+        _check(definition == basis["definition"], "MODEL_CHANGED")
+        head = db.execute("SELECT input_id FROM investor_evidence_model_checkpoints WHERE id=? AND workspace_id=? AND model_id=?",
+            (basis["history"]["proof"]["head_checkpoint_id"], workspace, model_id)).fetchone()
+        prior = db.execute("SELECT document_json,content_hash FROM investor_monitor_evidence_inputs WHERE id=? AND workspace_id=? AND model_id=?",
+            (head["input_id"], workspace, model_id)).fetchone() if head else None
+        _check(prior is not None, "LATEST_HEAD_CHANGED")
+        original = _object(prior["document_json"])
+        _check(content_hash(original) == prior["content_hash"], "LATEST_HEAD_CHANGED")
+        result = []
+        for selected in windows:
+            managed._stopped(db, stop_requested); window = deepcopy(selected)
+            listing = resolve_review(db, workspace, window["action_review_ids"][0], "actions", now=checked)["facts"]["listing_id"]
+            market = next(row["market"] for row in definition["targets"] if row["listing_id"] == listing)
+            start = instant(basis["history"]["head"]["market_cutoffs"][market]).astimezone(ZoneInfo(_MARKETS[market][0])).date().isoformat()
+            _check(start <= window["end_date"], "CLOSE_REGRESSION")
+
+            def scope(identifier, confirmed):
+                value = (resolve_confirmed_capture if confirmed else resolve_capture)(db, workspace, identifier, now=checked)
+                return {(row["listing_id"], row["observed_at"]): row["value"] for row in value["records"] if start <= row["observed_at"] <= window["end_date"]}
+
+            covered = {}
+            for key in ("capture_ids", "confirmed_capture_ids"):
+                for identifier in window.get(key, []): _extend_capture_scope(covered, scope(identifier, key == "confirmed_capture_ids"))
+            for segment in original["segments"]:
+                snapshot = segment["snapshot"]
+                calendars = [resolve_review(db, workspace, ref["review_id"], "calendar", now=checked)["facts"]["market"]
+                    for ref in snapshot["review_refs"] if _review_kind(db, workspace, ref["review_id"]) == "calendar"]
+                _check(len(calendars) == 1, "CALENDAR_SCOPE")
+                if calendars[0] != market: continue
+                for ref in snapshot["capture_refs"]:
+                    key = "confirmed_capture_ids" if ref.get("kind") == "confirmed_sdk" else "capture_ids"
+                    supplied = scope(ref["capture_id"], key == "confirmed_capture_ids")
+                    if not _extend_capture_scope(covered, supplied): continue
+                    window.setdefault(key, []).append(ref["capture_id"])
+            for key in ("capture_ids", "confirmed_capture_ids"):
+                window[key] = sorted(set(window.get(key, [])))
+            window["start_date"] = start; result.append(window)
+        managed._stopped(db, stop_requested)
+        return references, result
 
 
 def _assemble(db, workspace, actor, epoch_id, basis, raw, checked, frozen, maximum=None):
