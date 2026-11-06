@@ -5,6 +5,7 @@ supply a predecessor, corrected ledger, epoch definition or source-trust flag.
 """
 
 from copy import deepcopy
+from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 from worker.market.contracts import validate_contract
@@ -15,7 +16,7 @@ from .data_evidence import _fact_validation_scope, _owner, resolve_capture, reso
 from .confirmed_capture import resolve_confirmed_capture
 from .model_epoch_transition import continue_corrected_model_epoch
 from .model_runtime import _clock
-from .monitor_bootstrap import _check_action_selection, _check_fx_selection, _settings, plan_bootstrap
+from .monitor_bootstrap import MAX_CAPTURE_CANDIDATES, _check_action_selection, _check_fx_selection, _settings, plan_bootstrap
 from .monitor_data import build_monitor_data, check_reference_listing_identity, resolve_monitor_data
 from .planned_funding_source import read_bound_planned_funding_monitor, read_planned_funding_monitor
 from .source_inputs import _review_kind, _snapshot_ids
@@ -53,6 +54,53 @@ def _basis(db, workspace, actor, epoch_id, checked, frozen, stop_requested):
         "control": {"id": control["id"], "content_hash": content_hash(dict(control))}, "funding": funding}
 
 
+def _retained_price_window(db, workspace, reference, window, prior, market, start, checked):
+    pool = {(key,identifier) for key in ("capture_ids","confirmed_capture_ids") for identifier in window.get(key,[])}
+    for segment in prior["segments"]:
+        snapshot = segment["snapshot"]
+        calendars = [resolve_review(db,workspace,ref["review_id"],"calendar",now=checked)["facts"]["market"]
+            for ref in snapshot["review_refs"] if _review_kind(db,workspace,ref["review_id"])=="calendar"]
+        _check(len(calendars)==1,"CALENDAR_SCOPE")
+        if calendars[0]!=market:continue
+        pool.update(("confirmed_capture_ids" if r.get("kind")=="confirmed_sdk" else "capture_ids",r["capture_id"]) for r in snapshot["capture_refs"])
+    retained = db.execute("""SELECT 'capture_ids' kind,c.id FROM investor_price_captures c JOIN investor_price_payloads p ON p.capture_id=c.id
+      WHERE c.workspace_id=? AND c.qualification='isolated_official_sdk' AND c.retain_until>?
+        AND json_extract(c.receipt_json,'$.request.mapping.market')=?
+        AND json_extract(c.receipt_json,'$.request.start_date')<=? AND json_extract(c.receipt_json,'$.request.end_date')>=?
+      UNION ALL SELECT 'confirmed_capture_ids' kind,c.id FROM investor_confirmed_captures c JOIN investor_confirmed_payloads p ON p.capture_id=c.id
+      WHERE c.workspace_id=? AND c.qualification='isolated_official_sdk_callback' AND c.status='complete' AND c.retain_until>?
+        AND EXISTS(SELECT 1 FROM json_each(c.receipt_json,'$.bindings') b WHERE json_extract(b.value,'$.target.mapping.market')=?
+          AND json_extract(b.value,'$.target.session_date') BETWEEN ? AND ?)
+      ORDER BY kind,id LIMIT ?""",(workspace,checked,market,window["end_date"],start,workspace,checked,market,start,window["end_date"],MAX_CAPTURE_CANDIDATES+1)).fetchall()
+    _check(len(retained)<=MAX_CAPTURE_CANDIDATES,"CAPTURE_SELECTION_LIMIT")
+    pool.update((r["kind"],r["id"]) for r in retained)
+    _check(len(pool)<=MAX_CAPTURE_CANDIDATES,"CAPTURE_SELECTION_LIMIT")
+    targets = {r["listing_id"]:r for r in reference["targets"] if r["market"]==market}
+    prices,versions,choices = {},{},[]
+    for kind,identifier in sorted(pool):
+        value = (resolve_confirmed_capture if kind=="confirmed_capture_ids" else resolve_capture)(db,workspace,identifier,now=checked)
+        bindings = value["bindings"] if kind=="confirmed_capture_ids" else [value["binding"]]
+        if not {b["listing"]["facts"]["listing_id"] for b in bindings} <= set(targets):continue
+        supplied = {(r["listing_id"],r["observed_at"]):r["value"] for r in value["records"] if start<=r["observed_at"]<=window["end_date"]}
+        if not supplied:continue
+        _check(instant(value["capture"]["created_at"])<=instant(checked),"SOURCE_AFTER_CLOCK")
+        for binding in bindings:
+            asset = binding["listing"]["facts"];identity = asset["listing_id"];target = targets[identity]
+            _check(all(asset[k]==target[k] for k in ("market","currency")) and asset["provider_symbol"]==target["symbol"],"CAPTURE_IDENTITY_CHANGED")
+            version = binding["listing"]["review"]["id"],binding["calendar"]["review"]["id"]
+            _check(identity not in versions or versions[identity]==version,"CAPTURE_VERSIONS_AMBIGUOUS");versions[identity]=version
+        _check(all(k not in prices or prices[k]==v for k,v in supplied.items()),"CAPTURE_PRICES_CONFLICT")
+        prices.update(supplied);choices.append((kind,identifier,supplied))
+    # Check every eligible overlap before selecting whole, disjoint originals.
+    # Largest scopes allow a retained multi-day download to replace endpoint-only
+    # selections without clipping bytes or duplicating rows in the dataset.
+    covered = set();selected = {"capture_ids":[],"confirmed_capture_ids":[]}
+    for kind,identifier,supplied in sorted(choices,key=lambda r:(-len(r[2]),r[0],r[1])):
+        if covered & supplied.keys():continue
+        selected[kind].append(identifier);covered.update(supplied)
+    return {**window,**{key:sorted(ids) for key,ids in selected.items()},"start_date":start}
+
+
 def _windows(db, workspace, basis, checked):
     _, definition, _, windows, _ = plan_bootstrap(db, workspace, basis["definition"]["model_id"], checked)
     _check(definition == basis["definition"], "MODEL_CHANGED")
@@ -64,28 +112,18 @@ def _windows(db, workspace, basis, checked):
         market = next(row["market"] for row in definition["targets"] if row["listing_id"] == market)
         start = instant(basis["previous"]["market_cutoffs"][market]).astimezone(ZoneInfo(_MARKETS[market][0])).date().isoformat()
         _check(start <= window["end_date"], "CLOSE_REGRESSION")
-        def scope(identifier, confirmed):
-            value = (resolve_confirmed_capture if confirmed else resolve_capture)(db, workspace, identifier, now=checked)
-            return {(row["listing_id"], row["observed_at"]) for row in value["records"] if start <= row["observed_at"] <= window["end_date"]}
-        covered = set()
-        for key in ("capture_ids", "confirmed_capture_ids"):
-            for identifier in window.get(key, []): covered.update(scope(identifier, key == "confirmed_capture_ids"))
-        for segment in old["segments"]:
-            snapshot = segment["snapshot"]
-            calendars = [resolve_review(db, workspace, ref["review_id"], "calendar", now=checked)["facts"]["market"]
-                for ref in snapshot["review_refs"] if _review_kind(db, workspace, ref["review_id"]) == "calendar"]
-            _check(len(calendars) == 1, "CALENDAR_SCOPE")
-            if calendars[0] != market: continue
-            for ref in snapshot["capture_refs"]:
-                key = "confirmed_capture_ids" if ref.get("kind") == "confirmed_sdk" else "capture_ids"
-                supplied = scope(ref["capture_id"], key == "confirmed_capture_ids")
-                if supplied <= covered: continue
-                _check(not supplied & covered, "CAPTURE_SCOPE_AMBIGUOUS")
-                window.setdefault(key, []).append(ref["capture_id"]); covered.update(supplied)
-        for key in ("capture_ids", "confirmed_capture_ids"):
-            window[key] = sorted(set(window.get(key, [])))
-        window["start_date"] = start
-        result.append(window)
+        result.append(_retained_price_window(db,workspace,basis["reference"],window,old,market,start,checked))
+    # Match the independent current reader's shared (not per-market) ceiling.
+    earliest = min((instant(checked)-timedelta(days=7)).date().isoformat(),*(w["start_date"] for w in result))
+    candidates = db.execute("""SELECT 'capture_ids' kind,c.id FROM investor_price_captures c JOIN investor_price_payloads p ON p.capture_id=c.id
+      WHERE c.workspace_id=? AND c.qualification='isolated_official_sdk' AND c.created_at<=? AND c.retain_until>?
+        AND json_extract(c.receipt_json,'$.request.end_date')>=?
+      UNION ALL SELECT 'confirmed_capture_ids' kind,c.id FROM investor_confirmed_captures c JOIN investor_confirmed_payloads p ON p.capture_id=c.id
+      WHERE c.workspace_id=? AND c.qualification='isolated_official_sdk_callback' AND c.status='complete' AND c.created_at<=? AND c.retain_until>?
+      ORDER BY kind,id LIMIT ?""",(workspace,checked,checked,earliest,workspace,checked,checked,MAX_CAPTURE_CANDIDATES+1)).fetchall()
+    selected = {(r["kind"],r["id"]) for r in candidates}
+    selected.update((kind,identifier) for w in result for kind in ("capture_ids","confirmed_capture_ids") for identifier in w[kind])
+    _check(len(candidates)<=MAX_CAPTURE_CANDIDATES and len(selected)<=MAX_CAPTURE_CANDIDATES,"CAPTURE_SELECTION_LIMIT")
     return result
 
 

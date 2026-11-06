@@ -6,10 +6,63 @@ import { actionPython } from "./action-maintenance-fixture";
 import { replayModelEpochContinuationSource } from "../src/server/investor/model-epoch-continuation-source";
 import { validateInvestorMonitorDataDocument, validateModelEpochContinuationSource } from "../src/server/investor/kernel-contracts";
 import { executeInvestorCommand, getInvestorState } from "../src/server/investor/service";
+import { readEpochContinuationChain } from "../src/server/investor/epoch-continuation";
 
 type Obj = Record<string, unknown>;
 function obj(value: unknown): Obj { assert.ok(value && typeof value === "object" && !Array.isArray(value)); return value as Obj; }
 const actor = { id: "owner" }, now = "2026-10-21T10:00:03.000Z", first = "2026-10-20T10:00:03.000Z";
+
+test("retained intermediate and multi-day originals survive a stopped core interval with independent current replay and no fabricated past observations",t=>{
+  const f=investorFixture();t.after(f.close);
+  const setup=actionPython(f.filename,`
+from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture
+from tests.investor import epoch_gap_fixture as gap
+from worker.investor.model_epoch_continuation_source import prepare_model_epoch_continuation
+with offline_protocol_fixture():
+ value=gap.create(db,Path(sys.argv[1]));saved=value['saved'];epoch=saved['registration']['epoch']['id']
+ tiles=gap.add_prices(db,saved,['2026-10-20','2026-10-21'])
+ prepared=prepare_model_epoch_continuation(db,'w','owner',epoch,now=gap.NOW)
+print(json.dumps({'saved':saved,'prepared':prepared,'tiles':tiles,'now':gap.NOW}))
+`,"core_readmission");
+  const prepared=obj(setup.prepared),saved=obj(setup.saved),epochId=String(obj(obj(saved.registration).epoch).id),at=String(setup.now);
+  const implementation=String(obj(obj(prepared.candidate).assessment).implementation_hash);
+  const reader=new Database(f.filename,{readonly:true});t.after(()=>reader.close());reader.pragma("query_only=ON");
+  assert.deepEqual(replayModelEpochContinuationSource(reader,"w",actor,epochId,prepared.input,at,implementation),prepared);
+  const published=actionPython(f.filename,`
+from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture
+from worker.investor import epoch_continuation as epochs
+from worker.orchestration.runtime import run_pending_once
+with offline_protocol_fixture():
+ epoch=db.execute('SELECT * FROM investor_model_epochs').fetchone()
+ head=dict(db.execute('SELECT id,content_hash FROM investor_evidence_model_checkpoints ORDER BY sequence DESC LIMIT 1').fetchone())
+ body={'schema_version':'investor-epoch-control-submit-v1','epoch_id':epoch['id'],'expected_registration_hash':epoch['content_hash'],'expected_checkpoint':head,
+  'expected_revision':db.execute("SELECT revision FROM investor_workspaces WHERE id='w'").fetchone()[0],'idempotency_key':'fictional-retained-gap-activation','enabled':True,'acknowledgements':{k:True for k in epochs.ACKS}}
+ epochs.set_epoch_continuation_control(db,'w','owner',body,owner_interaction=True,now='${at}')
+ result=run_pending_once(db,'fictional-retained-gap-default-core',clock=lambda:'${at}')
+ assert result['status']=='succeeded',result
+ chain=epochs.read_epoch_continuation_chain(db,'w','owner',epoch['id'],now='${at}')
+ assert chain['publication_count']==1
+print(json.dumps(chain))
+`,"core_readmission");
+  assert.deepEqual(readEpochContinuationChain(reader,"w",actor,epochId,at),published);
+  const assessment=obj(obj(obj(published.source).candidate).assessment),state=getInvestorState(reader,actor,at);
+  assert.equal(state.model_watch?.status,assessment.outcome==="observe"?"research_observe":"research_decision");assert.equal(state.model_watch?.model_nav_cny,assessment.model_nav_cny);
+  assert.equal((reader.prepare("SELECT count(*) n FROM investor_epoch_continuations").get() as {n:number}).n,1);
+  assert.equal((reader.prepare("SELECT total_changes() n").get() as {n:number}).n,0);
+  // A later conflicting intermediate close must hide current economics, while
+  // authenticated historical publications remain independently replayable.
+  actionPython(f.filename,`
+from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture
+from tests.investor import epoch_gap_fixture as gap
+with offline_protocol_fixture():
+ preview=json.loads(db.execute('SELECT document_json FROM investor_model_epoch_previews').fetchone()[0])
+ gap.add_prices(db,{'preview':preview},['2026-10-20'],delta='1')
+print('{}')
+`,"core_readmission");
+  const hidden=getInvestorState(reader,actor,at);assert.equal(hidden.model_watch?.model_nav_cny,null);assert.ok(!["research_observe","research_decision"].includes(hidden.model_watch?.status??""));
+  assert.deepEqual(readEpochContinuationChain(reader,"w",actor,epochId,at),published);
+  for(const table of ["portfolios","accounts","ledger_events","postings"])assert.equal((f.db.prepare("SELECT count(*) n FROM "+table).get() as {n:number}).n,0);
+});
 
 test("independent registered-parent and current SDK/calendar/action/FX replay advances the same economic epoch without publishing or resetting", t => {
   const f = investorFixture(); t.after(f.close);

@@ -15,6 +15,34 @@ from worker.orchestration.db import WorkbenchError, content_hash, open_database
 class ModelEpochContinuationSourceTests(unittest.TestCase):
     setUp = setup.CurrentCorrectionFixtureTests.setUp
 
+    def test_retained_intermediate_closes_fill_a_stopped_core_window_without_new_network_or_state_reset(self):
+        from tests.investor import epoch_gap_fixture as gap
+        value = gap.create(self.db,self.path);self.saved = value["saved"];self.epoch_id = self.saved["registration"]["epoch"]["id"]
+        before = list(self.db.iterdump())
+        prepared = self.prepare(now=gap.NOW)
+        refs = {r["capture_id"] for s in prepared["input"]["segments"] for r in s["snapshot"]["capture_refs"]}
+        self.assertTrue(set(value["intermediate_capture_ids"]) <= refs)
+        parent,candidate = self.saved["checkpoint"],prepared["candidate"]["checkpoint"]
+        self.assertEqual(candidate["sequence"],parent["sequence"]+1)
+        for field in ("initial_notional_cny","initialized_at","quantities","epoch_binding"):
+            self.assertEqual(candidate[field],parent[field],field)
+        self.assertEqual(before,list(self.db.iterdump()))
+        tiles = gap.add_prices(self.db,self.saved,["2026-10-20","2026-10-21"])
+        before = list(self.db.iterdump());tiled = self.prepare(now=gap.NOW)
+        selected = {r["capture_id"] for s in tiled["input"]["segments"] for r in s["snapshot"]["capture_refs"]}
+        self.assertTrue(set(tiles)<=selected)
+        self.assertTrue(set(value["intermediate_capture_ids"]).isdisjoint(selected))
+        self.assertEqual(tiled["candidate"]["checkpoint"]["quantities"],parent["quantities"])
+        self.assertEqual(before,list(self.db.iterdump()))
+        with patch.object(source,"MAX_CAPTURE_CANDIDATES",1):
+            with self.assertRaisesRegex(WorkbenchError,"CAPTURE_SELECTION_LIMIT"):self.prepare(now=gap.NOW)
+        self.db.execute("SAVEPOINT fictional_intermediate_conflict")
+        try:
+            gap.add_prices(self.db,self.saved,["2026-10-20"],delta="1")
+            with self.assertRaisesRegex(WorkbenchError,"CAPTURE_PRICES_CONFLICT"):self.prepare(now=gap.NOW)
+        finally:self.db.execute("ROLLBACK TO fictional_intermediate_conflict");self.db.execute("RELEASE fictional_intermediate_conflict")
+        self.assertEqual(before,list(self.db.iterdump()))
+
     def seed(self):
         self.saved = create(self.db, self.path); self.epoch_id = self.saved["registration"]["epoch"]["id"]
         next_sources(self.db, self.saved)

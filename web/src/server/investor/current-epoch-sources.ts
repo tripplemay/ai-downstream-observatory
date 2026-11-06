@@ -7,6 +7,7 @@ import { assertCurrentEpochAuxiliarySources } from "./model-epoch-continuation-s
 
 type Obj = Record<string, unknown>;
 type Binding = { rights: VerifiedSourceReview; listing: VerifiedSourceReview; calendar: VerifiedSourceReview };
+type Original = {capture: Obj;bindings: Binding[];records: Obj[]};
 type Candidate = { id: string; created_at: string; market: string; day: Obj; calendar: VerifiedSourceReview; listings: Map<string, string>; records: Map<string, Obj> };
 function check(value: unknown, code = "INVALID"): asserts value { if (!value) throw new Error("INVESTOR_EPOCH_CURRENT_SOURCE_" + code); }
 function obj(value: unknown): Obj { check(value && typeof value === "object" && !Array.isArray(value)); return value as Obj; }
@@ -21,7 +22,7 @@ function localDay(now: string, market: string) {
   return ["year", "month", "day"].map(key => parts.find(part => part.type === key)!.value).join("-");
 }
 
-function candidate(db: Database.Database, workspace: string, row: Obj, targets: Map<string, Obj>, now: string): Candidate | null {
+function original(db: Database.Database, workspace: string, row: Obj, now: string): Original {
   let capture: Obj, bindings: Binding[], records: Obj[];
   if (row.kind === "historical") {
     const value = readInvestorHistoricalCapture(db, workspace, text(row.id), now);
@@ -35,6 +36,11 @@ function candidate(db: Database.Database, workspace: string, row: Obj, targets: 
       return { rights, listing, calendar };
     });
   }
+  return {capture,bindings,records};
+}
+
+function candidate(row: Obj, value: Original, targets: Map<string, Obj>, now: string): Candidate | null {
+  const {capture,bindings,records}=value;
   const identities = new Set(bindings.map(bound => text(bound.listing.facts.listing_id)));
   if ([...identities].some(id => !targets.has(id))) return null;
   const markets = new Set(bindings.map(bound => text(bound.listing.facts.market))); if (markets.size !== 1) return null;
@@ -55,12 +61,43 @@ function candidate(db: Database.Database, workspace: string, row: Obj, targets: 
     listings: new Map(bindings.map(bound => [text(bound.listing.facts.listing_id), bound.listing.row.id])), records: selected };
 }
 
+function assertRetainedWindows(db: Database.Database,workspace: string,document: Obj,targets: Map<string,Obj>,now: string,retained: Map<string,Original>) {
+  for(const segment of rows(document.segments)) {
+    const snapshot=obj(segment.snapshot),start=text(snapshot.range_start),end=text(snapshot.range_end),listings=new Map<string,string>();
+    let calendar: VerifiedSourceReview|null=null;
+    for(const ref of rows(snapshot.review_refs)) {
+      const value=readInvestorSourceReview(db,workspace,ref,now);
+      if(value.source.kind==="listing")listings.set(text(value.facts.listing_id),value.row.id);
+      if(value.source.kind==="calendar"){check(!calendar||calendar.row.id===value.row.id,"CALENDAR_AMBIGUOUS");calendar=value;}
+    }
+    check(calendar&&listings.size,"WINDOW_SCOPE_INVALID");const market=text(calendar.facts.market),prices=new Map<string,unknown>();
+    for(const ref of rows(snapshot.capture_refs)) {
+      const kind=ref.kind==="confirmed_sdk"?"confirmed":"historical",key=kind+":"+text(ref.capture_id);
+      if(!retained.has(key))retained.set(key,original(db,workspace,{kind,id:ref.capture_id},now));
+      check(retained.size<=128,"SOURCE_LIMIT");const value=retained.get(key)!;
+      for(const record of value.records)if(start<=text(record.observed_at)&&text(record.observed_at)<=end) {
+        const id=JSON.stringify([record.listing_id,record.observed_at]);check(!prices.has(id),"WINDOW_PRICE_OVERLAP");prices.set(id,record.value);
+      }
+    }
+    for(const value of retained.values()) {
+      if(value.bindings.some(b=>!listings.has(text(b.listing.facts.listing_id))))continue;
+      const scoped=value.records.filter(r=>start<=text(r.observed_at)&&text(r.observed_at)<=end);if(!scoped.length)continue;
+      for(const bound of value.bindings) {
+        const facts=bound.listing.facts,target=targets.get(text(facts.listing_id));
+        check(target&&facts.market===market&&facts.currency===target.currency&&facts.provider_symbol===target.symbol
+          &&bound.listing.row.id===listings.get(text(facts.listing_id))&&bound.calendar.row.id===calendar.row.id,"WINDOW_IDENTITY_CHANGED");
+      }
+      for(const record of scoped)check(prices.get(JSON.stringify([record.listing_id,record.observed_at]))===record.value,"WINDOW_PRICES_CONFLICT");
+    }
+  }
+}
+
 /** Negative/selection gate only. The caller must independently replay the actual
  * journal first; passing values here never certifies a source or permits a write. */
 export function assertCurrentEpochSourceSelection(db: Database.Database, workspace: string, targets: Obj[], definition: Obj, document: Obj, projection: Obj, now: string) {
   assertCurrentEpochAuxiliarySources(db, workspace, definition, document, now);
   const targetMap = new Map(targets.map(target => [text(target.listing_id), target])); check(targetMap.size === targets.length);
-  const earliest = new Date(Number(time(now) / 1000n) - 604800000).toISOString().slice(0, 10);
+  const earliest = [new Date(Number(time(now) / 1000n) - 604800000).toISOString().slice(0, 10),...rows(document.segments).map(s=>text(obj(s.snapshot).range_start))].sort()[0];
   const retained = db.prepare(`SELECT 'historical' kind,c.id,c.created_at FROM investor_price_captures c
     JOIN investor_price_payloads p ON p.capture_id=c.id WHERE c.workspace_id=? AND c.qualification='isolated_official_sdk'
       AND c.created_at<=? AND c.retain_until>? AND json_extract(c.receipt_json,'$.request.end_date')>=?
@@ -69,7 +106,9 @@ export function assertCurrentEpochSourceSelection(db: Database.Database, workspa
       AND c.status='complete' AND c.created_at<=? AND c.retain_until>?
     ORDER BY created_at DESC,id LIMIT 129`).all(workspace, now, now, earliest, workspace, now, now) as Obj[];
   check(retained.length <= 128, "SOURCE_LIMIT");
-  const candidates = retained.map(row => candidate(db, workspace, row, targetMap, now)).filter((value): value is Candidate => value !== null);
+  const originals=new Map(retained.map(row=>[text(row.kind)+":"+text(row.id),original(db,workspace,row,now)]));
+  assertRetainedWindows(db,workspace,document,targetMap,now,originals);
+  const candidates = retained.map(row => candidate(row,originals.get(text(row.kind)+":"+text(row.id))!,targetMap,now)).filter((value): value is Candidate => value !== null);
   check(candidates.length, "PRICES_NOT_READY");
   const prices = new Map<string, unknown>(), listings = new Map<string, string>(), calendars = new Map<string, Candidate>();
   for (const value of candidates) {
