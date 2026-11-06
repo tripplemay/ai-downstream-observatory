@@ -17,6 +17,8 @@ import { readEvidenceReference } from "../src/server/investor/reference-evidence
 import {submitEpochControl,readEpochControlResponse} from "../src/server/investor/epoch-control-jobs";
 import {actionJobStartedByMillisecond} from "../src/server/investor/action-source-proof";
 import {readInvestorNotifications,readInvestorNotification} from "../src/server/investor/notifications";
+import {verifyHistoryService} from "./epoch-history-service-fixture";
+test("ordinary history intents reach async core, bounded real-role stub collection and independent Node continuation without trading",verifyHistoryService);
 
 type Obj = Record<string, unknown>;
 const now = "2026-10-21T10:00:03.000Z";

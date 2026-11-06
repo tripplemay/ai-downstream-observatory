@@ -44,7 +44,7 @@ function mount(t: { after: (fn: () => void) => void }, state = displayState(), v
       "./investor-model-composition": { currentResearchModelComposition },
       "@/server/investor/schemas": schemas, "@/server/investor/loss-scenarios": losses, "./research-format": research, "./investor-client": client,
       "@/server/investor/initial-close-progress": { initialCloseProgressRequest },
-      ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel", "history-panel", "monitor-cost-panel","action-review","legacy-transition","epoch-control","epoch-setup"]
+      ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel", "history-panel", "monitor-cost-panel","action-review","legacy-transition","epoch-control","epoch-setup","epoch-history"]
         .map(name => { const component = "Investor" + name.split("-").map(value => value[0].toUpperCase() + value.slice(1)).join("");
           return ["./investor-" + name, { [component]: component }]; })),
       "./investor-acquisition": { acquisitionDeadlines, InvestorAcquisitionPanel: "InvestorAcquisitionPanel" },
@@ -78,6 +78,15 @@ test("epoch-scoped controls replace the generic toggle; pending control hides de
   await h.flush();assert.equal(h.card("当前研究模型"),undefined);
   await h.reply(0,{...state,session_binding:binding});assert.ok(h.card("当前研究模型"));assert.ok(h.node("InvestorAiPanel"));
   assert.equal(h.requests.filter(row=>row.method==="POST").length,0);
+});
+test("history and epoch controls keep independent locks and require authenticated parent recheck after download changes",async t=>{
+ const state=compositionDisplayState();state.model_watch!.control_scope="epoch";const h=mount(t,state,"plan");await h.flush();const panel=h.node("InvestorEpochHistory")!;assert.ok(panel);
+ (panel.props.onGuardChange as (v:boolean)=>void)(true);await h.flush();assert.equal(h.card("当前研究模型"),undefined);assert.equal(h.node("InvestorAiPanel"),undefined);
+ (h.node("InvestorEpochControl")!.props.onGuardChange as (v:boolean)=>void)(true);await h.flush();
+ (h.node("InvestorEpochHistory")!.props.onGuardChange as (v:boolean)=>void)(false);await h.flush();assert.equal(h.card("当前研究模型"),undefined);
+ (h.node("InvestorEpochControl")!.props.onGuardChange as (v:boolean)=>void)(false);await h.flush();
+ (h.node("InvestorEpochHistory")!.props.onChanged as ()=>void)();await h.waitRequests(1);assert.equal(h.card("当前研究模型"),undefined);assert.equal(h.requests[0].method,"GET");
+ await h.reply(0,{...state,session_binding:binding});assert.ok(h.card("当前研究模型"));assert.equal(h.requests.filter(r=>r.method==="POST").length,0);
 });
 test("model composition hides on known expiry despite an edit lock and never revives after clock rollback", async t => {
   const h = mount(t, compositionDisplayState()); await h.flush(); assert.ok(h.card("当前研究模型"));

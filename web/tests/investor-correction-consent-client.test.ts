@@ -4,6 +4,8 @@ import { buildConsentAttempt, parseConsentResponse } from "../src/components/wor
 import { consentAnswers, consentResponse, consentScope, consentSummaryHash, confirmedConsent, queuedConsent } from "./correction-consent-client-fixture";
 import { reviewNow } from "./action-review-client-fixture";
 import {verifySetupClient} from "./epoch-setup-fixture";
+import {verifyHistoryClient} from "./epoch-history-client-fixture";
+test("historical download consent binds the exact plan, scope, deadline, one-to-four call cap and original nonce",verifyHistoryClient);
 test("epoch setup binds the displayed preview, every new acknowledgement, fresh clock and exact nonce",verifySetupClient);
 import { buildEpochControlAttempt,parseEpochControlResponse } from "../src/components/workbench/investor-epoch-control-client";
 import { epochAnswers,epochResponse,epochScope,queuedEpochControl,pausedEpochControl } from "./epoch-control-client-fixture";

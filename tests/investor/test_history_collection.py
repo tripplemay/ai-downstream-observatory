@@ -267,6 +267,18 @@ class HistoryCollectionTests(unittest.TestCase):
 
 
 class EpochHistoryPlanTests(unittest.TestCase):
+    def test_async_history_workflow_prepares_without_download_then_registers_only_after_separate_confirmation(self):
+        from tests.investor.history_workflow_fixture import positive
+        positive(self)
+
+    def test_async_history_confirmation_late_failure_and_final_expiry_roll_back_all_download_jobs_and_revision(self):
+        from tests.investor.history_workflow_fixture import final_fences
+        final_fences(self)
+
+    def test_async_history_prepare_stops_before_heavy_replay_and_paused_epoch_cannot_authorize_download(self):
+        from tests.investor.history_workflow_fixture import cancelled
+        cancelled(self)
+
     def setUp(self):
         from tests.investor import test_current_correction_fixture as fixture
         fixture.CurrentCorrectionFixtureTests.setUp(self)

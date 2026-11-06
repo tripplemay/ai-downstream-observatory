@@ -362,6 +362,11 @@
       "version": 71,
       "file": "0071_investor_epoch_history_jobs.sql",
       "sha256": "6f7e0be06f1cb2598aa899ab967e745fd3d1c1f7f83e0997ee2e4b31af3386f8"
+    },
+    {
+      "version": 72,
+      "file": "0072_investor_epoch_history_workflow.sql",
+      "sha256": "3accd9e1445b87456ebc9980b8fbefecb4107222277b2c341964f98a49b2cd43"
     }
   ]
 }

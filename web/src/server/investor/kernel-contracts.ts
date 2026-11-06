@@ -52,6 +52,9 @@ import modelEpochContinuationSource from "../../../../contracts/v1/investor-mode
 import epochContinuation from "../../../../contracts/v1/investor-epoch-continuation.schema.json";
 import epochControlJobs from "../../../../contracts/v1/investor-epoch-control-jobs.schema.json";
 import epochPreviewJobs from "../../../../contracts/v1/investor-epoch-preview-jobs.schema.json";
+import epochHistoryPlan from "../../../../contracts/v1/investor-epoch-history-plan.schema.json";
+import epochHistoryJobs from "../../../../contracts/v1/investor-epoch-history-jobs.schema.json";
+import epochHistoryWorkflow from "../../../../contracts/v1/investor-epoch-history-workflow.schema.json";
 import modelEpochRegistration from "../../../../contracts/v1/investor-model-epoch-registration.schema.json";
 import evidenceCheckpointV4 from "../../../../contracts/v1/investor-evidence-model-checkpoint-v4.schema.json";
 import retainedActionEvidence from "../../../../contracts/v1/investor-retained-action-evidence.schema.json";
@@ -128,6 +131,9 @@ ajv.addSchema(modelEpochContinuationSource);
 ajv.addSchema(epochContinuation);
 ajv.addSchema(epochControlJobs);
 ajv.addSchema(epochPreviewJobs);
+ajv.addSchema(epochHistoryPlan);
+ajv.addSchema(epochHistoryJobs);
+ajv.addSchema(epochHistoryWorkflow);
 ajv.addSchema(modelEpochRegistration);
 ajv.addSchema(evidenceCheckpointV4);
 ajv.addSchema(retainedActionEvidence);
@@ -216,6 +222,8 @@ export function validateEpochControlJob(kind: "request" | "result", value: unkno
 export function validateEpochPreviewJob(kind: "submit" | "request" | "result", value: unknown) {
   requireTrue(ajv.getSchema(epochPreviewJobs.$id + "#/$defs/" + kind)!(value));
 }
+export function validateEpochHistoryJob(kind:"submit"|"request"|"attempt"|"run",value:unknown){requireTrue(ajv.getSchema(epochHistoryJobs.$id+"#/$defs/"+kind)!(value));}
+export function validateEpochHistoryWorkflow(kind:"submit"|"request"|"result",value:unknown){requireTrue(ajv.getSchema(epochHistoryWorkflow.$id+"#/$defs/"+kind)!(value));}
 export function validateModelEpochRegistration(kind: "preview" | "submit" | "request" | "registration" | "monitor_request" | "replay_proof", value: unknown) {
   requireTrue(ajv.getSchema(modelEpochRegistration.$id + "#/$defs/" + kind)!(value));
 }

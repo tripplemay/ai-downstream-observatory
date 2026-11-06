@@ -145,6 +145,21 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
     assert.equal(read(db=>db.prepare('SELECT count(*) n FROM investor_workspaces').get().n),0);assert.deepEqual(counts(),before);assert.deepEqual(financial(),facts);
     return {implicit_epoch:false,implicit_activation:false,source_or_ai_calls:0,positive_registration_http_journey_verified:false};
   });
+  await check('HTTP-I25','history preparation requires explicit session-bound intent and does not implicitly create research or provider jobs',async()=>{
+    const route=endpoint+'/epoch-history',facts=financial();
+    const counts=()=>read(db=>Object.fromEntries(['investor_epoch_history_intents','investor_epoch_history_results','investor_epoch_history_requests','investor_epoch_history_attempts','job_runs','audit_events'].map(n=>[n,db.prepare('SELECT count(*) n FROM '+n).get().n])));
+    const before=counts(),body={schema_version:'investor-epoch-history-workflow-submit-v1',action:'prepare',model_id:'fictional-model',expected_revision:0,idempotency_key:'fictional-http-history-intent',acknowledged_plan_only:true};
+    const send=(value,extra={})=>jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json',...extra}),body:typeof value==='string'?value:JSON.stringify(value)});
+    assert.equal((await jsonRequest(route+'?model=fictional-model')).status,401);
+    assert.equal((await jsonRequest(route+'?model=fictional-model',{headers:{Cookie:cookie}})).status,400);
+    assert.equal((await send(body,{Origin:'https://wrong.example.test'})).status,403);
+    assert.equal((await send(body,{'X-Workbench-Session-Binding':'b'.repeat(64)})).status,401);
+    for(const value of [{...body,prices:[]},{...body,acknowledged_plan_only:false},'{"action":"prepare","action":"confirm"}'])assert.equal((await send(value)).status,400);
+    const huge=await jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json'}),duplex:'half',body:(async function*(){yield Buffer.alloc(4097,120);})()});assert.equal(huge.status,413);
+    const missing=await send(body);assert.equal(missing.status,409);assert.equal(missing.json.error,'HISTORY_WORKFLOW_WORKSPACE_REQUIRED');assert.equal(missing.headers.get('cache-control'),'private, no-store');
+    assert.equal(read(db=>db.prepare('SELECT count(*) n FROM investor_workspaces').get().n),0);assert.deepEqual(counts(),before);assert.deepEqual(financial(),facts);
+    return {maximum_body_bytes:4096,implicit_workspace:false,implicit_download:false,provider_calls:0,positive_history_http_journey_verified:false};
+  });
   await check('HTTP-I20', 'AI explanation endpoint has current-session and strict small-body boundaries; reads never generate AI or financial facts', async () => {
     const route = `${endpoint}/ai-explanation`, body = { observation_id: 'fictional-observation', binding_hash: 'a'.repeat(64) };
     const facts = financial(), count = () => read(db => db.prepare('SELECT count(*) n FROM audit_events').get().n), before = count();

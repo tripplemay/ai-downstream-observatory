@@ -266,6 +266,9 @@ def command_handler(connection, clock=None, lease_seconds=300, stop_requested=No
         if job["job_type"] == "investor_epoch_preview" and role == "core":
             from worker.investor.epoch_preview_jobs import prepare_epoch_preview_job
             return prepare_epoch_preview_job(connection, job, lease, clock=clock, stop_requested=stop_requested)
+        if job["job_type"] == "investor_epoch_history_workflow" and role == "core":
+            from worker.investor.epoch_history_workflow import prepare_history_workflow_job
+            return prepare_history_workflow_job(connection, job, lease, clock=clock, stop_requested=stop_requested)
         if job["job_type"] == "investor_epoch_control" and role == "core":
             from worker.investor.epoch_control_jobs import prepare_epoch_control_job
             return prepare_epoch_control_job(connection, job, lease, clock=clock, stop_requested=stop_requested)
@@ -449,6 +452,8 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
     if role == "core":
         from worker.investor.epoch_preview_jobs import discover_epoch_previews
         discover_epoch_previews(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        from worker.investor.epoch_history_workflow import discover_history_workflows
+        discover_history_workflows(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         from worker.investor.epoch_control_jobs import discover_epoch_controls
         discover_epoch_controls(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         from worker.investor.correction_consent import discover_correction_consents
@@ -506,5 +511,5 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
     sync_requests(connection, now=clock(), command_types=supported)
     # One oldest-ready selection avoids starving periodic jobs behind a busy
     # ingestion stream while still excluding unsupported modules' jobs.
-    types = (*supported, "investor_research", "investor_funded_study", "investor_monitor", "investor_evidence_monitor", "investor_epoch_preview", "investor_epoch_control", "investor_action_review", "investor_legacy_transition", "investor_correction_impact", "investor_correction_consent") if role == "core" else (*supported, "investor_confirmed_watch", "investor_epoch_confirmed_watch", "investor_initial_close", "investor_initial_prices", "investor_epoch_history", "investor_current_fx", "investor_issuer_capture", "investor_eodhd_capture") if role == "longport" else supported
+    types = (*supported, "investor_research", "investor_funded_study", "investor_monitor", "investor_evidence_monitor", "investor_epoch_preview", "investor_epoch_control", "investor_epoch_history_workflow", "investor_action_review", "investor_legacy_transition", "investor_correction_impact", "investor_correction_consent") if role == "core" else (*supported, "investor_confirmed_watch", "investor_epoch_confirmed_watch", "investor_initial_close", "investor_initial_prices", "investor_epoch_history", "investor_current_fx", "investor_issuer_capture", "investor_eodhd_capture") if role == "longport" else supported
     return run_one(connection, owner, command_handler(connection, clock, lease_seconds, stop_requested, role), job_type=types, lease_seconds=lease_seconds, clock=clock)

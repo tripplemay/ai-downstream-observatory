@@ -218,6 +218,8 @@ def prepare_epoch_history_job(db,job,lease,*,clock=None,stop_requested=None):
             _check(sealed["fence"]==epochs._fence(db,parent["workspace_id"],parent["actor_id"]),"SOURCE_CHANGED")
             if prepared and status is None:
                 capture=prepared(connection);_check(capture["qualification"]=="isolated_official_sdk","CAPTURE_CHANGED")
+        # The capture commit samples its own clock; the enclosing run must follow it.
+        checked=guard()
         state=status or "collected";identifier=new_id("epoch-history-run")
         value={"schema_version":"investor-epoch-history-run-v1","run_id":identifier,"slot":epochs._ref(slot),"request":epochs._ref(parent),"job_id":job["id"],"fencing_token":lease.fencing_token,
             "attempt_id":attempt,"capture_id":capture["id"] if capture else None,"receipt_hash":capture["receipt_hash"] if capture else None,"status":state,"code":CODES[state],

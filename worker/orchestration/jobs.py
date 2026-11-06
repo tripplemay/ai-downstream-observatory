@@ -205,6 +205,9 @@ def complete_job(connection, lease, result, outcome="succeeded", effect=None, no
             raise WorkbenchError("JOB_CLOCK_REGRESSION")
         assert_lease(connection, lease, now=finished)
         finalizing_job = connection.execute("SELECT * FROM job_runs WHERE id=?", (lease.job_id,)).fetchone()
+        if finalizing_job["job_type"] == "investor_epoch_history_workflow":
+            from worker.investor.epoch_history_workflow import assert_history_workflow_finalization
+            assert_history_workflow_finalization(connection, finalizing_job, lease, result, outcome, finished)
         if finalizing_job["job_type"] == "investor_epoch_preview":
             from worker.investor.epoch_preview_jobs import assert_epoch_preview_finalization
             assert_epoch_preview_finalization(connection, finalizing_job, lease, result, outcome, finished)
