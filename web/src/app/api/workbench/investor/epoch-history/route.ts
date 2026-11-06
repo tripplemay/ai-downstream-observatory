@@ -19,6 +19,7 @@ function failure(error:unknown){
  return NextResponse.json({error:code},{status:code==="WORKBENCH_READ_ONLY"?423:allowed.has(code)?409:503,headers});
 }
 function bind(r:Request,id:string){if(!r.headers.get("X-Workbench-Session-Binding"))throw new AuthError("SESSION_BINDING_REQUIRED",400);assertRequestSessionBinding(r,id);}
+function includeReview(r:Request){const v=r.headers.get("X-Workbench-History-View");if(v===null)return false;z.literal("unknown-review-v1").parse(v);return true;}
 function query(r:Request){const p=new URL(r.url).searchParams,k=[...p.keys()];if(new Set(k).size!==k.length)throw new AuthError("INVALID_QUERY",400);
  return z.object({model:investorId.optional(),nonce:investorId.optional()}).strict().refine(v=>Object.keys(v).length===1).parse(Object.fromEntries(p));}
 async function body(r:Request){
@@ -32,14 +33,14 @@ async function body(r:Request){
  return historyWorkflowSubmitSchema.parse(parsed);
 }
 export async function GET(request:Request){try{
- const initial=await requireApiSession();bind(request,initial.sessionId);const selected=query(request),db=openWorkbench();
- try{const value=readHistoryWorkflowResponse(db,{id:initial.userId},sessionBinding(initial.sessionId),selected);const current=await requireApiSession();bind(request,current.sessionId);
+ const initial=await requireApiSession();bind(request,initial.sessionId);const selected=query(request),view=includeReview(request),db=openWorkbench();
+ try{const value=readHistoryWorkflowResponse(db,{id:initial.userId},sessionBinding(initial.sessionId),selected,undefined,view);const current=await requireApiSession();bind(request,current.sessionId);
   if(current.userId!==initial.userId||current.sessionId!==initial.sessionId)throw new AuthError("SESSION_CHANGED",401);return NextResponse.json(value,{headers});}finally{db.close();}
 }catch(error){return failure(error);}}
 export async function POST(request:Request){try{
- const initial=await requireMutationSession();bind(request,initial.sessionId);const input=await body(request);
+ const initial=await requireMutationSession();bind(request,initial.sessionId);const view=includeReview(request),input=await body(request);
  const guard=async()=>{const current=await requireMutationSession();bind(request,current.sessionId);if(current.userId!==initial.userId||current.sessionId!==initial.sessionId)throw new AuthError("SESSION_CHANGED",401);};
  await guard();if(request.signal.aborted)throw new AuthError("REQUEST_ABORTED",400);const db=openWorkbench();
- try{submitHistoryWorkflow(db,{id:initial.userId},input);const value=readHistoryWorkflowResponse(db,{id:initial.userId},sessionBinding(initial.sessionId),{nonce:input.idempotency_key});
+ try{submitHistoryWorkflow(db,{id:initial.userId},input);const value=readHistoryWorkflowResponse(db,{id:initial.userId},sessionBinding(initial.sessionId),{nonce:input.idempotency_key},undefined,view);
   await guard();return NextResponse.json(value,{status:["queued","running"].includes(value.request?.status??"")?202:200,headers});}finally{db.close();}
 }catch(error){return failure(error);}}

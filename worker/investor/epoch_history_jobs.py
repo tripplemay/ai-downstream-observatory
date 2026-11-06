@@ -64,12 +64,15 @@ def slot_header(db,workspace,identifier,at):
 
 
 def _unresolved(db,workspace,tile,at,exclude=None):
-    return db.execute("""SELECT 1 FROM investor_epoch_history_slots s JOIN investor_epoch_history_requests r ON r.id=s.request_id
+    rows=db.execute("""SELECT s.id,r.actor_id FROM investor_epoch_history_slots s JOIN investor_epoch_history_requests r ON r.id=s.request_id
       LEFT JOIN investor_epoch_history_attempts a ON a.slot_id=s.id LEFT JOIN investor_epoch_history_runs u ON u.slot_id=s.id
       WHERE s.workspace_id=? AND s.listing_id=? AND s.start_date<=? AND s.end_date>=? AND (? IS NULL OR r.id!=?)
         AND ((a.id IS NOT NULL AND (u.id IS NULL OR u.status!='collected')) OR
-          (r.valid_until>? AND u.id IS NULL AND NOT EXISTS(SELECT 1 FROM job_runs j WHERE j.job_type=? AND j.scope=s.workspace_id AND j.period=s.id AND j.status IN ('failed','skipped','cancelled')))) LIMIT 1""",
-        (workspace,tile["listing_id"],tile["end_date"],tile["start_date"],exclude,exclude,at,JOB_TYPE)).fetchone() is not None
+          (r.valid_until>? AND u.id IS NULL AND NOT EXISTS(SELECT 1 FROM job_runs j WHERE j.job_type=? AND j.scope=s.workspace_id AND j.period=s.id AND j.status IN ('failed','skipped','cancelled')))) LIMIT 1001""",
+        (workspace,tile["listing_id"],tile["end_date"],tile["start_date"],exclude,exclude,at,JOB_TYPE)).fetchall()
+    _check(len(rows)<=1000,"HISTORY_REVIEW_LIMIT")
+    from .epoch_history_resolution import read_resolution
+    return any(read_resolution(db,workspace,row["actor_id"],row["id"],at) is None for row in rows)
 
 
 def prepare_epoch_history_confirmation(db,workspace,actor,body,*,owner_interaction=False,now=None,clock=None,stop_requested=None):

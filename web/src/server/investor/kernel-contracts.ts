@@ -55,6 +55,7 @@ import epochPreviewJobs from "../../../../contracts/v1/investor-epoch-preview-jo
 import epochHistoryPlan from "../../../../contracts/v1/investor-epoch-history-plan.schema.json";
 import epochHistoryJobs from "../../../../contracts/v1/investor-epoch-history-jobs.schema.json";
 import epochHistoryWorkflow from "../../../../contracts/v1/investor-epoch-history-workflow.schema.json";
+import epochHistoryResolution from "../../../../contracts/v1/investor-epoch-history-resolution.schema.json";
 import modelEpochRegistration from "../../../../contracts/v1/investor-model-epoch-registration.schema.json";
 import evidenceCheckpointV4 from "../../../../contracts/v1/investor-evidence-model-checkpoint-v4.schema.json";
 import retainedActionEvidence from "../../../../contracts/v1/investor-retained-action-evidence.schema.json";
@@ -134,6 +135,7 @@ ajv.addSchema(epochPreviewJobs);
 ajv.addSchema(epochHistoryPlan);
 ajv.addSchema(epochHistoryJobs);
 ajv.addSchema(epochHistoryWorkflow);
+ajv.addSchema(epochHistoryResolution);
 ajv.addSchema(modelEpochRegistration);
 ajv.addSchema(evidenceCheckpointV4);
 ajv.addSchema(retainedActionEvidence);
@@ -224,6 +226,7 @@ export function validateEpochPreviewJob(kind: "submit" | "request" | "result", v
 }
 export function validateEpochHistoryJob(kind:"submit"|"request"|"attempt"|"run",value:unknown){requireTrue(ajv.getSchema(epochHistoryJobs.$id+"#/$defs/"+kind)!(value));}
 export function validateEpochHistoryWorkflow(kind:"submit"|"request"|"result",value:unknown){requireTrue(ajv.getSchema(epochHistoryWorkflow.$id+"#/$defs/"+kind)!(value));}
+export function validateEpochHistoryResolution(kind:"submit"|"record",value:unknown){requireTrue(ajv.getSchema(epochHistoryResolution.$id+"#/$defs/"+kind)!(value));}
 export function validateModelEpochRegistration(kind: "preview" | "submit" | "request" | "registration" | "monitor_request" | "replay_proof", value: unknown) {
   requireTrue(ajv.getSchema(modelEpochRegistration.$id + "#/$defs/" + kind)!(value));
 }

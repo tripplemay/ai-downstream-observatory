@@ -8,7 +8,8 @@ import {readModelEpochRegistrationHeader} from "./model-epoch-registration";
 import {readEpochControlHeader} from "./epoch-continuation";
 import {correctionChangeFence} from "./correction-change-fence";
 import {validateEpochHistoryJob as validateHistory,validateEpochHistoryWorkflow as validate} from "./kernel-contracts";
-import {historyWorkflowSubmitSchema,historyWorkflowResponseSchema} from "./epoch-history-schemas";
+import {historyWorkflowSubmitSchema,historyWorkflowResponseSchema,historyWorkflowReviewResponseSchema} from "./epoch-history-schemas";
+import {readHistoryUnknownReview,readHistoryResolutionHeader} from "./epoch-history-resolution";
 type Obj=Record<string,unknown>;
 const JOB="investor_epoch_history_workflow",HISTORY="investor_epoch_history";
 function check(v:unknown,code="INVALID"):asserts v{if(!v)throw new Error("HISTORY_WORKFLOW_"+code);}
@@ -84,7 +85,7 @@ function batchHeader(db:Database.Database,w:Obj,actor:{id:string},id:unknown,now
  actionAudit(db,w.id as string,row,"investor_confirm_epoch_history","investor_epoch_history_request");return {row,doc,plan:p,body};
 }
 const tileView=(t:Obj)=>({symbol:t.symbol,market:t.market,start_date:t.start_date,end_date:t.end_date,expected_date_count:(t.expected_dates as unknown[]).length});
-function batchView(db:Database.Database,w:Obj,actor:{id:string},id:unknown,now:string){
+function batchView(db:Database.Database,w:Obj,actor:{id:string},id:unknown,now:string,includeReview=false){
  const {row,plan}=batchHeader(db,w,actor,id,now),slots=db.prepare("SELECT * FROM investor_epoch_history_slots WHERE request_id=? ORDER BY slot_index").all(row.id) as Obj[];
  check(slots.length===row.authorized_calls,"BATCH_CHANGED");
  const values=slots.map((s,index)=>{
@@ -115,7 +116,9 @@ function batchView(db:Database.Database,w:Obj,actor:{id:string},id:unknown,now:s
   }else if(job.status==="running")status=time(now)<time(job.lease_until as string)?"running":"unknown";
   else if(job.status==="queued"&&job.attempt_count===0&&!marker)status="queued";
   else{check(["failed","skipped","cancelled"].includes(job.status as string),"JOB_CHANGED");status="unknown";}
-  return {...tileView(tile),index,reserved:!!marker,status};
+  const review=includeReview&&status==="unknown"&&marker?readHistoryUnknownReview(db,actor,s.id,now):null;
+  if(review?.resolution)status="acknowledged_unknown";
+  return {...tileView(tile),index,reserved:!!marker,status,...(includeReview?{review}:{})};
  });return {id:row.id,content_hash:row.content_hash,created_at:row.created_at,valid_until:row.valid_until,slots:values,historical_metadata_only:true};
 }
 export function submitHistoryWorkflow(db:Database.Database,actor:{id:string},raw:unknown,now=new Date().toISOString()){
@@ -123,6 +126,7 @@ export function submitHistoryWorkflow(db:Database.Database,actor:{id:string},raw
  return db.transaction(()=>{
   assertWritableDatabase(db);const w=workspace(db,actor),digest=hash(body),old=db.prepare("SELECT id,request_hash FROM investor_epoch_history_intents WHERE workspace_id=? AND idempotency_key=?").get(w.id,body.idempotency_key) as Obj|undefined;
   if(old){check(old.request_hash===digest,"DUPLICATE_CONFLICT");return intentHeader(db,w,actor,old.id,now).doc;}
+  check(!db.prepare("SELECT 1 FROM investor_epoch_history_resolutions WHERE workspace_id=? AND idempotency_key=?").get(w.id,body.idempotency_key),"DUPLICATE_CONFLICT");
   check(w.revision===body.expected_revision,"VERSION_CHANGED");const e=epoch(db,w,actor,body.model_id,now);check(e?.enabled,"ACTIVATION_REQUIRED");
   let until=Math.min(Date.parse(e.root.row.valid_until as string),Date.parse(now)+300000);
   if(body.action==="confirm"){
@@ -143,7 +147,7 @@ export function submitHistoryWorkflow(db:Database.Database,actor:{id:string},raw
    body.idempotency_key,digest,canonical(doc),hashed,actor.id,now,expires,audit);assertWritableDatabase(db);return doc;
  }).immediate();
 }
-export function readHistoryWorkflowResponse(db:Database.Database,actor:{id:string},binding:string,selection:{model?:string;nonce?:string},now=new Date().toISOString()){
+export function readHistoryWorkflowResponse(db:Database.Database,actor:{id:string},binding:string,selection:{model?:string;nonce?:string},now=new Date().toISOString(),includeReview=false){
  time(now);return db.transaction(()=>{
   const w=workspace(db,actor);let selected:Obj|undefined;
   if(selection.nonce){selected=db.prepare("SELECT id,model_id FROM investor_epoch_history_intents WHERE workspace_id=? AND idempotency_key=?").get(w.id,selection.nonce) as Obj|undefined;check(selected,"LOOKUP_MISSING");}
@@ -162,7 +166,7 @@ export function readHistoryWorkflowResponse(db:Database.Database,actor:{id:strin
      check(prior.row.outcome==="plan_ready"&&prior.row.content_hash===body.expected_preview_hash&&hash(ref(batch.row))===hash(v.doc.history_request)
       &&batch.row.epoch_id===row.epoch_id&&batch.row.model_id===row.model_id&&batch.body.idempotency_key===body.idempotency_key&&batch.body.expected_plan_hash===obj(prior.doc.plan).plan_hash
       &&batch.body.max_calls===body.max_calls&&hash(batch.body.acknowledgements)===hash(body.acknowledgements),"RESULT_CHANGED");
-     prepared=prior;download=batchView(db,w,actor,batch.row.id,now);
+     prepared=prior;download=batchView(db,w,actor,batch.row.id,now,includeReview);
     }
    }else if(!job||job.status==="queued"){if(job)check(job.attempt_count===0&&job.fencing_token===0&&job.lease_owner===null&&job.lease_until===null,"JOB_CHANGED");if(time(now)>=time(row.valid_until as string))status="expired";}
    else if(job.status==="running")status=time(now)<time(job.lease_until as string)?"running":"unknown";
@@ -177,10 +181,16 @@ export function readHistoryWorkflowResponse(db:Database.Database,actor:{id:strin
    if(!result&&w.revision!==row.expected_revision)status="outdated";
    request={id:row.id,action:row.action,intent_hash:hash(body),created_at:row.created_at,valid_until:row.valid_until,status,code};
   }
-  if(!download&&e){const b=db.prepare("SELECT id FROM investor_epoch_history_requests WHERE workspace_id=? AND model_id=? AND epoch_id=? ORDER BY rowid DESC LIMIT 1").get(w.id,model,e.root.row.id) as Obj|undefined;if(b)download=batchView(db,w,actor,b.id,now);}
+  if(!download&&e){const b=db.prepare("SELECT id FROM investor_epoch_history_requests WHERE workspace_id=? AND model_id=? AND epoch_id=? ORDER BY rowid DESC LIMIT 1").get(w.id,model,e.root.row.id) as Obj|undefined;if(b)download=batchView(db,w,actor,b.id,now,includeReview);}
   let readOnly=false;try{assertWritableDatabase(db);}catch(error){if(error instanceof Error&&error.message==="WORKBENCH_READ_ONLY")readOnly=true;else throw error;}
-  return historyWorkflowResponseSchema.parse({schema_version:"investor-epoch-history-workflow-response-v1",workspace_id:w.id,workspace_revision:w.revision,model_id:model,session_binding:binding,lookup_nonce:selection.nonce??null,
+  return (includeReview?historyWorkflowReviewResponseSchema:historyWorkflowResponseSchema).parse({schema_version:includeReview?"investor-epoch-history-workflow-response-v2":"investor-epoch-history-workflow-response-v1",workspace_id:w.id,workspace_revision:w.revision,model_id:model,session_binding:binding,lookup_nonce:selection.nonce??null,
    checked_at:now,refresh_after:new Date(Date.parse(now)+15000).toISOString(),read_only:readOnly,epoch:e?{id:e.root.row.id,enabled:e.enabled,valid_until:e.root.row.valid_until}:null,request,preview,download,
-   visibility:"private_owner_only_not_ai",provider_calls:0,current_source_eligibility_restored:false,monitoring_resumed:false,trading_permission:false});
+   visibility:"private_owner_only_not_ai",provider_calls:0,current_source_eligibility_restored:false,monitoring_resumed:false,trading_permission:false,...(includeReview?{resolution_result:null}:{})});
+ }).deferred();
+}
+export function readHistoryResolutionResponse(db:Database.Database,actor:{id:string},binding:string,nonce:string,now=new Date().toISOString()){
+ return db.transaction(()=>{const w=workspace(db,actor),found=db.prepare("SELECT id FROM investor_epoch_history_resolutions WHERE workspace_id=? AND idempotency_key=?").get(w.id,nonce) as Obj|undefined;
+  check(found,"LOOKUP_MISSING");const {row,body}=readHistoryResolutionHeader(db,actor,found.id,now),value=readHistoryWorkflowResponse(db,actor,binding,{model:row.model_id as string},now,true);
+  return historyWorkflowReviewResponseSchema.parse({...value,lookup_nonce:nonce,resolution_result:{id:row.id,content_hash:row.content_hash,created_at:row.created_at,nonce,intent_hash:hash(body),old_outcome_known:false,new_download_authorized:false}});
  }).deferred();
 }

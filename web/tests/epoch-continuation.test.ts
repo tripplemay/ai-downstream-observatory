@@ -19,6 +19,8 @@ import {actionJobStartedByMillisecond} from "../src/server/investor/action-sourc
 import {readInvestorNotifications,readInvestorNotification} from "../src/server/investor/notifications";
 import {verifyHistoryService} from "./epoch-history-service-fixture";
 test("ordinary history intents reach async core, bounded real-role stub collection and independent Node continuation without trading",verifyHistoryService);
+import {verifyHistoryResolutionService} from "./epoch-history-resolution-fixture";
+test("explicit acknowledgement authenticates terminal unknown and expired-lease history, preserves old journals, and only a separate new confirmation enqueues work",verifyHistoryResolutionService);
 
 type Obj = Record<string, unknown>;
 const now = "2026-10-21T10:00:03.000Z";

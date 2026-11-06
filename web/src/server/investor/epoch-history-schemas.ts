@@ -1,5 +1,6 @@
 import {z} from "zod";
 import {investorId as id,investorHash as digest,investorInstant as at} from "./schemas";
+import {historyUnknownReviewSchema,historyResolutionResultSchema} from "./epoch-history-resolution-schemas";
 const revision=z.number().int().min(0).max(9007199254740990),nonce=id.refine(s=>s.length>=8),day=z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 export const historyAcknowledgements=["historical_not_live","old_attempts_unchanged","bounded_download_only","no_trading"] as const;
 const shared={schema_version:z.literal("investor-epoch-history-workflow-submit-v1"),model_id:id,expected_revision:revision,idempotency_key:nonce};
@@ -22,3 +23,8 @@ export const historyWorkflowResponseSchema=z.object({schema_version:z.literal("i
 }).strict();
 export type HistoryWorkflowSubmit=z.infer<typeof historyWorkflowSubmitSchema>;
 export type HistoryWorkflowResponse=z.infer<typeof historyWorkflowResponseSchema>;
+export const historyWorkflowReviewResponseSchema=historyWorkflowResponseSchema.extend({schema_version:z.literal("investor-epoch-history-workflow-response-v2"),
+ download:historyWorkflowResponseSchema.shape.download.unwrap().extend({slots:z.array(tile.extend({index:z.number().int().min(0).max(3),reserved:z.boolean(),
+  status:z.enum(["queued","running","collected","already_available","superseded","blocked_predecessor","unknown","acknowledged_unknown"]),review:historyUnknownReviewSchema.nullable()}).strict()).min(1).max(4)}).strict().nullable(),
+ resolution_result:historyResolutionResultSchema.nullable()}).strict();
+export type HistoryWorkflowReviewResponse=z.infer<typeof historyWorkflowReviewResponseSchema>;

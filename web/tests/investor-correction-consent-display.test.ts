@@ -12,6 +12,8 @@ import * as epochClient from "../src/components/workbench/investor-epoch-control
 import {epochResponse,queuedEpochControl,pausedEpochControl} from "./epoch-control-client-fixture";
 import {verifySetupJourney,verifySetupUnknown,verifySetupExpiry} from "./epoch-setup-fixture";
 import {verifyHistoryJourney,verifyHistoryUnknown,verifyHistoryRetained,verifyHistoryBudget,verifyHistorySession,verifyHistoryPollFailure} from "./epoch-history-client-fixture";
+import {verifyHistoryResolution} from "./epoch-history-client-fixture";
+test("explicit unknown acknowledgement retains its original review frame and lost-response nonce, then shows a new prepared gap beside old metadata",verifyHistoryResolution);
 test("ordinary history preparation and separate confirmation send two intents and display independently completed slots",verifyHistoryJourney);
 test("history lost-response recovery never invents a new nonce or automatically posts again",verifyHistoryUnknown);
 test("history retained submit callbacks cannot bypass wall-clock expiry or parent locks",verifyHistoryRetained);

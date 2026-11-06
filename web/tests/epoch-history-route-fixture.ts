@@ -8,18 +8,36 @@ import {AuthError} from "../src/server/auth/core";
 import {parseStrictJson} from "../src/server/strict-json";
 import {investorId} from "../src/server/investor/schemas";
 import {historyWorkflowSubmitSchema} from "../src/server/investor/epoch-history-schemas";
+import {historyResolutionSubmitSchema} from "../src/server/investor/epoch-history-resolution-schemas";
 const binding="0".repeat(64),input={schema_version:"investor-epoch-history-workflow-submit-v1",action:"prepare",model_id:"fictional-model",expected_revision:1,idempotency_key:"fictional-history-route",acknowledged_plan_only:true};
 const compiled=ts.transpileModule(readFileSync(new URL("../src/app/api/workbench/investor/epoch-history/route.ts",import.meta.url),"utf8"),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
-function harness(options:{deny?:boolean;origin?:boolean;changeAt?:number;failure?:string}={}){const calls:string[]=[];let count=0;
+const resolutionCompiled=ts.transpileModule(readFileSync(new URL("../src/app/api/workbench/investor/epoch-history-resolution/route.ts",import.meta.url),"utf8"),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+const ref={id:"fictional-reference",content_hash:"1".repeat(64)},resolutionInput={schema_version:"investor-epoch-history-resolution-submit-v1",action:"acknowledge_unknown",model_id:"fictional-model",expected_revision:1,idempotency_key:"fictional-resolution-route",batch:ref,slot:ref,attempt:ref,state_hash:"2".repeat(64),reviewed_at:"2026-10-21T10:05:33.000Z",valid_until:"2026-10-21T10:10:33.000Z",acknowledgements:{outcome_stays_unknown:true,may_have_consumed_quota:true,separate_future_confirmation:true}};
+function harness(options:{deny?:boolean;origin?:boolean;changeAt?:number;failure?:string;resolution?:boolean}={}){const calls:string[]=[];let count=0;
  const auth=async()=>{calls.push("auth");count++;if(options.deny)throw new AuthError("UNAUTHENTICATED",401);if(options.origin)throw new AuthError("ORIGIN_DENIED",403);return {userId:"owner",sessionId:options.changeAt&&count>=options.changeAt?"changed":"same"};};
  const imports:Record<string,unknown>={"next/server":{NextResponse},zod:{z},"@/server/auth/core":{AuthError},"@/server/auth/session":{requireApiSession:auth,requireMutationSession:auth},
   "@/server/auth/session-binding":{sessionBinding:()=>binding,assertRequestSessionBinding:(r:Request)=>{if(r.headers.get("X-Workbench-Session-Binding")!==binding)throw new AuthError("SESSION_CHANGED",401);}},
   "@/server/workbench-db":{openWorkbench:()=>{calls.push("open");return {close(){calls.push("close");}};}},"@/server/strict-json":{parseStrictJson},"@/server/investor/schemas":{investorId},
   "@/server/investor/epoch-history-schemas":{historyWorkflowSubmitSchema},"@/server/investor/epoch-history-workflow":{
    submitHistoryWorkflow:(_db:unknown,actor:unknown,body:unknown)=>{calls.push("submit");assert.deepEqual(JSON.parse(JSON.stringify(actor)),{id:"owner"});assert.deepEqual(JSON.parse(JSON.stringify(body)),input);if(options.failure)throw new Error(options.failure);},
-   readHistoryWorkflowResponse:()=>{calls.push("read");if(options.failure)throw new Error(options.failure);return {request:{status:"queued"}};}}};
+   readHistoryWorkflowResponse:()=>{calls.push("read");if(options.failure)throw new Error(options.failure);return {request:{status:"queued"}};},
+   readHistoryResolutionResponse:()=>{calls.push("read");if(options.failure)throw new Error(options.failure);return {provider_calls:0,new_download_authorized:false};}},
+  "@/server/investor/epoch-history-resolution-schemas":{historyResolutionSubmitSchema},"@/server/investor/epoch-history-resolution":{acknowledgeHistoryUnknown:(_db:unknown,actor:unknown,body:unknown)=>{calls.push("submit");assert.deepEqual(JSON.parse(JSON.stringify(actor)),{id:"owner"});assert.deepEqual(JSON.parse(JSON.stringify(body)),resolutionInput);if(options.failure)throw new Error(options.failure);}}};
  const module={exports:{} as {GET:(r:Request)=>Promise<Response>;POST:(r:Request)=>Promise<Response>}};
- runInNewContext("(function(require,module,exports){"+compiled+"\n})",{Error,Buffer,URL,TextDecoder})((name:string)=>{assert.ok(name in imports,name);return imports[name];},module,module.exports);return {...module.exports,calls};
+ runInNewContext("(function(require,module,exports){"+(options.resolution?resolutionCompiled:compiled)+"\n})",{Error,Buffer,URL,TextDecoder})((name:string)=>{assert.ok(name in imports,name);return imports[name];},module,module.exports);return {...module.exports,calls};
+}
+export async function verifyHistoryResolutionRoute(){
+ const req=(raw:string|Uint8Array=JSON.stringify(resolutionInput),method="POST",q="")=>{const r=request(raw,method,q);r.headers.set("X-Workbench-History-View","unknown-review-v1");return r;};
+ for(const options of [{deny:true},{origin:true}]){const h=harness({...options,resolution:true}),r=req();assert.ok([401,403].includes((await h.POST(r)).status));assert.equal(r.bodyUsed,false);assert.equal(h.calls.includes("open"),false);}
+ const wrong=req();wrong.headers.set("X-Workbench-History-View","anything");assert.equal((await harness({resolution:true}).POST(wrong)).status,400);assert.equal(wrong.bodyUsed,false);
+ const early=harness({resolution:true,changeAt:2});assert.equal((await early.POST(req())).status,401);assert.equal(early.calls.includes("open"),false);
+ const late=harness({resolution:true,changeAt:3});assert.equal((await late.POST(req())).status,401);assert.equal(late.calls.filter(c=>c==="submit").length,1);assert.equal(late.calls.at(-1),"close");
+ for(const raw of ['{"action":"acknowledge_unknown","action":"prepare"}',JSON.stringify({...resolutionInput,new_download_authorized:true}),JSON.stringify({...resolutionInput,acknowledgements:{}}),new Uint8Array([255])," ".repeat(4097)]){
+  const h=harness({resolution:true}),r=await h.POST(req(raw));assert.ok([400,413].includes(r.status));assert.equal(h.calls.includes("open"),false);}
+ for(const q of ["","?model=a","?nonce=a&nonce=b","?nonce=a&actor_id=other"]){const h=harness({resolution:true});assert.equal((await h.GET(req("","GET",q))).status,400);assert.equal(h.calls.includes("open"),false);}
+ const value=await harness({resolution:true}).POST(req());assert.equal(value.status,200);assert.equal(value.headers.get("cache-control"),"private, no-store");assert.equal(value.headers.get("vary"),"Cookie");
+ const read=harness({resolution:true});assert.equal((await read.GET(req("","GET","?nonce=fictional-resolution-route"))).status,200);assert.equal(read.calls.includes("submit"),false);
+ for(const [failure,status] of [["HISTORY_RESOLUTION_WAIT_REQUIRED",409],["WORKBENCH_READ_ONLY",423],["FICTIONAL_PRIVATE_SQL",503]] as const){const r=await harness({resolution:true,failure}).POST(req());assert.equal(r.status,status);assert.deepEqual(await r.json(),{error:status===503?"HISTORY_RESOLUTION_UNAVAILABLE":failure});}
 }
 const request=(raw:string|Uint8Array=JSON.stringify(input),method="POST",query="")=>new Request("https://fictional.invalid/api/workbench/investor/epoch-history"+query,{method,
  headers:{"Content-Type":"application/json","X-Workbench-Session-Binding":binding},...(method==="POST"?{body:typeof raw==="string"?raw:new Uint8Array(raw).buffer}:{})});

@@ -160,6 +160,20 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
     assert.equal(read(db=>db.prepare('SELECT count(*) n FROM investor_workspaces').get().n),0);assert.deepEqual(counts(),before);assert.deepEqual(financial(),facts);
     return {maximum_body_bytes:4096,implicit_workspace:false,implicit_download:false,provider_calls:0,positive_history_http_journey_verified:false};
   });
+  await check('HTTP-I26','unknown history acknowledgement is explicit, session-bound and metadata-only, without implicit workspace or download',async()=>{
+    const route=endpoint+'/epoch-history-resolution',facts=financial(),ref={id:'fictional-ref',content_hash:'1'.repeat(64)};
+    const counts=()=>read(db=>Object.fromEntries(['investor_epoch_history_resolutions','investor_epoch_history_requests','investor_epoch_history_attempts','job_runs','audit_events'].map(n=>[n,db.prepare('SELECT count(*) n FROM '+n).get().n]))),before=counts();
+    const body={schema_version:'investor-epoch-history-resolution-submit-v1',action:'acknowledge_unknown',model_id:'fictional-model',expected_revision:0,idempotency_key:'fictional-http-resolution',batch:ref,slot:ref,attempt:ref,state_hash:'2'.repeat(64),reviewed_at:'2026-10-21T10:00:00.000Z',valid_until:'2026-10-21T10:05:00.000Z',acknowledgements:{outcome_stays_unknown:true,may_have_consumed_quota:true,separate_future_confirmation:true}};
+    const send=(value,extra={})=>jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json','X-Workbench-History-View':'unknown-review-v1',...extra}),body:typeof value==='string'?value:JSON.stringify(value)});
+    assert.equal((await jsonRequest(route+'?nonce=fictional-http-resolution')).status,401);
+    assert.equal((await send(body,{Origin:'https://wrong.example.test'})).status,403);assert.equal((await send(body,{'X-Workbench-Session-Binding':'b'.repeat(64)})).status,401);
+    assert.equal((await send(body,{'X-Workbench-History-View':'unrecognized'})).status,400);
+    for(const value of [{...body,new_download_authorized:true},{...body,acknowledgements:{}},'{"action":"acknowledge_unknown","action":"prepare"}'])assert.equal((await send(value)).status,400);
+    const huge=await jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json','X-Workbench-History-View':'unknown-review-v1'}),duplex:'half',body:(async function*(){yield Buffer.alloc(4097,120);})()});assert.equal(huge.status,413);
+    const missing=await send(body);assert.equal(missing.status,409);assert.equal(missing.headers.get('cache-control'),'private, no-store');
+    assert.equal(read(db=>db.prepare('SELECT count(*) n FROM investor_workspaces').get().n),0);assert.deepEqual(counts(),before);assert.deepEqual(financial(),facts);
+    return {maximum_body_bytes:4096,implicit_workspace:false,implicit_download:false,provider_calls:0,positive_resolution_http_journey_verified:false};
+  });
   await check('HTTP-I20', 'AI explanation endpoint has current-session and strict small-body boundaries; reads never generate AI or financial facts', async () => {
     const route = `${endpoint}/ai-explanation`, body = { observation_id: 'fictional-observation', binding_hash: 'a'.repeat(64) };
     const facts = financial(), count = () => read(db => db.prepare('SELECT count(*) n FROM audit_events').get().n), before = count();

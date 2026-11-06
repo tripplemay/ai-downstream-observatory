@@ -17,6 +17,8 @@ import {verifyEpochPreviewRoute} from "./epoch-preview-route-fixture";
 import {verifyEpochRegistrationRoute} from "./epoch-registration-route-fixture";
 import {verifyHistoryRoute} from "./epoch-history-route-fixture";
 test("history workflow route preserves explicit bounded intent, strict transport, session and metadata-only read boundaries",verifyHistoryRoute);
+import {verifyHistoryResolutionRoute} from "./epoch-history-route-fixture";
+test("unknown history resolution requires current session, origin and explicit versioned bounded consent without provider access",verifyHistoryResolutionRoute);
 test("epoch registration route preserves strict 4KiB explicit acknowledgement, origin/session and historical GET boundaries",verifyEpochRegistrationRoute);
 
 test("epoch control route preserves owner/session/origin guards, strict 16KiB intent bounds and private opaque responses",verifyEpochControlRoute);

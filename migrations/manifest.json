@@ -367,6 +367,11 @@
       "version": 72,
       "file": "0072_investor_epoch_history_workflow.sql",
       "sha256": "3accd9e1445b87456ebc9980b8fbefecb4107222277b2c341964f98a49b2cd43"
+    },
+    {
+      "version": 73,
+      "file": "0073_investor_epoch_history_resolutions.sql",
+      "sha256": "657b242463bdf52fe6851de995eb4925333c131a5bdf6b07c300fd5b590c5484"
     }
   ]
 }

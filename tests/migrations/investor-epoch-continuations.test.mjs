@@ -180,4 +180,18 @@ finally:db.close()
   for(const name of ['investor_epoch_history_intents','investor_epoch_history_results'])assert.equal(db.prepare('SELECT count(*) n FROM '+name).get().n,0);
   assert.deepEqual(db.pragma('foreign_key_check'),[]);assert.equal(db.pragma('integrity_check',{simple:true}),'ok');
   assert.equal(migrateWorkbench(filename,{directory:v72}).applied,0);
+  const tables72=db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row=>row.name);
+  const snapshot72=()=>tables72.map(table=>({table,rows:db.prepare(`SELECT rowid _preserved_rowid,* FROM ${table} ORDER BY rowid`).all()}));
+  const before73=snapshot72(),schema72=db.prepare('SELECT * FROM sqlite_master ORDER BY type,name').all(),v73=copy('v73',73);
+  const entry73={...manifest.migrations[72]},sql73=readFileSync(join(v73,entry73.file),'utf8'),bad73=sql73+"\nINSERT INTO investor_epoch_history_resolutions(id) VALUES('fictional-late-resolution-upgrade');\n";
+  writeFileSync(join(v73,entry73.file),bad73);entry73.sha256=createHash('sha256').update(bad73).digest('hex');
+  writeFileSync(join(v73,'manifest.json'),JSON.stringify({...manifest,migrations:[...manifest.migrations.slice(0,72),entry73]}));
+  assert.throws(()=>migrateWorkbench(filename,{directory:v73}),/NOT NULL|binding differs/);
+  assert.deepEqual(snapshot72(),before73);assert.deepEqual(db.prepare('SELECT * FROM sqlite_master ORDER BY type,name').all(),schema72);assert.equal(db.pragma('user_version',{simple:true}),72);
+  writeFileSync(join(v73,entry73.file),sql73);writeFileSync(join(v73,'manifest.json'),JSON.stringify({...manifest,migrations:manifest.migrations.slice(0,73)}));
+  assert.equal(migrateWorkbench(filename,{directory:v73}).applied,1);assert.equal(verifyWorkbenchSchema(db,v73).version,73);
+  assert.deepEqual(snapshot72().filter(row=>row.table!=='schema_migrations'),before73.filter(row=>row.table!=='schema_migrations'));
+  assert.deepEqual(db.prepare('SELECT * FROM schema_migrations WHERE version<=72 ORDER BY version').all(),before73.find(row=>row.table==='schema_migrations').rows.map(({_preserved_rowid,...row})=>row));
+  assert.equal(db.prepare('SELECT count(*) n FROM investor_epoch_history_resolutions').get().n,0);
+  assert.deepEqual(db.pragma('foreign_key_check'),[]);assert.equal(db.pragma('integrity_check',{simple:true}),'ok');assert.equal(migrateWorkbench(filename,{directory:v73}).applied,0);
 });
