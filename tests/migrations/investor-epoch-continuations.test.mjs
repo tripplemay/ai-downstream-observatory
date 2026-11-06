@@ -95,4 +95,29 @@ finally:db.close()
   assert.deepEqual(snapshot().filter(row=>row.table!=='schema_migrations'),oldRows.filter(row=>row.table!=='schema_migrations'));
   for(const name of ['investor_epoch_control_requests','investor_epoch_control_results'])assert.equal(db.prepare(`SELECT count(*) n FROM ${name}`).get().n,0);
   assert.deepEqual(db.pragma('foreign_key_check'),[]);
+  const notice=db.prepare(`SELECT o.id,r.id publication_id,r.workspace_id,r.model_id,r.observation_id,r.created_at published_at,r.status,w.owner_id
+    FROM investor_evidence_monitor_runs r JOIN outbox o ON o.dedup_key='investor-monitor:' || r.id JOIN investor_workspaces w ON w.id=r.workspace_id
+    ORDER BY r.created_at,r.id LIMIT 1`).get();assert.ok(notice);
+  const identity={id:notice.id,publication_id:notice.publication_id,workspace_id:notice.workspace_id,model_id:notice.model_id,
+    observation_id:notice.observation_id,recorded_outcome:notice.status==='blocked'?'insufficient_evidence':notice.status,published_at:notice.published_at};
+  const noticeHash=createHash('sha256').update(JSON.stringify(Object.fromEntries(Object.entries(identity).sort(([a],[b])=>a<b?-1:a>b?1:0)))).digest('hex');
+  db.prepare("INSERT INTO audit_events(id,actor_id,action,object_type,object_id,payload_json,created_at) VALUES('fictional-existing-notice-read',?,'investor_notification_read','investor_notification',?,?,?)")
+    .run(notice.owner_id,notice.id,JSON.stringify({workspace_id:notice.workspace_id,publication_hash:noticeHash}),notice.published_at);
+  const allTables=db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row=>row.name);
+  const fullSnapshot=()=>allTables.map(table=>({table,rows:db.prepare(`SELECT rowid _preserved_rowid,* FROM ${table} ORDER BY rowid`).all()}));
+  const before68=fullSnapshot(),schema67=db.prepare('SELECT * FROM sqlite_master ORDER BY type,name').all(),v68=copy('v68',68);
+  const entry68={...manifest.migrations[67]},sql68=readFileSync(join(v68,entry68.file),'utf8');
+  const bad68=sql68+"\nINSERT INTO audit_events(id) VALUES('fictional-late-notification-upgrade');\n";
+  writeFileSync(join(v68,entry68.file),bad68);entry68.sha256=createHash('sha256').update(bad68).digest('hex');
+  writeFileSync(join(v68,'manifest.json'),JSON.stringify({...manifest,migrations:[...manifest.migrations.slice(0,67),entry68]}));
+  assert.throws(()=>migrateWorkbench(filename,{directory:v68}),/NOT NULL/);
+  assert.deepEqual(fullSnapshot(),before68);assert.deepEqual(db.prepare('SELECT * FROM sqlite_master ORDER BY type,name').all(),schema67);
+  assert.equal(db.pragma('user_version',{simple:true}),67);
+  writeFileSync(join(v68,entry68.file),sql68);writeFileSync(join(v68,'manifest.json'),JSON.stringify({...manifest,migrations:manifest.migrations.slice(0,68)}));
+  assert.equal(migrateWorkbench(filename,{directory:v68}).applied,1);assert.equal(verifyWorkbenchSchema(db,v68).version,68);
+  assert.deepEqual(fullSnapshot().filter(row=>row.table!=='schema_migrations'),before68.filter(row=>row.table!=='schema_migrations'));
+  assert.deepEqual(db.prepare('SELECT * FROM schema_migrations WHERE version<=67 ORDER BY version').all(),before68.find(row=>row.table==='schema_migrations').rows.map(({_preserved_rowid,...row})=>row));
+  assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row=>row.name),allTables);
+  assert.deepEqual(db.pragma('foreign_key_check'),[]);assert.equal(db.pragma('integrity_check',{simple:true}),'ok');
+  assert.equal(migrateWorkbench(filename,{directory:v68}).applied,0);assert.deepEqual(fullSnapshot().filter(row=>row.table!=='schema_migrations'),before68.filter(row=>row.table!=='schema_migrations'));
 });

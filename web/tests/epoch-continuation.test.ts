@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import Database from "better-sqlite3";
+import {writeFileSync,unlinkSync} from "node:fs";
+import path from "node:path";
 import { investorFixture } from "./investor-fixture";
 import { actionPython } from "./action-maintenance-fixture";
 import { executeInvestorCommand, getInvestorState } from "../src/server/investor/service";
@@ -8,16 +10,98 @@ import { readEvidenceMonitorRun, readEvidenceCheckpoint } from "../src/server/in
 import { validateEpochContinuation } from "../src/server/investor/kernel-contracts";
 import { readEpochContinuationChain, readEpochContinuationHeader } from "../src/server/investor/epoch-continuation";
 import { replayModelEpochContinuationSource } from "../src/server/investor/model-epoch-continuation-source";
-import { canonical, hash } from "../src/server/ledger/service";
+import { canonical, hash, audit } from "../src/server/ledger/service";
 import { Decimal } from "../src/server/ledger/decimal";
 import { assertCurrentEpochSourceSelection } from "../src/server/investor/current-epoch-sources";
 import { readEvidenceReference } from "../src/server/investor/reference-evidence";
 import {submitEpochControl,readEpochControlResponse} from "../src/server/investor/epoch-control-jobs";
 import {actionJobStartedByMillisecond} from "../src/server/investor/action-source-proof";
+import {readInvestorNotifications,readInvestorNotification} from "../src/server/investor/notifications";
 
 type Obj = Record<string, unknown>;
 const now = "2026-10-21T10:00:03.000Z";
 function obj(value: unknown): Obj { assert.ok(value && typeof value === "object" && !Array.isArray(value)); return value as Obj; }
+test("paused epoch roots create no notice; actual continuation notices remain historical and independently acknowledge without source access or financial effects",t=>{
+  const f=investorFixture();t.after(f.close);const at="2026-10-20T10:00:03.000Z",actor={id:"owner"};
+  const seeded=actionPython(f.filename,`
+from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture
+from tests.investor.test_epoch_continuation import EpochContinuationTests
+with offline_protocol_fixture():
+ case=EpochContinuationTests();case.db=db;case.path=Path(sys.argv[1]);case.seed()
+ print(json.dumps({'epoch':case.epoch_id,'run':case.saved['registration']['monitor_run_id']}))
+`,"core_readmission");
+  const original=readInvestorNotifications(f.db,actor,at);
+  assert.ok(original.entries.length>0);assert.ok(original.entries.every(n=>n.publication_id!==seeded.run));
+  const rootJob=obj(f.db.prepare("SELECT j.id,j.result_json FROM job_runs j JOIN investor_model_epochs e ON e.job_id=j.id WHERE e.id=?").get(seeded.epoch));
+  f.db.prepare("UPDATE job_runs SET result_json='{}' WHERE id=?").run(rootJob.id);
+  assert.throws(()=>readInvestorNotifications(f.db,actor,at));
+  f.db.prepare("UPDATE job_runs SET result_json=? WHERE id=?").run(rootJob.result_json,rootJob.id);
+  f.db.exec("SAVEPOINT fictional_root_notice");
+  try{
+    const root=obj(f.db.prepare("SELECT * FROM investor_evidence_monitor_runs WHERE id=?").get(seeded.run));
+    f.db.prepare("INSERT INTO outbox(id,dedup_key,topic,payload_json,status,not_before,created_at) VALUES(?,?,'investor.observation.changed',?,'pending',?,?)")
+      .run("fictional-forged-root-notice","investor-monitor:"+root.id,canonical({workspace_id:"w",model_id:root.model_id,observation_id:root.observation_id,outcome:root.status,live_advice_eligible:false}),at,at.replace("Z","000Z"));
+    assert.throws(()=>readInvestorNotifications(f.db,actor,at));
+    assert.throws(()=>audit(f.db,actor,"investor_notification_read","investor_notification","fictional-forged-root-notice",null,null,{workspace_id:"w",publication_hash:"a".repeat(64)},at),/binding is invalid/);
+  }finally{f.db.exec("ROLLBACK TO fictional_root_notice; RELEASE fictional_root_notice");}
+  actionPython(f.filename,`
+from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture
+from tests.investor.test_epoch_continuation import EpochContinuationTests
+with offline_protocol_fixture():
+ case=EpochContinuationTests();case.db=db;case.path=Path(sys.argv[1]);case.epoch_id='${seeded.epoch}'
+ case.activate();result=case.run_core('${at}')
+ print(json.dumps(result['result']))
+`,"core_readmission");
+  const before=hash(Object.fromEntries(["investor_workspaces","investor_models","investor_model_controls","investor_observations","job_runs","outbox","investor_epoch_controls","investor_epoch_continuations"]
+    .map(name=>[name,f.db.prepare(`SELECT rowid,* FROM ${name} ORDER BY rowid`).all()])));
+  const feed=readInvestorNotifications(f.db,actor,at);assert.equal(feed.entries.length,original.entries.length+1);
+  const notice=feed.entries.find(n=>!original.entries.some(old=>old.id===n.id))!;assert.ok(notice);assert.equal(notice.recorded_outcome,"observe");
+  assert.equal(notice.is_current_conclusion,false);assert.equal(notice.live_advice_eligible,false);
+  const input={notice_id:notice.id,publication_hash:notice.publication_hash};
+  const receipt=readInvestorNotification(f.db,actor,input,at);assert.deepEqual(readInvestorNotification(f.db,actor,input,at),receipt);
+  const reader=new Database(f.filename,{readonly:true});t.after(()=>reader.close());reader.pragma("query_only=ON");
+  assert.equal(readInvestorNotifications(reader,actor,at).entries.find(n=>n.id===notice.id)?.read_at,at);
+  assert.equal((reader.prepare("SELECT total_changes() n").get() as {n:number}).n,0);
+  assert.equal(hash(Object.fromEntries(["investor_workspaces","investor_models","investor_model_controls","investor_observations","job_runs","outbox","investor_epoch_controls","investor_epoch_continuations"]
+    .map(name=>[name,f.db.prepare(`SELECT rowid,* FROM ${name} ORDER BY rowid`).all()]))),before);
+  assert.deepEqual(readInvestorNotifications(f.db,{id:"foreign"},at).entries,[]);
+  assert.throws(()=>readInvestorNotification(f.db,{id:"foreign"},input,at),/NOT_FOUND/);
+  assert.throws(()=>readInvestorNotification(f.db,actor,{...input,publication_hash:"a".repeat(64)},at),/CHANGED/);
+  const savedOutbox=obj(f.db.prepare("SELECT * FROM outbox WHERE id=?").get(notice.id));
+  for(const [column,value] of [["payload_json","{}"],["dedup_key","investor-monitor:"+notice.publication_id],["created_at",notice.published_at]] as const){
+    f.db.prepare(`UPDATE outbox SET ${column}=? WHERE id=?`).run(value,notice.id);
+    assert.throws(()=>readInvestorNotifications(f.db,actor,at));assert.throws(()=>readInvestorNotification(f.db,actor,input,at));
+    assert.throws(()=>audit(f.db,actor,"investor_notification_read","investor_notification",notice.id,null,null,{workspace_id:"w",publication_hash:notice.publication_hash},at),/binding is invalid/);
+    f.db.prepare(`UPDATE outbox SET ${column}=? WHERE id=?`).run(savedOutbox[column],notice.id);
+  }
+  const run=obj(f.db.prepare("SELECT job_id FROM investor_evidence_monitor_runs WHERE id=?").get(notice.publication_id));
+  const job=obj(f.db.prepare("SELECT result_json FROM job_runs WHERE id=?").get(run.job_id));
+  f.db.prepare("UPDATE job_runs SET result_json='{}' WHERE id=?").run(run.job_id);
+  assert.throws(()=>readInvestorNotifications(f.db,actor,at));
+  assert.throws(()=>audit(f.db,actor,"investor_notification_read","investor_notification",notice.id,null,null,{workspace_id:"w",publication_hash:notice.publication_hash},at),/binding is invalid/);
+  f.db.prepare("UPDATE job_runs SET result_json=? WHERE id=?").run(job.result_json,run.job_id);
+  assert.equal(readInvestorNotifications(f.db,actor,at).entries.find(n=>n.id===notice.id)?.read_at,at);
+  actionPython(f.filename,`
+from worker.investor import eodhd_sources
+grant=db.execute("SELECT id FROM investor_eodhd_authorities WHERE workspace_id='w'").fetchone()[0]
+eodhd_sources.set_authority_enabled(db,'w','owner',grant,False,now='${at}')
+print('{}')
+`);
+  const retained=readInvestorNotifications(f.db,actor,"2027-02-01T00:00:00.000Z");assert.deepEqual(retained.entries,readInvestorNotifications(f.db,actor,at).entries);
+  assert.ok(retained.entries.every(n=>!n.is_current_conclusion&&!n.live_advice_eligible));
+  assert.doesNotMatch(JSON.stringify(retained),/"(?:quotes|quantities|source_proof|tax_per_unit|baseline|cash_by_currency|approved_facts)":/);
+  f.db.exec("SAVEPOINT fictional_unavailable_payload_tables");
+  try{
+    for(const name of ["investor_price_payloads","investor_evidence_checkpoint_payloads","investor_evidence_run_payloads"])
+      f.db.exec(`DROP TABLE ${name}`);
+    assert.deepEqual(readInvestorNotifications(f.db,actor,"2027-02-01T00:00:00.000Z").entries,retained.entries);
+  }finally{f.db.exec("ROLLBACK TO fictional_unavailable_payload_tables; RELEASE fictional_unavailable_payload_tables");}
+  const marker=path.join(f.directory,"RESTORE_PENDING_REVIEW");writeFileSync(marker,"Fictional recovery lock");
+  try{assert.equal(readInvestorNotifications(f.db,actor,at).read_only,true);assert.throws(()=>readInvestorNotification(f.db,actor,input,at),/READ_ONLY/);}
+  finally{unlinkSync(marker);}
+  for(const name of ["portfolios","accounts","ledger_events","postings","approval_events","activations","reservations","execution_reports"])
+    assert.equal((f.db.prepare(`SELECT count(*) n FROM ${name}`).get() as {n:number}).n,0);
+});
 test("millisecond publication buckets accept finer same-bucket attempt starts but reject the exact next millisecond",()=>{
   const recorded="2026-11-04T18:34:55.367Z";
   assert.equal(actionJobStartedByMillisecond("2026-11-04T18:34:55.367073Z",recorded),true);
