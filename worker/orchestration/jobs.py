@@ -82,27 +82,40 @@ def claim_job(connection, owner, lease_seconds=60, job_type=None, now=None):
         parameters = [current]
         # Provider credentials share a bounded connection budget across workers.
         # SQLite's immediate transaction makes this global price-job mutex atomic.
-        query += """ AND (job_type NOT IN ('market_collect_prices','investor_confirmed_watch','investor_epoch_confirmed_watch','investor_initial_close','investor_initial_prices') OR NOT EXISTS (
-            SELECT 1 FROM job_runs active WHERE active.job_type IN ('market_collect_prices','investor_confirmed_watch','investor_epoch_confirmed_watch','investor_initial_close','investor_initial_prices')
+        query += """ AND (job_type NOT IN ('market_collect_prices','investor_confirmed_watch','investor_epoch_confirmed_watch','investor_initial_close','investor_initial_prices','investor_epoch_history') OR NOT EXISTS (
+            SELECT 1 FROM job_runs active WHERE active.job_type IN ('market_collect_prices','investor_confirmed_watch','investor_epoch_confirmed_watch','investor_initial_close','investor_initial_prices','investor_epoch_history')
               AND active.status='running' AND active.lease_until>?))"""
         parameters.append(current)
-        query += """ AND (job_type NOT IN ('market_collect_prices','investor_initial_prices','investor_current_fx','investor_issuer_capture','investor_eodhd_capture') OR NOT EXISTS (
+        query += """ AND (job_type NOT IN ('market_collect_prices','investor_initial_prices','investor_epoch_history','investor_current_fx','investor_issuer_capture','investor_eodhd_capture') OR NOT EXISTS (
             SELECT 1 FROM job_runs reserved JOIN investor_confirmed_feed_requests r ON r.id=reserved.period AND r.workspace_id=reserved.scope
             WHERE reserved.job_type='investor_confirmed_watch' AND reserved.status IN ('queued','retry_queued') AND r.latest_start>=?
               AND reserved.not_before<=?))"""
         parameters.extend([current, stamp(instant(current) + timedelta(seconds=120))])
         if connection.execute("SELECT 1 FROM job_runs WHERE job_type='investor_initial_close' LIMIT 1").fetchone():
-            query += """ AND (job_type NOT IN ('market_collect_prices','investor_initial_prices','investor_current_fx','investor_issuer_capture','investor_eodhd_capture') OR NOT EXISTS (
+            query += """ AND (job_type NOT IN ('market_collect_prices','investor_initial_prices','investor_epoch_history','investor_current_fx','investor_issuer_capture','investor_eodhd_capture') OR NOT EXISTS (
                 SELECT 1 FROM job_runs reserved JOIN investor_initial_close_requests r ON r.id=reserved.period AND r.workspace_id=reserved.scope
                 WHERE reserved.job_type='investor_initial_close' AND reserved.status IN ('queued','retry_queued') AND r.latest_start>=?
                   AND reserved.not_before<=?))"""
             parameters.extend([current, stamp(instant(current) + timedelta(seconds=120))])
         if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='investor_epoch_feed_requests'").fetchone():
-            query += """ AND (job_type NOT IN ('market_collect_prices','investor_initial_prices','investor_current_fx','investor_issuer_capture','investor_eodhd_capture') OR NOT EXISTS (
+            query += """ AND (job_type NOT IN ('market_collect_prices','investor_initial_prices','investor_epoch_history','investor_current_fx','investor_issuer_capture','investor_eodhd_capture') OR NOT EXISTS (
                 SELECT 1 FROM job_runs reserved JOIN investor_epoch_feed_requests r ON r.id=reserved.period AND r.workspace_id=reserved.scope
                 WHERE reserved.job_type='investor_epoch_confirmed_watch' AND reserved.status IN ('queued','retry_queued') AND r.latest_start>=?
                   AND reserved.not_before<=?))"""
             parameters.extend([current, stamp(instant(current) + timedelta(seconds=120))])
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='investor_epoch_history_slots'").fetchone():
+            query += """ AND (job_type!='investor_epoch_history' OR EXISTS (
+              SELECT 1 FROM investor_epoch_history_slots s JOIN investor_epoch_history_requests r ON r.id=s.request_id
+              WHERE s.id=job_runs.period AND s.workspace_id=job_runs.scope AND s.content_hash=job_runs.input_version AND
+              (r.valid_until<=? OR EXISTS(SELECT 1 FROM investor_epoch_history_slots p JOIN job_runs j ON j.period=p.id AND j.scope=p.workspace_id
+                AND j.job_type='investor_epoch_history' AND j.input_version=p.content_hash
+                WHERE p.request_id=s.request_id AND p.slot_index<s.slot_index AND j.status IN ('failed','skipped','partial','cancelled'))
+              OR NOT EXISTS(SELECT 1 FROM investor_epoch_history_slots p LEFT JOIN job_runs j ON j.period=p.id AND j.scope=p.workspace_id
+                AND j.job_type='investor_epoch_history' AND j.input_version=p.content_hash
+                LEFT JOIN investor_epoch_history_runs u ON u.slot_id=p.id AND u.job_id=j.id
+                WHERE p.request_id=s.request_id AND p.slot_index<s.slot_index AND (j.id IS NULL OR j.status!='succeeded'
+                  OR j.updated_at>? OR u.status IS NULL OR u.status NOT IN ('collected','already_available'))))))"""
+            parameters.extend([current,stamp(instant(current)-timedelta(seconds=1))])
         # An unknown EODHD outcome must close its day before another call starts.
         query += """ AND (job_type!='investor_eodhd_capture' OR NOT EXISTS (
             SELECT 1 FROM job_runs active WHERE active.job_type='investor_eodhd_capture'
@@ -201,6 +214,9 @@ def complete_job(connection, lease, result, outcome="succeeded", effect=None, no
         if finalizing_job["job_type"] == "investor_epoch_confirmed_watch":
             from worker.investor.epoch_confirmed_feed import assert_epoch_watch_finalization
             assert_epoch_watch_finalization(connection, finalizing_job, lease, result, outcome, finished)
+        if finalizing_job["job_type"] == "investor_epoch_history":
+            from worker.investor.epoch_history_jobs import assert_epoch_history_finalization
+            assert_epoch_history_finalization(connection, finalizing_job, lease, result, outcome, finished)
         if finalizing_job["job_type"] == "investor_evidence_monitor" and finalizing_job["period"].startswith("epoch-continuation-request:"):
             from worker.investor.epoch_continuation import assert_epoch_continuation_finalization
             assert_epoch_continuation_finalization(connection, finalizing_job, lease, result, outcome, finished)

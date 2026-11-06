@@ -286,6 +286,30 @@ class EpochHistoryPlanTests(unittest.TestCase):
             "expected_revision":self.db.execute("SELECT revision FROM investor_workspaces WHERE id='w'").fetchone()[0],"idempotency_key":"fictional-history-plan-"+str(enabled),
             "enabled":enabled,"acknowledgements":{k:True for k in epochs.ACKS}}
 
+    def test_explicit_history_confirmation_is_readonly_until_atomic_commit_and_exact_nonce_never_requeues(self):
+        from tests.investor.epoch_history_fixture import confirmation
+        confirmation(self)
+
+    def test_default_history_role_commits_durable_reservations_then_default_core_keeps_the_original_chain(self):
+        from tests.investor.epoch_history_fixture import positive
+        positive(self)
+
+    def test_partial_history_preserves_success_and_unknown_call_blocks_new_nonce_or_automatic_retry(self):
+        from tests.investor.epoch_history_fixture import partial
+        partial(self)
+
+    def test_history_late_failure_runner_expiry_and_revocation_keep_the_durable_unknown_marker_without_partial_capture(self):
+        from tests.investor.epoch_history_fixture import final_fences
+        final_fences(self)
+
+    def test_history_yields_to_current_close_and_shares_the_existing_connection_budget(self):
+        from tests.investor.epoch_history_fixture import preclose
+        preclose(self)
+
+    def test_unknown_first_history_call_stops_remaining_slots_without_another_provider_attempt(self):
+        from tests.investor.epoch_history_fixture import stopped_batch
+        stopped_batch(self)
+
     def test_owned_active_epoch_plans_exact_past_missing_windows_and_preserves_unknown_listener_metadata_without_io(self):
         from contextlib import closing,redirect_stdout,redirect_stderr
         import io
