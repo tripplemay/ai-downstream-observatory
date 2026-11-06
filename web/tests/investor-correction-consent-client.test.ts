@@ -3,6 +3,8 @@ import test from "node:test";
 import { buildConsentAttempt, parseConsentResponse } from "../src/components/workbench/investor-correction-consent-client";
 import { consentAnswers, consentResponse, consentScope, consentSummaryHash, confirmedConsent, queuedConsent } from "./correction-consent-client-fixture";
 import { reviewNow } from "./action-review-client-fixture";
+import {verifySetupClient} from "./epoch-setup-fixture";
+test("epoch setup binds the displayed preview, every new acknowledgement, fresh clock and exact nonce",verifySetupClient);
 import { buildEpochControlAttempt,parseEpochControlResponse } from "../src/components/workbench/investor-epoch-control-client";
 import { epochAnswers,epochResponse,epochScope,queuedEpochControl,pausedEpochControl } from "./epoch-control-client-fixture";
 

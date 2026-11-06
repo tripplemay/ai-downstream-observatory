@@ -14,6 +14,8 @@ import { consentAnswers, consentResponse, consentScope, consentSummaryHash } fro
 import { reviewNow } from "./action-review-client-fixture";
 import {verifyEpochControlRoute} from "./epoch-control-route-fixture";
 import {verifyEpochPreviewRoute} from "./epoch-preview-route-fixture";
+import {verifyEpochRegistrationRoute} from "./epoch-registration-route-fixture";
+test("epoch registration route preserves strict 4KiB explicit acknowledgement, origin/session and historical GET boundaries",verifyEpochRegistrationRoute);
 
 test("epoch control route preserves owner/session/origin guards, strict 16KiB intent bounds and private opaque responses",verifyEpochControlRoute);
 test("epoch preview route accepts only explicit 4KiB owner intent and preserves strict transport, session and metadata-only GET boundaries",verifyEpochPreviewRoute);

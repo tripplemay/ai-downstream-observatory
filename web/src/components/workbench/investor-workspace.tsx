@@ -31,6 +31,7 @@ import { InvestorActionMaintenance } from "./investor-action-maintenance";
 import { InvestorActionReview } from "./investor-action-review";
 import { InvestorLegacyTransition } from "./investor-legacy-transition";
 import { InvestorEpochControl } from "./investor-epoch-control";
+import { InvestorEpochSetup } from "./investor-epoch-setup";
 import type { ResearchExecutionReview, ResearchCashIntentReview } from "@/server/investor/research-execution";
 
 export type InvestorView = "overview" | "plan" | "observations" | "accounts";
@@ -479,6 +480,11 @@ export function InvestorWorkspace({ initial, initialSessionBinding, view = "over
           </summary>
           <div className="flex min-w-0 flex-col gap-6 p-3 pt-0 md:p-5 md:pt-0">{policyReview}{riskPanel}{researchDetails}</div>
         </details> : researchDetails}
+        {view==="plan"&&data.workspace_id&&data.model_watch&&data.model_watch.control_scope!=="epoch"&&
+          <InvestorEpochSetup key={[initialSessionBinding,data.workspace_id,data.model_watch.id].join(":")}
+            workspaceId={data.workspace_id} modelId={data.model_watch.id} binding={initialSessionBinding}
+            disabled={baseLocked||editing||scopeState.account||scopeState.costs||scopeState.reviews||scopeState.legacy}
+            onGuardChange={lockEpochScope} onChanged={()=>{generation.current++;setEpochRecheck(true);lockEpochScope(false);void refresh(false);}}/>}
         {data.model_watch && <ModelWatch watch={data.model_watch} nowMs={displayNow} controlPending={scopeState.epoch||epochRecheck} disabled={locked || !data.model_watch.enabled && !canResumeInvestorWatch(data, displayNow)}
           onToggle={() => command({ action: "set_monitoring", model_id: data.model_watch!.id, enabled: !data.model_watch!.enabled })} />}
         {data.workspace_id&&data.model_watch?.control_scope==="epoch"&&<InvestorEpochControl key={`epoch:${initialSessionBinding}:${data.workspace_id}:${data.model_watch.id}`}

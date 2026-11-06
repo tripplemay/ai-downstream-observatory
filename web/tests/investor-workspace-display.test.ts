@@ -44,7 +44,7 @@ function mount(t: { after: (fn: () => void) => void }, state = displayState(), v
       "./investor-model-composition": { currentResearchModelComposition },
       "@/server/investor/schemas": schemas, "@/server/investor/loss-scenarios": losses, "./research-format": research, "./investor-client": client,
       "@/server/investor/initial-close-progress": { initialCloseProgressRequest },
-      ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel", "history-panel", "monitor-cost-panel","action-review","legacy-transition","epoch-control"]
+      ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel", "history-panel", "monitor-cost-panel","action-review","legacy-transition","epoch-control","epoch-setup"]
         .map(name => { const component = "Investor" + name.split("-").map(value => value[0].toUpperCase() + value.slice(1)).join("");
           return ["./investor-" + name, { [component]: component }]; })),
       "./investor-acquisition": { acquisitionDeadlines, InvestorAcquisitionPanel: "InvestorAcquisitionPanel" },

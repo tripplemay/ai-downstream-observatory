@@ -11,10 +11,64 @@ import { readEvidenceCheckpoint, readEvidenceMonitorRun } from "../src/server/in
 import { getInvestorState, executeInvestorCommand } from "../src/server/investor/service";
 import { validateInvestorMonitorDataDocument, validateModelEpochRegistration } from "../src/server/investor/kernel-contracts";
 import {submitEpochPreview,readEpochPreviewResponse} from "../src/server/investor/epoch-preview-jobs";
+import {submitEpochRegistration,readEpochRegistrationResponse} from "../src/server/investor/epoch-registration-jobs";
+import {epochRegistrationAcknowledgements} from "../src/server/investor/epoch-registration-schemas";
 
 type Obj = Record<string, unknown>;
 const actor = { id: "owner" }, now = "2026-10-20T10:00:03.000Z", stale = "2026-10-20T21:00:03.000Z";
 function obj(value: unknown): Obj { assert.ok(value && typeof value === "object" && !Array.isArray(value)); return value as Obj; }
+test("ordinary preparation and six explicit acknowledgements reach the real default-core paused epoch, with immutable exact retry and source-free registration receipts",t=>{
+  const f=investorFixture();t.after(f.close);const binding="0".repeat(64);
+  const setup=actionPython(f.filename,[
+    "from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture",
+    "from tests.investor.test_model_epoch_registration import ModelEpochRegistrationTests",
+    "with offline_protocol_fixture():",
+    " case=ModelEpochRegistrationTests();case.db=db;case.path=Path(sys.argv[1]);case.seed(linked_fx=True)",
+    " model=db.execute('SELECT content_hash FROM investor_models WHERE id=?',(case.inputs['model_id'],)).fetchone()[0]",
+    " print(json.dumps({'model':case.inputs['model_id'],'hash':model,'revision':case.revision()}))",
+  ].join("\n"),"core_readmission");
+  const run=(at:string)=>actionPython(f.filename,[
+    "from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture",
+    "from worker.orchestration.runtime import run_pending_once",
+    "with offline_protocol_fixture():",
+    " for index in range(32):",
+    "  value=run_pending_once(db,'fictional-ordinary-registration-core',clock=lambda:'"+at+"')",
+    "  if value is None:break",
+    " print('{}')",
+  ].join("\n"),"core_readmission");
+  const pbody={schema_version:"investor-epoch-preview-submit-v1",model_id:setup.model,expected_model_hash:setup.hash,expected_revision:setup.revision,
+    idempotency_key:"fictional-pre-registration-preview",acknowledged_preview_only:true};
+  submitEpochPreview(f.db,actor,pbody,now);run("2026-10-20T10:00:04.000Z");
+  const at="2026-10-20T10:00:05.000Z",p=readEpochPreviewResponse(f.db,actor,binding,{model:String(setup.model)},at);
+  assert.equal(p.request?.status,"preview_ready");assert.ok(p.preview);
+  const initial=readEpochRegistrationResponse(f.db,actor,binding,{model:String(setup.model)},at);assert.equal(initial.request,null);
+  const body={schema_version:"investor-model-epoch-submit-v1",preview_id:p.preview.id,expected_preview_hash:p.preview.content_hash,
+    expected_revision:p.workspace_revision,idempotency_key:"fictional-ordinary-register",acknowledgements:Object.fromEntries(epochRegistrationAcknowledgements.map(k=>[k,true]))};
+  const snapshot=()=>JSON.stringify(Object.fromEntries(["investor_workspaces","investor_model_epoch_requests","job_runs","audit_events"].map(n=>[n,f.db.prepare("SELECT rowid,* FROM "+n+" ORDER BY rowid").all()])));
+  const before=snapshot();
+  for(const k of epochRegistrationAcknowledgements)assert.throws(()=>submitEpochRegistration(f.db,actor,{...body,acknowledgements:{...body.acknowledgements,[k]:false}},at));
+  assert.throws(()=>submitEpochRegistration(f.db,actor,{...body,enabled:true},at));assert.throws(()=>submitEpochRegistration(f.db,{id:"foreign"},body,at));
+  assert.throws(()=>submitEpochRegistration(f.db,actor,{...body,expected_preview_hash:"a".repeat(64)},at));assert.equal(snapshot(),before);
+  submitEpochRegistration(f.db,actor,body,at);const queued=snapshot();submitEpochRegistration(f.db,actor,body,at);assert.equal(snapshot(),queued);
+  assert.throws(()=>submitEpochRegistration(f.db,actor,{...body,expected_preview_hash:"a".repeat(64)},at),/DUPLICATE_CONFLICT/);
+  assert.equal(readEpochRegistrationResponse(f.db,actor,binding,{nonce:body.idempotency_key},at).request?.status,"queued");
+  run("2026-10-20T10:00:06.000Z");
+  const done=readEpochRegistrationResponse(f.db,actor,binding,{nonce:body.idempotency_key},"2026-10-20T10:00:07.000Z");
+  assert.equal(done.request?.status,"registered");assert.equal(done.receipt?.monitoring_resumed,false);assert.equal(done.receipt?.current_source_eligibility_restored,false);
+  const retained=snapshot();submitEpochRegistration(f.db,actor,body,"2026-10-20T10:00:07.000Z");assert.equal(snapshot(),retained);
+  const id=done.receipt!.epoch_id;readModelEpochRegistrationHeader(f.db,"w",actor,id,"2026-10-20T10:00:07.000Z");
+  const state=getInvestorState(f.db,actor,"2026-10-20T10:00:07.000Z");assert.equal(state.model_watch?.control_scope,"epoch");assert.equal(state.model_watch?.model_nav_cny,null);
+  assert.doesNotMatch(JSON.stringify(done),/"(?:quotes|quantities|source_proof|cash_by_currency|epoch_definition)":/);
+  actionPython(f.filename,["from worker.investor import eodhd_sources","grant=db.execute(\"SELECT id FROM investor_eodhd_authorities WHERE workspace_id='w'\").fetchone()[0]",
+    "eodhd_sources.set_authority_enabled(db,'w','owner',grant,False,now='2026-10-20T10:00:07.000Z')","print('{}')"].join("\n"));
+  assert.deepEqual(readEpochRegistrationResponse(f.db,actor,binding,{nonce:body.idempotency_key},"2027-02-01T00:00:00.000Z").receipt,done.receipt);
+  const marker=path.join(f.directory,"RESTORE_PENDING_REVIEW");writeFileSync(marker,"Fictional recovery");
+  try{assert.equal(readEpochRegistrationResponse(f.db,actor,binding,{model:String(setup.model)},"2027-02-01T00:00:00.000Z").read_only,true);
+    assert.throws(()=>submitEpochRegistration(f.db,actor,body,"2027-02-01T00:00:00.000Z"),/READ_ONLY/);
+  }finally{unlinkSync(marker);}
+  for(const n of ["investor_epoch_controls","portfolios","accounts","ledger_events","postings","approval_events","execution_reports"])
+    assert.equal((f.db.prepare("SELECT count(*) n FROM "+n).get() as {n:number}).n,0);
+});
 test("Node owner preview intent reaches default core and query-only metadata without source payload access, registration, activation or trading",t=>{
   const f=investorFixture();t.after(f.close);const binding="0".repeat(64);
   const created=actionPython(f.filename,[

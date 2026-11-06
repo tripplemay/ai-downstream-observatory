@@ -10,6 +10,10 @@ import { consentResponse, consentSummaryHash, confirmedConsent, queuedConsent } 
 import * as epochSchemas from "../src/server/investor/epoch-control-schemas";
 import * as epochClient from "../src/components/workbench/investor-epoch-control-client";
 import {epochResponse,queuedEpochControl,pausedEpochControl} from "./epoch-control-client-fixture";
+import {verifySetupJourney,verifySetupUnknown,verifySetupExpiry} from "./epoch-setup-fixture";
+test("ordinary Chinese preview and confirmation submit two distinct owner intents, poll GET and remain paused",verifySetupJourney);
+test("epoch setup lost responses recover the original nonce without automatic POST or a new command",verifySetupUnknown);
+test("epoch setup retained callbacks reject exact expiry and parent locks",verifySetupExpiry);
 
 function mount(t: TestContext, impactId: string | null = "fictional-impact", summaryHash: string | null = consentSummaryHash) {
   const locks: boolean[] = [], registered: number[] = [];

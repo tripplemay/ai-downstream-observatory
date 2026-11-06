@@ -128,6 +128,23 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
     assert.equal(read(db=>db.prepare('SELECT count(*) n FROM investor_workspaces').get().n),0);assert.deepEqual(counts(),before);assert.deepEqual(financial(),facts);
     return {maximum_body_bytes:4096,implicit_research:false,source_or_ai_calls:0,positive_preview_http_journey_verified:false};
   });
+  await check('HTTP-I24', 'epoch registration has separate authenticated acknowledgements and no implicit registration or activation', async () => {
+    const route=endpoint+'/epoch-registration',facts=financial();
+    const counts=()=>read(db=>Object.fromEntries(['investor_model_epoch_requests','investor_model_epochs','job_runs','audit_events'].map(n=>[n,db.prepare('SELECT count(*) n FROM '+n).get().n])));
+    const before=counts(),body={schema_version:'investor-model-epoch-submit-v1',preview_id:'fictional-preview',expected_preview_hash:'a'.repeat(64),
+      expected_revision:1,idempotency_key:'fictional-http-register-intent',acknowledgements:Object.fromEntries(['separate_current_epoch','displayed_source_and_correction_bindings',
+        'reported_coverage_not_objective_absence','economic_carry_not_point_in_time','preserve_original_model_and_history','no_strategy_cash_or_trading_change'].map(k=>[k,true]))};
+    const send=(v,extra={})=>jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json',...extra}),body:JSON.stringify(v)});
+    assert.equal((await jsonRequest(route+'?model=fictional-model')).status,401);
+    assert.equal((await jsonRequest(route+'?model=fictional-model',{headers:{Cookie:cookie}})).status,400);
+    assert.equal((await send(body,{Origin:'https://wrong.example.test'})).status,403);
+    assert.equal((await send(body,{'X-Workbench-Session-Binding':'b'.repeat(64)})).status,401);
+    for(const v of [{...body,enabled:true},{...body,acknowledgements:{}},{...body,quotes:[]}])assert.equal((await send(v)).status,400);
+    const missing=await send(body);assert.equal(missing.status,409);assert.equal(missing.json.error,'EPOCH_REGISTRATION_WORKSPACE_REQUIRED');
+    assert.equal(missing.headers.get('cache-control'),'private, no-store');
+    assert.equal(read(db=>db.prepare('SELECT count(*) n FROM investor_workspaces').get().n),0);assert.deepEqual(counts(),before);assert.deepEqual(financial(),facts);
+    return {implicit_epoch:false,implicit_activation:false,source_or_ai_calls:0,positive_registration_http_journey_verified:false};
+  });
   await check('HTTP-I20', 'AI explanation endpoint has current-session and strict small-body boundaries; reads never generate AI or financial facts', async () => {
     const route = `${endpoint}/ai-explanation`, body = { observation_id: 'fictional-observation', binding_hash: 'a'.repeat(64) };
     const facts = financial(), count = () => read(db => db.prepare('SELECT count(*) n FROM audit_events').get().n), before = count();
