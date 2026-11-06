@@ -16,6 +16,7 @@ from .monitor_admission import admit_monitor_data, current_monitor_model
 from .history_collection import plan_history, collect_history, MAX_BATCH_CALLS
 from .confirmed_capture import collect_confirmed_prices, resolve_confirmed_capture, purge_confirmed_payload
 from . import issuer_sources, managed_fx, issuer_schedule, eodhd_sources, action_reconciliation, managed_actions
+from .epoch_history_plan import plan_epoch_history
 
 
 def _private_descriptor(value):
@@ -145,6 +146,7 @@ def _parser():
     flags = control.add_mutually_exclusive_group(required=True)
     flags.add_argument("--enable", action="store_true"); flags.add_argument("--disable", action="store_true")
     commands.add_parser("inspect-action-maintenance").add_argument("--authority", required=True)
+    commands.add_parser("plan-epoch-history").add_argument("--epoch",required=True)
     return parser
 
 
@@ -154,9 +156,11 @@ def main(argv=None):
     try:
         descriptor, path = _private_descriptor(args.db)
         os.close(descriptor)
-        db = open_database(path, read_only=args.command in ("check-action-crosscheck", "preview-action-maintenance", "inspect-action-maintenance"))
+        db = open_database(path, read_only=args.command in ("check-action-crosscheck", "preview-action-maintenance", "inspect-action-maintenance","plan-epoch-history"))
         _owner(db, args.workspace, args.actor)
-        if args.command == "preview-action-maintenance":
+        if args.command == "plan-epoch-history":
+            result=plan_epoch_history(db,args.workspace,args.actor,args.epoch)
+        elif args.command == "preview-action-maintenance":
             refs = {}
             for key, identifier, table in (("issuer", args.issuer_capture, "investor_issuer_captures"),
                     ("dividends", args.dividend_capture, "investor_eodhd_captures"), ("splits", args.split_capture, "investor_eodhd_captures")):

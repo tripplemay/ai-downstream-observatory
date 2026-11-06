@@ -54,7 +54,7 @@ def _basis(db, workspace, actor, epoch_id, checked, frozen, stop_requested):
         "control": {"id": control["id"], "content_hash": content_hash(dict(control))}, "funding": funding}
 
 
-def _retained_price_window(db, workspace, reference, window, prior, market, start, checked):
+def _retained_price_choices(db, workspace, reference, window, prior, market, start, checked):
     pool = {(key,identifier) for key in ("capture_ids","confirmed_capture_ids") for identifier in window.get(key,[])}
     for segment in prior["segments"]:
         snapshot = segment["snapshot"]
@@ -91,6 +91,10 @@ def _retained_price_window(db, workspace, reference, window, prior, market, star
             _check(identity not in versions or versions[identity]==version,"CAPTURE_VERSIONS_AMBIGUOUS");versions[identity]=version
         _check(all(k not in prices or prices[k]==v for k,v in supplied.items()),"CAPTURE_PRICES_CONFLICT")
         prices.update(supplied);choices.append((kind,identifier,supplied))
+    return choices
+
+
+def _select_retained_prices(choices):
     # Check every eligible overlap before selecting whole, disjoint originals.
     # Largest scopes allow a retained multi-day download to replace endpoint-only
     # selections without clipping bytes or duplicating rows in the dataset.
@@ -98,7 +102,12 @@ def _retained_price_window(db, workspace, reference, window, prior, market, star
     for kind,identifier,supplied in sorted(choices,key=lambda r:(-len(r[2]),r[0],r[1])):
         if covered & supplied.keys():continue
         selected[kind].append(identifier);covered.update(supplied)
-    return {**window,**{key:sorted(ids) for key,ids in selected.items()},"start_date":start}
+    return {key:sorted(ids) for key,ids in selected.items()}
+
+
+def _retained_price_window(db, workspace, reference, window, prior, market, start, checked):
+    choices = _retained_price_choices(db,workspace,reference,window,prior,market,start,checked)
+    return {**window,**_select_retained_prices(choices),"start_date":start}
 
 
 def _windows(db, workspace, basis, checked):
@@ -113,6 +122,11 @@ def _windows(db, workspace, basis, checked):
         start = instant(basis["previous"]["market_cutoffs"][market]).astimezone(ZoneInfo(_MARKETS[market][0])).date().isoformat()
         _check(start <= window["end_date"], "CLOSE_REGRESSION")
         result.append(_retained_price_window(db,workspace,basis["reference"],window,old,market,start,checked))
+    _check_retained_budget(db,workspace,result,checked)
+    return result
+
+
+def _check_retained_budget(db,workspace,result,checked):
     # Match the independent current reader's shared (not per-market) ceiling.
     earliest = min((instant(checked)-timedelta(days=7)).date().isoformat(),*(w["start_date"] for w in result))
     candidates = db.execute("""SELECT 'capture_ids' kind,c.id FROM investor_price_captures c JOIN investor_price_payloads p ON p.capture_id=c.id
@@ -124,7 +138,6 @@ def _windows(db, workspace, basis, checked):
     selected = {(r["kind"],r["id"]) for r in candidates}
     selected.update((kind,identifier) for w in result for kind in ("capture_ids","confirmed_capture_ids") for identifier in w[kind])
     _check(len(candidates)<=MAX_CAPTURE_CANDIDATES and len(selected)<=MAX_CAPTURE_CANDIDATES,"CAPTURE_SELECTION_LIMIT")
-    return result
 
 
 def _actions(db, workspace, document, checked):

@@ -266,5 +266,100 @@ class HistoryCollectionTests(unittest.TestCase):
         self.assertEqual(len(client.calls), 1)
 
 
+class EpochHistoryPlanTests(unittest.TestCase):
+    def setUp(self):
+        from tests.investor import test_current_correction_fixture as fixture
+        fixture.CurrentCorrectionFixtureTests.setUp(self)
+
+    def seed(self,enabled=True):
+        from tests.investor.epoch_continuation_source_fixture import create
+        from worker.investor import epoch_continuation as epochs
+        self.saved=create(self.db,self.path);self.epoch_id=self.saved["registration"]["epoch"]["id"]
+        if enabled:
+            epochs.set_epoch_continuation_control(self.db,"w","owner",self.body(True),owner_interaction=True,now="2026-10-20T10:00:03.000Z")
+
+    def body(self,enabled):
+        from worker.investor import epoch_continuation as epochs
+        root=self.db.execute("SELECT content_hash FROM investor_model_epochs WHERE id=?",(self.epoch_id,)).fetchone()
+        head=dict(self.db.execute("SELECT id,content_hash FROM investor_evidence_model_checkpoints ORDER BY sequence DESC LIMIT 1").fetchone())
+        return {"schema_version":"investor-epoch-control-submit-v1","epoch_id":self.epoch_id,"expected_registration_hash":root[0],"expected_checkpoint":head,
+            "expected_revision":self.db.execute("SELECT revision FROM investor_workspaces WHERE id='w'").fetchone()[0],"idempotency_key":"fictional-history-plan-"+str(enabled),
+            "enabled":enabled,"acknowledgements":{k:True for k in epochs.ACKS}}
+
+    def test_owned_active_epoch_plans_exact_past_missing_windows_and_preserves_unknown_listener_metadata_without_io(self):
+        from contextlib import closing,redirect_stdout,redirect_stderr
+        import io
+        from worker.investor import epoch_history_plan as planner,epoch_confirmed_feed as feed,data_pipeline
+        self.seed();feed.discover_epoch_watches(self.db,now="2026-10-20T19:55:00.000Z")
+        before=list(self.db.iterdump());at="2026-10-22T10:00:03.000Z"
+        with closing(open_database(self.path,read_only=True)) as reader,patch.object(longport,"_collect_isolated",side_effect=AssertionError("NO_PLAN_IO")) as sdk, \
+                patch.object(longport,"read_private_credentials_file",side_effect=AssertionError("NO_PLAN_CREDENTIALS")) as credentials:
+            value=planner.plan_epoch_history(reader,"w","owner",self.epoch_id,now=at)
+            self.assertEqual(reader.total_changes,0)
+        sdk.assert_not_called();credentials.assert_not_called()
+        self.assertEqual(value["status"],"download_confirmation_required");self.assertEqual(value["missing_date_count"],4)
+        self.assertEqual(len(value["tiles"]),2)
+        self.assertTrue(all(t["expected_dates"]==["2026-10-20","2026-10-21"] for t in value["tiles"]))
+        self.assertEqual(value["ranges"],[{"market":"US","checkpoint_date":"2026-10-19","past_end_date":"2026-10-21","current_local_date":"2026-10-22"}])
+        self.assertEqual(len(value["prior_attempts"]),1);self.assertEqual(value["prior_attempts"][0]["job_status"],"queued")
+        self.assertFalse(value["prior_attempts"][0]["network_outcome_inferred"])
+        for k in ("future_calls_authorized","current_source_eligibility_restored","monitoring_resumed","trading_permission","market_values_output"):self.assertFalse(value[k])
+        self.assertEqual(before,list(self.db.iterdump()))
+        from worker.market.contracts import validate_contract
+        for change in ({"future_calls_authorized":True},{"provider_calls":1},{"max_batch_calls":5},{"trading_permission":True},{"quotes":[]}):
+            with self.assertRaises(WorkbenchError):validate_contract({**value,**change},planner.SCHEMA)
+        real=planner.plan_epoch_history
+        def readonly(connection,*args,**kwargs):
+            self.assertEqual(connection.execute("PRAGMA query_only").fetchone()[0],1)
+            return real(connection,*args,**kwargs,now=at)
+        stream=io.StringIO()
+        self.path.chmod(0o644)
+        with redirect_stderr(io.StringIO()),patch.object(data_pipeline,"plan_epoch_history",side_effect=AssertionError("NO_UNSAFE_DATABASE_READ")) as unsafe:
+            self.assertEqual(data_pipeline.main(["--db",str(self.path),"--workspace","w","--actor","owner","plan-epoch-history","--epoch",self.epoch_id]),1)
+        unsafe.assert_not_called();self.path.chmod(0o600)
+        with redirect_stdout(stream),patch.object(data_pipeline,"plan_epoch_history",side_effect=readonly):
+            self.assertEqual(data_pipeline.main(["--db",str(self.path),"--workspace","w","--actor","owner","plan-epoch-history","--epoch",self.epoch_id]),0)
+        self.assertEqual(json.loads(stream.getvalue()),value);self.assertEqual(before,list(self.db.iterdump()))
+
+    def test_retained_data_conflicts_expiry_and_tiling_cannot_turn_a_plan_into_a_download_or_a_current_grant(self):
+        from worker.investor import epoch_history_plan as planner
+        from tests.investor import epoch_gap_fixture as gap
+        self.seed();at=gap.NOW
+        days=[(datetime(2026,1,1).date()+timedelta(days=i)).isoformat() for i in range(70)]
+        available={days[20],days[21]};tiles=planner._tiles(days,available)
+        self.assertEqual({d for tile in tiles for d in tile},set(days)-available)
+        self.assertTrue(all((longport._day(t[-1])-longport._day(t[0])).days<31 for t in tiles))
+        self.assertTrue(all(not any(t[0]<=d<=t[-1] for d in available) for t in tiles))
+        original=planner.plan_epoch_history(self.db,"w","owner",self.epoch_id,now=at)
+        repeated=planner.plan_epoch_history(self.db,"w","owner",self.epoch_id,now="2026-10-22T10:00:04.000Z",planned_at=at)
+        self.assertEqual(original["plan_hash"],repeated["plan_hash"])
+        for now,planned in (("2026-10-22T10:05:03.000Z",at),(at,"2026-10-22T10:00:04.000Z")):
+            with self.assertRaisesRegex(WorkbenchError,"PLAN_EXPIRED"):planner.plan_epoch_history(self.db,"w","owner",self.epoch_id,now=now,planned_at=planned)
+        gap.add_prices(self.db,self.saved,["2026-10-20","2026-10-21"])
+        before=list(self.db.iterdump());complete=planner.plan_epoch_history(self.db,"w","owner",self.epoch_id,now=at)
+        self.assertEqual(complete["status"],"no_missing_past_closes");self.assertEqual(complete["tiles"],[]);self.assertEqual(complete["missing_date_count"],0)
+        self.assertNotEqual(complete["plan_hash"],original["plan_hash"]);self.assertEqual(before,list(self.db.iterdump()))
+        gap.add_prices(self.db,self.saved,["2026-10-20"],delta="1")
+        with self.assertRaisesRegex(WorkbenchError,"CAPTURE_PRICES_CONFLICT"):planner.plan_epoch_history(self.db,"w","owner",self.epoch_id,now=at)
+
+    def test_planning_rejects_paused_foreign_and_withdrawn_epochs_and_does_not_borrow_retired_source_permission(self):
+        from worker.investor import epoch_history_plan as planner,epoch_continuation as epochs,eodhd_sources
+        at="2026-10-22T10:00:03.000Z";self.seed(False);before=list(self.db.iterdump())
+        with self.assertRaisesRegex(WorkbenchError,"EXPLICIT_ACTIVATION_REQUIRED"):planner.plan_epoch_history(self.db,"w","owner",self.epoch_id,now=at)
+        self.assertEqual(before,list(self.db.iterdump()))
+        epochs.set_epoch_continuation_control(self.db,"w","owner",self.body(True),owner_interaction=True,now="2026-10-20T10:00:03.000Z")
+        for workspace,actor,epoch in (("w","foreign",self.epoch_id),("foreign","owner",self.epoch_id),("w","owner","foreign")):
+            with self.assertRaises(WorkbenchError):planner.plan_epoch_history(self.db,workspace,actor,epoch,now=at)
+        before=list(self.db.iterdump())
+        with patch.object(planner.feed,"_context",side_effect=AssertionError("NO_STOPPED_REPLAY")) as heavy:
+            with self.assertRaisesRegex(WorkbenchError,"WORKER_STOP_REQUESTED"):planner.plan_epoch_history(self.db,"w","owner",self.epoch_id,now=at,stop_requested=lambda:True)
+        heavy.assert_not_called();self.assertEqual(before,list(self.db.iterdump()))
+        grant=self.db.execute("SELECT id FROM investor_eodhd_authorities WHERE workspace_id='w'").fetchone()[0]
+        eodhd_sources.set_authority_enabled(self.db,"w","owner",grant,False,now=at)
+        with self.assertRaises(WorkbenchError):planner.plan_epoch_history(self.db,"w","owner",self.epoch_id,now=at)
+        for table in ("portfolios","accounts","ledger_events","postings"):
+            self.assertEqual(self.db.execute("SELECT count(*) FROM "+table).fetchone()[0],0)
+
+
 if __name__ == "__main__":
     unittest.main()
