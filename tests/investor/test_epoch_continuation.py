@@ -24,6 +24,18 @@ from worker.research import snapshot
 class EpochContinuationTests(unittest.TestCase):
     setUp = setup.CurrentCorrectionFixtureTests.setUp
 
+    def test_active_epoch_default_longport_callback_then_core_keeps_the_original_economic_chain(self):
+        from tests.investor.epoch_feed_fixture import positive
+        positive(self)
+
+    def test_epoch_callback_pause_dedup_and_shared_provider_connection_budget(self):
+        from tests.investor.epoch_feed_fixture import paused_and_budget
+        paused_and_budget(self)
+
+    def test_epoch_callback_final_runner_expiry_late_failure_and_source_revocation_are_atomic(self):
+        from tests.investor.epoch_feed_fixture import final_fences
+        final_fences(self)
+
     def seed(self):
         self.saved = create(self.db, self.path); self.epoch_id = self.saved["registration"]["epoch"]["id"]
         self.assertIsNone(contracts._VALIDATION_SCOPE.get(), "fixture construction must not retain a shape scope in the actual test")

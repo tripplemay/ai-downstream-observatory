@@ -293,7 +293,8 @@ def prepare_confirmed_watch(db, job, lease, *, clock=None, lease_seconds=300, st
         job_type=JOB_TYPE, clock=clock, lease_seconds=lease_seconds, stop_requested=stop_requested)
 
 
-def _prepare_watch(db, job, lease, *, request_header, current, publish_run, job_type, clock=None, lease_seconds=300, stop_requested=None):
+def _prepare_watch(db, job, lease, *, request_header, current, publish_run, job_type, clock=None, lease_seconds=300, stop_requested=None,
+        during_watch=None, before_commit=None, commit_current=None):
     _assert(db.execute("PRAGMA query_only").fetchone()[0] == 0, "WORKBENCH_READ_ONLY")
     clock = clock or (lambda: None); at = _clock(clock())
     bound_job = db.execute("SELECT * FROM job_runs WHERE id=?", (lease.job_id,)).fetchone()
@@ -320,6 +321,7 @@ def _prepare_watch(db, job, lease, *, request_header, current, publish_run, job_
         model = db.execute("SELECT profile_id,plan_id FROM investor_models WHERE id=?", (row["model_id"],)).fetchone()
         _assert(current and current["id"] == row["control_id"] and current["enabled"] == 1 and profile and selected
             and profile[0] == model["profile_id"] and selected[0] == model["plan_id"], "CONFIRMED_FEED_SUPERSEDED")
+        if during_watch is not None: during_watch(db, row, document, now)
         _assert(instant(now) < instant(document["valid_until"]), "CONFIRMED_FEED_WINDOW_ENDED")
         # A timely frozen receipt may outlive the network window while current
         # sources replay. Lease, rights and request expiry still guard persistence.
@@ -348,12 +350,19 @@ def _prepare_watch(db, job, lease, *, request_header, current, publish_run, job_
             assert_lease(db, live_lease, now=_clock(clock()))
             status = "missed_window" if isinstance(error, WorkbenchError) and str(error) == "CONFIRMED_FEED_START_WINDOW_ENDED" \
                 else "superseded" if isinstance(error, WorkbenchError) and str(error) == "CONFIRMED_FEED_SUPERSEDED" else "transport_failed"
+    if status is None and before_commit is not None:
+        try: before_commit(db, row, document, _clock(clock()))
+        except WorkbenchError as error:
+            if str(error) in ("WORKER_STOP_REQUESTED", "WORKBENCH_READ_ONLY", "RESTORE_PENDING_REVIEW", "STALE_OR_EXPIRED_LEASE"): raise
+            if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED") from None
+            assert_lease(db, live_lease, now=_clock(clock()))
+            status = "superseded"
     def commit_effect(connection):
         now = _clock(clock())
         if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
         assert_lease(connection, live_lease, now=now)
         if status is not None: return publish_run(connection, row, document, job, status, now)
-        try: current(connection, row, document, now)
+        try: (commit_current or current)(connection, row, document, now)
         except WorkbenchError: return publish_run(connection, row, document, job, "superseded", now)
         capture = prepared(connection)
         _assert(capture["qualification"] == confirmed_capture.OFFICIAL)
