@@ -15,47 +15,53 @@ from time import perf_counter
 from urllib.parse import urljoin
 from unittest.mock import patch
 
+from worker.investor import action_restatement_kernel
 from worker.market import contracts
 from worker.research import snapshot
 
 
 SCHEMA = "research-dataset.schema.json"
+RESTATEMENT_SCHEMA = "investor-action-restatement-kernel.schema.json"
 MAX_ENTRIES = 8
 MAX_BYTES = 8388608
 MAX_NODES = 100000
+MAX_SCHEMAS = 64
 _ACTIVE = ContextVar("offline_fixture_dataset_shapes", default=None)
 
 
-def _document_key(value):
-    pending, seen, count = [value], set(), 0
+def _document_key(value, minimum_bytes=65536, allow_aliases=False):
+    pending, seen, count = [(value, False)], set(), 0
     while pending:
-        item = pending.pop(); kind = type(item); count += 1
+        item, leaving = pending.pop()
+        if leaving:
+            seen.remove(id(item)); continue
+        kind = type(item); count += 1
         if count > MAX_NODES: return None
         if kind in (dict, list):
             if id(item) in seen: return None
             seen.add(id(item))
+            if allow_aliases: pending.append((item, True))
         if kind is dict:
             if any(type(key) is not str for key in item): return None
-            pending.extend(item.values())
-        elif kind is list: pending.extend(item)
+            pending.extend((value, False) for value in item.values())
+        elif kind is list: pending.extend((value, False) for value in item)
         elif kind is float:
             if not math.isfinite(item): return None
         elif kind not in (str, int, bool, type(None)): return None
     try: encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()
     except (ValueError, TypeError, OverflowError, RecursionError, UnicodeError): return None
-    # Small values already use the original production shape cache.
-    if not 65536 < len(encoded) <= MAX_BYTES: return None
+    if not minimum_bytes < len(encoded) <= MAX_BYTES: return None
     return sha256(encoded).digest()
 
 
-def _schema_key():
+def _schema_key(root=SCHEMA):
     schemas, registry, checker = contracts._schemas()
     by_uri = {value["$id"]: name for name, value in schemas.items()}
-    pending, selected = [SCHEMA], {}
+    pending, selected = [root], {}
     while pending:
         name = pending.pop()
         if name in selected: continue
-        if name not in schemas or len(selected) >= 8: return None
+        if name not in schemas or len(selected) >= MAX_SCHEMAS: return None
         document = schemas[name]; selected[name] = document
         nodes = [document]
         while nodes:
@@ -85,7 +91,7 @@ def fixture_dataset_shapes():
     metrics = {"checks": 0, "validated": 0, "hits": 0, "uncacheable": 0, "entries": 0,
                "key_ms": 0.0, "validation_ms": 0.0, "elapsed_ms": 0.0}
     # Do not replace another test's wrapper or share a scope across threads.
-    if original is not contracts.validate_contract:
+    if original is not contracts.validate_contract or action_restatement_kernel.validate_contract is not original:
         yield metrics
         return
     state = {"metrics": metrics, "keys": set(), "registry": None, "checker": None, "thread": get_ident()}
@@ -101,19 +107,25 @@ def fixture_dataset_shapes():
     timing("start")
 
     def checked(value, name="market-batch.schema.json", fragment=None):
-        if name != SCHEMA or fragment is not None or _ACTIVE.get() is not state or get_ident() != state["thread"]:
+        if name not in (SCHEMA, RESTATEMENT_SCHEMA) or fragment is not None or _ACTIVE.get() is not state or get_ident() != state["thread"]:
             return original(value, name, fragment)
         metrics["checks"] += 1; key_started = perf_counter()
-        document_key = _document_key(value); key = None
+        # Small dataset shapes already benefit from the production scope. The
+        # repeated restatement input crosses distinct real evidence operations.
+        minimum_bytes = 65536 if name == SCHEMA else 0
+        # Retained coverage/actions can share containers within one input. Walk
+        # every expanded path, rejecting cycles and counting repeated subtrees.
+        allow_aliases = name == RESTATEMENT_SCHEMA
+        document_key = _document_key(value, minimum_bytes, allow_aliases); key = None
         if document_key is not None:
-            try: schema = _schema_key()
+            try: schema = _schema_key(name)
             except (ValueError, TypeError, KeyError, RecursionError, UnicodeError): schema = None
             if schema is not None:
                 registry, checker, digest, formats = schema
                 if registry is not state["registry"] or checker is not state["checker"]:
                     state["keys"].clear(); metrics["entries"] = 0
                     state["registry"], state["checker"] = registry, checker
-                key = document_key, digest, formats
+                key = name, document_key, digest, formats
         metrics["key_ms"] += (perf_counter() - key_started) * 1000
         if key is not None and key in state["keys"]:
             metrics["hits"] += 1
@@ -128,16 +140,17 @@ def fixture_dataset_shapes():
             if metrics["checks"] % 128 == 0: timing("progress")
         if result is None and key is not None and len(state["keys"]) < MAX_ENTRIES:
             # Even test-provided format callbacks must not mutate a memoized input.
-            try: following = _schema_key()
+            try: following = _schema_key(name)
             except (ValueError, TypeError, KeyError, RecursionError, UnicodeError): following = None
             if following is not None and following[0] is state["registry"] and following[1] is state["checker"]:
-                confirmed = _document_key(value), following[2], following[3]
+                confirmed = name, _document_key(value, minimum_bytes, allow_aliases), following[2], following[3]
                 if confirmed == key:
                     state["keys"].add(key); metrics["entries"] = len(state["keys"])
         return result
 
     try:
-        with patch.object(snapshot, "validate_contract", checked): yield metrics
+        with patch.object(snapshot, "validate_contract", checked), \
+                patch.object(action_restatement_kernel, "validate_contract", checked): yield metrics
     finally:
         state["keys"].clear(); _ACTIVE.reset(token)
         timing("end")

@@ -13,6 +13,7 @@ from tests.investor.epoch_source_fixture import NOW as FIRST
 from tests.investor.registered_epoch_fixture import reseal_wrong_continuation_state
 from worker.investor import epoch_continuation as runtime, model_epoch_continuation_source as source, eodhd_sources
 from worker.investor import epoch_control_jobs as owner_controls
+from worker.investor import action_restatement_kernel as restatement
 from worker.investor.evidence_monitor_runtime import resolve_checkpoint
 from worker.orchestration.db import WorkbenchError, open_database, instant
 from worker.orchestration.runtime import run_pending_once, command_handler
@@ -100,9 +101,11 @@ class EpochContinuationTests(unittest.TestCase):
             self.assertGreater(hits, 0)
             # Compare the same retained originals and arithmetic with the fixture
             # memo explicitly bypassed, using the actual production validator.
-            with patch.object(snapshot, "validate_contract", wraps=contracts.validate_contract) as uncached:
+            with patch.object(snapshot, "validate_contract", wraps=contracts.validate_contract) as uncached, \
+                    patch.object(restatement, "validate_contract", wraps=contracts.validate_contract) as uncached_restatement:
                 self.assertEqual(runtime.read_epoch_continuation_chain(db, "w", "owner", self.epoch_id, now=NOW), chain)
                 self.assertTrue(any(call.args[1] == shapes.SCHEMA for call in uncached.call_args_list))
+                self.assertTrue(any(call.args[1] == restatement.SCHEMA and not call.kwargs for call in uncached_restatement.call_args_list))
             self.assertEqual(metrics["hits"], hits)
             historical = runtime.read_epoch_continuation_chain(db, "w", "owner", self.epoch_id, now="2026-10-21T21:00:00.000Z")
             self.assertEqual(chain["source"], historical["source"])

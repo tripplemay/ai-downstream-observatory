@@ -86,3 +86,53 @@ explicit frozen protocol, current source reviews and durable exposure records.
 Real reference-portfolio generation, continuous monitoring, permitted AI,
 account-level review/reporting and protected production release remain part of
 the full v2 objective, not completed by this optimization.
+
+## 2026-11-07: separate offline fixture increment
+
+`tests/investor/fixture_dataset_shapes.py` now also de-duplicates the complete
+input shape of `investor-action-restatement-kernel.schema.json`, only inside
+the existing explicitly offline fixture scope. No production validator changes.
+The original comparison, ledger reconstruction, arithmetic, result/fragment
+validation, retained bytes, audits, permissions and currentness checks still run.
+An explicit uncached full-chain comparison bypasses both fixture aliases.
+
+The shared cache still holds at most eight digests, not documents. Keys include
+the full native JSON bytes, contract name, transitive schema content, local
+registry/checker identity and format callbacks. Small restatement inputs can
+reuse success across real evidence operations; small dataset shapes retain the
+old behavior. The schema-closure traversal is separately bounded at 64 schemas
+(the restatement closure currently contains 33), not 64 cache entries.
+
+Some retained coverage/action containers are shared within one input. For this
+contract only, the key walks their fully expanded JSON paths, counting repeated
+subtrees against the same node budget and rejecting cycles. Dataset alias
+handling remains conservative. Changed bytes, numeric types, unknown Python
+types, excess bytes/nodes/schema closure, failed validation, changed formats,
+mutating callbacks, other threads and pre-existing wrappers cannot gain a hit.
+Success and failure restore both aliases and discard the context.
+
+Six added tests preserve full arithmetic and explicit uncached equivalence,
+transitive-schema/format changes, invalid types/result replay, shared entry
+capacity, thread/wrapper/exception cleanup, shared subtrees/cycles, size limits
+and mutating callbacks. The first four were run red before the helper changed.
+The final fixture selection passed 12 tests; the broader related selection
+passed 93. Logs are under `artifacts/verification/fixture-shape-20261107`.
+
+The unchanged complete Web shard 4 passed 247/247 across its original 35 files
+in 635.674 seconds, with no drift in 1,601 monitored source files. Independent
+timing-parser checks passed 5/5 and TypeScript passed. Root tests passed 460
+with one optional skip in 186.348 seconds after correcting a local command that
+had accidentally selected Python without `jsonschema`; the failed run remains
+in `root.log`, with no source/assertion change to address that environment error.
+This is not full local Python/Web discovery execution or new build/HTTP/native
+acceptance. Production source, contracts, migrations and CI configuration are
+byte-identical to `aa68048`; only tests/docs differ.
+
+One sequential local history-flow sample changed from 18.895 to 18.260 seconds
+(about 3.4%). The cache avoided 146 of 149 repeated restatement input shape
+validations, while every comparison still executed. An initial attempt did not
+cache the shared-container inputs; its timings are retained too. These samples
+do not establish a statistically reliable speedup, CI qualification or a VPS
+performance claim. The 120-second fixture and 30-minute CI budgets, test
+discovery, eight-shard assignment, production configuration and all original
+assertions remain unchanged. Aggregate CI timeouts still require verification.

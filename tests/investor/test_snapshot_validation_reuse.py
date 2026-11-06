@@ -12,6 +12,7 @@ from tests.investor import evidence_fixture as fixture, test_data_evidence as ev
 from tests.investor import fixture_dataset_shapes as shapes
 from tests.research.fixtures import dataset
 from worker.investor import data_evidence, data_snapshot, source_inputs
+from worker.investor import action_restatement_kernel as restatement
 from worker.investor.data_evidence import _fact_validation_scope, resolve_capture, resolve_review, review_source, validate_facts
 from worker.market.contracts import validate_contract
 from worker.market.providers import longport
@@ -220,6 +221,120 @@ def large_dataset():
 
 
 class FixtureDatasetShapesTests(unittest.TestCase):
+    def test_small_restatement_shapes_reuse_only_input_validation_not_arithmetic(self):
+        from tests.investor.test_action_restatement_kernel import fractional_case
+        value = fractional_case(); compare = restatement.compare_action_restatement
+        original = restatement.validate_contract
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics, \
+                patch.object(restatement, "_replay", wraps=restatement._replay) as replay:
+            result = compare(value)
+            self.assertEqual(compare(deepcopy(value)), result)
+            self.assertEqual((metrics["validated"], metrics["hits"]), (1, 1))
+            self.assertEqual(replay.call_count, 4)
+            self.assertIs(restatement.compare_action_restatement, compare)
+            hits = metrics["hits"]
+            with patch.object(snapshot, "validate_contract", wraps=contracts.validate_contract), \
+                    patch.object(restatement, "validate_contract", wraps=contracts.validate_contract) as uncached:
+                self.assertEqual(compare(deepcopy(value)), result)
+                self.assertTrue(any(call.args[1] == restatement.SCHEMA and not call.kwargs for call in uncached.call_args_list))
+            self.assertEqual(metrics["hits"], hits)
+            self.assertEqual(replay.call_count, 6)
+            bad = deepcopy(value); bad["corrected_coverage"][next(iter(bad["corrected_coverage"]))]["complete"] = False
+            for _ in range(2):
+                with self.assertRaisesRegex(WorkbenchError, "CORRECTED_COVERAGE_GAP"): compare(bad)
+            self.assertEqual((metrics["validated"], metrics["hits"]), (2, 2))
+            self.assertEqual(replay.call_count, 8)
+        self.assertIs(restatement.validate_contract, original)
+
+    def test_restatement_transitive_schema_and_format_changes_are_not_cached(self):
+        from tests.investor.test_action_restatement_kernel import fractional_case
+        value = fractional_case(); schemas, _, checker = contracts._schemas()
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            result = restatement.compare_action_restatement(value)
+            with patch.dict(schemas["common.schema.json"]["$defs"]["hash"], {"pattern": "^z$"}):
+                with self.assertRaises(WorkbenchError): restatement.compare_action_restatement(value)
+            with patch.dict(checker.checkers, {"date-time": (lambda _: False, ())}):
+                with self.assertRaises(WorkbenchError): restatement.compare_action_restatement(value)
+            self.assertEqual((metrics["validated"], metrics["hits"]), (3, 0))
+            self.assertEqual(restatement.compare_action_restatement(value), result)
+            self.assertEqual(metrics["hits"], 1)
+
+    def test_restatement_invalid_types_and_fragments_always_reach_original_validation(self):
+        from tests.investor.test_action_restatement_kernel import fractional_case
+        value = fractional_case()
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            result = restatement.compare_action_restatement(value)
+            for change in (lambda item: item["origin"].update(sequence=True),
+                           lambda item: item["definition"].update(targets=tuple(item["definition"]["targets"]))):
+                bad = deepcopy(value); change(bad)
+                for _ in range(2):
+                    with self.assertRaises(WorkbenchError): restatement.compare_action_restatement(bad)
+            self.assertEqual((metrics["validated"], metrics["hits"]), (5, 0))
+            result["difference_cny"] = "0"
+            # A structurally valid result still requires independent arithmetic.
+            for _ in range(2):
+                with self.assertRaisesRegex(WorkbenchError, "RESULT_REPLAY_MISMATCH"):
+                    restatement.verify_action_restatement_arithmetic(value, result)
+            self.assertEqual((metrics["validated"], metrics["hits"]), (5, 2))
+
+    def test_restatement_shares_entry_budget_and_cannot_cross_threads_or_wrappers(self):
+        from tests.investor.test_action_restatement_kernel import fractional_case
+        value = fractional_case(); original = restatement.validate_contract
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            restatement.compare_action_restatement(value)
+            with ThreadPoolExecutor(max_workers=1) as pool: pool.submit(restatement.compare_action_restatement, value).result()
+            self.assertEqual((metrics["validated"], metrics["hits"]), (1, 0))
+        with patch.object(shapes, "MAX_ENTRIES", 1), redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            snapshot.validate_dataset(large_dataset())
+            restatement.compare_action_restatement(value); restatement.compare_action_restatement(value)
+            self.assertEqual((metrics["validated"], metrics["hits"], metrics["entries"]), (3, 0, 1))
+        with patch.object(restatement, "validate_contract", wraps=original) as wrapper, \
+                redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            restatement.compare_action_restatement(value)
+            self.assertIs(restatement.validate_contract, wrapper)
+            self.assertEqual(metrics["checks"], 0)
+            self.assertGreater(wrapper.call_count, 0)
+        with self.assertRaisesRegex(RuntimeError, "FICTIONAL_EXIT"), redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes():
+            raise RuntimeError("FICTIONAL_EXIT")
+        self.assertIs(restatement.validate_contract, original)
+        self.assertIsNone(shapes._ACTIVE.get())
+
+    def test_restatement_shared_json_subtrees_bind_expanded_bytes_and_stay_bounded(self):
+        from tests.investor.test_action_restatement_kernel import fractional_case
+        value = fractional_case(); value["corrected_actions"][0] = value["original_actions"][0]
+        self.assertIsNone(shapes._document_key(value, 0))
+        expanded = json.loads(json.dumps(value))
+        self.assertEqual(shapes._document_key(value, 0, True), shapes._document_key(expanded, 0))
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            result = restatement.compare_action_restatement(value)
+            self.assertEqual(restatement.compare_action_restatement(expanded), result)
+            self.assertEqual((metrics["validated"], metrics["hits"]), (1, 1))
+            value["original_actions"][0]["known_at"] = "not-an-instant"
+            for _ in range(2):
+                with self.assertRaises(WorkbenchError): restatement.compare_action_restatement(value)
+            self.assertEqual((metrics["validated"], metrics["hits"]), (3, 1))
+        cycle = {}; cycle["cycle"] = cycle
+        self.assertIsNone(shapes._document_key(cycle, 0, True))
+        with patch.object(shapes, "MAX_NODES", 4):
+            leaf = {"value": 1}
+            self.assertIsNone(shapes._document_key([leaf, leaf], 0, True))
+        for guard in ({"MAX_BYTES": 128}, {"MAX_SCHEMAS": 2}):
+            with patch.multiple(shapes, **guard), redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+                restatement.compare_action_restatement(expanded); restatement.compare_action_restatement(expanded)
+                self.assertEqual((metrics["validated"], metrics["hits"], metrics["entries"]), (2, 0, 0))
+
+    def test_restatement_mutating_format_callback_cannot_create_an_entry(self):
+        from tests.investor.test_action_restatement_kernel import fractional_case
+        value = fractional_case(); _, _, checker = contracts._schemas()
+        original = checker.checkers["date-time"]
+        def mutate(instant):
+            value["checked_at"] = "2025-01-01T00:00:00Z"
+            return original[0](instant)
+        with patch.dict(checker.checkers, {"date-time": (mutate, original[1])}), \
+                redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            with self.assertRaises(WorkbenchError): restatement.compare_action_restatement(value)
+            self.assertEqual(metrics["entries"], 0)
+
     def test_exact_shape_reuse_restores_original_and_keeps_every_dataset_semantic_check(self):
         original, validate = snapshot.validate_contract, snapshot.validate_dataset
         value = large_dataset()
