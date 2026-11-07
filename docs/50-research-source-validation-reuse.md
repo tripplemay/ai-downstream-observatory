@@ -187,3 +187,49 @@ test duration of 347.113 seconds. This Python-only template does not claim to
 fix that Web timeout. A separate actual Node CPU profile of that largest test
 passed locally in 112.770 seconds; further optimization remains separate from
 these class-owned prerequisites and from production acceptance.
+
+## 2026-11-07: file-owned Web prerequisites and unchanged replay
+
+The repeated prerequisites in the epoch, legacy-transition and funded-comparison
+Web fixtures now each have at most one file-owned, private RAM image and plain
+JSON value (8 MiB combined). They are constructed by the original fictional
+producer, not loaded from a repository snapshot or a production backup. Every
+copy creates an exclusive new temporary file; existing targets are never
+overwritten. Complete schema/metadata/rowid/BLOB fingerprints, the migration
+manifest, WAL/FK settings and foreign keys are checked. Non-JSON, oversized or
+external scratch dependencies decline reuse. Scope checks reject financial
+facts, recovery state, transactions, read-only/attached databases and hardlinks.
+File cleanup discards the sole image; individual test cleanup owns each copy.
+
+Only preparation is reused: each original Node replay, source/permission read,
+mutation probe, independent arithmetic, client check and cold worker still runs.
+Funded-study intents and all candidate calculations run separately in every case;
+no funded study result is copied. Non-default funded variants and the two-checkpoint
+legacy prerequisite retain their original construction path. Epoch activation,
+download confirmation and core publication are not part of the reused paused base.
+
+The full original Web 4 selection passed 247/247, zero skips, in 538.708 seconds.
+All 35 files, the discovery/assignment fingerprint and every original test name
+matched; 1,604 monitored source files were unchanged during that run. Its earlier
+local comparison was 635.674 seconds, not a controlled statistical or Linux/VPS
+performance guarantee. Separate complete legacy and funded files passed 8/8 and
+12/12 in 24.461 and 146.314 seconds respectively. Bounded preparation/study timing
+diagnostics contain only elapsed numbers and a reuse boolean.
+
+Review then identified that separating the first epoch construction must not
+give its original preparation a second 120-second budget. They now share one
+absolute monotonic deadline; optional deadlines only shorten a named limit.
+Invalid or exhausted deadlines reject before spawning, and a real bounded
+timeout test preserves failure rather than returning a cached answer. After
+this tightening, all 18 affected budget/guard/epoch tests passed in 181.924 seconds;
+type checking and the original root selection (460 pass, one explicit optional
+skip, 186.763 seconds) passed. The added budget guard means final Web 4 contains
+the original 247 tests plus one new test. The earlier full-shard receipt is not
+relabelled as execution of this last deadline change; exact-commit CI remains
+required. The first TypeScript run found an `unknown` pragma result; that log
+is retained and the test helper now narrows it explicitly.
+
+No production source, provider transport, contract, strategy, migration, CI
+assignment, 30-minute job limit or production configuration changed. The separate
+date-formatter optimization proposal has not been implemented or folded into
+this test-only change. Evidence: `artifacts/verification/v2-release-audit-20261107/`.

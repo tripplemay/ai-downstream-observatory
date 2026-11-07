@@ -3,7 +3,7 @@ import test from "node:test";
 import Database from "better-sqlite3";
 import {writeFileSync,unlinkSync} from "node:fs";
 import path from "node:path";
-import { investorFixture } from "./investor-fixture";
+import { epochPrerequisiteFixture, epochPrerequisitePython, epochPrerequisiteValue } from "./epoch-prerequisite-fixture";
 import { actionPython } from "./action-maintenance-fixture";
 import { executeInvestorCommand, getInvestorState } from "../src/server/investor/service";
 import { readEvidenceMonitorRun, readEvidenceCheckpoint } from "../src/server/investor/evidence-monitor";
@@ -26,12 +26,14 @@ type Obj = Record<string, unknown>;
 const now = "2026-10-21T10:00:03.000Z";
 function obj(value: unknown): Obj { assert.ok(value && typeof value === "object" && !Array.isArray(value)); return value as Obj; }
 test("paused epoch roots create no notice; actual continuation notices remain historical and independently acknowledge without source access or financial effects",t=>{
-  const f=investorFixture();t.after(f.close);const at="2026-10-20T10:00:03.000Z",actor={id:"owner"};
-  const seeded=actionPython(f.filename,`
+  const f=epochPrerequisiteFixture();t.after(f.close);const at="2026-10-20T10:00:03.000Z",actor={id:"owner"};
+  const seeded=epochPrerequisitePython(f,`
 from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture
 from tests.investor.test_epoch_continuation import EpochContinuationTests
+from worker.market import contracts
 with offline_protocol_fixture():
- case=EpochContinuationTests();case.db=db;case.path=Path(sys.argv[1]);case.seed()
+ case=EpochContinuationTests();case.db=db;case.path=Path(sys.argv[1]);case.saved=${epochPrerequisiteValue(f)};case.epoch_id=case.saved['registration']['epoch']['id']
+ case.assertIsNone(contracts._VALIDATION_SCOPE.get(), "fixture construction must not retain a shape scope in the actual test")
  print(json.dumps({'epoch':case.epoch_id,'run':case.saved['registration']['monitor_run_id']}))
 `,"core_readmission");
   const original=readInvestorNotifications(f.db,actor,at);
@@ -115,12 +117,14 @@ test("millisecond publication buckets accept finer same-bucket attempt starts bu
   assert.throws(()=>actionJobStartedByMillisecond(recorded,"2026-11-04T18:34:55.367001Z"));
 });
 test("ordinary owner activation queues one real core check; immediate metadata-only pause invalidates stale enable work without changing global control",t=>{
-  const f=investorFixture();t.after(f.close);const at="2026-10-20T10:00:03.000Z",actor={id:"owner"},binding="a".repeat(64);
-  const seeded=actionPython(f.filename,`
+  const f=epochPrerequisiteFixture();t.after(f.close);const at="2026-10-20T10:00:03.000Z",actor={id:"owner"},binding="a".repeat(64);
+  const seeded=epochPrerequisitePython(f,`
 from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture
 from tests.investor.test_epoch_continuation import EpochContinuationTests
+from worker.market import contracts
 with offline_protocol_fixture():
- case=EpochContinuationTests();case.db=db;case.path=Path(sys.argv[1]);case.seed()
+ case=EpochContinuationTests();case.db=db;case.path=Path(sys.argv[1]);case.saved=${epochPrerequisiteValue(f)};case.epoch_id=case.saved['registration']['epoch']['id']
+ case.assertIsNone(contracts._VALIDATION_SCOPE.get(), "fixture construction must not retain a shape scope in the actual test")
  print(json.dumps({'body':case.body(),'model':case.saved['registration']['model_id']}))
 `,"core_readmission");
   const body=seeded.body as Obj,model=String(seeded.model),before=f.db.prepare("SELECT count(*) n FROM investor_epoch_controls").get() as {n:number};
@@ -167,15 +171,15 @@ with offline_protocol_fixture():
   for(const table of ["portfolios","accounts","ledger_events","postings"])assert.equal((f.db.prepare(`SELECT count(*) n FROM ${table}`).get() as {n:number}).n,0);
 });
 test("actual ongoing research requires independent full replay and current unambiguous sources; expiry or changed evidence hides derivatives", t => {
-  const f = investorFixture(); t.after(f.close);
-  const metadata = actionPython(f.filename, `
+  const f = epochPrerequisiteFixture(); t.after(f.close);
+  const metadata = epochPrerequisitePython(f, `
 from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture
-from tests.investor.epoch_continuation_source_fixture import create,next_sources,NOW
+from tests.investor.epoch_continuation_source_fixture import next_sources,NOW
 from tests.investor.epoch_source_fixture import NOW as FIRST
 from worker.investor import epoch_continuation as runtime
 from worker.orchestration.runtime import run_pending_once
 with offline_protocol_fixture():
- saved=create(db,Path(sys.argv[1]));identifier=saved['registration']['epoch']['id']
+ saved=${epochPrerequisiteValue(f)};identifier=saved['registration']['epoch']['id']
  root=db.execute('SELECT content_hash FROM investor_model_epochs WHERE id=?',(identifier,)).fetchone()[0]
  head=dict(db.execute('SELECT id,content_hash FROM investor_evidence_model_checkpoints ORDER BY sequence DESC LIMIT 1').fetchone())
  body={'schema_version':'investor-epoch-control-submit-v1','epoch_id':identifier,'expected_registration_hash':root,'expected_checkpoint':head,

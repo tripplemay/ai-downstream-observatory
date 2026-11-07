@@ -31,12 +31,15 @@ export function readActionFixtureTimings(stderr:string):Record<string,number|str
   }
   return rows;
 }
-export function actionPython(filename:string,code:string,budget:"source"|"core_readmission"|"legacy_transition"="source") {
+export function actionPython(filename:string,code:string,budget:"source"|"core_readmission"|"legacy_transition"="source",deadline?:number) {
   assert.ok(budget==="source"||budget==="core_readmission"||budget==="legacy_transition","UNKNOWN_ACTION_FIXTURE_BUDGET");
   // Full retained-core replay includes research, callbacks and two checkpoints.
   // Keep ordinary source probes unchanged and never change a production deadline.
-  const timeout=budget==="source"?30000:120000;
   const started=performance.now();
+  const maximum=budget==="source"?30000:120000;
+  assert.ok(deadline===undefined||typeof deadline==="number"&&Number.isFinite(deadline),"INVALID_ACTION_FIXTURE_DEADLINE");
+  const timeout=deadline===undefined?maximum:Math.min(maximum,Math.floor(deadline-started));
+  assert.ok(timeout>0,"OFFLINE_ACTION_FIXTURE_DEADLINE_EXPIRED");
   const child=spawnSync(process.env.WORKBENCH_TEST_PYTHON ?? "python3",["-c",`
 import json,socket,sys
 from pathlib import Path

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import type {TestContext} from "node:test";
 import {writeFileSync,unlinkSync} from "node:fs";
 import path from "node:path";
-import {investorFixture} from "./investor-fixture";
+import {epochPrerequisiteFixture,epochPrerequisitePython,epochPrerequisiteValue} from "./epoch-prerequisite-fixture";
 import {actionPython} from "./action-maintenance-fixture";
 import {canonical,hash} from "../src/server/ledger/service";
 import {readHistoryWorkflowResponse,readHistoryResolutionResponse,submitHistoryWorkflow} from "../src/server/investor/epoch-history-workflow";
@@ -11,18 +11,20 @@ import {historyWorkflowReviewResponseSchema} from "../src/server/investor/epoch-
 import {historyResolutionAcknowledgements} from "../src/server/investor/epoch-history-resolution-schemas";
 const NOW="2026-10-21T10:00:03.000Z",actor={id:"owner"},binding="0".repeat(64);
 export function verifyHistoryResolutionService(t:TestContext){for(const expired of [false,true]){
- const f=investorFixture();t.after(f.close);
- const seeded=actionPython(f.filename,`
+ const f=epochPrerequisiteFixture();t.after(f.close);
+ const seeded=epochPrerequisitePython(f,`
 from unittest.mock import patch
 from datetime import timedelta
 from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture
 from tests.investor.test_history_collection import EpochHistoryPlanTests
 from tests.investor.epoch_history_fixture import body,confirm,transport,default,NOW
-from worker.investor import epoch_history_jobs as history,data_evidence
+from worker.investor import epoch_history_jobs as history,data_evidence,epoch_continuation as epochs
 from worker.orchestration.jobs import claim_job
 from worker.orchestration.db import instant
 with offline_protocol_fixture():
- case=EpochHistoryPlanTests();case.db=db;case.path=Path(sys.argv[1]);case.seed();parent=confirm(case,body(case,calls=${expired?1:2}));clock=[NOW]
+ case=EpochHistoryPlanTests();case.db=db;case.path=Path(sys.argv[1]);case.saved=${epochPrerequisiteValue(f)};case.epoch_id=case.saved['registration']['epoch']['id']
+ epochs.set_epoch_continuation_control(db,'w','owner',case.body(True),owner_interaction=True,now='2026-10-20T10:00:03.000Z')
+ parent=confirm(case,body(case,calls=${expired?1:2}));clock=[NOW]
  with transport(case,clock,fail_on=${expired?"None":"1"}) as (calls,sdk):
   if ${expired?"True":"False"}:
    lease=claim_job(db,'fictional-crashed-history',job_type=history.JOB_TYPE,lease_seconds=60,now=NOW)

@@ -2,22 +2,24 @@ import assert from "node:assert/strict";
 import type {TestContext} from "node:test";
 import {writeFileSync,unlinkSync} from "node:fs";
 import path from "node:path";
-import {investorFixture} from "./investor-fixture";
+import {epochPrerequisiteFixture,epochPrerequisitePython,epochPrerequisiteValue} from "./epoch-prerequisite-fixture";
 import {actionPython} from "./action-maintenance-fixture";
 import {submitHistoryWorkflow,readHistoryWorkflowResponse} from "../src/server/investor/epoch-history-workflow";
 import {historyAcknowledgements} from "../src/server/investor/epoch-history-schemas";
 import {readEpochContinuationChain} from "../src/server/investor/epoch-continuation";
 const NOW="2026-10-21T10:00:03.000Z",actor={id:"owner"},binding="0".repeat(64);
 export function verifyHistoryService(t:TestContext){
- const f=investorFixture();t.after(f.close);
- const seed=actionPython(f.filename,`
+ const f=epochPrerequisiteFixture();t.after(f.close);
+ const seed=epochPrerequisitePython(f,`
 from unittest.mock import patch
 from tests.investor.test_legacy_protocol_matrix import offline_protocol_fixture
 from tests.investor.test_history_collection import EpochHistoryPlanTests
 from tests.investor import epoch_continuation_source_fixture as sources
 from tests.investor.epoch_source_fixture import current
+from worker.investor import epoch_continuation as epochs
 with offline_protocol_fixture():
- case=EpochHistoryPlanTests();case.db=db;case.path=Path(sys.argv[1]);case.seed()
+ case=EpochHistoryPlanTests();case.db=db;case.path=Path(sys.argv[1]);case.saved=${epochPrerequisiteValue(f)};case.epoch_id=case.saved['registration']['epoch']['id']
+ epochs.set_epoch_continuation_control(db,'w','owner',case.body(True),owner_interaction=True,now='2026-10-20T10:00:03.000Z')
  with patch.object(current,'prices',return_value=None):sources.next_sources(db,case.saved)
  print(json.dumps({'epoch':case.epoch_id,'model':case.saved['preview']['epoch_definition']['model_id']}))
 `,"core_readmission");

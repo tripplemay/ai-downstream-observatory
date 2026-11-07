@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test, { type TestContext } from "node:test";
+import test, { after, type TestContext } from "node:test";
 import Database from "better-sqlite3";
 import { actionPython, probeActionMutation } from "./action-maintenance-fixture";
 import { investorActor, investorFixture } from "./investor-fixture";
@@ -8,10 +8,21 @@ import { readLegacyActionTransitionPreview } from "../src/server/investor/legacy
 import { checkpointActionReview } from "../src/server/investor/action-checkpoint-replay";
 import { readInvestorMonitorEvidenceSource, compareInvestorMonitorData, replayInvestorMonitorData } from "../src/server/investor/monitor-source";
 import { executeInvestorCommand, getInvestorState } from "../src/server/investor/service";
+import { FictionalPrerequisite } from "./fictional-prerequisite-fixture";
 
 type Obj = Record<string, unknown>;
 const at = "2026-11-03T06:00:04.001Z";
+let prerequisite: FictionalPrerequisite | null = null;
+after(() => { prerequisite?.close(); prerequisite = null; });
+function prepared(f: ReturnType<typeof investorFixture>, value: Obj) {
+  return { ...f, candidate: value.candidate as Obj, preview: value.preview as Obj, modelId: (value.preview as Obj).model_id as string,
+    oldReviewId: value.old_review_id as string };
+}
 function fixture(t: TestContext, twoCheckpoints = false) {
+  if (!twoCheckpoints && prerequisite) {
+    const f = prerequisite.instantiate(); t.after(f.close);
+    return prepared(f, f.value);
+  }
   const f = investorFixture(); t.after(() => f.close());
   const value = actionPython(f.filename, `
 from tests.investor.test_action_review_readmission import ActionReviewReadmissionTests
@@ -30,8 +41,8 @@ prepared=transition._prepare_legacy_action_transition(db,'w','synthetic-investor
 prepared['old_review_id']=case.old
 print(canonical_json(prepared))
 `, "legacy_transition");
-  return { ...f, candidate: value.candidate as Obj, preview: value.preview as Obj, modelId: (value.preview as Obj).model_id as string,
-    oldReviewId: value.old_review_id as string };
+  if (!twoCheckpoints) prerequisite = FictionalPrerequisite.capture(f, value);
+  return prepared(f, value);
 }
 
 test("Node independently replays actual retained legacy bytes and every checkpoint, not the Python summary", t => {

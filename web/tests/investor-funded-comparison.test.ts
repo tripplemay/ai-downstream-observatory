@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { getFundedComparison } from "../src/server/investor/funded-comparison";
@@ -15,29 +15,44 @@ import { canonical, hash } from "../src/server/ledger/service";
 import { getFundedPathAnalysis } from "../src/server/investor/funded-analysis";
 import { parseFundedAnalysis } from "../src/components/workbench/investor-funded-analysis-client";
 import { FundedAnalysisResults } from "../src/components/workbench/investor-funded-analysis-panel";
+import { FictionalPrerequisite } from "./fictional-prerequisite-fixture";
 
 const registered = "2026-01-02T12:00:04.000Z", done = "2026-01-02T12:00:05.000Z", expired = "2026-02-03T00:00:00.000Z", binding = "a".repeat(64);
+let prerequisite: FictionalPrerequisite | null = null;
+after(() => { prerequisite?.close(); prerequisite = null; });
 function helper(f: ReturnType<typeof investorFixture>, module: string, args: string[] = []) {
   return JSON.parse(execFileSync(process.env.WORKBENCH_TEST_PYTHON ?? "python3", ["-m", module, "--db", f.filename, ...args],
     { cwd: path.resolve(".."), encoding: "utf8", timeout: 120000, maxBuffer: 65536, stdio: ["ignore", "pipe", "pipe"] }));
 }
-function setup(f: ReturnType<typeof investorFixture>, failure = false, bounded = false, eventReview = false, settled = false, orphan = false) {
-  saveSyntheticProfile(f);
-  executeInvestorCommand(f.db, actor, { action: "save_funding_plan", expected_revision: 1, idempotency_key: "fictional-funding",
-    funding_plan: { schema_version: "investor-funding-plan-v1", start_date: "2026-01-01", horizon_years: 1, evaluation_timezone: "Asia/Shanghai",
-      initial_capital_cny: "1200", annual_contribution_cny: "300", first_annual_date: "2026-12-31", entry_method: "three_tranches_60_days",
-      actual_arrivals_confirmed: false, execution_authorized: false, live_advice_eligible: false } }, registered);
-  helper(f, "tests.investor.evidence_fixture", ["--fixed-policy-v2", "--funded-year", ...(bounded ? ["--bounded-execution-v3"] : []), ...(eventReview ? ["--event-review-execution-v5"] : []), ...(settled ? ["--settled-intent-execution-v6"] : []), ...(orphan ? ["--funded-settled-orphan"] : [])]);
-  executeInvestorCommand(f.db, actor, { action: "compare_funding", expected_revision: getInvestorState(f.db, actor, registered).revision, idempotency_key: "fictional-study" }, registered);
-  helper(f, "tests.investor.funded_study_fixture", [...(failure ? ["--fail-first-candidate"] : []), ...(bounded || eventReview || settled ? ["--default-core"] : [])]);
+function setup(failure = false, bounded = false, eventReview = false, settled = false, orphan = false) {
+  const reusable = !bounded && !eventReview && !settled && !orphan;
+  const reused = reusable && prerequisite !== null;
+  const started = performance.now(), f = reused ? prerequisite!.instantiate() : investorFixture();
+  let preparedAt = started;
+  try {
+    if (!reused) {
+      saveSyntheticProfile(f);
+      executeInvestorCommand(f.db, actor, { action: "save_funding_plan", expected_revision: 1, idempotency_key: "fictional-funding",
+        funding_plan: { schema_version: "investor-funding-plan-v1", start_date: "2026-01-01", horizon_years: 1, evaluation_timezone: "Asia/Shanghai",
+          initial_capital_cny: "1200", annual_contribution_cny: "300", first_annual_date: "2026-12-31", entry_method: "three_tranches_60_days",
+          actual_arrivals_confirmed: false, execution_authorized: false, live_advice_eligible: false } }, registered);
+      helper(f, "tests.investor.evidence_fixture", ["--fixed-policy-v2", "--funded-year", ...(bounded ? ["--bounded-execution-v3"] : []), ...(eventReview ? ["--event-review-execution-v5"] : []), ...(settled ? ["--settled-intent-execution-v6"] : []), ...(orphan ? ["--funded-settled-orphan"] : [])]);
+      if (reusable) prerequisite = FictionalPrerequisite.capture(f, {});
+    }
+    preparedAt = performance.now();
+    executeInvestorCommand(f.db, actor, { action: "compare_funding", expected_revision: getInvestorState(f.db, actor, registered).revision, idempotency_key: "fictional-study" }, registered);
+    helper(f, "tests.investor.funded_study_fixture", [...(failure ? ["--fail-first-candidate"] : []), ...(bounded || eventReview || settled ? ["--default-core"] : [])]);
+    return f;
+  } catch (error) { f.close(); throw error; }
+  finally { process.stderr.write("FICTIONAL_FUNDED_SETUP_TIMING " + JSON.stringify({ prerequisite_reused: reused,
+    prepare_ms: preparedAt - started, study_ms: performance.now() - preparedAt }) + "\n"); }
 }
 function count(f: ReturnType<typeof investorFixture>, table: string) { return (f.db.prepare(`SELECT count(*) n FROM ${table}`).get() as { n: number }).n; }
 function changes(f: ReturnType<typeof investorFixture>) { return (f.db.prepare("SELECT total_changes() n").get() as { n: number }).n; }
 
 test("v6 source keeps cash intents through normal annual producer, durable payloads, cold replay, strict clients and holding analysis", async () => {
-  const f = investorFixture();
+  const f = setup(false, false, false, true);
   try {
-    setup(f, false, false, false, true);
     const rows = f.db.prepare("SELECT payload FROM investor_funded_result_payloads").all() as { payload: Buffer }[];
     assert.equal(rows.length, 3);
     for (const row of rows) {
@@ -73,9 +88,8 @@ test("v6 source keeps cash intents through normal annual producer, durable paylo
 });
 
 test("annual orphan stays visible and incomplete through default core and service read models despite zero order errors", async () => {
-  const f = investorFixture();
+  const f = setup(false, false, false, true, true);
   try {
-    setup(f, false, false, false, true, true);
     assert.equal(count(f, "investor_funded_result_payloads"), 3);
     const before = changes(f), state = getInvestorState(f.db, actor, done), report = await getFundedComparison(f.db, actor, { clock: () => done });
     assert.equal(report.status, "partial"); assert.equal(report.economics_independently_replayed, false);
@@ -99,9 +113,8 @@ test("annual orphan stays visible and incomplete through default core and servic
 });
 
 test("v5 admitted source keeps event-review policy through durable funding study, cold replay and path analysis", async () => {
-  const f = investorFixture();
+  const f = setup(false, false, true);
   try {
-    setup(f, false, false, true);
     const rows = f.db.prepare("SELECT payload FROM investor_funded_result_payloads").all() as { payload: Buffer }[];
     assert.equal(rows.length, 3);
     for (const row of rows) {
@@ -142,9 +155,8 @@ test("v5 admitted source keeps event-review policy through durable funding study
 });
 
 test("bounded source reaches existing durable funding study, cold independent replay and analysis without financial writes", async () => {
-  const f = investorFixture();
+  const f = setup(false, true);
   try {
-    setup(f, false, true);
     const rows = f.db.prepare("SELECT payload FROM investor_funded_result_payloads").all() as { payload: Buffer }[];
     assert.equal(rows.length, 3);
     for (const row of rows) {
@@ -170,9 +182,9 @@ test("bounded source reaches existing durable funding study, cold independent re
 });
 
 test("private persisted comparison independently replays all candidates, remains read-only and never selects personal risk or weights", async () => {
-  const f = investorFixture();
+  const f = setup();
   try {
-    setup(f); assert.equal(count(f, "investor_funded_result_headers"), 3); assert.equal(count(f, "investor_funded_result_payloads"), 3);
+    assert.equal(count(f, "investor_funded_result_headers"), 3); assert.equal(count(f, "investor_funded_result_payloads"), 3);
     const state = getInvestorState(f.db, actor, done), before = changes(f), report = await getFundedComparison(f.db, actor, { clock: () => done });
     assert.equal(report.status, "verified_retrospective"); assert.equal(report.economics_independently_replayed, true);
     assert.equal(report.candidates.length, 3); assert.equal(report.execution_authorized, false); assert.equal(report.publication_eligible, false);
@@ -201,9 +213,9 @@ test("private persisted comparison independently replays all candidates, remains
   } finally { f.close(); }
 });
 test("failed candidates stay beside independently replayed peers without survivor-only comparison", async () => {
-  const f = investorFixture();
+  const f = setup(true);
   try {
-    setup(f, true); const report = await getFundedComparison(f.db, actor, { clock: () => done });
+    const report = await getFundedComparison(f.db, actor, { clock: () => done });
     assert.equal(report.status, "partial"); assert.equal(report.economics_independently_replayed, false);
     assert.deepEqual(report.candidates.map(row => row.status), ["failed", "verified_retrospective", "verified_retrospective"]);
     assert.equal(report.candidates[0].paths, null); assert.equal(count(f, "investor_funded_result_payloads"), 2);
@@ -212,9 +224,9 @@ test("failed candidates stay beside independently replayed peers without survivo
   } finally { f.close(); }
 });
 test("expired or withdrawn sources hide economics; core cleanup is scoped, audited and idempotent", async () => {
-  const f = investorFixture();
+  const f = setup();
   try {
-    setup(f); assert.throws(() => helper(f, "tests.investor.funded_study_fixture", ["--purge-first"]), /PURGE_NOT_DUE/);
+    assert.throws(() => helper(f, "tests.investor.funded_study_fixture", ["--purge-first"]), /PURGE_NOT_DUE/);
     assert.throws(() => helper(f, "tests.investor.funded_study_fixture", ["--purge-first", "--actor", "different-owner", "--now", expired]), /OUT_OF_SCOPE/);
     const before = changes(f), report = await getFundedComparison(f.db, actor, { clock: () => expired });
     assert.equal(report.status, "outdated"); assert.equal(report.candidates.length, 0); assert.equal(changes(f), before);
@@ -228,9 +240,9 @@ test("expired or withdrawn sources hide economics; core cleanup is scoped, audit
     assert.equal(count(f, "ledger_events"), 0);
     for (const sql of ["UPDATE investor_funded_result_purges SET reason=reason", "DELETE FROM investor_funded_result_purges"]) assert.throws(() => f.db.exec(sql));
   } finally { f.close(); }
-  const g = investorFixture();
+  const g = setup();
   try {
-    setup(g); helper(g, "tests.investor.funded_study_fixture", ["--withdraw-first-source"]);
+    helper(g, "tests.investor.funded_study_fixture", ["--withdraw-first-source"]);
     assert.equal((await getFundedComparison(g.db, actor, { clock: () => done })).status, "outdated");
     assert.equal(helper(g, "tests.investor.funded_study_fixture", ["--purge-due"]).purge_count, 3);
     assert.equal(count(g, "investor_funded_result_payloads"), 0);
@@ -238,9 +250,9 @@ test("expired or withdrawn sources hide economics; core cleanup is scoped, audit
   } finally { g.close(); }
 });
 test("source expiry during asynchronous replay rejects all economic output instead of returning an old certificate", async () => {
-  const f = investorFixture();
+  const f = setup();
   try {
-    setup(f); let calls = 0;
+    let calls = 0;
     const report = await getFundedComparison(f.db, actor, { clock: () => calls++ === 0 ? done : expired });
     assert.equal(report.status, "outdated"); assert.equal(report.candidates.length, 0); assert.equal(report.economics_independently_replayed, false);
     const current = await getFundedComparison(f.db, actor, { clock: () => done }); calls = 0;
@@ -250,9 +262,8 @@ test("source expiry during asynchronous replay rejects all economic output inste
   } finally { f.close(); }
 });
 test("self-sealed forged economic payload is not trusted; missing legacy bytes are explicit rather than fabricated", async () => {
-  const f = investorFixture();
+  const f = setup();
   try {
-    setup(f);
     const triggers = f.db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='investor_funded_result_payloads'").all() as { name: string }[];
     for (const trigger of triggers) f.db.exec(`DROP TRIGGER ${trigger.name}`);
     const row = f.db.prepare("SELECT * FROM investor_funded_result_payloads ORDER BY parameters_hash LIMIT 1").get() as { run_id: string; parameters_hash: string; payload: Buffer };
@@ -289,9 +300,9 @@ test("fixed worker source inventory matches build tooling; per-process capacity 
   assert.equal(await withFundedComparisonCapacity("fictional-one", async () => 1), 1);
 });
 test("selected funded curve is owner-scoped, read-only and bound to the independently replayed summary, not a recommended strategy", async () => {
-  const f = investorFixture();
+  const f = setup();
   try {
-    setup(f); const comparison = await getFundedComparison(f.db, actor, { clock: () => done });
+    const comparison = await getFundedComparison(f.db, actor, { clock: () => done });
     const parameters = comparison.candidates[0].parameters_hash, before = changes(f);
     const report = await getFundedPathAnalysis(f.db, actor, { parameters_hash: parameters, path: "staged" }, { clock: () => done });
     assert.equal(report.status, "verified_retrospective"); assert.equal(report.analysis?.baseline_preregistered, false);
@@ -311,9 +322,9 @@ test("selected funded curve is owner-scoped, read-only and bound to the independ
   } finally { f.close(); }
 });
 test("funded curve client rejects stale scope and resealed inconsistent money, monthly windows and risk diagnostics", async () => {
-  const f = investorFixture();
+  const f = setup();
   try {
-    setup(f); const comparison = await getFundedComparison(f.db, actor, { clock: () => done }), parameters = comparison.candidates[0].parameters_hash;
+    const comparison = await getFundedComparison(f.db, actor, { clock: () => done }), parameters = comparison.candidates[0].parameters_hash;
     const report = await getFundedPathAnalysis(f.db, actor, { parameters_hash: parameters, path: "immediate" }, { clock: () => done });
     const mutations = [
       (value: typeof report & { session_binding: string }) => { value.session_binding = "b".repeat(64); },
