@@ -20,6 +20,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: workbench-production-release
@@ -53,6 +54,26 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release_sha }}
+      - name: bind host deadline to the original release job start
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" --jq '[.jobs[] | select(.name == "release" and .status == "in_progress") | .started_at]' > "$RUNNER_TEMP/release-job-start.json"
+          deadline=$(python3 - "$RUNNER_TEMP/release-job-start.json" <<'PY'
+          from datetime import datetime, timezone
+          import json, sys
+          starts = json.load(open(sys.argv[1]))
+          assert len(starts) == 1
+          started = datetime.fromisoformat(starts[0].replace('Z', '+00:00')).timestamp()
+          now = datetime.now(timezone.utc).timestamp()
+          assert started <= now < started + 75 * 60
+          print(int(started) + 75 * 60)
+          PY
+          )
+          printf 'RELEASE_DEADLINE_EPOCH=%s\n' "$deadline" >> "$GITHUB_ENV"
+          printf 'Host cutover is durable after submission; cancelling this observer does not cancel the host task. Manual stop requires the recovery runbook.\n' >> "$GITHUB_STEP_SUMMARY"
       - name: build and verify public-source image bundle on the runner
         env:
           RELEASE_SHA: ${{ inputs.release_sha }}
@@ -85,10 +106,10 @@ jobs:
           git archive --format=tar.gz --output=release.tar.gz "$RELEASE_SHA"
           sha256sum release.tar.gz > release.tar.gz.sha256
           image_upload="images-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" "set -eu; umask 077; mkdir -p '$VPS_PATH/incoming/$RELEASE_SHA/$image_upload'; test ! -e '$VPS_PATH/incoming/$RELEASE_SHA/$image_upload/release-images.json'; test ! -e '$VPS_PATH/incoming/$RELEASE_SHA/$image_upload/release-images.tar.gz'"
-          scp -o BatchMode=yes -o StrictHostKeyChecking=yes release.tar.gz release.tar.gz.sha256 "$VPS_USER@$VPS_HOST:$VPS_PATH/incoming/$RELEASE_SHA/"
-          scp -o BatchMode=yes -o StrictHostKeyChecking=yes "$RUNNER_TEMP/etf-release-images/release-images.tar.gz" "$RUNNER_TEMP/etf-release-images/release-images.json" "$VPS_USER@$VPS_HOST:$VPS_PATH/incoming/$RELEASE_SHA/$image_upload/"
-      - name: stage immutable source and run guarded cutover
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "$VPS_USER@$VPS_HOST" "set -eu; umask 077; mkdir -p '$VPS_PATH/incoming/$RELEASE_SHA/$image_upload'; test ! -e '$VPS_PATH/incoming/$RELEASE_SHA/$image_upload/release-images.json'; test ! -e '$VPS_PATH/incoming/$RELEASE_SHA/$image_upload/release-images.tar.gz'"
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4 release.tar.gz release.tar.gz.sha256 "$VPS_USER@$VPS_HOST:$VPS_PATH/incoming/$RELEASE_SHA/"
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "$RUNNER_TEMP/etf-release-images/release-images.tar.gz" "$RUNNER_TEMP/etf-release-images/release-images.json" "$VPS_USER@$VPS_HOST:$VPS_PATH/incoming/$RELEASE_SHA/$image_upload/"
+      - name: stage immutable source without starting a cutover
         env:
           RELEASE_SHA: ${{ inputs.release_sha }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -97,7 +118,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$GITHUB_RUN_ID" =~ ^[0-9]{1,20}$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]{1,6}$ ]]
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" bash -s -- "$VPS_PATH" "$RELEASE_SHA" "images-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" <<'REMOTE'
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "$VPS_USER@$VPS_HOST" bash -s -- "$VPS_PATH" "$RELEASE_SHA" "images-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" <<'REMOTE'
           set -euo pipefail
           umask 077
           root=$1
@@ -120,8 +141,48 @@ jobs:
             (cd "$stage" && find . -type f ! -name .release-files.sha256 -print0 | sort -z | xargs -0 sha256sum > .release-files.sha256)
             mv -T "$stage" "$release"
           fi
-          bash "$release/scripts/deploy-workbench.sh" --release "$sha" --release-dir "$release" --config /etc/etf-workbench/release.env --image-bundle "$incoming/$image_upload/release-images.json" --execute
           REMOTE
+      - name: submit host cutover exactly once, reconcile unknown transport through observation
+        id: submit
+        continue-on-error: true
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PATH: ${{ secrets.VPS_PATH }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_DEADLINE_EPOCH" =~ ^[0-9]{10}$ ]]
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "$VPS_USER@$VPS_HOST" python3 "$VPS_PATH/releases/$RELEASE_SHA/scripts/release-job.py" submit --root "$VPS_PATH" --release "$RELEASE_SHA" --workflow-run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --config /etc/etf-workbench/release.env --deadline "$RELEASE_DEADLINE_EPOCH"
+      - name: observe the exact host job read-only until verified terminal outcome
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PATH: ${{ secrets.VPS_PATH }}
+        run: |
+          set -euo pipefail
+          umask 077
+          while (( $(date -u +%s) < RELEASE_DEADLINE_EPOCH )); do
+            if ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "$VPS_USER@$VPS_HOST" python3 "$VPS_PATH/releases/$RELEASE_SHA/scripts/release-job.py" status --root "$VPS_PATH" --release "$RELEASE_SHA" --workflow-run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --config /etc/etf-workbench/release.env > "$RUNNER_TEMP/host-release-status.json"; then
+              state=$(python3 - "$RUNNER_TEMP/host-release-status.json" "$RELEASE_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1]))
+          assert (value['release_sha'], value['workflow_run'], value['attempt']) == tuple(sys.argv[2:])
+          assert value['status'] in ('RUNNING', 'UNKNOWN_REQUIRES_REVIEW', 'SUCCEEDED', 'FAILED_PRE_CUTOVER', 'FAILED_RECOVERY_REQUIRED')
+          print(value['status'])
+          PY
+              )
+              printf 'Host release state: %s\n' "$state"
+              case "$state" in
+                SUCCEEDED) exit 0 ;;
+                FAILED_PRE_CUTOVER|FAILED_RECOVERY_REQUIRED) exit 1 ;;
+              esac
+            fi
+            sleep 15
+          done
+          printf 'Host outcome is unverified; query the same unit and preserved receipt. Do not resubmit.\n' >&2
+          exit 1
       - name: remove runner SSH key
         if: always()
         run: rm -f ~/.ssh/id_ed25519

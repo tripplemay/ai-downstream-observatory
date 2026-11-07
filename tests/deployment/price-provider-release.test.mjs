@@ -92,7 +92,8 @@ test('provider preflight, migration isolation and failure cleanup are wired into
   assert.match(deploy, /Market provider environment must be root-owned/);
   assert.equal((deploy.match(/writers_stopped=1\n  stop_market_provider_writers/g) ?? []).length, 2);
   assert.match(deploy, /assert_market_provider_stopped\nassert_no_recovery\nmutation_started=1/);
-  assert.match(deploy, /compose stop "\$\{start_services\[@\]\}"[\s\S]*?stop_market_provider_writers[\s\S]*?RESTORE_PENDING_REVIEW/);
+  assert.match(definition('failed'), /write_recovery_barrier \|\| true[\s\S]*?compose stop "\$\{start_services\[@\]\}"[\s\S]*?stop_market_provider_writers/);
+  assert.match(definition('write_recovery_barrier'), /release-barrier\.py" fence --release "\$release_sha" --data-dir "\$WORKBENCH_DATA_DIR_HOST"/);
   assert.ok(deploy.indexOf('market-provider-configuration.txt') < deploy.indexOf('if ((first_release)); then'));
   assert.match(deploy, /market-provider-readiness\.txt/);
   assert.match(deploy, /else\n  assert_market_provider_stopped\nfi/);

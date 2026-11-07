@@ -16,12 +16,15 @@ test('synthetic image bundle cases cover portable runtime fingerprints, private 
 test('protected release builds before SSH secrets and loads a per-attempt exact bundle before the original cutover gates', () => {
   const workflow = readFileSync(join(root, '.github/workflows/deploy.yml'), 'utf8');
   const deploy = readFileSync(join(root, 'scripts/deploy-workbench.sh'), 'utf8');
+  const job = readFileSync(join(root, 'scripts/release-job.py'), 'utf8');
   assert.ok(workflow.indexOf('needs: verify') < workflow.indexOf('release-image-bundle.py build'));
   assert.ok(workflow.indexOf('release-image-bundle.py build') < workflow.indexOf('VPS_SSH_KEY:'));
   assert.match(workflow, /environment: production/);
   assert.match(workflow, /images-\$GITHUB_RUN_ID-\$GITHUB_RUN_ATTEMPT/);
   assert.match(workflow, /"set -eu; umask 077; mkdir/);
-  assert.match(workflow, /--image-bundle "\$incoming\/\$image_upload\/release-images\.json"/);
+  assert.match(workflow, /release-job\.py" submit --root "\$VPS_PATH" --release "\$RELEASE_SHA" --workflow-run "\$GITHUB_RUN_ID" --attempt "\$GITHUB_RUN_ATTEMPT"/);
+  assert.ok(job.includes('f"images-{workflow_run}-{attempt}" / "release-images.json"'));
+  assert.ok(job.includes('"--image-bundle", str(self.bundle), "--execute"'));
   assert.match(deploy, /timeout 600 python3 "\$release_dir\/scripts\/release-image-bundle\.py" load/);
   assert.ok(deploy.indexOf('image-bundle-verification.json') < deploy.indexOf('pre-stop-backup.json'));
   assert.match(deploy, /else\n  timeout 3600 docker compose/);

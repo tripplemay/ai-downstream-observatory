@@ -120,7 +120,9 @@ jobs:
       - name: schema, market, recovery and release fixtures
         run: node --test --test-concurrency=2 tests/*/*.test.mjs
       - name: shell release checks
-        run: shellcheck scripts/deploy-workbench.sh tests/deployment/container-smoke.sh tests/deployment/provider-container-smoke.sh tests/deployment/ai-container-smoke.sh
+        run: shellcheck scripts/deploy-workbench.sh tests/deployment/container-smoke.sh tests/deployment/provider-container-smoke.sh tests/deployment/ai-container-smoke.sh tests/deployment/release-job-smoke.sh
+      - name: native isolated host-owned release lifecycle without business services
+        run: bash tests/deployment/release-job-smoke.sh
   http:
     runs-on: ubuntu-latest
     timeout-minutes: 30
