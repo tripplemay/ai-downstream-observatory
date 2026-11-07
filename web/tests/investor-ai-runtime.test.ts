@@ -80,8 +80,11 @@ test("built launcher verifies the complete source map and rejects tampered bundl
     manifest.bundle_sha256 = createHash("sha256").update(unusableBundle).digest("hex");
     writeFileSync(manifestFile, JSON.stringify(manifest));
     const guard = path.join(directory, "health-only.cjs");
-    writeFileSync(guard, `const fs=require('node:fs'),original=fs.readFileSync;
-fs.readFileSync=function(file,...args){if(file==='/tmp/etf-ai-runtime-health.json')return JSON.stringify({status:process.env.FICTIONAL_HEALTH_STATUS,at:Date.now()-Number(process.env.FICTIONAL_HEALTH_AGE)});return original.call(this,file,...args)};
+    // A persisted heartbeat predates validation, even when every clock read advances.
+    writeFileSync(guard, `const fs=require('node:fs'),original=fs.readFileSync,clockBase=Date.now();let clockTicks=0;
+Date.now=()=>clockBase+clockTicks++;
+const heartbeatAt=Date.now()-Number(process.env.FICTIONAL_HEALTH_AGE);
+fs.readFileSync=function(file,...args){if(file==='/tmp/etf-ai-runtime-health.json')return JSON.stringify({status:process.env.FICTIONAL_HEALTH_STATUS,at:heartbeatAt});return original.call(this,file,...args)};
 require('node:module').syncBuiltinESMExports();`);
     const health = (flag = "0", args = ["--health"], age = 0, status = "ready") => spawnSync(process.execPath, ["--require", guard, path.join(directory, "web/scripts/run-ai-explanation.mjs"), ...args],
       { encoding: "utf8", timeout: 10000, env: { PATH: process.env.PATH, NODE_ENV: "test", WORKBENCH_AI_ENABLE_DISPATCH: flag,
