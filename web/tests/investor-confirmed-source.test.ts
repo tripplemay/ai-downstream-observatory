@@ -6,6 +6,8 @@ import test from "node:test";
 import { canonical, hash } from "../src/server/ledger/service";
 import { readInvestorConfirmedCapture, replayConfirmedProtocol } from "../src/server/investor/confirmed-source";
 import { investorFixture } from "./investor-fixture";
+import { withInvestorKernelReadScope } from "../src/server/investor/kernel-read-scope";
+import { readInvestorSourceReview } from "../src/server/investor/source-inputs";
 
 type Obj = Record<string, any>;
 const now = "2026-01-02T22:00:03.000Z", invalid = /INVESTOR_CONFIRMED_EVIDENCE_INVALID/;
@@ -50,6 +52,31 @@ test("Node independently replays exact three-market confirmed callback receipts 
     assert.equal(result.receipt.bindings[1].target.close_at, "2026-01-02T04:00:00.000000Z");
     assert.deepEqual(f.db.prepare("SELECT total_changes() n").get(), before); noFinance(f);
   } finally { f.close(); }
+});
+
+test("scoped sealed source content is checked once while source reads and returned facts remain independent", () => {
+  const f = investorFixture(), parse = JSON.parse;
+  try {
+    const value = seed(f), before = f.db.prepare("SELECT total_changes() n").get();
+    let scans = 0;
+    JSON.parse = function(raw: string, ...args: unknown[]) {
+      if (raw === '"review_basis"') scans++;
+      return Reflect.apply(parse, JSON, [raw, ...args]);
+    } as typeof JSON.parse;
+    withInvestorKernelReadScope(() => {
+      const rights = value.receipt.bindings[0].reviews.rights;
+      const first = readInvestorSourceReview(f.db, "w", rights, now), facts = structuredClone(first.facts);
+      first.facts.uses = [];
+      assert.deepEqual(readInvestorSourceReview(f.db, "w", rights, now).facts, facts);
+      assert.deepEqual(readInvestorConfirmedCapture(f.db, "w", value.capture_id, now).records, value.records);
+      const checked = scans;
+      assert(checked > 0);
+      assert.deepEqual(readInvestorConfirmedCapture(f.db, "w", value.capture_id, now).records, value.records);
+      assert.equal(scans, checked, "same JSON content is not a cached source, owner, audit or latest-version verdict");
+    });
+    assert.deepEqual(f.db.prepare("SELECT total_changes() n").get(), before);
+    noFinance(f);
+  } finally { JSON.parse = parse; f.close(); }
 });
 
 test("partial and empty attempts remain partial or empty, not complete quote coverage", () => {
@@ -128,19 +155,22 @@ test("scope, retention, owner, audit and normalized target corruption fail close
   const f = investorFixture();
   try {
     const value = seed(f), read = () => readInvestorConfirmedCapture(f.db, "w", value.capture_id, now);
-    assert.throws(() => readInvestorConfirmedCapture(f.db, "other", value.capture_id, now), invalid);
-    assert.throws(() => readInvestorConfirmedCapture(f.db, "w", value.capture_id, "2026-01-02T22:00:02.000Z"), invalid);
-    assert.throws(() => readInvestorConfirmedCapture(f.db, "w", value.capture_id, value.receipt.retain_until), invalid);
-    assert.throws(() => readInvestorConfirmedCapture(f.db, "w", value.capture_id, now, 1 as unknown as boolean), invalid);
-    f.db.exec("DROP TRIGGER investor_workspace_update; DROP TRIGGER audit_events_no_update");
-    f.db.prepare("UPDATE investor_workspaces SET owner_id='other' WHERE id='w'").run(); assert.throws(read, invalid);
-    f.db.prepare("UPDATE investor_workspaces SET owner_id='synthetic-investor' WHERE id='w'").run();
-    const row = f.db.prepare("SELECT * FROM investor_confirmed_captures WHERE id=?").get(value.capture_id) as Obj;
-    f.db.prepare("UPDATE audit_events SET actor_id='other' WHERE id=?").run(row.audit_id); assert.throws(read, invalid);
-    f.db.prepare("UPDATE audit_events SET actor_id='synthetic-investor' WHERE id=?").run(row.audit_id);
-    f.db.exec("DROP TRIGGER investor_confirmed_target_no_update");
-    f.db.prepare("UPDATE investor_confirmed_targets SET listing_review_id=rights_review_id WHERE capture_id=?").run(value.capture_id);
-    assert.throws(read, invalid); noFinance(f);
+    withInvestorKernelReadScope(() => {
+      assert.deepEqual(read().records, value.records);
+      assert.throws(() => readInvestorConfirmedCapture(f.db, "other", value.capture_id, now), invalid);
+      assert.throws(() => readInvestorConfirmedCapture(f.db, "w", value.capture_id, "2026-01-02T22:00:02.000Z"), invalid);
+      assert.throws(() => readInvestorConfirmedCapture(f.db, "w", value.capture_id, value.receipt.retain_until), invalid);
+      assert.throws(() => readInvestorConfirmedCapture(f.db, "w", value.capture_id, now, 1 as unknown as boolean), invalid);
+      f.db.exec("DROP TRIGGER investor_workspace_update; DROP TRIGGER audit_events_no_update");
+      f.db.prepare("UPDATE investor_workspaces SET owner_id='other' WHERE id='w'").run(); assert.throws(read, invalid);
+      f.db.prepare("UPDATE investor_workspaces SET owner_id='synthetic-investor' WHERE id='w'").run();
+      const row = f.db.prepare("SELECT * FROM investor_confirmed_captures WHERE id=?").get(value.capture_id) as Obj;
+      f.db.prepare("UPDATE audit_events SET actor_id='other' WHERE id=?").run(row.audit_id); assert.throws(read, invalid);
+      f.db.prepare("UPDATE audit_events SET actor_id='synthetic-investor' WHERE id=?").run(row.audit_id);
+      f.db.exec("DROP TRIGGER investor_confirmed_target_no_update");
+      f.db.prepare("UPDATE investor_confirmed_targets SET listing_review_id=rights_review_id WHERE capture_id=?").run(value.capture_id);
+      assert.throws(read, invalid); noFinance(f);
+    });
   } finally { f.close(); }
 });
 
@@ -148,16 +178,19 @@ test("current source approval is checked independently and withdrawn rights reje
   const f = investorFixture();
   try {
     const value = seed(f), rights = value.receipt.bindings[0].reviews.rights;
-    const row = f.db.prepare("SELECT * FROM investor_data_reviews WHERE id=?").get(rights.review_id) as Obj;
-    const document = { ...JSON.parse(row.document_json), version: 2, decision: "withdrawn", facts: null, reason: "Fictional withdrawal" };
-    f.db.prepare("INSERT INTO audit_events(id,actor_id,action,object_type,object_id,payload_json,created_at) VALUES('confirmed-withdraw-audit','synthetic-investor','investor_review_data_source','investor_data_review','confirmed-withdraw',?,?)")
-      .run(canonical({ content_hash: hash(document) }), now);
-    f.db.prepare("INSERT INTO investor_data_reviews(id,workspace_id,source_id,version,decision,document_json,content_hash,actor_id,created_at,valid_until,audit_id) VALUES('confirmed-withdraw','w',?,2,'withdrawn',?,?,'synthetic-investor',?,?,'confirmed-withdraw-audit')")
-      .run(row.source_id, canonical(document), hash(document), now, row.valid_until);
-    const before = f.db.prepare("SELECT total_changes() n").get();
-    assert.throws(() => readInvestorConfirmedCapture(f.db, "w", value.capture_id, now), invalid);
-    assert.deepEqual(f.db.prepare("SELECT total_changes() n").get(), before);
-    assert.ok(f.db.prepare("SELECT 1 FROM investor_confirmed_payloads WHERE capture_id=?").get(value.capture_id)); noFinance(f);
+    withInvestorKernelReadScope(() => {
+      assert.deepEqual(readInvestorConfirmedCapture(f.db, "w", value.capture_id, now).records, value.records);
+      const row = f.db.prepare("SELECT * FROM investor_data_reviews WHERE id=?").get(rights.review_id) as Obj;
+      const document = { ...JSON.parse(row.document_json), version: 2, decision: "withdrawn", facts: null, reason: "Fictional withdrawal" };
+      f.db.prepare("INSERT INTO audit_events(id,actor_id,action,object_type,object_id,payload_json,created_at) VALUES('confirmed-withdraw-audit','synthetic-investor','investor_review_data_source','investor_data_review','confirmed-withdraw',?,?)")
+        .run(canonical({ content_hash: hash(document) }), now);
+      f.db.prepare("INSERT INTO investor_data_reviews(id,workspace_id,source_id,version,decision,document_json,content_hash,actor_id,created_at,valid_until,audit_id) VALUES('confirmed-withdraw','w',?,2,'withdrawn',?,?,'synthetic-investor',?,?,'confirmed-withdraw-audit')")
+        .run(row.source_id, canonical(document), hash(document), now, row.valid_until);
+      const before = f.db.prepare("SELECT total_changes() n").get();
+      assert.throws(() => readInvestorConfirmedCapture(f.db, "w", value.capture_id, now), invalid);
+      assert.deepEqual(f.db.prepare("SELECT total_changes() n").get(), before);
+      assert.ok(f.db.prepare("SELECT 1 FROM investor_confirmed_payloads WHERE capture_id=?").get(value.capture_id)); noFinance(f);
+    });
   } finally { f.close(); }
 });
 

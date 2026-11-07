@@ -1,5 +1,47 @@
 # Research source reconstruction: bounded pure-validation reuse
 
+## Exact sealed-document proof and original shard preservation, 2026-11-07
+
+The action-index head `723f70f` did not pass full Linux CI: both push and PR
+finished with 18 successful jobs and Web 4 cancelled at its original aggregate
+30-minute deadline. No completed assertion failed before cancellation. Adding a
+standalone test file changed the historical-cost partitioner's assignments and
+placed different expensive fixtures in Web 4. This is not evidence that the
+production algorithm failed, nor a passing CI result.
+
+All 13 new action-index/JSON-proof cases now live in the existing continuous
+economics and kernel-scope suites. No case or original file was removed. The
+274-file inventory, all eight original file assignments and cost table match
+`ca80cff` exactly; workflow, partitioner and deadlines remain unchanged. The
+restored complete Web 4 passed 262/262 with no skips in 567.593 seconds locally.
+That receipt was produced from the dirty combined working tree, not clean
+`723f70f`, and cannot substitute for new exact-head Linux CI.
+
+The read-only production profile also identified repeated strict JSON scanning
+and canonical seal hashing in source reconstruction. The new helper reuses only
+the successful pure document check inside the existing synchronous 64-entry
+proof scope. Its digest binds the claimed seal, exact UTF-16 wire text and
+length, distinguishing lone surrogates from replacement characters. The first
+read retains the original duplicate-key, depth, root-object and canonical-hash
+checks; subsequent identical text produces a fresh parsed object. No raw
+document, returned object, source approval or authority verdict is cached.
+Size, creation time, expiry, ownership, audit, latest version and source-use
+checks remain with the caller and execute on every read. Nested, later and
+standalone reads do not inherit proofs, and rejected documents consume none.
+The AI implementation binding includes this helper; helper tampering rejects.
+
+The final related suite passed 42/42, no skips, in 55.668 seconds, including
+same-scope warmed owner/audit corruption and rights withdrawal, independent
+returned facts, malformed/resealed/duplicate/deep JSON, Unicode, and the unchanged
+shared 64-entry ceiling. TypeScript passed. No provider or AI was called, no
+financial or source-use authority was changed, and the two optimizations require
+one new exact-head CI and protected release before public-page acceptance.
+
+The unchanged root command passed 470 cases with its one original optional skip
+in 204.820 seconds. Fresh build `_8YP4yKumvMHj6BwgASjR` passed the full 133-case
+authenticated HTTP suite; all 1612 inventoried source files remained unchanged.
+Those are local synthetic regressions, not real-data or production acceptance.
+
 ## Cold-read result and per-replay action index, 2026-11-07
 
 The protected `ca80cff` release completed and all five actual containers were

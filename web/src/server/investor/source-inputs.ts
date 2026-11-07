@@ -13,6 +13,7 @@ import { currentCalendarReview } from "./calendar-continuation";
 import { MANAGED_ACTION_PREFIX, managedActionReviewUnavailable, readManagedActionReview } from "./managed-action-source";
 import { actionAvailabilityRefs, indexActionAvailability } from "./monitor-action-knowledge";
 import { checkpointActionReview } from "./action-checkpoint-replay";
+import { parseSealedInvestorJson } from "./sealed-json";
 
 type Obj = Record<string, unknown>;
 type Row = { id: string; workspace_id: string; document_json: string; content_hash: string; created_at: string; actor_id: string; audit_id: string; valid_until: string; source_qualification: string };
@@ -26,7 +27,12 @@ function obj(value: unknown): Obj { check(value !== null && typeof value === "ob
 function list(value: unknown, max = 100000): Obj[] { check(Array.isArray(value) && value.length <= max); return value.map(obj); }
 function eq(a: unknown, b: unknown) { check(hash(a) === hash(b)); }
 function json(raw: string, maximum = 8388608) { check(Buffer.byteLength(raw) <= maximum); return obj(parseStrictJson(raw)); }
-function sealed(row: Row, now: string) { const value = json(row.document_json); check(hash(value) === row.content_hash && investorInstant.safeParse(row.created_at).success && row.created_at <= now); return value; }
+function sealed(row: Row, now: string) {
+  check(Buffer.byteLength(row.document_json) <= 8388608);
+  const value = obj(parseSealedInvestorJson(row.document_json, row.content_hash));
+  check(investorInstant.safeParse(row.created_at).success && row.created_at <= now);
+  return value;
+}
 function localDate(value: unknown, zone: string) {
   check(typeof value === "string"); priceInstant(value);
   return formatMarketLocalDate(new Date(value), zone);
