@@ -322,7 +322,7 @@ export function getInvestorState(db: Database.Database, actor: Actor, now = new 
       if (costsUnavailable) {
         gap("MONITOR_COST_ASSUMPTIONS_PENDING", "研究监测费用尚未应用", "费用假设已变化、到期或无法核验；等待按当前证据重新评估，不沿用旧调整结论。");
         modelWatch.model_nav_cny = null;
-        if (!["paused", "outdated", "expired"].includes(modelWatch.status)) modelWatch.status = "awaiting_evaluation";
+        if (!["paused", "outdated", "expired", "awaiting_inputs"].includes(modelWatch.status)) modelWatch.status = "awaiting_evaluation";
       }
     }
     if (modelWatch) {

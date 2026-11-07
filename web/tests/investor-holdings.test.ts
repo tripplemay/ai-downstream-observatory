@@ -7,8 +7,11 @@ import { getInvestorAccountWorkspace } from "../src/server/investor/accounts";
 import { getInvestorState } from "../src/server/investor/service";
 import { investorHoldingsSchema, HoldingsDecimal as Decimal } from "../src/server/investor/holdings-schemas";
 import { parseInvestorHoldings } from "../src/components/workbench/investor-holdings-client";
+import { revision } from "../src/server/ledger/service";
+import { storeJsonAttachment } from "../src/server/ledger/attachments";
+import { reconcileAccount } from "../src/server/ledger/reconciliation";
 import { investorActor as actor, investorFixture } from "./investor-fixture";
-import { holdingsNow as now, investorHoldingsFixture } from "./investor-holdings-fixture";
+import { holdingsNow as now, holdingsPython, investorHoldingsFixture } from "./investor-holdings-fixture";
 
 const binding = "a".repeat(64);
 type Fixture = ReturnType<typeof investorHoldingsFixture>;
@@ -124,6 +127,64 @@ test("newest incomplete valuation is not replaced by an older complete snapshot"
     const before = changes(f), value = get(f);
     assert.equal(value.snapshot, null); assert.deepEqual(value.gaps, ["VALUATION_NOT_COMPLETE"]); assert.deepEqual(changes(f), before);
   } finally { f.close(); }
+});
+
+test("a later restatement at an earlier cutoff supersedes a previously generated valuation", () => {
+  const f = investorHoldingsFixture(); try {
+    f.reconcile(); const original = f.publish();
+    const { market_manifest } = f.db.prepare("SELECT market_manifest FROM valuation_runs WHERE id=?").get(original.id) as { market_manifest: string };
+    const latest = holdingsPython(f, "tests.investor.holdings_fixture", [], { portfolio_id: f.portfolio,
+      now: "2026-01-02T12:00:12.000001Z", cutoff: "2026-01-02T12:00:08.000Z",
+      rules: JSON.parse(market_manifest).rules, documents: [] });
+    assert.equal(latest.quality, "complete"); assert.notEqual(latest.id, original.id);
+    const before = changes(f), value = get(f);
+    assert.equal(value.status, "verified_as_of"); assert.equal(value.snapshot?.valuation_id, latest.id);
+    assert.equal(value.snapshot?.cutoff_at, "2026-01-02T12:00:08.000000Z"); assert.equal(value.snapshot?.nav_cny, "100");
+    assert.deepEqual(changes(f), before);
+  } finally { f.close(); }
+});
+
+test("new facts and independent reconciliation can produce an earlier-cutoff current-ledger restatement", () => {
+  const f = investorHoldingsFixture(); try {
+    f.reconcile(); const original = f.publish();
+    const { market_manifest } = f.db.prepare("SELECT market_manifest FROM valuation_runs WHERE id=?").get(original.id) as { market_manifest: string };
+    f.record({ type: "deposit", account_id: f.account, currency: "CNY", amount: "1" }, "2026-01-02T12:00:13.000Z");
+    const statement = f.statement();
+    statement.balances.find(row => row.currency === "CNY" && row.ledger_account === "cash_settled")!.balance = "101";
+    const attachment = storeJsonAttachment(f.db, actor, { portfolio_id: f.portfolio, account_id: f.account,
+      raw: JSON.stringify(statement) }, { dataDir: f.directory, now: "2026-01-02T12:00:14.000Z" });
+    assert.equal(reconcileAccount(f.db, actor, { portfolio_id: f.portfolio, account_id: f.account,
+      expected_revision: revision(f.db, f.portfolio), attachment_id: attachment.id },
+    { dataDir: f.directory, now: "2026-01-02T12:00:14.000Z" }).status, "matched");
+    const latest = holdingsPython(f, "tests.investor.holdings_fixture", [], { portfolio_id: f.portfolio,
+      now: "2026-01-02T12:00:15.000001Z", cutoff: "2026-01-02T12:00:08.000Z",
+      rules: JSON.parse(market_manifest).rules, documents: [] });
+    assert.equal(latest.quality, "complete"); assert.equal(latest.nav_cny, "101");
+    const before = changes(f), value = get(f);
+    assert.equal(value.ledger_revision, 2); assert.equal(value.status, "verified_as_of");
+    assert.equal(value.snapshot?.valuation_id, latest.id); assert.equal(value.snapshot?.nav_cny, "101");
+    assert.deepEqual(parseInvestorHoldings({ ...value, session_binding: binding }, expected(f)), value);
+    assert.deepEqual(changes(f), before);
+  } finally { f.close(); }
+});
+
+test("a later invalid valuation at an earlier cutoff cannot fall back to the previous snapshot", () => {
+  for (const fault of ["incomplete", "old-ledger", "as-known", "future", "evidence"] as const) {
+    const f = investorHoldingsFixture(); try {
+      f.reconcile(); f.publish(); assert.equal(get(f).status, "verified_as_of");
+      f.db.prepare(`INSERT INTO valuation_runs(id,portfolio_id,ledger_revision,market_manifest,method_version,cutoff_at,quality,nav_cny,issues_json,created_at)
+        SELECT 'fictional-later-earlier-cutoff',portfolio_id,?, ?,method_version,'2026-01-02T12:00:08.000Z',?,?,issues_json,?
+        FROM valuation_runs LIMIT 1`).run(fault === "old-ledger" ? 0 : 1,
+        fault === "as-known" ? JSON.stringify({ mode: "as_known" }) : JSON.stringify({ mode: "restated" }),
+        fault === "incomplete" ? "blocked" : "complete", fault === "incomplete" ? null : "100",
+        fault === "future" ? "2026-01-02T12:00:20.000001Z" : "2026-01-02T12:00:13.000001Z");
+      const before = changes(f), value = get(f);
+      assert.equal(value.snapshot, null); assert.equal(value.comparison, null);
+      assert.deepEqual(value.gaps, [fault === "incomplete" ? "VALUATION_NOT_COMPLETE"
+        : fault === "evidence" ? "VALUATION_EVIDENCE_INVALID" : "VALUATION_NOT_CURRENT"]);
+      assert.deepEqual(changes(f), before);
+    } finally { f.close(); }
+  }
 });
 
 test("fictional reconstructed research resolves different ledger IDs only through unique audited identity mappings", () => {

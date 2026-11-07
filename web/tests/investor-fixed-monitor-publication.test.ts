@@ -9,6 +9,7 @@ import { readEvidenceCheckpoint, readEvidenceMonitorRun } from "../src/server/in
 import { parseInvestorState } from "../src/components/workbench/investor-client";
 import { replayEvidenceModel } from "../src/server/investor/evidence-model-state";
 import { modelDefinitionHash } from "../src/server/investor/fixed-policy";
+import { currentResearchModelComposition } from "../src/components/workbench/investor-model-composition";
 
 type Obj = Record<string, unknown>;
 const now = "2026-01-03T12:00:04.000Z", binding = "a".repeat(64);
@@ -46,6 +47,9 @@ test("new frozen reference reaches default core and independent Node/strict-clie
     assert.deepEqual(parseInvestorState({ ...state, session_binding: binding }, binding), state);
     assert.equal(state.model_watch!.status, "research_observe"); assert.equal(state.latest!.document.monitoring, "active");
     assert.equal(state.latest!.document.model_change!.policy_evaluation!.class_drift.length, 2);
+    const composition = currentResearchModelComposition(state, Date.parse("2026-01-03T12:15:04.000Z"));
+    assert.ok(composition); assert.equal(composition.model_nav_cny, state.model_watch!.model_nav_cny);
+    assert.deepEqual(composition.targets.map(row => row.value_cny), state.latest!.document.model_change!.changes.map(row => row.current_model_value_cny));
     assert.equal(rows(f).length, 1); assert.equal((f.db.prepare("SELECT count(*) n FROM investor_monitor_requests").get() as { n: number }).n, 0);
     const { model, document } = definition(f), row = latest(f);
     const checkpoint = readEvidenceCheckpoint(f.db, state.workspace_id!, model, document, row.checkpoint_id, "2026-01-03T12:15:04.000Z").checkpoint!;
@@ -62,6 +66,8 @@ test("funding and pause/resume preserve model units and repeated open proposal a
     let state = getInvestorState(f.db, actor, "2026-01-03T12:15:04.000Z");
     assert.equal(state.effective_outcome, "decision_required"); assert.equal(state.model_watch!.status, "research_decision");
     assert.equal(state.latest!.document.model_change!.policy_evaluation!.new_funding, false);
+    const composition = currentResearchModelComposition(state, Date.parse("2026-01-03T12:15:04.000Z"));
+    assert.ok(composition); assert.equal(composition.model_nav_cny, state.latest!.document.model_change!.model_nav_cny);
     assert.equal(rows(f).length, 1);
     const original = rows(f), { model, document } = definition(f), run = latest(f);
     const checkpoint = readEvidenceCheckpoint(f.db, state.workspace_id!, model, document, run.checkpoint_id, "2026-01-03T12:15:04.000Z").checkpoint!;
@@ -70,6 +76,7 @@ test("funding and pause/resume preserve model units and repeated open proposal a
       executeInvestorCommand(f.db, actor, { action: "set_monitoring", model_id: model.id, enabled, expected_revision: state.revision,
         idempotency_key: `fixed-control-${enabled}` }, "2026-01-03T12:15:04.000Z");
       state = getInvestorState(f.db, actor, "2026-01-03T12:15:04.000Z");
+      if (!enabled) assert.equal(currentResearchModelComposition(state, Date.parse("2026-01-03T12:15:04.000Z")), null);
     }
     helper(f, "tests.investor.queue_fixture", ["--mode", "core", "--now", "2026-01-03T12:15:05.000Z"]);
     state = getInvestorState(f.db, actor, "2026-01-03T12:15:06.000Z");

@@ -15,7 +15,7 @@ from worker.market.providers import longport
 from worker.orchestration.db import canonical_json, instant, open_database
 
 
-def create(db, workspace, actor, model_id, now, *, funding=False, external_ai=False):
+def create(db, workspace, actor, model_id, now, *, funding=False, external_ai=False, receipts_only=False):
     """Never operate on a user or deployment database."""
     path = Path(db.execute("PRAGMA database_list").fetchone()[2]).resolve(strict=True)
     assert path.parent.parent == Path(tempfile.gettempdir()).resolve() and path.name == "workbench.db"
@@ -59,6 +59,9 @@ def create(db, workspace, actor, model_id, now, *, funding=False, external_ai=Fa
                 patch("worker.investor.data_evidence.instant", side_effect=lambda value=None: instant(now if value is None else value)):
             capture = collect_prices(db, workspace, actor, rights["id"], listing["id"], calendar["id"], date(start), date(end))
         captures.append(capture["id"]); actions.append(action["id"])
+    if receipts_only:
+        assert not funding
+        return None
     settings = {"policy": monitor_input()["policy"], "funding_intent": {"id": "fictional-current-funding", "amount_cny": "1000", "expected_at": now} if funding else None,
         "max_quote_age_seconds": 172800}
     return admit_monitor_data(db, workspace, actor, model_id, [{"capture_ids": captures, "action_review_ids": actions, "fx_review_ids": [],

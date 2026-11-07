@@ -9,7 +9,37 @@ import { migrateWorkbench } from "../../scripts/migrate-workbench.mjs";
 import { canonical, hash } from "../src/server/ledger/service";
 
 export const AT="2026-11-01T05:00:03.000Z",LATER="2026-11-02T06:00:03.000Z";
-export function actionPython(filename:string,code:string) {
+const timingPrefix="FICTIONAL_SHAPE_TIMING ";
+const timingCounters=["checks","validated","hits","uncacheable","entries"] as const;
+const timingDurations=["key_ms","validation_ms","elapsed_ms"] as const;
+export function readActionFixtureTimings(stderr:string):Record<string,number|string>[] {
+  const rows:Record<string,number|string>[]=[];
+  const keys=["phase",...timingCounters,...timingDurations].sort();
+  for(const line of stderr.split(/\r?\n/)) {
+    if(!line.startsWith(timingPrefix))continue;
+    const invalid=():never=>{throw new Error("INVALID_ACTION_FIXTURE_TIMING");};
+    if(Buffer.byteLength(line)>2048||rows.length>=256)invalid();
+    let parsed:unknown;
+    try {parsed=JSON.parse(line.slice(timingPrefix.length));}catch{invalid();}
+    if(!parsed||Array.isArray(parsed)||typeof parsed!=="object"||Object.keys(parsed).sort().join(",")!==keys.join(","))invalid();
+    const row=parsed as Record<string,number|string>;
+    if(!["start","progress","end"].includes(row.phase as string))invalid();
+    for(const key of timingCounters)if(!Number.isSafeInteger(row[key])||Number(row[key])<0)invalid();
+    for(const key of timingDurations)if(typeof row[key]!=="number"||!Number.isFinite(row[key])||Number(row[key])<0)invalid();
+    if(Number(row.hits)+Number(row.validated)!==row.checks||Number(row.uncacheable)>Number(row.validated)||Number(row.entries)>8||Number(row.entries)>Number(row.validated))invalid();
+    rows.push(row);
+  }
+  return rows;
+}
+export function actionPython(filename:string,code:string,budget:"source"|"core_readmission"|"legacy_transition"="source",deadline?:number) {
+  assert.ok(budget==="source"||budget==="core_readmission"||budget==="legacy_transition","UNKNOWN_ACTION_FIXTURE_BUDGET");
+  // Full retained-core replay includes research, callbacks and two checkpoints.
+  // Keep ordinary source probes unchanged and never change a production deadline.
+  const started=performance.now();
+  const maximum=budget==="source"?30000:120000;
+  assert.ok(deadline===undefined||typeof deadline==="number"&&Number.isFinite(deadline),"INVALID_ACTION_FIXTURE_DEADLINE");
+  const timeout=deadline===undefined?maximum:Math.min(maximum,Math.floor(deadline-started));
+  assert.ok(timeout>0,"OFFLINE_ACTION_FIXTURE_DEADLINE_EXPIRED");
   const child=spawnSync(process.env.WORKBENCH_TEST_PYTHON ?? "python3",["-c",`
 import json,socket,sys
 from pathlib import Path
@@ -20,8 +50,20 @@ db=open_database(sys.argv[1])
 try:
 ${code.split("\n").map(line=>" "+line).join("\n")}
 finally:db.close()
-`,filename],{cwd:new URL("../../",import.meta.url),encoding:"utf8",timeout:30000,env:{PATH:process.env.PATH,NODE_ENV:"test"}});
-  assert.equal(child.status,0,child.stderr);return JSON.parse(child.stdout) as Record<string,unknown>;
+`,filename],{cwd:new URL("../../",import.meta.url),encoding:"utf8",timeout,env:{PATH:process.env.PATH,NODE_ENV:"test"}});
+  const failure=child.error as NodeJS.ErrnoException|undefined;
+  // Re-serialize only fixed scalar diagnostics, including partial progress on
+  // timeout. Never forward arbitrary child warnings or fixture documents.
+  let timingFailure:unknown;
+  try {
+    for(const row of readActionFixtureTimings(child.stderr??""))process.stderr.write(timingPrefix+JSON.stringify(row)+"\n");
+  }catch(error){timingFailure=error;}
+  process.stderr.write("OFFLINE_ACTION_FIXTURE_TIMING "+JSON.stringify({budget,deadline_ms:timeout,elapsed_ms:performance.now()-started,timed_out:failure?.code==="ETIMEDOUT"})+"\n");
+  assert.ok(!failure,`OFFLINE_ACTION_FIXTURE_${failure?.code??"SPAWN_FAILURE"} deadline_ms=${timeout}`);
+  assert.equal(child.signal,null,"OFFLINE_ACTION_FIXTURE_INTERRUPTED");
+  assert.equal(child.status,0,child.stderr);
+  if(timingFailure)throw timingFailure;
+  return JSON.parse(child.stdout) as Record<string,unknown>;
 }
 export function actionMaintenanceFixture(t:TestContext,official=true,withSnapshot=false) {
   const directory=mkdtempSync(path.join(tmpdir(),"fictional-action-proof-")),filename=path.join(directory,"workbench.db");

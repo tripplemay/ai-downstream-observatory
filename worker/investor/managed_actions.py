@@ -216,6 +216,7 @@ def set_authority_enabled(db, workspace, actor, identifier, enabled, *, now=None
         _owner(db, workspace, actor)
         authority, policy, old = _authority(db, workspace, identifier, at)
         if enabled:
+            _check(not db.execute("SELECT 1 FROM investor_action_review_confirmations WHERE workspace_id=? AND previous_authority_id=?", (workspace, identifier)).fetchone(), "AUTHORITY_RETIRED")
             _check(policy["valid_from"] <= at < policy["valid_until"], "AUTHORITY_EXPIRED")
             _check(not _quarantined(db, workspace, identifier, at), "SOURCE_QUARANTINED")
         if old["enabled"] == int(enabled): return dict(old)
@@ -504,6 +505,15 @@ def managed_review_header(db, workspace, identifier, at):
 
 def managed_review_unavailable(db, workspace, identifier, at):
     """Metadata-only gate; unavailable metadata never qualifies raw evidence."""
+    return _managed_review_unavailable(db, workspace, identifier, at, current_rule_required=True)
+
+
+def managed_review_storage_unavailable(db, workspace, identifier, at):
+    """Pausing computation is not withdrawal of source storage permission."""
+    return _managed_review_unavailable(db, workspace, identifier, at, current_rule_required=False)
+
+
+def _managed_review_unavailable(db, workspace, identifier, at, *, current_rule_required):
     if not identifier.startswith(PREFIX): return None
     value = managed_review_header(db, workspace, identifier, at)
     row, doc = _publication_header(db, workspace, identifier, at)
@@ -512,7 +522,7 @@ def managed_review_unavailable(db, workspace, identifier, at):
     reason = None
     if at >= value["review"]["valid_until"] or at >= policy["valid_until"]:
         reason = "REFERENCE_SOURCE_EXPIRED"
-    elif not _active(authority, at) or control["id"] != doc["control_id"] or _quarantined(db, workspace, authority[0]["id"], at):
+    elif current_rule_required and (not _active(authority, at) or control["id"] != doc["control_id"] or _quarantined(db, workspace, authority[0]["id"], at)):
         reason = "REFERENCE_SOURCE_NO_LONGER_CURRENT"
     for identifier in (policy["base_review_id"], policy["listing_review_id"]):
         header = review_header(db, workspace, identifier, now=at)
@@ -549,14 +559,22 @@ def managed_review_unavailable(db, workspace, identifier, at):
 
 def current_action_reviews(db, workspace, listing_ids, at, *, limit=128, header_only=False):
     """Shadow only an explicitly bound baseline, never unrelated action facts."""
+    with transaction(db, immediate=False), _fact_validation_scope():
+        return _current_action_reviews(db, workspace, listing_ids, at, limit=limit, header_only=header_only)
+
+
+def _current_action_reviews(db, workspace, listing_ids, at, *, limit, header_only):
+    from .action_review_selection import verified_action_successions
     listing_ids = sorted(set(listing_ids))
     _check(0 < len(listing_ids) <= 20 and type(limit) is int and 1 <= limit <= 128 and type(header_only) is bool)
+    links = verified_action_successions(db, workspace, listing_ids, at)
     placeholders = ",".join("?" for _ in listing_ids)
     manual = db.execute("""SELECT r.id FROM investor_data_reviews r JOIN investor_data_sources s ON s.id=r.source_id
       WHERE r.workspace_id=? AND s.workspace_id=r.workspace_id AND s.kind='actions' AND r.decision='approved'
         AND r.created_at<=? AND r.valid_until>? AND r.version=(SELECT max(version) FROM investor_data_reviews WHERE source_id=r.source_id)
         AND json_extract(r.document_json,'$.facts.listing_id') IN (""" + placeholders + ") ORDER BY r.created_at DESC,r.id LIMIT ?",
-        (workspace, at, at, *listing_ids, limit + 1)).fetchall()
+        (workspace, at, at, *listing_ids, limit + len(links["shadowed"]) + 1)).fetchall()
+    manual = [row for row in manual if row["id"] not in links["shadowed"]]
     rules = db.execute("""SELECT a.id FROM investor_action_authorities a JOIN investor_action_controls c ON c.authority_id=a.id
       WHERE a.workspace_id=? AND a.created_at<=? AND c.enabled=1
         AND c.version=(SELECT max(version) FROM investor_action_controls WHERE authority_id=a.id)
@@ -568,11 +586,15 @@ def current_action_reviews(db, workspace, listing_ids, at, *, limit=128, header_
         value = _authority(db, workspace, rule["id"], at)
         authority, policy, _ = value
         _check(policy["listing_id"] not in identities, "SOURCE_AMBIGUOUS")
-        identities.add(policy["listing_id"]); shadowed.add(policy["base_review_id"])
+        identities.add(policy["listing_id"])
         _check(_active(value, at) and not _quarantined(db, workspace, authority["id"], at), "SOURCE_UNAVAILABLE")
         head = db.execute("SELECT id FROM investor_action_publications WHERE authority_id=? AND status='published' ORDER BY sequence DESC LIMIT 1",
             (authority["id"],)).fetchone()
-        _check(head is not None, "SOURCE_UNAVAILABLE")
+        if head is None and authority["id"] in links["terminals"]:
+            # Explicitly approved facts can cover a window without inventing a
+            # successful maintenance publication or enabling a default-off rule.
+            continue
+        _check(head is not None, "SOURCE_UNAVAILABLE"); shadowed.add(policy["base_review_id"])
         if header_only:
             _check(managed_review_unavailable(db, workspace, head["id"], at) is None, "SOURCE_UNAVAILABLE")
             derived.append(managed_review_header(db, workspace, head["id"], at))

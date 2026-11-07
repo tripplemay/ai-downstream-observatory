@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-action-review-job.schema.json",
+  "$defs": {
+    "request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "request_id", "workspace_id", "provider_symbol", "kind", "body", "request_hash", "created_at", "valid_until"],
+      "properties": {
+        "schema_version": {"const": "investor-action-review-job-request-v1"},
+        "request_id": {"$ref": "common.schema.json#/$defs/id"}, "workspace_id": {"$ref": "common.schema.json#/$defs/id"},
+        "provider_symbol": {"enum": ["VT.US", "BND.US"]},
+        "kind": {"enum": ["preview", "confirmation"]}, "body": {"type": "object"}, "request_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "created_at": {"$ref": "common.schema.json#/$defs/instant"}, "valid_until": {"$ref": "common.schema.json#/$defs/instant"}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "preview"}}}, "then": {"properties": {"body": {"$ref": "investor-action-review-workflow.schema.json#/$defs/preview_request"}}},
+          "else": {"properties": {"body": {"$ref": "investor-action-review-workflow.schema.json#/$defs/submit"}}}}
+      ]
+    },
+    "code": {"enum": ["ACTION_REVIEW_PREVIEW_READY", "ACTION_REVIEW_CONFIRMED", "ACTION_REVIEW_VERSION_CHANGED", "ACTION_REVIEW_PREVIEW_EXPIRED", "ACTION_REVIEW_SOURCE_UNAVAILABLE", "ACTION_REVIEW_HISTORICAL_REVIEW_REQUIRED", "ACTION_REVIEW_INVALID_ANSWERS", "ACTION_REVIEW_RULE_RETIRED", "ACTION_REVIEW_SCOPE_CHANGED", "ACTION_REVIEW_REQUEST_EXPIRED", "ACTION_REVIEW_FAILED"]},
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "result_id", "request_id", "request_hash", "workspace_id", "kind", "job_id", "fencing_token", "outcome", "code", "resource_id", "resource_hash", "created_at", "research_admitted", "trading_permission", "provider_calls"],
+      "properties": {
+        "schema_version": {"const": "investor-action-review-job-result-v1"}, "result_id": {"$ref": "common.schema.json#/$defs/id"},
+        "request_id": {"$ref": "common.schema.json#/$defs/id"}, "request_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "workspace_id": {"$ref": "common.schema.json#/$defs/id"}, "kind": {"enum": ["preview", "confirmation"]},
+        "job_id": {"$ref": "common.schema.json#/$defs/id"}, "fencing_token": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "outcome": {"enum": ["preview_ready", "confirmed", "rejected"]}, "code": {"$ref": "#/$defs/code"},
+        "resource_id": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/id"}]},
+        "resource_hash": {"oneOf": [{"type": "null"}, {"$ref": "common.schema.json#/$defs/hash"}]},
+        "created_at": {"$ref": "common.schema.json#/$defs/instant"}, "research_admitted": {"const": false}, "trading_permission": {"const": false}, "provider_calls": {"const": 0}
+      },
+      "allOf": [
+        {"if": {"properties": {"outcome": {"const": "rejected"}}}, "then": {"properties": {"resource_id": {"type": "null"}, "resource_hash": {"type": "null"}, "code": {"not": {"enum": ["ACTION_REVIEW_PREVIEW_READY", "ACTION_REVIEW_CONFIRMED"]}}}},
+          "else": {"properties": {"resource_id": {"$ref": "common.schema.json#/$defs/id"}, "resource_hash": {"$ref": "common.schema.json#/$defs/hash"}}}},
+        {"if": {"properties": {"outcome": {"const": "preview_ready"}}}, "then": {"properties": {"kind": {"const": "preview"}, "code": {"const": "ACTION_REVIEW_PREVIEW_READY"}}}},
+        {"if": {"properties": {"outcome": {"const": "confirmed"}}}, "then": {"properties": {"kind": {"const": "confirmation"}, "code": {"const": "ACTION_REVIEW_CONFIRMED"}}}}
+      ]
+    }
+  }
+}

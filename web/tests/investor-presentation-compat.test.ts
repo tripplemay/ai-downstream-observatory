@@ -15,6 +15,7 @@ import * as costs from "../src/server/investor/monitor-cost-schemas";
 import { getInvestorState } from "../src/server/investor/service";
 import { actionDraftProgressRequest, actionDraftProgressSchema } from "../src/server/investor/action-draft-progress-schemas";
 import { actionMaintenanceProgressRequest } from "../src/server/investor/action-maintenance-progress-schemas";
+import { initialCloseProgressRequest } from "../src/server/investor/initial-close-progress";
 import { parseInvestorState } from "../src/components/workbench/investor-client";
 import { investorActor as actor, investorFixture, saveSyntheticProfile } from "./investor-fixture";
 
@@ -38,11 +39,12 @@ function legacyClient(withDrafts=false) {
     '  if (state.action_drafts && (state.workspace_id === null || state.action_drafts.checked_at !== state.checked_at)) throw new Error("INVESTOR_RESPONSE_INVALID");\n'] : []),
   ]) { assert.equal(text.split(line).length - 1, 1); text = text.replace(line, ""); }
   assert.equal(createHash("sha256").update(text).digest("hex"), withDrafts ? "81da04e85b419d45464f47658426e5168cde83634992c9e7651ea8919e0a59cc" : "b20243ba1af22d427e660cd0c2e3e50647524b2bdd827f4699ea656e7f2c733d", "FROZEN_OLD_CONSUMER_DRIFT");
-  return moduleFrom(text, { zod: { z }, "@/server/investor/schemas": schemas, "@/server/investor/funding-schemas": funding,
+  return moduleFrom(text, { zod: { z }, "@/server/investor/schemas": { ...schemas,
+    modelWatchSchema: schemas.modelWatchSchema.refine(watch => watch.acquisition?.phase !== "initial_close") }, "@/server/investor/funding-schemas": funding,
     "@/server/investor/funded-study-schemas": study, "@/server/investor/monitor-cost-schemas": costs,
     "@/server/investor/action-draft-progress-schemas":{actionDraftProgressSchema} }).parseInvestorState;
 }
-function harness(t: { after: (fn: () => void) => void }, options: { denied?: boolean; changed?: boolean } = {}) {
+function harness(t: { after: (fn: () => void) => void }, options: { denied?: boolean; changed?: boolean; initialClose?: boolean } = {}) {
   const f = investorFixture(); t.after(f.close); saveSyntheticProfile(f);
   const calls: string[] = []; let sessionReads = 0, current: Request;
   const authenticate = async () => {
@@ -51,6 +53,18 @@ function harness(t: { after: (fn: () => void) => void }, options: { denied?: boo
   };
   const db = new Proxy(f.db, { get(target, key) { if (key === "close") return () => calls.push("close");
     const value = Reflect.get(target, key, target); return typeof value === "function" ? value.bind(target) : value; } });
+  const state = (principal: typeof actor, settings?: Parameters<typeof getInvestorState>[3]) => {
+    const value = getInvestorState(f.db, principal, at, settings);
+    if (!options.initialClose) return value;
+    // Transport negotiation fixture only, not a producer or source proof.
+    return {...value,model_watch:schemas.modelWatchSchema.parse({id:"fictional-model",profile_id:value.profile!.id,plan_id:"fictional-plan",plan_hash:"b".repeat(64),
+      valid_until:"2026-01-05T00:00:00.000Z",enabled:true,status:"awaiting_inputs",created_at:at,completed_at:null,next_check_at:null,
+      checkpoint_sequence:0,initial_notional_cny:"10000",model_nav_cny:null,source_qualification:"not_available",live_advice_eligible:false,
+      acquisition:{model_id:"fictional-model",checked_at:at,phase:"initial_close",status:"visible",evidence_scope:"task_metadata_only",live_advice_eligible:false,
+        markets:[{market:"CN",target_count:1,registered_count:1,completed_count:0,status:"scheduled",session_date:"2026-01-02",
+          scheduled_at:"2026-01-02T12:01:00.000Z",latest_start_at:"2026-01-02T12:02:00.000Z",stop_at:"2026-01-02T12:05:00.000Z",lease_until:null,
+          valid_until:"2026-01-05T00:00:00.000Z",completed_at:null}]}})};
+  };
   const exports = moduleFrom(readFileSync(new URL("../src/app/api/workbench/investor/route.ts", import.meta.url), "utf8"), {
     "next/server": { NextResponse }, zod: { z }, "@/server/auth/core": { AuthError },
     "@/server/auth/session": { requireApiSession: authenticate, requireMutationSession: async () => {
@@ -62,16 +76,17 @@ function harness(t: { after: (fn: () => void) => void }, options: { denied?: boo
     "@/server/workbench-db": { openWorkbench: () => { calls.push("open"); return db; } }, "@/server/strict-json": { parseStrictJson },
     "@/server/investor/action-draft-progress-schemas": { actionDraftProgressRequest },
     "@/server/investor/action-maintenance-progress-schemas": { actionMaintenanceProgressRequest },
+    "@/server/investor/initial-close-progress": { initialCloseProgressRequest },
     "@/server/investor/service": { isInvestorClientError: () => false, getInvestorState: (_db: unknown, principal: typeof actor, _now: unknown, settings: any) => {
-      calls.push("read"); return getInvestorState(f.db, principal, at, settings);
+      calls.push("read"); return state(principal,settings);
     }, executeInvestorCommand: () => { calls.push("explicit-command"); return { receipt_only: true }; } },
   });
   return { f, calls, async GET(headers: Record<string, string> = {}, query = "", omitBinding = false) {
     current = new Request(origin + "/api/workbench/investor" + query, { headers: { ...(!omitBinding ? { "X-Workbench-Session-Binding": binding } : {}), ...headers } });
     return exports.GET(current) as Promise<Response>;
-  }, async POST() {
-    current = new Request(origin + "/api/workbench/investor", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json",
-      "X-Workbench-Session-Binding": binding, [actionDraftProgressRequest.header]: actionDraftProgressRequest.value }, body: JSON.stringify({ action: "evaluate" }) });
+  }, async POST(version = actionDraftProgressRequest.value as string, omitBinding = false, query = "") {
+    current = new Request(origin + "/api/workbench/investor" + query, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json",
+      ...(!omitBinding ? { "X-Workbench-Session-Binding": binding } : {}), [actionDraftProgressRequest.header]: version }, body: JSON.stringify({ action: "evaluate" }) });
     return exports.POST(current) as Promise<Response>;
   } };
 }
@@ -111,7 +126,7 @@ test("frozen v1 consumer remains compatible while v2 alone receives standing-rul
 });
 
 test("view negotiation cannot bypass authentication, session binding or query checks and never changes explicit command receipts", async t => {
-  for (const version of [actionDraftProgressRequest,actionMaintenanceProgressRequest]) for (const mode of ["anonymous", "changed", "binding", "missing", "empty", "query"]) {
+  for (const version of [actionDraftProgressRequest,actionMaintenanceProgressRequest,initialCloseProgressRequest]) for (const mode of ["anonymous", "changed", "binding", "missing", "empty", "query"]) {
     const opted = { [version.header]: version.value };
     const h = harness(t, { denied: mode === "anonymous", changed: mode === "changed" });
     const response = await h.GET({ ...opted, ...(mode === "binding" ? { "X-Workbench-Session-Binding": "b".repeat(64) } : mode === "empty" ? { "X-Workbench-Session-Binding": "" } : {}) }, mode === "query" ? "?owner=forged" : "", mode === "missing");
@@ -121,4 +136,21 @@ test("view negotiation cannot bypass authentication, session binding or query ch
   assert.deepEqual(await response.json(), { receipt_only: true, session_binding: binding });
   assert.equal(response.headers.get("vary"), "Cookie"); assert.equal(h.calls.filter(value => value === "explicit-command").length, 1);
   assert.ok(!h.calls.includes("read"));
+});
+test("first-close GET capability protects prior strict clients; mutation receipts stay unchanged with strict new-client binding",async t=>{
+  const h=harness(t,{initialClose:true}),old=legacyClient(true);
+  for(const version of [actionMaintenanceProgressRequest.value,"unknown",""]){
+    const response=await h.GET({[initialCloseProgressRequest.header]:version}),value=await response.json();
+    assert.equal(response.status,200);assert.equal("acquisition" in value.model_watch,false);
+    const {action_maintenance:_,...prior}=value;old(prior,binding);
+    const post=await h.POST(version);assert.equal(post.status,200);assert.deepEqual(await post.json(),{receipt_only:true,session_binding:binding});
+  }
+  const next=await (await h.GET({[initialCloseProgressRequest.header]:initialCloseProgressRequest.value})).json();
+  assert.equal(next.model_watch.acquisition.phase,"initial_close");parseInvestorState(next,binding);
+  assert.throws(()=>old(next,binding),/RESPONSE_INVALID/);
+  const post=await h.POST(initialCloseProgressRequest.value);assert.deepEqual(await post.json(),{receipt_only:true,session_binding:binding});
+  const before=h.calls.filter(value=>value==="explicit-command").length;
+  assert.equal((await h.POST(initialCloseProgressRequest.value,true)).status,400);
+  assert.equal((await h.POST(initialCloseProgressRequest.value,false,"?owner=forged")).status,400);
+  assert.equal(h.calls.filter(value=>value==="explicit-command").length,before);
 });

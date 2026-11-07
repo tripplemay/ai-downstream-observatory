@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-correction-consent.schema.json",
+  "$ref": "#/$defs/submit",
+  "$defs": {
+    "id": {"$ref": "common.schema.json#/$defs/id"}, "hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "instant": {"$ref": "investor-planned-funding-monitor.schema.json#/$defs/instant"},
+    "revision": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+    "submit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "impact_request_id", "expected_result_hash", "expected_revision", "idempotency_key", "acknowledgements"],
+      "properties": {
+        "schema_version": {"const": "investor-correction-consent-submit-v1"},
+        "impact_request_id": {"$ref": "#/$defs/id"}, "expected_result_hash": {"$ref": "#/$defs/hash"},
+        "expected_revision": {"$ref": "#/$defs/revision"}, "idempotency_key": {"$ref": "#/$defs/id"},
+        "acknowledgements": {"type": "object", "additionalProperties": false,
+          "required": ["exact_stored_impact_seen", "explicit_historical_restatement", "selected_report_differences_accepted", "tax_and_instants_are_research_assumptions", "preserve_original_history_and_strategy", "new_epoch_not_current_nav", "separate_current_readmission_no_trading"],
+          "properties": {
+            "exact_stored_impact_seen": {"const": true}, "explicit_historical_restatement": {"const": true},
+            "selected_report_differences_accepted": {"const": true}, "tax_and_instants_are_research_assumptions": {"const": true},
+            "preserve_original_history_and_strategy": {"const": true}, "new_epoch_not_current_nav": {"const": true},
+            "separate_current_readmission_no_trading": {"const": true}
+          }}
+      }
+    },
+    "request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "request_id", "workspace_id", "model_id", "body", "request_hash", "created_at", "valid_until"],
+      "properties": {
+        "schema_version": {"const": "investor-correction-consent-request-v1"}, "request_id": {"$ref": "#/$defs/id"},
+        "workspace_id": {"$ref": "#/$defs/id"}, "model_id": {"$ref": "#/$defs/id"}, "body": {"$ref": "#/$defs/submit"},
+        "request_hash": {"$ref": "#/$defs/hash"}, "created_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"}
+      }
+    },
+    "baseline": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "epoch_id", "model_hash", "original_history", "approved_facts", "corrected_actions_hash", "economics", "policy_state", "original_checkpoint_hash", "original_projection_hash", "comparison_hash", "valuation_summary", "knowledge_at", "status"],
+      "properties": {
+        "schema_version": {"const": "investor-approved-restatement-baseline-v1"}, "epoch_id": {"$ref": "#/$defs/id"}, "model_hash": {"$ref": "#/$defs/hash"},
+        "original_history": {"$ref": "investor-retained-monitor-history.schema.json"},
+        "approved_facts": {"$ref": "investor-data-facts.schema.json#/$defs/actions"},
+        "corrected_actions_hash": {"$ref": "#/$defs/hash"},
+        "economics": {"$ref": "investor-action-restatement-kernel.schema.json#/$defs/economics"},
+        "policy_state": {"oneOf": [{"type": "null"}, {"$ref": "investor-fixed-policy-state.schema.json"}]},
+        "original_checkpoint_hash": {"$ref": "#/$defs/hash"}, "original_projection_hash": {"$ref": "#/$defs/hash"},
+        "comparison_hash": {"$ref": "#/$defs/hash"},
+        "valuation_summary": {"type": "object", "additionalProperties": false,
+          "required": ["original_valuation_cny", "restated_valuation_cny", "difference_cny", "delta"],
+          "properties": {
+            "original_valuation_cny": {"$ref": "investor-model-monitor-v2.schema.json#/$defs/derived"},
+            "restated_valuation_cny": {"$ref": "investor-model-monitor-v2.schema.json#/$defs/derived"},
+            "difference_cny": {"$ref": "investor-model-monitor-v2.schema.json#/$defs/derived"},
+            "delta": {"$ref": "investor-action-restatement-kernel.schema.json#/$defs/result/properties/delta"}
+          }},
+        "knowledge_at": {"$ref": "#/$defs/instant"}, "status": {"const": "approved_baseline_requires_new_current_data_protocol"}
+      }
+    },
+    "confirmation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "confirmation_id", "workspace_id", "workspace_revision", "model_id", "impact_request_id", "impact_result_id", "impact_result_hash", "request_id", "request", "request_hash", "created_at", "valid_until", "reviewed_source_valid_until", "baseline", "capture_refs", "draft_basis_hash", "outstanding_new_report_dates", "economic_correction_approved", "source_basis", "checkpoint_created", "state_published", "monitoring_resumed", "monitor_data_readmission_required", "historical_observations_rewritten", "historical_strategy_results_recomputed", "trading_permission", "provider_calls", "raw_ai_sharing"],
+      "properties": {
+        "schema_version": {"const": "investor-correction-consent-confirmation-v1"}, "confirmation_id": {"$ref": "#/$defs/id"},
+        "workspace_id": {"$ref": "#/$defs/id"}, "workspace_revision": {"$ref": "#/$defs/revision"}, "model_id": {"$ref": "#/$defs/id"},
+        "impact_request_id": {"$ref": "#/$defs/id"}, "impact_result_id": {"$ref": "#/$defs/id"}, "impact_result_hash": {"$ref": "#/$defs/hash"},
+        "request_id": {"$ref": "#/$defs/id"}, "request": {"$ref": "#/$defs/submit"}, "request_hash": {"$ref": "#/$defs/hash"},
+        "created_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"}, "reviewed_source_valid_until": {"$ref": "#/$defs/instant"}, "baseline": {"$ref": "#/$defs/baseline"},
+        "capture_refs": {"$ref": "investor-action-maintenance.schema.json#/$defs/capture_refs"}, "draft_basis_hash": {"$ref": "#/$defs/hash"},
+        "outstanding_new_report_dates": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/date"}},
+        "economic_correction_approved": {"const": true}, "source_basis": {"const": "selected_reports_and_explicit_owner_hypotheses_not_objective_absence"},
+        "checkpoint_created": {"const": false}, "state_published": {"const": false}, "monitoring_resumed": {"const": false},
+        "monitor_data_readmission_required": {"const": true}, "historical_observations_rewritten": {"const": false}, "historical_strategy_results_recomputed": {"const": false},
+        "trading_permission": {"const": false}, "provider_calls": {"const": 0}, "raw_ai_sharing": {"const": false}
+      }
+    },
+    "receipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "confirmation_id", "workspace_id", "workspace_revision", "model_id", "impact_request_id", "impact_result_hash", "request_id", "created_at", "valid_until", "economic_correction_approved", "baseline_registered", "historical_registration_only", "current_source_eligibility_restored", "monitor_data_readmission_required", "monitoring_resumed", "checkpoint_created", "trading_permission", "source_values_included", "provider_calls"],
+      "properties": {
+        "schema_version": {"const": "investor-correction-consent-receipt-v1"}, "confirmation_id": {"$ref": "#/$defs/id"},
+        "workspace_id": {"$ref": "#/$defs/id"}, "workspace_revision": {"$ref": "#/$defs/revision"}, "model_id": {"$ref": "#/$defs/id"},
+        "impact_request_id": {"$ref": "#/$defs/id"}, "impact_result_hash": {"$ref": "#/$defs/hash"}, "request_id": {"$ref": "#/$defs/id"},
+        "created_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"},
+        "economic_correction_approved": {"const": true}, "baseline_registered": {"const": true}, "historical_registration_only": {"const": true},
+        "current_source_eligibility_restored": {"const": false}, "monitor_data_readmission_required": {"const": true}, "monitoring_resumed": {"const": false},
+        "checkpoint_created": {"const": false}, "trading_permission": {"const": false}, "source_values_included": {"const": false}, "provider_calls": {"const": 0}
+      }
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "result_id", "request_id", "workspace_id", "request_hash", "job_id", "fencing_token", "outcome", "code", "confirmation_id", "confirmation_hash", "created_at"],
+      "properties": {
+        "schema_version": {"const": "investor-correction-consent-result-v1"}, "result_id": {"$ref": "#/$defs/id"}, "request_id": {"$ref": "#/$defs/id"},
+        "workspace_id": {"$ref": "#/$defs/id"}, "request_hash": {"$ref": "#/$defs/hash"}, "job_id": {"$ref": "#/$defs/id"}, "fencing_token": {"type": "integer", "minimum": 1},
+        "outcome": {"enum": ["confirmed", "rejected"]}, "code": {"enum": ["CORRECTION_CONSENT_CONFIRMED", "CORRECTION_CONSENT_EXPIRED", "CORRECTION_CONSENT_CHANGED", "CORRECTION_CONSENT_SOURCE_UNAVAILABLE", "CORRECTION_CONSENT_UNRESOLVED"]},
+        "confirmation_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/id"}]}, "confirmation_hash": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/hash"}]}, "created_at": {"$ref": "#/$defs/instant"}
+      },
+      "allOf": [{"if": {"properties": {"outcome": {"const": "confirmed"}}}, "then": {"properties": {"code": {"const": "CORRECTION_CONSENT_CONFIRMED"}, "confirmation_id": {"type": "string"}, "confirmation_hash": {"type": "string"}}}, "else": {"properties": {"code": {"not": {"const": "CORRECTION_CONSENT_CONFIRMED"}}, "confirmation_id": {"type": "null"}, "confirmation_hash": {"type": "null"}}}}]
+    }
+  }
+}

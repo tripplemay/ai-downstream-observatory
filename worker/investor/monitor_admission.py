@@ -57,11 +57,12 @@ def monitor_evidence_document(db, workspace_id, model_id, input_id, checked):
     return row, document
 
 
-def admit_monitor_data(db, workspace_id, actor_id, model_id, windows, settings, *, now=None):
+def admit_monitor_data(db, workspace_id, actor_id, model_id, windows, settings, *, now=None, audited_action_knowledge=False, legacy_transition=None):
     _owner(db, workspace_id, actor_id)
     checked = _milliseconds(now)
     _, definition, reference = current_monitor_model(db, workspace_id, model_id, checked)
-    candidate = build_monitor_data(db, workspace_id, definition, windows, settings, now=checked)
+    candidate = build_monitor_data(db, workspace_id, definition, windows, settings, now=checked,
+        audited_action_knowledge=audited_action_knowledge, legacy_transition=legacy_transition)
     check_reference_listing_identity(reference["targets"], candidate["catalog"])
     _assert(not candidate["projection"]["quality_gaps"] and candidate["projection"]["valid_until"] > checked, "INVESTOR_DATA_MONITOR_INPUTS_NOT_CURRENT")
     document, digest = candidate["document"], candidate["content_hash"]
@@ -77,6 +78,9 @@ def admit_monitor_data(db, workspace_id, actor_id, model_id, windows, settings, 
         check_reference_listing_identity(reference["targets"], rebuilt["catalog"])
         current = _milliseconds(now)
         _assert(rebuilt["projection"]["valid_until"] > current, "INVESTOR_DATA_MONITOR_INPUTS_NOT_CURRENT")
+        if legacy_transition is not None:
+            from .monitor_costs import verify_settings
+            verify_settings(db, workspace_id, definition, settings, current)
         for segment in document["segments"]:
             reason = source_unavailable_reason(db, workspace_id, {"snapshot": segment["snapshot"], "valid_until": document["valid_until"]}, current)
             _assert(reason is None, reason or "INVESTOR_DATA_EVIDENCE_INVALID")
@@ -84,7 +88,8 @@ def admit_monitor_data(db, workspace_id, actor_id, model_id, windows, settings, 
         if previous:
             _, prior = monitor_evidence_document(db, workspace_id, model_id, previous["id"], current)
             signature = lambda value: {"target": value["target_definition_hash"], "settings": value["settings"], "valid_until": value["valid_until"],
-                "windows": [{key: entry for key, entry in row["snapshot"].items() if key != "created_at"} for row in value["segments"]]}
+                "windows": [{key: entry for key, entry in row["snapshot"].items() if key != "created_at"} for row in value["segments"]],
+                **({"transition": value["transition"]} if "transition" in value else {})}
             if signature(prior) == signature(document):
                 replay = resolve_monitor_data(db, workspace_id, definition, prior, now=current)
                 if replay["unavailable_reason"] is None:

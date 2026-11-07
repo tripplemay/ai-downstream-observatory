@@ -6,7 +6,7 @@ from .data_evidence import _assert, _audit_binding, _object, _owner, review_head
 from .model_contracts import definition_schema, reference_schema, validate_definition
 from .model_runtime import _clock, _sealed
 from .monitor_admission import monitor_evidence_document
-from .source_inputs import source_document, source_unavailable_reason
+from .source_inputs import source_document, source_storage_unavailable_reason
 
 
 def _review_receipt(db, workspace, row, now):
@@ -34,7 +34,7 @@ def _snapshot_reason(db, workspace, snapshot, valid_until, now):
         latest_document = _review_receipt(db, workspace, latest, now)
         _assert(latest_document["source_hash"] == source["content_hash"] and latest_document["kind"] == source["kind"])
     for ref in snapshot["capture_refs"]:
-        confirmed = snapshot["schema_version"] == "investor-monitor-price-snapshot-v1" and ref.get("kind") == "confirmed_sdk"
+        confirmed = snapshot["schema_version"] in ("investor-monitor-price-snapshot-v1", "investor-monitor-source-snapshot-v2") and ref.get("kind") == "confirmed_sdk"
         prefix = "investor_confirmed" if confirmed else "investor_price"
         purge = db.execute("SELECT p.*,c.workspace_id FROM " + prefix + "_purges p JOIN " + prefix + "_captures c ON c.id=p.capture_id WHERE p.capture_id=?", (ref["capture_id"],)).fetchone()
         if purge:
@@ -45,11 +45,30 @@ def _snapshot_reason(db, workspace, snapshot, valid_until, now):
                 and audit["action"] == ("investor_purge_confirmed_payload" if confirmed else "investor_purge_price_payload")
                 and audit["object_type"] == ("investor_confirmed_capture" if confirmed else "investor_price_capture")
                 and audit["object_id"] == ref["capture_id"] and _object(audit["payload_json"]) == {"reason": purge["reason"]})
-    return source_unavailable_reason(db, workspace, {"snapshot": snapshot, "valid_until": valid_until}, now)
+    return source_storage_unavailable_reason(db, workspace, {"snapshot": snapshot, "valid_until": valid_until}, now)
 
 
 def _monitor_reason(db, workspace, definition, input_id, evaluated_at, now):
-    row, document = monitor_evidence_document(db, workspace, definition["model_id"], input_id, now)
+    row = db.execute("SELECT * FROM investor_monitor_evidence_inputs WHERE id=? AND workspace_id=? AND model_id=?", (input_id, workspace, definition["model_id"])).fetchone()
+    _assert(row is not None)
+    document = _object(row["document_json"])
+    if document.get("schema_version") == "investor-monitor-data-input-v6":
+        # Cleanup must authenticate the actual journal even when source bytes are
+        # no longer readable. This is not current-state/source replay authority.
+        from .model_epoch_registration import _header
+        epoch = db.execute("SELECT id FROM investor_model_epochs WHERE input_id=? AND workspace_id=? AND model_id=?", (input_id, workspace, definition["model_id"])).fetchone()
+        owner = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (workspace,)).fetchone()
+        _assert(owner is not None)
+        if epoch is not None:
+            _, record = _header(db, workspace, owner[0], epoch["id"], "registration")
+        else:
+            from .epoch_continuation import publication_header
+            continuation = db.execute("SELECT id FROM investor_epoch_continuations WHERE input_id=? AND workspace_id=? AND model_id=?", (input_id, workspace, definition["model_id"])).fetchone()
+            _assert(continuation is not None)
+            _, record = publication_header(db, workspace, owner[0], continuation["id"])
+        _assert(record["input"] == {"id": input_id, "content_hash": content_hash(document)})
+    else:
+        row, document = monitor_evidence_document(db, workspace, definition["model_id"], input_id, now)
     _assert(row["created_at"] <= evaluated_at and document["target_definition_hash"] == definition["target_definition_hash"])
     reason = None
     for segment in document["segments"]:
@@ -118,7 +137,23 @@ def monitor_payload_unavailable(db, row, kind, now):
     request = db.execute("SELECT * FROM investor_evidence_monitor_requests WHERE id=? AND workspace_id=? AND model_id=?", (row["request_id"], workspace, model["id"])).fetchone()
     _assert(request is not None and request["created_at"] <= row["created_at"])
     from .evidence_monitor_runtime import _validate_request
-    bound = _object(request["document_json"]); _validate_request(bound)
+    bound = _object(request["document_json"])
+    if bound.get("schema_version") == "investor-evidence-monitor-request-v3":
+        from .model_epoch_registration import _header, SCHEMA
+        validate_contract(bound, SCHEMA, fragment="$defs/monitor_request")
+        epoch = db.execute("SELECT id FROM investor_model_epochs WHERE monitor_run_id=? AND workspace_id=? AND model_id=?", (row["id"], workspace, model["id"])).fetchone()
+        owner = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (workspace,)).fetchone()
+        _assert(epoch is not None and owner is not None)
+        _, record = _header(db, workspace, owner[0], epoch["id"], "registration")
+        _assert(record["request"]["id"] == request["id"] and record["input"]["id"] == request["input_id"] and record["checkpoint"]["id"] == row["checkpoint_id"])
+    elif bound.get("schema_version") == "investor-evidence-monitor-request-v4":
+        from .epoch_continuation import publication_header
+        publication = db.execute("SELECT id FROM investor_epoch_continuations WHERE monitor_run_id=? AND workspace_id=? AND model_id=?", (row["id"], workspace, model["id"])).fetchone()
+        owner = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (workspace,)).fetchone()
+        _assert(publication is not None and owner is not None)
+        _, record = publication_header(db, workspace, owner[0], publication["id"])
+        _assert(record["request"]["id"] == request["id"] and record["input"]["id"] == request["input_id"] and record["checkpoint"]["id"] == row["checkpoint_id"])
+    else: _validate_request(bound)
     input_row, _, reason = _monitor_reason(db, workspace, definition, request["input_id"], request["created_at"], now)
     _assert(content_hash(bound) == request["input_version"] == run["input_version"]
         and bound["model_hash"] == model["content_hash"] and bound["profile_hash"] == definition["profile_hash"]
@@ -127,7 +162,31 @@ def monitor_payload_unavailable(db, row, kind, now):
 
 
 _CANDIDATES = """
-WITH source_snapshots AS (
+WITH action_dependencies AS (
+  SELECT p.id,p.workspace_id,j.key kind,json_extract(j.value,'$.capture_id') capture_id
+    FROM investor_action_publications p JOIN investor_action_authorities a ON a.id=p.authority_id AND a.workspace_id=p.workspace_id
+    JOIN json_each(a.document_json,'$.anchor_captures') j WHERE p.status='published'
+  UNION ALL
+  SELECT p.id,p.workspace_id,j.key,json_extract(j.value,'$.capture_id') FROM investor_action_publications p
+    JOIN json_each(p.document_json,'$.capture_refs') j WHERE p.status='published'
+), action_storage_unavailable AS (
+  SELECT p.id,p.workspace_id FROM investor_action_publications p JOIN investor_action_authorities a ON a.id=p.authority_id AND a.workspace_id=p.workspace_id
+    JOIN investor_data_reviews b ON b.id=a.base_review_id JOIN investor_data_reviews l ON l.id=a.listing_review_id
+    WHERE p.status='published' AND (EXISTS(SELECT 1 FROM investor_data_reviews n WHERE (n.source_id=b.source_id AND n.version>b.version)
+      OR (n.source_id=l.source_id AND n.version>l.version)) OR EXISTS(
+      SELECT 1 FROM action_dependencies d JOIN investor_issuer_captures c ON c.id=d.capture_id AND c.workspace_id=d.workspace_id
+        JOIN investor_issuer_requests r ON r.id=c.request_id AND r.workspace_id=c.workspace_id
+      WHERE d.id=p.id AND d.workspace_id=p.workspace_id AND d.kind='issuer' AND (c.retain_until<=:at
+        OR EXISTS(SELECT 1 FROM investor_issuer_purges x WHERE x.capture_id=c.id)
+        OR NOT EXISTS(SELECT 1 FROM investor_issuer_controls x WHERE x.id=r.control_id AND x.enabled=1
+          AND x.version=(SELECT max(version) FROM investor_issuer_controls WHERE authority_id=r.authority_id)))) OR EXISTS(
+      SELECT 1 FROM action_dependencies d JOIN investor_eodhd_captures c ON c.id=d.capture_id AND c.workspace_id=d.workspace_id
+        JOIN investor_eodhd_requests r ON r.id=c.request_id AND r.workspace_id=c.workspace_id
+      WHERE d.id=p.id AND d.workspace_id=p.workspace_id AND d.kind IN ('dividends','splits') AND (c.retain_until<=:at
+        OR EXISTS(SELECT 1 FROM investor_eodhd_purges x WHERE x.capture_id=c.id)
+        OR NOT EXISTS(SELECT 1 FROM investor_eodhd_controls x WHERE x.id=r.control_id AND x.enabled=1
+          AND x.version=(SELECT max(version) FROM investor_eodhd_controls WHERE authority_id=r.authority_id)))) )
+), source_snapshots AS (
   SELECT 'research' kind,i.id,i.workspace_id,i.created_at,i.valid_until,json_extract(i.document_json,'$.snapshot') snapshot
     FROM investor_evidence_inputs i
   UNION ALL
@@ -140,7 +199,7 @@ WITH source_snapshots AS (
         JOIN investor_review_headers d ON d.id=json_extract(ref.value,'$.review_id') AND d.workspace_id=s.workspace_id
         WHERE d.valid_until<=:at OR d.decision!='approved' OR EXISTS(
           SELECT 1 FROM investor_review_headers newer WHERE newer.source_id=d.source_id AND newer.version>d.version)
-          OR EXISTS(SELECT 1 FROM investor_action_unavailable_headers a WHERE a.id=d.id AND a.workspace_id=d.workspace_id)
+          OR EXISTS(SELECT 1 FROM action_storage_unavailable a WHERE a.id=d.id AND a.workspace_id=d.workspace_id)
           OR EXISTS(SELECT 1 FROM investor_fx_publications p JOIN investor_fx_captures c ON c.id=p.capture_id AND c.workspace_id=p.workspace_id
             JOIN investor_fx_authorities a ON a.id=p.authority_id AND a.workspace_id=p.workspace_id
             WHERE p.workspace_id=s.workspace_id AND (p.usd_review_id=d.id OR p.hkd_review_id=d.id)

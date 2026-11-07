@@ -79,14 +79,15 @@ def _payload(raw, request, started, returned, qualification):
 
 
 def prepare_confirmed_prices(db, workspace_id, actor_id, targets, *, watch_seconds=900,
-        credentials_file=None, stop_requested=None, now=None, test_receiver=None):
+        credentials_file=None, stop_requested=None, now=None, test_receiver=None, before_collect=None):
     """No write lock across I/O. Injected Python receivers are always synthetic."""
     _assert(test_receiver is None or callable(test_receiver))
+    _assert(before_collect is None or callable(before_collect))
     _assert(test_receiver is not None or now is None, "INVESTOR_DATA_PRODUCTION_CLOCK_NOT_CALLER_CONTROLLED")
     _assert(test_receiver is None or credentials_file is None, "INVESTOR_DATA_SYNTHETIC_CREDENTIALS_FORBIDDEN")
     _assert(type(watch_seconds) is int and 1 <= watch_seconds <= receiver.MAX_WATCH_SECONDS)
     inputs = _inputs(targets)
-    assert_writable(db); _owner(db, workspace_id, actor_id)
+    assert_writable(db); _assert(db.execute("PRAGMA query_only").fetchone()[0] == 0, "WORKBENCH_READ_ONLY"); _owner(db, workspace_id, actor_id)
     before = _milliseconds(now)
     binding, initial_reviews = _bindings(db, workspace_id, inputs, before, watch_seconds=watch_seconds)
     request = receiver.make_watch_request([row["target"] for row in binding], secrets.token_hex(16), watch_seconds=watch_seconds)
@@ -97,7 +98,7 @@ def prepare_confirmed_prices(db, workspace_id, actor_id, targets, *, watch_secon
     def guard():
         if stop_requested and stop_requested():
             return True
-        assert_writable(db); _owner(db, workspace_id, actor_id)
+        assert_writable(db); _assert(db.execute("PRAGMA query_only").fetchone()[0] == 0, "WORKBENCH_READ_ONLY"); _owner(db, workspace_id, actor_id)
         checked = _milliseconds(now)
         _assert(instant(checked) < deadline, "INVESTOR_DATA_CHANGED_DURING_COLLECTION")
         # Immutable headers suffice for frequent cancellation polls. Full facts,
@@ -116,6 +117,11 @@ def prepare_confirmed_prices(db, workspace_id, actor_id, targets, *, watch_secon
 
     if guard():
         raise WorkbenchError("WORKER_STOP_REQUESTED")
+    if before_collect is not None:
+        remaining = before_collect()
+        _assert(type(remaining) is int and 1 <= remaining <= watch_seconds)
+        request = receiver.make_watch_request([row["target"] for row in binding], request["watch_id"], watch_seconds=remaining)
+        if guard(): raise WorkbenchError("WORKER_STOP_REQUESTED")
     result = receiver.collect_confirmed_days(request, credentials_file=credentials_file, stop_requested=guard) if test_receiver is None else test_receiver(request, guard)
     if guard():
         raise WorkbenchError("WORKER_STOP_REQUESTED")

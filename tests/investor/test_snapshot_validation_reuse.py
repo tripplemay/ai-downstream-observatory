@@ -1,18 +1,28 @@
 """Bounded pure-validation reuse; invented facts and stub transport only."""
 
-from contextlib import nullcontext, redirect_stdout
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from copy import deepcopy
 import io
 import json
+import os
+from pathlib import Path
+import sqlite3
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
 from tests.investor import evidence_fixture as fixture, test_data_evidence as evidence, test_runtime as queue
+from tests.investor import fixture_dataset_shapes as shapes
+from tests.research.fixtures import dataset
 from worker.investor import data_evidence, data_snapshot, source_inputs
+from worker.investor import action_restatement_kernel as restatement
 from worker.investor.data_evidence import _fact_validation_scope, resolve_capture, resolve_review, review_source, validate_facts
 from worker.market.contracts import validate_contract
 from worker.market.providers import longport
 from worker.orchestration.db import WorkbenchError
+from worker.market import contracts
+from worker.research import snapshot
 
 
 def rights():
@@ -204,6 +214,344 @@ class SnapshotValidationReuseTests(unittest.TestCase):
             resolved = resolve_review(self.db, "w", replacement["id"], "rights", now=queue.NOW)
             self.assertEqual(resolved["review"]["id"], replacement["id"])
         self.assert_no_finance()
+
+
+def large_dataset():
+    value = dataset(); observations = value["observations"]
+    value["observations"] = [{**row, "id": row["id"] + ":copy:" + str(index), "revision_id": "copy:" + str(index)}
+                             for index in range(12) for row in observations]
+    assert len(json.dumps(value).encode()) > 65536
+    return value
+
+
+class FixtureDatasetShapesTests(unittest.TestCase):
+    def test_small_restatement_shapes_reuse_only_input_validation_not_arithmetic(self):
+        from tests.investor.test_action_restatement_kernel import fractional_case
+        value = fractional_case(); compare = restatement.compare_action_restatement
+        original = restatement.validate_contract
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics, \
+                patch.object(restatement, "_replay", wraps=restatement._replay) as replay:
+            result = compare(value)
+            self.assertEqual(compare(deepcopy(value)), result)
+            self.assertEqual((metrics["validated"], metrics["hits"]), (1, 1))
+            self.assertEqual(replay.call_count, 4)
+            self.assertIs(restatement.compare_action_restatement, compare)
+            hits = metrics["hits"]
+            with patch.object(snapshot, "validate_contract", wraps=contracts.validate_contract), \
+                    patch.object(restatement, "validate_contract", wraps=contracts.validate_contract) as uncached:
+                self.assertEqual(compare(deepcopy(value)), result)
+                self.assertTrue(any(call.args[1] == restatement.SCHEMA and not call.kwargs for call in uncached.call_args_list))
+            self.assertEqual(metrics["hits"], hits)
+            self.assertEqual(replay.call_count, 6)
+            bad = deepcopy(value); bad["corrected_coverage"][next(iter(bad["corrected_coverage"]))]["complete"] = False
+            for _ in range(2):
+                with self.assertRaisesRegex(WorkbenchError, "CORRECTED_COVERAGE_GAP"): compare(bad)
+            self.assertEqual((metrics["validated"], metrics["hits"]), (2, 2))
+            self.assertEqual(replay.call_count, 8)
+        self.assertIs(restatement.validate_contract, original)
+
+    def test_restatement_transitive_schema_and_format_changes_are_not_cached(self):
+        from tests.investor.test_action_restatement_kernel import fractional_case
+        value = fractional_case(); schemas, _, checker = contracts._schemas()
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            result = restatement.compare_action_restatement(value)
+            with patch.dict(schemas["common.schema.json"]["$defs"]["hash"], {"pattern": "^z$"}):
+                with self.assertRaises(WorkbenchError): restatement.compare_action_restatement(value)
+            with patch.dict(checker.checkers, {"date-time": (lambda _: False, ())}):
+                with self.assertRaises(WorkbenchError): restatement.compare_action_restatement(value)
+            self.assertEqual((metrics["validated"], metrics["hits"]), (3, 0))
+            self.assertEqual(restatement.compare_action_restatement(value), result)
+            self.assertEqual(metrics["hits"], 1)
+
+    def test_restatement_invalid_types_and_fragments_always_reach_original_validation(self):
+        from tests.investor.test_action_restatement_kernel import fractional_case
+        value = fractional_case()
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            result = restatement.compare_action_restatement(value)
+            for change in (lambda item: item["origin"].update(sequence=True),
+                           lambda item: item["definition"].update(targets=tuple(item["definition"]["targets"]))):
+                bad = deepcopy(value); change(bad)
+                for _ in range(2):
+                    with self.assertRaises(WorkbenchError): restatement.compare_action_restatement(bad)
+            self.assertEqual((metrics["validated"], metrics["hits"]), (5, 0))
+            result["difference_cny"] = "0"
+            # A structurally valid result still requires independent arithmetic.
+            for _ in range(2):
+                with self.assertRaisesRegex(WorkbenchError, "RESULT_REPLAY_MISMATCH"):
+                    restatement.verify_action_restatement_arithmetic(value, result)
+            self.assertEqual((metrics["validated"], metrics["hits"]), (5, 2))
+
+    def test_restatement_shares_entry_budget_and_cannot_cross_threads_or_wrappers(self):
+        from tests.investor.test_action_restatement_kernel import fractional_case
+        value = fractional_case(); original = restatement.validate_contract
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            restatement.compare_action_restatement(value)
+            with ThreadPoolExecutor(max_workers=1) as pool: pool.submit(restatement.compare_action_restatement, value).result()
+            self.assertEqual((metrics["validated"], metrics["hits"]), (1, 0))
+        with patch.object(shapes, "MAX_ENTRIES", 1), redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            snapshot.validate_dataset(large_dataset())
+            restatement.compare_action_restatement(value); restatement.compare_action_restatement(value)
+            self.assertEqual((metrics["validated"], metrics["hits"], metrics["entries"]), (3, 0, 1))
+        with patch.object(restatement, "validate_contract", wraps=original) as wrapper, \
+                redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            restatement.compare_action_restatement(value)
+            self.assertIs(restatement.validate_contract, wrapper)
+            self.assertEqual(metrics["checks"], 0)
+            self.assertGreater(wrapper.call_count, 0)
+        with self.assertRaisesRegex(RuntimeError, "FICTIONAL_EXIT"), redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes():
+            raise RuntimeError("FICTIONAL_EXIT")
+        self.assertIs(restatement.validate_contract, original)
+        self.assertIsNone(shapes._ACTIVE.get())
+
+    def test_restatement_shared_json_subtrees_bind_expanded_bytes_and_stay_bounded(self):
+        from tests.investor.test_action_restatement_kernel import fractional_case
+        value = fractional_case(); value["corrected_actions"][0] = value["original_actions"][0]
+        self.assertIsNone(shapes._document_key(value, 0))
+        expanded = json.loads(json.dumps(value))
+        self.assertEqual(shapes._document_key(value, 0, True), shapes._document_key(expanded, 0))
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            result = restatement.compare_action_restatement(value)
+            self.assertEqual(restatement.compare_action_restatement(expanded), result)
+            self.assertEqual((metrics["validated"], metrics["hits"]), (1, 1))
+            value["original_actions"][0]["known_at"] = "not-an-instant"
+            for _ in range(2):
+                with self.assertRaises(WorkbenchError): restatement.compare_action_restatement(value)
+            self.assertEqual((metrics["validated"], metrics["hits"]), (3, 1))
+        cycle = {}; cycle["cycle"] = cycle
+        self.assertIsNone(shapes._document_key(cycle, 0, True))
+        with patch.object(shapes, "MAX_NODES", 4):
+            leaf = {"value": 1}
+            self.assertIsNone(shapes._document_key([leaf, leaf], 0, True))
+        for guard in ({"MAX_BYTES": 128}, {"MAX_SCHEMAS": 2}):
+            with patch.multiple(shapes, **guard), redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+                restatement.compare_action_restatement(expanded); restatement.compare_action_restatement(expanded)
+                self.assertEqual((metrics["validated"], metrics["hits"], metrics["entries"]), (2, 0, 0))
+
+    def test_restatement_mutating_format_callback_cannot_create_an_entry(self):
+        from tests.investor.test_action_restatement_kernel import fractional_case
+        value = fractional_case(); _, _, checker = contracts._schemas()
+        original = checker.checkers["date-time"]
+        def mutate(instant):
+            value["checked_at"] = "2025-01-01T00:00:00Z"
+            return original[0](instant)
+        with patch.dict(checker.checkers, {"date-time": (mutate, original[1])}), \
+                redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            with self.assertRaises(WorkbenchError): restatement.compare_action_restatement(value)
+            self.assertEqual(metrics["entries"], 0)
+
+    def test_exact_shape_reuse_restores_original_and_keeps_every_dataset_semantic_check(self):
+        original, validate = snapshot.validate_contract, snapshot.validate_dataset
+        value = large_dataset()
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            snapshot.validate_dataset(value); snapshot.validate_dataset(deepcopy(value))
+            self.assertEqual((metrics["validated"], metrics["hits"]), (1, 1))
+            self.assertIs(snapshot.validate_dataset, validate)
+            bad = deepcopy(value); bad["observations"].append(deepcopy(bad["observations"][0]))
+            for _ in range(2):
+                with self.assertRaisesRegex(WorkbenchError, "DUPLICATE_RESEARCH_OBSERVATION"):
+                    snapshot.validate_dataset(bad)
+            # Shape reuse never skips duplicate-row or other semantic checks.
+            self.assertEqual((metrics["validated"], metrics["hits"]), (2, 2))
+        self.assertIs(snapshot.validate_contract, original)
+        self.assertIs(contracts.validate_contract, original)
+
+    def test_full_bytes_numeric_types_and_original_raw_hashes_do_not_alias(self):
+        value = large_dataset()
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            snapshot.validate_dataset(value)
+            variants = []
+            for alias in (0, 0.0):
+                bad = deepcopy(value); bad["historical_archive_verified"] = alias; variants.append(bad)
+            bad = deepcopy(value); bad["observations"][0]["value"] = "not-a-decimal"; variants.append(bad)
+            bad = deepcopy(value); bad["assets"] = tuple(bad["assets"]); variants.append(bad)
+            for bad in variants:
+                for _ in range(2):
+                    with self.assertRaises(WorkbenchError): snapshot.validate_dataset(bad)
+            self.assertEqual(metrics["hits"], 0)
+            changed = deepcopy(value); changed["observations"][0]["value"] = "12.5"
+            # An unchanged source label/hash never aliases changed full bytes.
+            self.assertEqual(changed["observations"][0]["raw_hash"], value["observations"][0]["raw_hash"])
+            validated = metrics["validated"]
+            snapshot.validate_dataset(changed)
+            self.assertEqual(metrics["validated"], validated + 1)
+            self.assertEqual(metrics["hits"], 0)
+            snapshot.validate_dataset(deepcopy(value)); self.assertEqual(metrics["hits"], 1)
+
+    def test_schema_and_format_changes_cannot_reuse_an_old_success(self):
+        value = large_dataset(); schemas, _, checker = contracts._schemas()
+        mode = schemas[shapes.SCHEMA]["properties"]["mode"]
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            snapshot.validate_dataset(value)
+            with patch.dict(mode, {"enum": ["historical_point_in_time"]}):
+                with self.assertRaises(WorkbenchError): snapshot.validate_dataset(value)
+            with patch.dict(checker.checkers, {"date-time": (lambda _: False, ())}):
+                with self.assertRaises(WorkbenchError): snapshot.validate_dataset(value)
+            self.assertEqual(metrics["hits"], 0)
+            snapshot.validate_dataset(value); self.assertEqual(metrics["hits"], 1)
+
+    def test_scopes_entry_caps_and_uncacheable_values_never_bypass_original_validation(self):
+        value = large_dataset(); original = snapshot.validate_contract
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            for index in range(shapes.MAX_ENTRIES + 2):
+                changed = deepcopy(value); changed["source_evidence"] = "Fictional scope " + str(index)
+                snapshot.validate_dataset(changed)
+            snapshot.validate_dataset(changed)
+            self.assertEqual(metrics["entries"], shapes.MAX_ENTRIES)
+            self.assertEqual(metrics["hits"], 0)
+            with shapes.fixture_dataset_shapes() as nested: self.assertIs(nested, metrics)
+        self.assertIs(snapshot.validate_contract, original)
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as fresh:
+            snapshot.validate_dataset(value); self.assertEqual((fresh["validated"], fresh["hits"]), (1, 0))
+        for guard in ({"MAX_BYTES": 128}, {"MAX_NODES": 2}):
+            with patch.multiple(shapes, **guard), redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as limited:
+                snapshot.validate_dataset(value); snapshot.validate_dataset(value)
+                self.assertEqual((limited["validated"], limited["hits"], limited["entries"]), (2, 0, 0))
+
+    def test_other_threads_do_not_share_success_and_exception_exit_restores_alias(self):
+        value = large_dataset(); original = snapshot.validate_contract
+        with redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            snapshot.validate_dataset(value)
+            with ThreadPoolExecutor(max_workers=1) as pool: pool.submit(snapshot.validate_dataset, value).result()
+            self.assertEqual((metrics["validated"], metrics["hits"]), (1, 0))
+        with self.assertRaisesRegex(RuntimeError, "FICTIONAL_EXIT"), redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes():
+            raise RuntimeError("FICTIONAL_EXIT")
+        self.assertIs(snapshot.validate_contract, original)
+        self.assertIsNone(shapes._ACTIVE.get())
+
+    def test_a_mutating_format_callback_does_not_create_a_stale_shape_entry(self):
+        value = large_dataset(); _, _, checker = contracts._schemas()
+        original = checker.checkers["date-time"]
+        def mutate(instant):
+            value["source_evidence"] += "."
+            return original[0](instant)
+        with patch.dict(checker.checkers, {"date-time": (mutate, original[1])}), redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
+            snapshot.validate_dataset(value)
+            self.assertEqual(metrics["entries"], 0)
+
+
+class FrozenEpochTemplateTests(unittest.TestCase):
+    def setUp(self):
+        from tests.investor import epoch_template_fixture
+        self.templates = epoch_template_fixture
+
+    def database(self, *, prefix="etf-correction-http-", applied="2026-01-01T00:00:00Z"):
+        directory = TemporaryDirectory(prefix=prefix); self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / "workbench.db"
+        db = sqlite3.connect(path, isolation_level=None); self.addCleanup(db.close)
+        db.execute("PRAGMA journal_mode=WAL"); db.execute("PRAGMA foreign_keys=ON"); db.execute("PRAGMA user_version=1")
+        db.executescript("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,filename TEXT,checksum TEXT,applied_at TEXT);"
+            "CREATE TABLE facts(id TEXT PRIMARY KEY,payload BLOB); CREATE TABLE sequence_probe(id INTEGER PRIMARY KEY AUTOINCREMENT);"
+            "INSERT INTO sqlite_sequence(name,seq) VALUES('sequence_probe',0);")
+        db.execute("INSERT INTO schema_migrations VALUES(1,'fixture.sql','fictional-checksum',?)", (applied,))
+        return db
+
+    def source(self):
+        db = self.database(); baseline = self.templates.pristine_fingerprint(db)
+        db.execute("INSERT INTO facts(rowid,id,payload) VALUES(17,'a',?)", (b"\x00\xffretained",))
+        value = {"references": ["a"], "fictional": True}
+        template = self.templates.FrozenEpochTemplate.capture(db, baseline, value)
+        self.assertIsNotNone(template); self.addCleanup(template.close)
+        return db, baseline, value, template
+
+    def test_copies_preserve_raw_bytes_rowids_schema_and_full_metadata_without_external_files(self):
+        source, _, _, template = self.source(); target = self.database(applied="2026-01-02T00:00:00Z")
+        copied = template.restore(target)
+        self.assertEqual(list(source.iterdump()), list(target.iterdump()))
+        self.assertEqual(source.execute("SELECT rowid,* FROM facts").fetchall(), target.execute("SELECT rowid,* FROM facts").fetchall())
+        self.assertEqual(copied, {"references": ["a"], "fictional": True})
+        self.assertEqual(target.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+        self.assertEqual(target.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+        self.assertEqual(target.execute("PRAGMA foreign_key_check").fetchall(), [])
+
+    def test_every_case_has_independent_values_and_database_writes_never_change_the_template(self):
+        _, _, original, template = self.source(); first, second = self.database(), self.database()
+        original["references"].append("caller-mutated")
+        value = template.restore(first); value["references"].append("first-only")
+        first.execute("UPDATE facts SET payload=?", (b"first-only",))
+        self.assertEqual(template.restore(second), {"references": ["a"], "fictional": True})
+        self.assertEqual(second.execute("SELECT payload FROM facts").fetchone()[0], b"\x00\xffretained")
+        before = list(first.iterdump())
+        with self.assertRaisesRegex(AssertionError, "TARGET_NOT_PRISTINE"): template.restore(first)
+        self.assertEqual(before, list(first.iterdump()))
+
+    def test_nonempty_changed_schema_or_migration_history_cannot_be_overwritten(self):
+        _, _, _, template = self.source()
+        for sql in ("INSERT INTO facts VALUES('new',x'01')", "ALTER TABLE facts ADD COLUMN extra TEXT",
+                    "UPDATE schema_migrations SET checksum='changed'", "UPDATE sqlite_sequence SET seq=3"):
+            target = self.database(); target.execute(sql); before = list(target.iterdump())
+            with self.assertRaisesRegex(AssertionError, "TARGET_NOT_PRISTINE"): template.restore(target)
+            self.assertEqual(before, list(target.iterdump()))
+
+    def test_transactions_readonly_recovery_and_attached_databases_are_rejected_before_copy(self):
+        _, _, _, template = self.source()
+        for mode in ("transaction", "readonly", "recovery", "attached"):
+            target = self.database()
+            if mode == "transaction": target.execute("BEGIN")
+            elif mode == "readonly": target.execute("PRAGMA query_only=ON")
+            elif mode == "attached": target.execute("ATTACH ':memory:' AS extra")
+            else:
+                path = Path(target.execute("PRAGMA database_list").fetchone()[2]).parent / "RESTORE_PENDING_REVIEW"
+                path.touch()
+            before = list(target.iterdump())
+            with self.assertRaisesRegex(AssertionError, "TARGET_NOT_PRISTINE"): template.restore(target)
+            self.assertEqual(before, list(target.iterdump()))
+
+    def test_scope_does_not_accept_other_temporary_prefixes_or_changed_template_rowids(self):
+        _, _, _, template = self.source(); outside = self.database(prefix="not-an-epoch-fixture-")
+        before = list(outside.iterdump())
+        with self.assertRaisesRegex(AssertionError, "TARGET_NOT_PRISTINE"): template.restore(outside)
+        self.assertEqual(before, list(outside.iterdump()))
+        target = self.database(); before = list(target.iterdump())
+        template._db.execute("PRAGMA query_only=OFF"); template._db.execute("UPDATE facts SET rowid=51 WHERE id='a'"); template._db.execute("PRAGMA query_only=ON")
+        with self.assertRaisesRegex(AssertionError, "TEMPLATE_CHANGED"): template.restore(target)
+        self.assertEqual(before, list(target.iterdump()))
+
+    def test_oversize_external_scratch_references_and_non_json_values_decline_the_optimization(self):
+        source, baseline, _, _ = self.source(); before = list(source.iterdump())
+        with patch.object(self.templates, "MAX_BYTES", 1):
+            self.assertIsNone(self.templates.FrozenEpochTemplate.capture(source, baseline, {"fixture": True}))
+        self.assertIsNone(self.templates.FrozenEpochTemplate.capture(source, baseline, {"tuple": (1, 2)}))
+        self.assertIsNone(self.templates.FrozenEpochTemplate.capture(source, baseline, {"object": object()}))
+        self.assertIsNone(self.templates.FrozenEpochTemplate.capture(source, baseline, {"nan": float("nan")}))
+        directory = str(Path(source.execute("PRAGMA database_list").fetchone()[2]).parent)
+        self.assertIsNone(self.templates.FrozenEpochTemplate.capture(source, baseline, {"external_file": directory + "/raw.xml"}))
+        self.assertEqual(before, list(source.iterdump()))
+        source.execute("BEGIN")
+        with self.assertRaisesRegex(AssertionError, "SOURCE_NOT_QUIESCENT"):
+            self.templates.FrozenEpochTemplate.capture(source, baseline, {"fixture": True})
+        source.execute("ROLLBACK")
+
+    def test_close_is_idempotent_and_a_closed_template_cannot_populate_a_new_case(self):
+        _, _, _, template = self.source(); target = self.database(); before = list(target.iterdump())
+        template.close(); template.close()
+        with self.assertRaisesRegex(AssertionError, "TEMPLATE_CLOSED"): template.restore(target)
+        self.assertEqual(before, list(target.iterdump()))
+
+    def test_failed_construction_discards_the_builder_and_does_not_register_a_template(self):
+        from unittest.mock import Mock
+        builder = Mock(); builder.db = self.database()
+        with patch.object(self.templates.setup, "CurrentCorrectionFixtureTests", return_value=builder), \
+                patch.object(self.templates, "create", side_effect=RuntimeError("FICTIONAL_CONSTRUCTION_FAILED")):
+            with self.assertRaisesRegex(RuntimeError, "FICTIONAL_CONSTRUCTION_FAILED"): self.templates.build_epoch_template()
+        builder.setUp.assert_called_once(); builder.doCleanups.assert_called_once()
+
+    def test_hardlinked_targets_are_refused_without_touching_either_name(self):
+        _, _, _, template = self.source(); target = self.database()
+        path = Path(target.execute("PRAGMA database_list").fetchone()[2]); os.link(path, path.parent / "alias.db")
+        before = list(target.iterdump())
+        with self.assertRaisesRegex(AssertionError, "TARGET_NOT_PRISTINE"): template.restore(target)
+        self.assertEqual(before, list(target.iterdump()))
+
+    def test_suite_cleanup_releases_the_only_template_and_restores_uncached_manual_setup(self):
+        from unittest.mock import Mock
+        from tests.investor import test_epoch_continuation as cases
+        template = Mock()
+        with patch.object(cases, "build_epoch_template", return_value=template) as build:
+            cases.EpochContinuationTests.setUpClass()
+            self.assertIs(cases.EpochContinuationTests._seed_template, template)
+            cases.EpochContinuationTests.doClassCleanups()
+            self.assertIsNone(cases.EpochContinuationTests._seed_template)
+        build.assert_called_once(); template.close.assert_called_once()
 
 
 if __name__ == "__main__":

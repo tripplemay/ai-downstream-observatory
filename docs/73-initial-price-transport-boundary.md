@@ -58,3 +58,43 @@ acceptance are separate requirements. Earlier expired attempts remain closed;
 this repair does not recover their missing prices. Complete corporate actions,
 continuous qualified data, ordinary/funding/stale journeys, independent running
 recovery, capacity and the remaining v2 P0/P1/P2 work remain open.
+
+## Terminal lease-expiry progress
+
+The optional read-only acquisition view now distinguishes a closed expired lease
+from a generic failed task. The exact persisted `LEASE_EXPIRED` result must agree
+with its original single attempt, expiry status/error, final timestamp, cleared
+lease and incremented fencing token. Inconsistent metadata hides only this
+optional progress view; it does not disable independently checked research or
+expose raw errors. Unknown failures remain generic rather than being inferred to
+be provider outages.
+
+Both initial historical-price and subsequent confirmed-close tasks retain their
+original one-attempt identity. The display explains that expiry can leave an
+unknown request outcome and never adds a retry action, resets a budget or predicts
+an unregistered future collection time. Fictional regressions use the actual
+claim/expiry lifecycle without SDK calls and test corrupted attempts, hidden
+private error details, read-only state, empty financial tables and no false NAV.
+This is task-metadata correctness, not successful collection or restored monitoring.
+
+## First-monitor user guidance
+
+The first-input panel states that continuous monitoring is not yet established,
+rather than presenting a saved observation task as an active monitor. Registered
+work, completed price tasks awaiting independent core checks, and absent or
+interrupted tasks have separate next-step text. Local display expiry updates
+that explanation even without a fresh response. Mixed markets do not turn a
+partial failure into full completion.
+
+No new ETA is inferred from a weekend, a source label or an exhausted request.
+The panel explains that resaving the same profile/plan or toggling observation
+does not authorize replay of an old request. It adds no button, source query,
+worker write, attempt or data-quality admission. Hidden/invalid source states
+do not display the registered-work guidance. This clarification does not solve
+the missing production prices or certify the next market session.
+
+A separate [first confirmed-close bootstrap](84-first-confirmed-close-bootstrap.md)
+can now schedule from the selected reference without inventing a monitor input.
+It preserves the historical endpoint's past-local-date restriction, globally
+reserves its single callback window, and never replays a consumed close through
+history. Its completed receipt still needs independent core qualification.

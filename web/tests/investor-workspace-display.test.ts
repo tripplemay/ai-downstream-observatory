@@ -10,8 +10,10 @@ import { displayBinding as binding, displayBefore, displayUntil, displayFuture, 
 import { blockedResearchDisplayState } from "./investor-research-blocker-fixture";
 import { actionCostMethodology, reviewCostMethodology, settlementCostMethodology } from "../src/server/investor/reference-cost-methodology";
 import { actionDraftProgressSchema } from "../src/server/investor/action-draft-progress-schemas";
-import { actionMaintenanceProgressRequest } from "../src/server/investor/action-maintenance-progress-schemas";
+import { initialCloseProgressRequest } from "../src/server/investor/initial-close-progress";
 import { unavailableActionMaintenanceProgress } from "../src/server/investor/action-maintenance-progress";
+import { currentResearchModelComposition } from "../src/components/workbench/investor-model-composition";
+import { compositionDisplayState } from "./investor-model-composition-fixture";
 
 const before = Date.parse(displayBefore), until = Date.parse(displayUntil);
 function validationHoldState() {
@@ -39,9 +41,10 @@ function mount(t: { after: (fn: () => void) => void }, state = displayState(), v
     { initial: state, initialSessionBinding: binding, view }, { "next/link": { default: "Link", __esModule: true },
       "lucide-react": Object.fromEntries(["ArrowRight", "CheckCircle2", "CircleHelp", "Clock3", "Eye", "ShieldCheck"].map(name => [name, name])),
       "@/components/ui/input": { Input: "Input" }, "@/components/session-boundary": { useSessionBoundary: () => null },
+      "./investor-model-composition": { currentResearchModelComposition },
       "@/server/investor/schemas": schemas, "@/server/investor/loss-scenarios": losses, "./research-format": research, "./investor-client": client,
-      "@/server/investor/action-maintenance-progress-schemas": { actionMaintenanceProgressRequest },
-      ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel", "history-panel", "monitor-cost-panel"]
+      "@/server/investor/initial-close-progress": { initialCloseProgressRequest },
+      ...Object.fromEntries(["account-workspace", "funding-panel", "funded-comparison-panel", "risk-panel", "ai-panel", "notifications-panel", "history-panel", "monitor-cost-panel","action-review","legacy-transition","epoch-control","epoch-setup","epoch-history"]
         .map(name => { const component = "Investor" + name.split("-").map(value => value[0].toUpperCase() + value.slice(1)).join("");
           return ["./investor-" + name, { [component]: component }]; })),
       "./investor-acquisition": { acquisitionDeadlines, InvestorAcquisitionPanel: "InvestorAcquisitionPanel" },
@@ -52,6 +55,76 @@ function mount(t: { after: (fn: () => void) => void }, state = displayState(), v
     headline: () => h.nodes().filter(node => node.type === "h2").map(node => h.words(node)).find(text => ["继续观察", "需要你做决定", "证据不足"].includes(text)),
   };
 }
+
+test("qualified model composition leads the overview while reference evidence stays available in a closed keyboard disclosure", async t => {
+  const state = compositionDisplayState(), original = JSON.stringify(state), h = mount(t, state); await h.flush();
+  const current = h.card("当前研究模型")!; assert.ok(current);
+  for (const text of ["61.00%", "60.00%", "+1.00 个百分点", "38.00%", "-2.00 个百分点", "6,100.00 CNY", "3,800.00 CNY", "非真实持仓", "计划追加"])
+    assert.ok(h.words(current).includes(text), text);
+  assert.doesNotMatch(h.words(current), /9,000.00|61.62%|38.38%/);
+  const fold = h.nodes().find(node => node.props["data-testid"] === "model-reference-details")!;
+  assert.ok(fold); assert.equal(!!fold.props.open, false); assert.match(h.words(fold), /历史参考配置与研究依据/);
+  assert.match(h.words(fold), /Historical|历史研究参考组合/);
+  assert.ok(h.nodes().indexOf(current) < h.nodes().indexOf(fold));
+  assert.equal(h.requests.length, 0); assert.equal(JSON.stringify(state), original);
+});
+test("epoch-scoped controls replace the generic toggle; pending control hides derivatives and only a new authenticated read restores them",async t=>{
+  const state=compositionDisplayState();state.model_watch!.control_scope="epoch";const h=mount(t,state);await h.flush();
+  const control=h.node("InvestorEpochControl")!;assert.ok(control);assert.equal(h.button("暂停观察任务"),undefined);assert.ok(h.card("当前研究模型"));
+  (control.props.onGuardChange as (value:boolean)=>void)(true);await h.flush();
+  assert.equal(h.card("当前研究模型"),undefined);assert.equal(h.node("InvestorAiPanel"),undefined);assert.equal(h.headline(),"证据不足");
+  assert.match(h.words(h.card("持续观察")),/旧净值和变化暂不作为当前结论/);
+  (h.node("InvestorEpochControl")!.props.onChanged as ()=>void)();await h.waitRequests(1);assert.equal(h.requests[0].method,"GET");
+  await h.flush();assert.equal(h.card("当前研究模型"),undefined);
+  await h.reply(0,{...state,session_binding:binding});assert.ok(h.card("当前研究模型"));assert.ok(h.node("InvestorAiPanel"));
+  assert.equal(h.requests.filter(row=>row.method==="POST").length,0);
+});
+test("history and epoch controls keep independent locks and require authenticated parent recheck after download changes",async t=>{
+ const state=compositionDisplayState();state.model_watch!.control_scope="epoch";const h=mount(t,state,"plan");await h.flush();const panel=h.node("InvestorEpochHistory")!;assert.ok(panel);
+ (panel.props.onGuardChange as (v:boolean)=>void)(true);await h.flush();assert.equal(h.card("当前研究模型"),undefined);assert.equal(h.node("InvestorAiPanel"),undefined);
+ (h.node("InvestorEpochControl")!.props.onGuardChange as (v:boolean)=>void)(true);await h.flush();
+ (h.node("InvestorEpochHistory")!.props.onGuardChange as (v:boolean)=>void)(false);await h.flush();assert.equal(h.card("当前研究模型"),undefined);
+ (h.node("InvestorEpochControl")!.props.onGuardChange as (v:boolean)=>void)(false);await h.flush();
+ (h.node("InvestorEpochHistory")!.props.onChanged as ()=>void)();await h.waitRequests(1);assert.equal(h.card("当前研究模型"),undefined);assert.equal(h.requests[0].method,"GET");
+ await h.reply(0,{...state,session_binding:binding});assert.ok(h.card("当前研究模型"));assert.equal(h.requests.filter(r=>r.method==="POST").length,0);
+});
+test("model composition hides on known expiry despite an edit lock and never revives after clock rollback", async t => {
+  const h = mount(t, compositionDisplayState()); await h.flush(); assert.ok(h.card("当前研究模型"));
+  await h.fundingLock(true); await h.advance(until); assert.equal(h.card("当前研究模型"), undefined);
+  assert.equal(h.headline(), "证据不足"); assert.equal(h.requests.length, 0);
+  await h.advance(before - 10000, 1000); await h.wake(); assert.equal(h.card("当前研究模型"), undefined);
+});
+test("an uncertain human decision and session invalidation cannot leave current model values displayed", async t => {
+  const h = mount(t, compositionDisplayState("decision_required")); await h.flush(); assert.ok(h.card("当前研究模型"));
+  await h.click("暂缓"); await h.waitRequests(1); assert.equal(h.card("当前研究模型"), undefined);
+  await h.fail(0); assert.equal(h.card("当前研究模型"), undefined);
+  await h.invalidate(); assert.equal(h.card("当前研究模型"), undefined); assert.equal(h.requests.length, 1);
+});
+
+test("legacy compatibility locks sibling commands and old callbacks, without blocking its own status read",async t=>{
+  const h=mount(t,costDisplayState(),"plan");await h.flush();const panel=h.node("InvestorLegacyTransition")!;assert.ok(panel);assert.equal(panel.props.disabled,false);
+  const staleCost=h.node("InvestorMonitorCostPanel")!.props.onCommand as (intent:unknown)=>void;
+  const staleRisk=h.node("InvestorRiskPanel")!.props.onCommand as (intent:unknown)=>void;
+  (panel.props.onScopeChange as (value:boolean)=>void)(true);await h.flush();
+  assert.equal(h.node("InvestorLegacyTransition")!.props.disabled,false);assert.equal(h.node("InvestorActionReview")!.props.disabled,true);
+  assert.equal(h.node("InvestorMonitorCostPanel")!.props.disabled,true);assert.equal(h.node("InvestorRiskPanel")!.props.disabled,true);
+  staleCost({action:"fictional-stale-cost"});staleRisk({action:"fictional-stale-risk"});await h.flush();assert.equal(h.requests.length,0);
+  await h.advance(before+15000);assert.equal(h.requests.length,0);
+  (panel.props.onScopeChange as (value:boolean)=>void)(false);await h.flush();assert.equal(h.node("InvestorActionReview")!.props.disabled,false);
+  const overview=mount(t,costDisplayState(),"overview");await overview.flush();assert.equal(overview.node("InvestorLegacyTransition"),undefined);
+});
+
+test("private action review locks sibling commands and parent polling without disabling its own independent status read",async t=>{
+  const h=mount(t,costDisplayState(),"plan");await h.flush();const reviewer=h.node("InvestorActionReview")!;assert.ok(reviewer);assert.equal(reviewer.props.disabled,false);
+  const staleRisk=h.node("InvestorRiskPanel")!.props.onCommand as (intent:unknown)=>void;
+  const staleCost=h.node("InvestorMonitorCostPanel")!.props.onCommand as (intent:unknown)=>void;
+  (reviewer.props.onScopeChange as (value:boolean)=>void)(true);await h.flush();
+  assert.equal(h.node("InvestorActionReview")!.props.disabled,false);assert.equal(h.node("InvestorFundingPanel")!.props.disabled,true);
+  assert.equal(h.node("InvestorMonitorCostPanel")!.props.disabled,true);assert.equal(h.node("InvestorRiskPanel")!.props.disabled,true);
+  staleRisk({action:"fictional-stale-risk"});staleCost({action:"fictional-stale-cost"});await h.flush();assert.equal(h.requests.length,0);
+  await h.advance(before+15000);assert.equal(h.requests.length,0);
+  (reviewer.props.onScopeChange as (value:boolean)=>void)(false);await h.flush();assert.equal(h.node("InvestorMonitorCostPanel")!.props.disabled,false);
+});
 
 test("reference and change cards fold only execution method, retaining cost, risk, counterevidence and dates without commands", async t => {
   const summary = "Fictional costs 12.37 CNY; price buffer 2%; FX buffer 1%.",
@@ -299,6 +372,61 @@ test("main navigation is compact and never speculatively fetches other expensive
   }
   assert.equal(h.requests.length, 0);
 });
+test("profile and plan saves move focus to the result only after a verified receipt and authenticated state read", async t => {
+  for (const action of ["save_profile", "save_plan"]) {
+    const state = displayState(), h = mount(t, state); await h.flush();
+    const heading = h.nodes().find(node => node.props["data-testid"] === "investor-result-heading")!;
+    assert.ok(heading); assert.equal(heading.type, "h2"); assert.equal(heading.props.tabIndex, -1);
+    const calls: string[] = [];
+    (heading.props.ref as { current: unknown }).current = {
+      focus: (options: unknown) => { assert.equal(JSON.stringify(options), '{"preventScroll":true}'); calls.push("focus"); },
+      scrollIntoView: (options: unknown) => { assert.equal(JSON.stringify(options), '{"block":"start"}'); calls.push("scroll"); },
+    };
+    (h.node("InvestorRiskPanel")!.props.onCommand as (value: unknown) => void)(action === "save_plan"
+      ? { action, plan_id: state.plan!.id } : { action, profile: state.profile!.document });
+    await h.waitRequests(1); assert.deepEqual(calls, []);
+    await h.reply(0, { workspace_id: state.workspace_id, revision: state.revision + 1, action,
+      resource_id: "fictional-saved-result", audit_id: "fictional-save-audit", session_binding: binding });
+    await h.waitRequests(2); assert.equal(h.requests[1].method, "GET"); assert.deepEqual(calls, []);
+    await h.reply(1, { ...state, revision: state.revision + 1, session_binding: binding });
+    assert.deepEqual(calls, ["focus", "scroll"]);
+    await h.click("刷新状态"); await h.reply(2, { ...state, revision: state.revision + 1, session_binding: binding });
+    assert.deepEqual(calls, ["focus", "scroll"]); assert.equal(h.requests.filter(row => row.method === "POST").length, 1); h.close();
+  }
+});
+test("lost, rejected, unauthenticated and invalidated saves never move focus or infer a completed transition", async t => {
+  for (const outcome of ["lost", "rejected", "bad_receipt", "bad_read", "read_only", "invalidated", "unmounted"]) {
+    const state = displayState(), h = mount(t, state); await h.flush();
+    const heading = h.nodes().find(node => node.props["data-testid"] === "investor-result-heading")!;
+    assert.ok(heading); const calls: string[] = [];
+    (heading.props.ref as { current: unknown }).current = { focus: () => calls.push("focus"), scrollIntoView: () => calls.push("scroll") };
+    (h.node("InvestorRiskPanel")!.props.onCommand as (value: unknown) => void)({ action: "save_profile", profile: state.profile!.document });
+    await h.waitRequests(1);
+    if (outcome === "lost") await h.fail(0);
+    else if (outcome === "rejected") await h.reply(0, { error: "INVESTOR_REVISION_CONFLICT" }, 409);
+    else {
+      await h.reply(0, { workspace_id: state.workspace_id, revision: state.revision + 1, action: "save_profile",
+        resource_id: "fictional-saved-result", audit_id: "fictional-save-audit", session_binding: outcome === "bad_receipt" ? "wrong-binding" : binding });
+      if (outcome !== "bad_receipt") {
+        await h.waitRequests(2);
+        if (outcome === "invalidated") await h.invalidate();
+        if (outcome === "unmounted") h.close();
+        await h.reply(1, { ...state, read_only: outcome === "read_only", revision: state.revision + 1, session_binding: outcome === "bad_read" ? "wrong-binding" : binding });
+      }
+    }
+    assert.deepEqual(calls, []); assert.equal(h.requests.filter(row => row.method === "POST").length, 1); h.close();
+  }
+});
+test("other verified commands do not move the reader away from the active panel", async t => {
+  const state = displayState(), h = mount(t, state); await h.flush();
+  const heading = h.nodes().find(node => node.props["data-testid"] === "investor-result-heading")!, calls: string[] = [];
+  (heading.props.ref as { current: unknown }).current = { focus: () => calls.push("focus"), scrollIntoView: () => calls.push("scroll") };
+  await h.click("重新检查研究条件"); await h.waitRequests(1);
+  await h.reply(0, { workspace_id: state.workspace_id, revision: state.revision + 1, action: "evaluate",
+    resource_id: "fictional-new-evaluation", audit_id: "fictional-evaluation-audit", session_binding: binding });
+  await h.waitRequests(2); await h.reply(1, { ...state, revision: state.revision + 1, session_binding: binding });
+  assert.deepEqual(calls, []); assert.deepEqual(h.requests.map(row => row.method), ["POST", "GET"]);
+});
 test("background refresh is single-flight and does not lock risk editing; explicit refresh still locks", async t => {
   const state = historicalDisplayState(true), h = mount(t, state, "plan"); await h.flush();
   await h.advance(before + 5000); assert.equal(h.requests.length, 1); assert.equal(h.requests[0].method, "GET");
@@ -314,7 +442,7 @@ test("background refresh is single-flight and does not lock risk editing; explic
   for (const request of h.requests) {
     assert.equal(request.url, "/api/workbench/investor");
     const headers = new Headers(request.options.headers);
-    assert.equal(headers.get(actionMaintenanceProgressRequest.header), actionMaintenanceProgressRequest.value);
+    assert.equal(headers.get(initialCloseProgressRequest.header), initialCloseProgressRequest.value);
     assert.equal(headers.get("X-Workbench-Session-Binding"), binding);
   }
 });

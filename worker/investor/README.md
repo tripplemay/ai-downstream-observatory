@@ -94,6 +94,12 @@ core 发现独立 `investor_monitor` 任务，按 15 分钟窗口或新快照/�
 
 独立 `investor-monitor-data-input-v2` 支持监测专用 `investor-monitor-price-snapshot-v1`，显式区分历史与 Confirmed 回调引用；窗口可增加非空 `confirmed_capture_ids`。`build_monitor_dataset` 逐目标核对完整覆盖，仍按审阅日历重建时点，不伪造 provider 发布时间；原研究 `build_dataset` 与历史接口不接受回调。迁移 42 原子重建监测元数据表的 schema CHECK，保留旧 rowid、列、子引用和审计。默认 core、Node 独立重放、下游来源清理与 AI 全目标用途检查已接通，自动三地收盘监听和真实资格仍未验收。具体升级与边界见[监测专用回调快照](../../docs/14-private-research-data-pipeline.md#监测专用回调快照与版本化准入)。
 
+研发中的显式 `audited_action_knowledge=True` 选择 v4 输入、v2 来源快照/投影及独立监测行动日志。
+晚到行动按实际审阅/评估时点处理，不倒填公告；固定无新增规则保留原人工基准的事件知识时间。
+旧协议重放不变，原研究数据集/回测不接受该专用结构。迁移 54 保留原元数据行和 rowid，确认收盘/费用刷新保持新版本，
+独立 Node 重放原始载荷与逐事件出处。尚无普通确认入口或跨新人工审阅的不可变接续，未默认切换、迁移或启用生产。
+具体证明与剩余用户路径见[明确审阅接续](../../docs/81-reviewed-action-recovery.md)。
+
 `confirmed_feed.py` 已增加日历驱动监听切片：从当前启用的已选模型及已准入 seed 分市场登记 `investor_confirmed_watch`，由 longport 角色执行；core 只消费完整回执并接入原监测链。监听不持写锁，回执与任务在租约保护下原子提交；共享 SDK mutex 和窗口预留，单次尝试，漏窗不补历史。模拟 CN 的两版模型闭环、三地窗口规划及失败边界已验证；真实三地持续采集、长期重启治理和生产运行尚未验收。详细说明和复跑入口见[自动监听](../../docs/14-private-research-data-pipeline.md#日历驱动的自动监听与后台准入)。
 
 `monitor_bootstrap.py` 在默认 core 维护中为当前启用、已选且从未登记监测输入的模型建立首个输入。只发现已有且保留中的完整官方收据，重放当前审阅和各市场最新已完成交易日；整个多目标回执采用或拒绝，不截取目标伪造完整覆盖。价格冲突、挂牌/日历歧义、行动或 FX 多重来源均阻断。容差来自完整核验的冻结研究参数，行情质量上限为七天，FX 使用研究与监测中更严格的时效；费用与投入意图保持未知，不猜测风险答案。未知费用且触发变化仍不发布检查点，既有输入不覆盖、不因到期自动重启。模型/来源/控制再次核对后，输入、revision 和额外 bootstrap 审计同事务提交。此模块不读取凭据、不调用 SDK，也不能获得缺失行情或批准许可。详见[首次自动输入](../../docs/14-private-research-data-pipeline.md#首个监测输入的自动建立)。

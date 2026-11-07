@@ -8,6 +8,7 @@ import { parseStrictJson } from "@/server/strict-json";
 import { executeInvestorCommand, getInvestorState, isInvestorClientError } from "@/server/investor/service";
 import { actionDraftProgressRequest } from "@/server/investor/action-draft-progress-schemas";
 import { actionMaintenanceProgressRequest } from "@/server/investor/action-maintenance-progress-schemas";
+import { initialCloseProgressRequest } from "@/server/investor/initial-close-progress";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,6 +23,11 @@ function failure(error: unknown) {
     code = error.message; status = code.endsWith("_CONFLICT") || code.endsWith("_CHANGED") || code.endsWith("_EXPIRED") || code.endsWith("_NOT_CURRENT") || code === "INVESTOR_PLAN_SOURCE_UNAVAILABLE" || code === "INVESTOR_MONITOR_FIXED_POLICY_UNSUPPORTED" ? 409 : code.endsWith("_OUT_OF_SCOPE") ? 403 : 400;
   }
   return NextResponse.json({ error: code }, { status, headers });
+}
+function stateForView(state: ReturnType<typeof getInvestorState>, request: Request) {
+  if (state.model_watch?.acquisition?.phase !== "initial_close" || request.headers.get(initialCloseProgressRequest.header) === initialCloseProgressRequest.value) return state;
+  const watch = { ...state.model_watch }; delete watch.acquisition;
+  return { ...state, model_watch: watch };
 }
 async function readCommand(request: Request) {
   if (request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") throw new AuthError("JSON_REQUIRED", 415);
@@ -40,14 +46,15 @@ export async function GET(request: Request) {
   try {
     const initial = await requireApiSession(); assertRequestSessionBinding(request, initial.sessionId);
     if (new URL(request.url).searchParams.size) throw new AuthError("INVALID_QUERY", 400);
-    const includeActionMaintenanceProgress = request.headers.get(actionMaintenanceProgressRequest.header) === actionMaintenanceProgressRequest.value;
+    const includeInitialCloseProgress = request.headers.get(initialCloseProgressRequest.header) === initialCloseProgressRequest.value;
+    const includeActionMaintenanceProgress = includeInitialCloseProgress || request.headers.get(actionMaintenanceProgressRequest.header) === actionMaintenanceProgressRequest.value;
     const includeActionDraftProgress = includeActionMaintenanceProgress || request.headers.get(actionDraftProgressRequest.header) === actionDraftProgressRequest.value;
     if (includeActionDraftProgress && !request.headers.get("x-workbench-session-binding")) throw new AuthError("SESSION_BINDING_REQUIRED", 400);
     const current = await requireApiSession();
     if (current.sessionId !== initial.sessionId) throw new AuthError("SESSION_CHANGED", 401);
     const db = openWorkbench();
-    try { return NextResponse.json({ ...getInvestorState(db, { id: current.userId }, undefined, {
-      includeActionDraftProgress, includeActionMaintenanceProgress }),
+    try { return NextResponse.json({ ...stateForView(getInvestorState(db, { id: current.userId }, undefined, {
+      includeActionDraftProgress, includeActionMaintenanceProgress }), request),
       session_binding: sessionBinding(current.sessionId) }, { headers: readHeaders }); }
     finally { db.close(); }
   } catch (error) { return failure(error); }
@@ -55,6 +62,10 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const initial = await requireMutationSession(); assertRequestSessionBinding(request, initial.sessionId);
+    if (request.headers.get(initialCloseProgressRequest.header) === initialCloseProgressRequest.value
+      && !request.headers.get("x-workbench-session-binding")) throw new AuthError("SESSION_BINDING_REQUIRED", 400);
+    if (request.headers.get(initialCloseProgressRequest.header) === initialCloseProgressRequest.value
+      && new URL(request.url).searchParams.size) throw new AuthError("INVALID_QUERY", 400);
     const command = await readCommand(request), current = await requireMutationSession();
     if (current.sessionId !== initial.sessionId || current.userId !== initial.userId) throw new AuthError("SESSION_CHANGED", 401);
     assertRequestSessionBinding(request, current.sessionId);

@@ -1,6 +1,7 @@
 """Fictional saved US model, standing reference FX and ordinary monitor flow."""
 
 import argparse
+from contextlib import nullcontext
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -11,7 +12,7 @@ from unittest.mock import patch
 from tests.investor import evidence_fixture, confirmed_monitor_fixture, test_confirmed_feed as feed
 from tests.investor.fixtures import monitor_input
 from tests.investor.test_managed_fx import Collector, policy, rates
-from worker.investor import managed_fx as fx, monitor_admission, confirmed_feed
+from worker.investor import managed_fx as fx, monitor_admission, confirmed_feed, monitor_bootstrap
 from worker.investor.data_evidence import review_source
 from worker.investor.source_inputs import admit_evidence_input
 from worker.investor.monitor_data import resolve_monitor_data
@@ -36,7 +37,7 @@ def output(db, model, at, calls):
         "checkpoints": db.execute("SELECT count(*) FROM investor_evidence_model_checkpoints").fetchone()[0]}
 
 
-def run(db, stage, fixed=False, owner_costs=False):
+def run(db, stage, fixed=False, owner_costs=False, legacy_seed=False):
     for name in FINANCE:
         if db.execute("SELECT count(*) FROM " + name).fetchone()[0]: raise WorkbenchError("SYNTHETIC_EMPTY_FINANCE_REQUIRED")
     if stage == "history":
@@ -73,7 +74,14 @@ def run(db, stage, fixed=False, owner_costs=False):
         with patch.object(fx.receiver, "collect_current_fx_draft", side_effect=collector):
             completed = run_pending_once(db, "fictional-first-reference-provider", role="longport", lease_seconds=180, clock=lambda: SEED)
         if not completed or completed["status"] != "succeeded" or collector.calls != 1: raise WorkbenchError("SYNTHETIC_FX_INITIAL_CAPTURE_FAILED")
-        run_pending_once(db, "fictional-first-reference-core", role="core", clock=lambda: SEED)
+        original_admission = monitor_bootstrap.admit_monitor_data
+        def legacy_first_input(*args, **kwargs):
+            assert kwargs.pop("audited_action_knowledge") is True
+            return original_admission(*args, **kwargs, audited_action_knowledge=False)
+        # Explicit isolated legacy fixture, never migrate an existing input or
+        # expose a protocol selector in the ordinary production bootstrap.
+        with patch.object(monitor_bootstrap, "admit_monitor_data", side_effect=legacy_first_input) if legacy_seed else nullcontext():
+            run_pending_once(db, "fictional-first-reference-core", role="core", clock=lambda: SEED)
         value = output(db, model, SEED, collector.calls)
         reasons = [json.loads(row[0])["reason_codes"] for row in db.execute("SELECT document_json FROM investor_evidence_monitor_runs")]
         expected = value["checkpoints"] == 1 and len(reasons) == 1 and "CANNOT_COMPARE_CHANGE_COST" not in reasons[0] if owner_costs else value["checkpoints"] == 0 and reasons == [["CANNOT_COMPARE_CHANGE_COST"]]
@@ -95,7 +103,8 @@ def run(db, stage, fixed=False, owner_costs=False):
         # or a silent production default. Source/model limits stay frozen.
         settings["policy"]["costs"] = monitor_input()["policy"]["costs"]
         windows = [window for _, window in confirmed_feed._windows(db, workspace, document)]
-        monitor_admission.admit_monitor_data(db, workspace, owner, model["id"], windows, settings, now=at)
+        monitor_admission.admit_monitor_data(db, workspace, owner, model["id"], windows, settings, now=at,
+            audited_action_knowledge=document["schema_version"] == "investor-monitor-data-input-v4")
         completed = run_pending_once(db, "fictional-explicit-cost-core", role="core", clock=lambda: at)
         value = output(db, model, at, 0)
         if not completed or completed["status"] != "succeeded" or value["unavailable_reason"] or value["checkpoints"] != 1:
@@ -125,13 +134,15 @@ def main():
     parser = argparse.ArgumentParser(); parser.add_argument("--db", required=True)
     parser.add_argument("--stage", choices=("history", "seed", "costs", "advance", "withdraw"), required=True)
     parser.add_argument("--fixed-policy-v2", action="store_true")
-    parser.add_argument("--owner-costs-before-seed", action="store_true"); args = parser.parse_args()
+    parser.add_argument("--owner-costs-before-seed", action="store_true")
+    parser.add_argument("--legacy-monitor-input", action="store_true"); args = parser.parse_args()
     if args.owner_costs_before_seed and args.stage != "seed": raise WorkbenchError("SYNTHETIC_OWNER_COSTS_SEED_ONLY")
+    if args.legacy_monitor_input and args.stage != "seed": raise WorkbenchError("SYNTHETIC_LEGACY_SEED_ONLY")
     path = Path(args.db).resolve(strict=True)
     if path.name != "workbench.db" or path.parent.parent != Path(tempfile.gettempdir()).resolve() or not path.parent.name.startswith("etf-investor-synthetic-"):
         raise WorkbenchError("SYNTHETIC_FIXTURE_DATABASE_REQUIRED")
     db = open_database(path)
-    try: print(canonical_json(run(db, args.stage, args.fixed_policy_v2, args.owner_costs_before_seed)))
+    try: print(canonical_json(run(db, args.stage, args.fixed_policy_v2, args.owner_costs_before_seed, args.legacy_monitor_input)))
     finally: db.close()
 
 

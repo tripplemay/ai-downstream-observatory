@@ -1,0 +1,19 @@
+{
+  "purpose": "change_fence_only_not_source_proof",
+  "max_rows": 100000,
+  "tables": [
+    "investor_profiles", "investor_reference_plans", "investor_plan_selections", "investor_evidence_inputs", "investor_models", "investor_model_controls",
+    "investor_data_sources", "investor_data_reviews", "investor_price_captures", "investor_confirmed_captures", "investor_confirmed_targets",
+    "investor_fx_authorities", "investor_fx_controls", "investor_fx_requests", "investor_fx_captures", "investor_fx_publications", "investor_fx_payloads", "investor_fx_purges",
+    "investor_issuer_authorities", "investor_issuer_controls", "investor_issuer_requests", "investor_issuer_captures", "investor_issuer_payloads", "investor_issuer_purges",
+    "investor_eodhd_authorities", "investor_eodhd_controls", "investor_eodhd_requests", "investor_eodhd_captures", "investor_eodhd_payloads", "investor_eodhd_purges",
+    "investor_action_authorities", "investor_action_controls", "investor_action_requests", "investor_action_publications",
+    "investor_action_review_previews", "investor_action_review_confirmations", "investor_monitor_evidence_inputs", "investor_evidence_model_checkpoints",
+    "investor_legacy_transition_previews", "investor_legacy_transition_confirmations", "investor_legacy_transition_admissions", "investor_funding_plans", "investor_monitor_cost_assumptions", "investor_monitor_payload_purges"
+  ],
+  "children": [
+    ["investor_price_payloads", "capture_id", "investor_price_captures"], ["investor_price_purges", "capture_id", "investor_price_captures"],
+    ["investor_confirmed_payloads", "capture_id", "investor_confirmed_captures"], ["investor_confirmed_purges", "capture_id", "investor_confirmed_captures"],
+    ["investor_evidence_checkpoint_payloads", "checkpoint_id", "investor_evidence_model_checkpoints"]
+  ]
+}

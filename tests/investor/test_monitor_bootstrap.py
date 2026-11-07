@@ -56,7 +56,8 @@ class MonitorBootstrapTests(unittest.TestCase):
             credentials.assert_not_called(); history.assert_not_called(); callback.assert_not_called()
             source = self.source(); self.assertIsNotNone(source)
             document = json.loads(source["document_json"])
-            self.assertEqual(document["schema_version"], "investor-monitor-data-input-v1")
+            self.assertEqual(document["schema_version"], "investor-monitor-data-input-v4")
+            self.assertEqual(document["segments"][0]["snapshot"]["schema_version"], "investor-monitor-source-snapshot-v2")
             self.assertEqual(document["settings"]["policy"]["version"], monitor_bootstrap.VERSION)
             self.assertIsNone(document["settings"]["policy"]["costs"])
             self.assertIsNone(document["settings"]["funding_intent"])
@@ -75,7 +76,7 @@ class MonitorBootstrapTests(unittest.TestCase):
         sources = monitor_bootstrap.bootstrap_monitor_inputs(self.db, now=self.now)
         self.assertEqual(len(sources), 1)
         document = json.loads(self.source()["document_json"])
-        self.assertEqual(document["schema_version"], "investor-monitor-data-input-v2")
+        self.assertEqual(document["schema_version"], "investor-monitor-data-input-v4")
         snapshot = document["segments"][0]["snapshot"]
         self.assertEqual((snapshot["range_start"], snapshot["range_end"]), ("2026-01-02", "2026-01-02"))
         self.assertTrue(all(ref["kind"] == "confirmed_sdk" for ref in snapshot["capture_refs"]))
@@ -110,6 +111,54 @@ class MonitorBootstrapTests(unittest.TestCase):
         self.assertEqual(self.source()["id"], manual["id"])
         self.assertEqual(list(self.db.iterdump()), before)
         self.assert_no_finance()
+
+    def test_first_automatic_input_preserves_actual_late_action_knowledge_without_pre_entry_income(self):
+        from tests.investor.monitor_data_fixture import late_action_receipts
+        from worker.investor.monitor_data import build_monitor_data
+        original = fixtures.InvestorMonitorDataTests.fixture
+        def with_events(case, *args, **kwargs): return original(case, *args, **kwargs, events=True)
+        with patch.object(fixtures.InvestorMonitorDataTests, "fixture", with_events): self.model(fixed=True, positive_tolerance=True)
+        late_action_receipts(self.db, "w", self.windows, self.refs)
+        with self.assertRaisesRegex(WorkbenchError, "CORPORATE_ACTION_NOT_KNOWN_AT_EVENT"):
+            build_monitor_data(self.db, "w", self.definition, self.windows, self.manual_settings, now=self.now)
+        protected = ("investor_profiles", "investor_reference_plans", "investor_models", "investor_research_runs", "investor_trial_results")
+        before = {table:[list(row) for row in self.db.execute("SELECT rowid,* FROM " + table)] for table in protected}
+        with patch.object(longport, "_collect_isolated", side_effect=AssertionError("NO_PROVIDER_REQUEST")), \
+                patch.object(longport, "read_private_credentials_file", side_effect=AssertionError("NO_CREDENTIAL_READ")):
+            self.assertEqual(run_pending_once(self.db, "fictional-late-first-core", clock=lambda:self.now)["status"], "succeeded")
+        document = json.loads(self.source()["document_json"])
+        self.assertEqual(document["schema_version"], "investor-monitor-data-input-v4")
+        projection = resolve_monitor_data(self.db, "w", self.definition, document, now=self.now)["projection"]
+        self.assertTrue(projection["corporate_actions"])
+        self.assertEqual({event["known_at"] for event in projection["corporate_actions"]}, {self.now})
+        checkpoint = json.loads(self.db.execute("SELECT payload FROM investor_evidence_checkpoint_payloads").fetchone()[0])
+        self.assertEqual(checkpoint["initialized_at"], {quote["market"]:quote["observed_at"] for quote in projection["quotes"]})
+        self.assertEqual(checkpoint["entitlements"], {}); self.assertEqual(checkpoint["receivables"], [])
+        self.assertEqual(checkpoint["sequence"], 1); self.assertTrue(checkpoint["processed_actions"])
+        self.assertEqual(before, {table:[list(row) for row in self.db.execute("SELECT rowid,* FROM " + table)] for table in protected})
+        self.assert_no_finance()
+
+    def test_legacy_input_and_checkpoint_created_during_first_input_planning_are_not_migrated(self):
+        self.model(fixed=True, positive_tolerance=True)
+        original = monitor_bootstrap.plan_bootstrap; inserted = []
+        second = open_database(self.path); self.addCleanup(second.close)
+        def admit_legacy(*args, **kwargs):
+            result = original(*args, **kwargs)
+            source = monitor_admission.admit_monitor_data(second, "w", "synthetic-investor", self.definition["model_id"],
+                self.windows, self.manual_settings, now=self.now)
+            self.assertEqual(json.loads(source["document_json"])["schema_version"], "investor-monitor-data-input-v1")
+            self.assertEqual(run_pending_once(second, "fictional-concurrent-legacy-core", clock=lambda:self.now)["status"], "succeeded")
+            inserted.append({table:[list(row) for row in second.execute("SELECT rowid,* FROM " + table)] for table in
+                ("investor_monitor_evidence_inputs", "investor_evidence_model_checkpoints", "investor_evidence_checkpoint_payloads")})
+            self.assertEqual(len(inserted[-1]["investor_evidence_model_checkpoints"]), 1)
+            return result
+        with patch.object(monitor_bootstrap, "plan_bootstrap", side_effect=admit_legacy):
+            self.assertEqual(monitor_bootstrap.bootstrap_monitor_inputs(self.db, now=self.now), [])
+        self.assertEqual(len(inserted), 1)
+        self.assertEqual(inserted[0], {table:[list(row) for row in self.db.execute("SELECT rowid,* FROM " + table)] for table in inserted[0]})
+        before = list(self.db.iterdump())
+        self.assertEqual(monitor_bootstrap.bootstrap_monitor_inputs(self.db, now=self.now), [])
+        self.assertEqual(before, list(self.db.iterdump())); self.assert_no_finance()
 
     def test_withdrawn_prices_and_missing_actions_are_gaps_not_defaults(self):
         self.model()
@@ -240,12 +289,14 @@ class MonitorBootstrapTests(unittest.TestCase):
             self.model(fixed=True, confirmed=True, positive_tolerance=True)
         self.assertEqual(run_pending_once(self.db, "fictional-core", clock=lambda: self.now)["status"], "succeeded")
         seed = self.source()["id"]
+        self.assertEqual(json.loads(self.source()["document_json"])["schema_version"], "investor-monitor-data-input-v4")
         self.assertEqual(self.db.execute("SELECT count(*) FROM investor_evidence_model_checkpoints").fetchone()[0], 1)
         self.assertIsNone(run_pending_once(self.db, "fictional-listener", role="longport", clock=lambda: EARLY))
         fixture = ConfirmedFeedTests(); fixture.db = self.db; fixture.path = self.path
         self.assertEqual(fixture.watch()[0]["status"], "succeeded")
         self.assertEqual(run_pending_once(self.db, "fictional-core", clock=lambda: END)["status"], "succeeded")
         self.assertNotEqual(self.source()["id"], seed)
+        self.assertEqual(json.loads(self.source()["document_json"])["schema_version"], "investor-monitor-data-input-v4")
         self.assertEqual(self.db.execute("SELECT count(*) FROM investor_evidence_model_checkpoints").fetchone()[0], 2)
         self.assertEqual(self.db.execute("SELECT count(*) FROM audit_events WHERE action='investor_bootstrap_monitor_source'").fetchone()[0], 1)
         self.assertIsNone(run_pending_once(self.db, "fictional-core", clock=lambda: END))

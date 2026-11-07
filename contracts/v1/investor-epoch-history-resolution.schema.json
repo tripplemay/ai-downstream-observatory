@@ -1,0 +1,14 @@
+{
+ "$schema":"https://json-schema.org/draft/2020-12/schema","$id":"investor-epoch-history-resolution.schema.json",
+ "$defs":{
+  "id":{"type":"string","minLength":1,"maxLength":160},"hash":{"type":"string","pattern":"^[a-f0-9]{64}$"},"at":{"type":"string","format":"date-time","pattern":"Z$"},
+  "ref":{"type":"object","additionalProperties":false,"required":["id","content_hash"],"properties":{"id":{"$ref":"#/$defs/id"},"content_hash":{"$ref":"#/$defs/hash"}}},
+  "submit":{"type":"object","additionalProperties":false,"required":["schema_version","action","model_id","expected_revision","idempotency_key","batch","slot","attempt","state_hash","reviewed_at","valid_until","acknowledgements"],"properties":{
+   "schema_version":{"const":"investor-epoch-history-resolution-submit-v1"},"action":{"const":"acknowledge_unknown"},"model_id":{"$ref":"#/$defs/id"},"expected_revision":{"type":"integer","minimum":0,"maximum":9007199254740990},"idempotency_key":{"type":"string","minLength":8,"maxLength":160},
+   "batch":{"$ref":"#/$defs/ref"},"slot":{"$ref":"#/$defs/ref"},"attempt":{"$ref":"#/$defs/ref"},"state_hash":{"$ref":"#/$defs/hash"},"reviewed_at":{"$ref":"#/$defs/at"},"valid_until":{"$ref":"#/$defs/at"},
+   "acknowledgements":{"type":"object","additionalProperties":false,"required":["outcome_stays_unknown","may_have_consumed_quota","separate_future_confirmation"],"properties":{"outcome_stays_unknown":{"const":true},"may_have_consumed_quota":{"const":true},"separate_future_confirmation":{"const":true}}}}},
+  "record":{"type":"object","additionalProperties":false,"required":["schema_version","resolution_id","workspace_id","model_id","actor_id","body","request_hash","created_at","old_outcome_known","new_download_authorized","source_eligibility_restored","provider_calls","monitoring_resumed","trading_permission"],"properties":{
+   "schema_version":{"const":"investor-epoch-history-resolution-v1"},"resolution_id":{"$ref":"#/$defs/id"},"workspace_id":{"$ref":"#/$defs/id"},"model_id":{"$ref":"#/$defs/id"},"actor_id":{"$ref":"#/$defs/id"},"body":{"$ref":"#/$defs/submit"},"request_hash":{"$ref":"#/$defs/hash"},"created_at":{"$ref":"#/$defs/at"},
+   "old_outcome_known":{"const":false},"new_download_authorized":{"const":false},"source_eligibility_restored":{"const":false},"provider_calls":{"const":0},"monitoring_resumed":{"const":false},"trading_permission":{"const":false}}}
+ }
+}

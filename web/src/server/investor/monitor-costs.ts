@@ -97,7 +97,8 @@ export function readMonitorCostState(db: Database.Database, workspace: string, m
     && canonical(settings.cost_assumptions) === canonical(selected.binding)
     && canonical((settings.policy as Obj).costs) === canonical(selected.costs);
   return monitorCostStateSchema.parse({ model_id: modelId, model_hash: row.content_hash,
-    status: !doc ? "unknown" : !matches ? "pending" : doc.costs === null ? "unknown" : priceInstant(now) >= priceInstant(doc.valid_until) ? "expired" : "known",
+    status: !doc ? "unknown" : doc.costs !== null && priceInstant(now) >= priceInstant(doc.valid_until) ? "expired"
+      : !matches ? "pending" : doc.costs === null ? "unknown" : "known",
     version: latest?.version ?? 0, costs: doc?.costs ?? null, effective_from: doc?.effective_from ?? null, valid_until: doc?.valid_until ?? null,
     model_valid_until: definition.valid_until, input_applied: !!doc && !!matches, editable, basis, trading_permission: false });
 }

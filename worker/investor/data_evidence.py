@@ -8,7 +8,7 @@ import json
 from zoneinfo import ZoneInfo
 
 from worker.accounting.decimal_math import decimal
-from worker.market.contracts import validate_contract
+from worker.market.contracts import contract_validation_scope, validate_contract
 from worker.market.providers import longport
 from worker.orchestration.db import WorkbenchError, assert_writable, canonical_json, content_hash, instant, new_id, transaction
 from .precision import validate_time_precision
@@ -27,7 +27,7 @@ def _fact_validation_scope():
     """Reuse pure validation only; source/audit/currentness reads never cache."""
     token = _FACT_VALIDATIONS.set(set())
     try:
-        yield
+        with contract_validation_scope(): yield
     finally:
         _FACT_VALIDATIONS.reset(token)
 
@@ -208,6 +208,9 @@ def review_header(db, workspace_id, review_id, *, now=None):
 
 def resolve_review(db, workspace_id, review_id, kind, *, now=None, require_current=True):
     checked = _milliseconds(now)
+    from .action_checkpoint_replay import checkpoint_action_review
+    historical = checkpoint_action_review(db, workspace_id, review_id, kind, checked)
+    if historical is not None: return historical
     if review_id.startswith("managed-actions-review:"):
         _assert(kind == "actions")
         from .managed_actions import resolve_managed_review

@@ -16,7 +16,7 @@ from .source_inputs import resolve_evidence_input
 from .fx_selection import GAPS as FX_GAPS, select_current_fx
 
 
-VERSION = "investor-monitor-bootstrap-quality-v2"
+VERSION = "investor-monitor-bootstrap-quality-v3"
 MAX_QUOTE_AGE_SECONDS = 604800
 MAX_CAPTURE_CANDIDATES = 128
 MAX_REVIEW_CANDIDATES = 128
@@ -27,7 +27,7 @@ GAPS = {"INVESTOR_BOOTSTRAP_SOURCE_LIMIT", "INVESTOR_BOOTSTRAP_IDENTITY_CHANGED"
     "INVESTOR_BOOTSTRAP_ACTIONS_NOT_READY"} | FX_GAPS
 
 
-def _settings(db, workspace, model, definition, reference, at):
+def _source_settings(db, workspace, model, definition, reference, at):
     _assert(reference_source_current(db, workspace, model["plan_id"], at, verify_result=True))
     evidence = reference["reference_evidence"]
     source = resolve_evidence_input(db, workspace, evidence["source_input_id"], now=at)
@@ -41,8 +41,12 @@ def _settings(db, workspace, model, definition, reference, at):
     settings = {"policy": {"version": VERSION, "weight_band": parameters["tolerance"]["weight"],
         "absolute_band_cny": parameters["tolerance"]["absolute_cny"], "max_fx_age_seconds": min(MAX_QUOTE_AGE_SECONDS, execution["max_fx_age_seconds"]), "costs": None},
         "funding_intent": None, "max_quote_age_seconds": MAX_QUOTE_AGE_SECONDS}
+    return settings
+
+
+def _settings(db, workspace, model, definition, reference, at):
     from .monitor_costs import current_settings
-    settings = current_settings(db, workspace, definition, settings, at)
+    settings = current_settings(db, workspace, definition, _source_settings(db, workspace, model, definition, reference, at), at)
     validate_contract(settings, "investor-monitor-data-input-v3.schema.json" if "cost_assumptions" in settings else "investor-monitor-data-input.schema.json", fragment="$defs/settings")
     return settings
 
@@ -195,7 +199,9 @@ def bootstrap_monitor_inputs(db, *, limit=100, now=None, stop_requested=None):
           AND m.profile_id=(SELECT id FROM investor_profiles WHERE workspace_id=m.workspace_id ORDER BY version DESC LIMIT 1)
           AND m.plan_id=(SELECT plan_id FROM investor_plan_selections WHERE workspace_id=m.workspace_id ORDER BY created_at DESC,rowid DESC LIMIT 1)
           AND json_extract(m.document_json,'$.data_mode')='reconstructed' AND json_extract(m.document_json,'$.valid_until')>?
-          AND NOT EXISTS(SELECT 1 FROM investor_monitor_evidence_inputs WHERE model_id=m.id) ORDER BY m.created_at,m.id LIMIT ?""", (at, at, limit)).fetchall()
+          AND NOT EXISTS(SELECT 1 FROM investor_monitor_evidence_inputs WHERE model_id=m.id)
+          AND NOT EXISTS(SELECT 1 FROM investor_evidence_model_checkpoints WHERE model_id=m.id)
+          ORDER BY m.created_at,m.id LIMIT ?""", (at, at, limit)).fetchall()
     for row in rows:
         if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
         try:
@@ -206,10 +212,14 @@ def bootstrap_monitor_inputs(db, *, limit=100, now=None, stop_requested=None):
                 control = db.execute("SELECT * FROM investor_model_controls WHERE model_id=? ORDER BY version DESC LIMIT 1", (row["id"],)).fetchone()
                 _assert(control and control["enabled"] == 1 and control["created_at"] <= checked, "INVESTOR_BOOTSTRAP_MODEL_DISABLED")
                 if db.execute("SELECT 1 FROM investor_monitor_evidence_inputs WHERE model_id=?", (row["id"],)).fetchone(): continue
+                if db.execute("SELECT 1 FROM investor_evidence_model_checkpoints WHERE model_id=?", (row["id"],)).fetchone(): continue
                 _check_fx_selection(db, row["workspace_id"], definition, windows, settings, checked)
                 _check_action_selection(db, row["workspace_id"], definition, windows, checked)
                 actor = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (row["workspace_id"],)).fetchone()[0]
-                source = admit_monitor_data(db, row["workspace_id"], actor, row["id"], windows, settings, now=checked)
+                # New models have no processed history to migrate. Existing
+                # inputs/checkpoints keep their original protocol and hashes.
+                source = admit_monitor_data(db, row["workspace_id"], actor, row["id"], windows, settings, now=checked,
+                    audited_action_knowledge=True)
                 if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
                 _audit(db, actor, "investor_bootstrap_monitor_source", "investor_monitor_evidence_input", source["id"],
                     {"content_hash": source["content_hash"], "model_hash": model["content_hash"], "plan_hash": content_hash(reference), "policy_version": VERSION}, checked)

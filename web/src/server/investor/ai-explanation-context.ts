@@ -69,7 +69,7 @@ export function prepareInvestorAiExplanation(db: Database.Database, actor: { id:
       const refs = new Map(rows(snapshot.review_refs).map(ref => [text(ref.review_id), ref]));
       const captures = rows(snapshot.capture_refs); check(captures.length > 0);
       for (const ref of captures) {
-        const confirmed = snapshot.schema_version === "investor-monitor-price-snapshot-v1" && ref.kind === "confirmed_sdk";
+        const confirmed = ["investor-monitor-price-snapshot-v1", "investor-monitor-source-snapshot-v2"].includes(text(snapshot.schema_version)) && ref.kind === "confirmed_sdk";
         const captureRights = (confirmed ? db.prepare("SELECT DISTINCT rights_review_id FROM investor_confirmed_targets WHERE capture_id=? AND workspace_id=?")
           : db.prepare("SELECT rights_review_id FROM investor_price_captures WHERE id=? AND workspace_id=?")).all(ref.capture_id, workspace) as { rights_review_id: string }[];
         check(captureRights.length > 0 && captureRights.every(row => refs.has(row.rights_review_id)));

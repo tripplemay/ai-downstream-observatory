@@ -27,6 +27,11 @@ export function actionJson(value: unknown, maximum=32768): Obj {
 export function actionRead(db: Database.Database, table: string, id: unknown, workspace: string): Obj {
   const row=db.prepare(`SELECT * FROM ${table} WHERE id=? AND workspace_id=?`).get(id,workspace) as Obj|undefined;check(row);return row;
 }
+/** Domain records truncate to milliseconds; attempt logs retain microseconds. */
+export function actionJobStartedByMillisecond(started: string, recorded: string): boolean {
+  const at=priceInstant(recorded);check(at%1000n===0n);
+  return priceInstant(started)<at+1000n;
+}
 export function actionSeal(row:Obj, schema:Schema, fragment:string|null, now:string):Obj {
   const doc=actionJson(row.document_json), validate=ajv.getSchema(schemas[schema].$id+(fragment ? "#/$defs/"+fragment : ""));
   check(validate?.(doc) && canonical(doc) === row.document_json && hash(doc) === row.content_hash

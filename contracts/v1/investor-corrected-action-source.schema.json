@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-corrected-action-source.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "workspace_id", "model_id", "confirmation_id", "confirmation_hash", "original_head_id", "original_chain_hash", "authority_id", "authority_hash", "control_id", "control_hash", "base_facts_hash", "candidate_facts_hash", "anchor_captures", "current_captures", "extension_hash", "previous_coverage_end", "candidate_coverage_end", "source_day", "knowledge_at", "checked_at", "source_valid_until", "valid_until", "status", "coverage_basis", "economic_correction_approved", "current_source_eligibility_restored", "handover_registered", "maintenance_enabled", "checkpoint_created", "monitoring_resumed", "trading_permission", "provider_calls", "database_writes", "distribution"],
+  "properties": {
+    "schema_version": {"const": "investor-corrected-action-source-proof-v1"},
+    "workspace_id": {"$ref": "common.schema.json#/$defs/id"}, "model_id": {"$ref": "common.schema.json#/$defs/id"},
+    "confirmation_id": {"$ref": "common.schema.json#/$defs/id"}, "confirmation_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "original_head_id": {"$ref": "common.schema.json#/$defs/id"}, "original_chain_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "authority_id": {"$ref": "common.schema.json#/$defs/id"}, "authority_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "control_id": {"$ref": "common.schema.json#/$defs/id"}, "control_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "base_facts_hash": {"$ref": "common.schema.json#/$defs/hash"}, "candidate_facts_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "anchor_captures": {"$ref": "investor-action-maintenance.schema.json#/$defs/capture_refs"},
+    "current_captures": {"$ref": "investor-action-maintenance.schema.json#/$defs/capture_refs"},
+    "extension_hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "previous_coverage_end": {"type": "string", "format": "date"}, "candidate_coverage_end": {"type": "string", "format": "date"},
+    "source_day": {"type": "string", "format": "date"},
+    "knowledge_at": {"type": "string", "format": "date-time"}, "checked_at": {"type": "string", "format": "date-time"}, "source_valid_until": {"type": "string", "format": "date-time"}, "valid_until": {"type": "string", "format": "date-time"},
+    "status": {"const": "corrected_report_basis_prepared_not_published"},
+    "coverage_basis": {"const": "selected_two_source_reports_not_objective_absence"}, "economic_correction_approved": {"const": true},
+    "current_source_eligibility_restored": {"const": false}, "handover_registered": {"const": false}, "maintenance_enabled": {"const": false},
+    "checkpoint_created": {"const": false}, "monitoring_resumed": {"const": false}, "trading_permission": {"const": false},
+    "provider_calls": {"const": 0}, "database_writes": {"const": 0}, "distribution": {"const": "private_owner_only_not_ai"}
+  }
+}

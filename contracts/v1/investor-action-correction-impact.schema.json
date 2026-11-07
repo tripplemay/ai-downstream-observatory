@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-action-correction-impact.schema.json",
+  "$ref": "#/$defs/request",
+  "$defs": {
+    "id": {"$ref": "common.schema.json#/$defs/id"},
+    "hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "instant": {"$ref": "investor-planned-funding-monitor.schema.json#/$defs/instant"},
+    "event_instant": {"type": "string", "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{3})?Z$"},
+    "date": {"type": "string", "format": "date"},
+    "event_answer": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["type", "at", "pay_at", "tax_per_unit"], "properties": {
+        "type": {"const": "dividend"}, "at": {"$ref": "#/$defs/event_instant"}, "pay_at": {"$ref": "#/$defs/event_instant"},
+        "tax_per_unit": {"$ref": "common.schema.json#/$defs/decimal"}
+      }},
+      {"type": "object", "additionalProperties": false, "required": ["type", "at", "ratio_direction"], "properties": {
+        "type": {"const": "split"}, "at": {"$ref": "#/$defs/event_instant"},
+        "ratio_direction": {"const": "provider_numerator_new_units_per_denominator_old_unit_assumed"}
+      }}
+    ]},
+    "decision": {"type": "object", "additionalProperties": false,
+      "required": ["date", "choice", "reason", "events"], "properties": {
+        "date": {"$ref": "#/$defs/date"}, "choice": {"enum": ["retain", "replace", "cancel"]},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "events": {"type": "array", "maxItems": 2, "items": {"$ref": "#/$defs/event_answer"}}
+      }, "allOf": [
+        {"if": {"properties": {"choice": {"const": "replace"}}}, "then": {"properties": {"events": {"type": "array", "minItems": 1}}},
+          "else": {"properties": {"events": {"type": "array", "maxItems": 0}}}}
+      ]
+    },
+    "request": {"type": "object", "additionalProperties": false,
+      "required": ["schema_version", "model_id", "preview_id", "expected_revision", "idempotency_key", "acknowledgements", "decisions"],
+      "properties": {
+        "schema_version": {"const": "investor-action-correction-impact-request-v1"},
+        "model_id": {"$ref": "#/$defs/id"}, "preview_id": {"$ref": "#/$defs/id"}, "idempotency_key": {"$ref": "#/$defs/id"},
+        "expected_revision": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+        "acknowledgements": {"type": "object", "additionalProperties": false,
+          "required": ["hypothetical_only", "source_differences_seen", "explicit_time_and_tax", "original_reported_coverage_only", "unchanged_tax_assumption"],
+          "properties": {
+            "hypothetical_only": {"const": true}, "source_differences_seen": {"const": true}, "explicit_time_and_tax": {"const": true},
+            "original_reported_coverage_only": {"const": true}, "unchanged_tax_assumption": {"const": true}
+          }},
+        "decisions": {"type": "array", "minItems": 1, "maxItems": 1000, "items": {"$ref": "#/$defs/decision"}}
+      }
+    },
+    "result": {"type": "object", "additionalProperties": false,
+      "required": ["schema_version", "workspace_id", "workspace_revision", "model_id", "preview_id", "request_hash", "draft_basis_hash", "checked_at", "valid_until", "knowledge_not_before", "original_history", "source_changes_hash", "prior_facts_hash", "hypothetical_events", "tax_assumption_hash", "kernel_input_hash", "comparison", "ignored_new_report_dates", "coverage_basis", "status", "visibility", "economic_correction_approved", "source_evidence_verified", "checkpoint_created", "monitoring_resumed", "historical_observations_rewritten", "trading_permission", "provider_calls", "database_writes"],
+      "properties": {
+        "schema_version": {"const": "investor-action-correction-impact-result-v1"},
+        "workspace_id": {"$ref": "#/$defs/id"}, "workspace_revision": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+        "model_id": {"$ref": "#/$defs/id"}, "preview_id": {"$ref": "#/$defs/id"},
+        "request_hash": {"$ref": "#/$defs/hash"}, "draft_basis_hash": {"$ref": "#/$defs/hash"},
+        "source_changes_hash": {"$ref": "#/$defs/hash"}, "prior_facts_hash": {"$ref": "#/$defs/hash"}, "kernel_input_hash": {"$ref": "#/$defs/hash"},
+        "checked_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"}, "knowledge_not_before": {"$ref": "#/$defs/instant"},
+        "original_history": {"$ref": "investor-retained-monitor-history.schema.json"},
+        "hypothetical_events": {"$ref": "research-dataset.schema.json#/properties/actions"},
+        "tax_assumption_hash": {"$ref": "#/$defs/hash"},
+        "comparison": {"$ref": "investor-action-restatement-kernel.schema.json#/$defs/result"},
+        "ignored_new_report_dates": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"$ref": "#/$defs/date"}},
+        "coverage_basis": {"const": "original_reported_coverage_plus_explicit_hypotheses_not_new_admission"},
+        "status": {"const": "hypothetical_impact_only_not_correction_consent"}, "visibility": {"const": "private_owner_only_not_ai"},
+        "economic_correction_approved": {"const": false}, "source_evidence_verified": {"const": false}, "checkpoint_created": {"const": false},
+        "monitoring_resumed": {"const": false}, "historical_observations_rewritten": {"const": false}, "trading_permission": {"const": false},
+        "provider_calls": {"const": 0}, "database_writes": {"const": 0}
+      }
+    }
+  }
+}

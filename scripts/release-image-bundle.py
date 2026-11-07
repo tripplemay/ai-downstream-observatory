@@ -14,6 +14,7 @@ import tarfile
 
 
 VERSION = "workbench-image-bundle-v1"
+AI_VERSION = "workbench-image-bundle-v2"
 ARCHIVE = "release-images.tar.gz"
 MANIFEST = "release-images.json"
 MAX_ARCHIVE = 4 * 1024 ** 3
@@ -57,9 +58,16 @@ def private_file(path, limit):
     return info.st_size
 
 
-def names(release, provider):
-    require(re.fullmatch(r"[a-f0-9]{40}", release) is not None and type(provider) is bool)
-    return ["etf-workbench-" + service + ":" + release for service in ("web", "worker", *(("market-provider",) if provider else ()))]
+def image_specs(release, provider, ai=False):
+    require(re.fullmatch(r"[a-f0-9]{40}", release) is not None and type(provider) is bool and type(ai) is bool)
+    services = [("web", "Dockerfile.web"), ("worker", "Dockerfile")]
+    if provider: services.append(("market-provider", "Dockerfile.market-provider"))
+    if ai: services.append(("ai-explanation", "Dockerfile.ai-explanation"))
+    return [("etf-workbench-" + service + ":" + release, dockerfile) for service, dockerfile in services]
+
+
+def names(release, provider, ai=False):
+    return [name for name, unused in image_specs(release, provider, ai)]
 
 
 def docker(arguments):
@@ -107,7 +115,7 @@ def safe_member(name):
     return str(path)
 
 
-def archive_tags(path):
+def archive_tags(path, ai=False):
     seen, total, manifest = set(), 0, None
     with tarfile.open(path, "r|gz") as archive:
         for member in archive:
@@ -119,7 +127,7 @@ def archive_tags(path):
             if name == "manifest.json":
                 require(member.isfile() and 0 < member.size <= MAX_JSON)
                 manifest = strict_json(archive.extractfile(member).read(MAX_JSON + 1))
-    require(type(manifest) is list and 1 <= len(manifest) <= 3)
+    require(type(manifest) is list and 1 <= len(manifest) <= (4 if ai else 3))
     tags = []
     for row in manifest:
         require(type(row) is dict and type(row.get("RepoTags")) is list and len(row["RepoTags"]) == 1)
@@ -130,14 +138,17 @@ def archive_tags(path):
     return tags
 
 
-def read_bundle(directory, release, provider):
+def read_bundle(directory, release, provider, ai=False):
+    expected = names(release, provider, ai)
     path = directory / MANIFEST
     private_file(path, MAX_JSON)
     manifest = strict_json(path.read_bytes())
-    require(set(manifest) == {"schema_version", "release_sha", "platform", "market_provider", "archive_bytes", "archive_sha256", "images"})
-    require(manifest["schema_version"] == VERSION and manifest["release_sha"] == release
+    fields = {"schema_version", "release_sha", "platform", "market_provider", "archive_bytes", "archive_sha256", "images"}
+    if ai: fields.add("ai_explanation")
+    require(set(manifest) == fields)
+    require(manifest["schema_version"] == (AI_VERSION if ai else VERSION) and manifest["release_sha"] == release
             and manifest["platform"] == "linux/amd64" and manifest["market_provider"] is provider)
-    expected = names(release, provider)
+    if ai: require(manifest["ai_explanation"] is True)
     require(type(manifest["images"]) is list and [row["name"] for row in manifest["images"]] == expected)
     for row in manifest["images"]:
         require(set(row) == {"name", "origin_image_id", "identity", "fingerprint"})
@@ -150,18 +161,19 @@ def read_bundle(directory, release, provider):
     archive = directory / ARCHIVE
     require(type(manifest["archive_bytes"]) is int and private_file(archive, MAX_ARCHIVE) == manifest["archive_bytes"])
     require(re.fullmatch(r"[a-f0-9]{64}", manifest["archive_sha256"]) is not None and file_hash(archive) == manifest["archive_sha256"])
-    require(sorted(archive_tags(archive)) == sorted(expected))
+    require(sorted(archive_tags(archive, ai)) == sorted(expected))
     return manifest
 
 
-def package(directory, release, provider):
+def package(directory, release, provider, ai=False):
+    image_names = names(release, provider, ai)
     daemon_platform()
     directory.mkdir(mode=0o700, parents=False)
-    rows = inspect(names(release, provider), release)
+    rows = inspect(image_names, release)
     archive = directory / ARCHIVE
     with archive.open("xb") as target:
         with gzip.GzipFile(fileobj=target, mode="wb", compresslevel=1, mtime=0) as compressed:
-            process = subprocess.Popen(["docker", "image", "save", "--platform", "linux/amd64", *names(release, provider)],
+            process = subprocess.Popen(["docker", "image", "save", "--platform", "linux/amd64", *image_names],
                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE)
             try:
                 size = 0
@@ -176,21 +188,22 @@ def package(directory, release, provider):
                 process.wait()
                 process.stdout.close()
     private_file(archive, MAX_ARCHIVE)
-    manifest = {"schema_version": VERSION, "release_sha": release, "platform": "linux/amd64", "market_provider": provider,
+    manifest = {"schema_version": AI_VERSION if ai else VERSION, "release_sha": release, "platform": "linux/amd64", "market_provider": provider,
                 "archive_bytes": archive.stat().st_size, "archive_sha256": file_hash(archive), "images": rows}
+    if ai: manifest["ai_explanation"] = True
     with (directory / MANIFEST).open("x") as target:
         target.write(canonical(manifest) + "\n")
-    read_bundle(directory, release, provider)
+    read_bundle(directory, release, provider, ai)
     return {"status": "image_bundle_packaged", "release_sha": release, "archive_bytes": manifest["archive_bytes"],
             "archive_sha256": manifest["archive_sha256"], "image_count": len(rows)}
 
 
-def load_or_verify(directory, release, provider, load):
-    manifest = read_bundle(directory, release, provider)
+def load_or_verify(directory, release, provider, load, ai=False):
+    manifest = read_bundle(directory, release, provider, ai)
     daemon_platform()
     if load:
         docker(["image", "load", "--quiet", "--platform", "linux/amd64", "--input", str(directory / ARCHIVE)])
-    actual = inspect(names(release, provider), release)
+    actual = inspect(names(release, provider, ai), release)
     require(all(row["identity"] == expected["identity"] and row["fingerprint"] == expected["fingerprint"]
                 for row, expected in zip(actual, manifest["images"])))
     return {"status": "loaded_images_verified" if load else "images_verified", "release_sha": release,
@@ -206,9 +219,11 @@ def main():
     parser.add_argument("--release", required=True)
     parser.add_argument("--directory", required=True, type=Path)
     parser.add_argument("--market-provider", choices=(0, 1), type=int, default=0)
+    parser.add_argument("--ai-explanation", choices=(0, 1), type=int, default=0)
     args = parser.parse_args()
     provider = bool(args.market_provider)
-    names(args.release, provider)
+    ai = bool(args.ai_explanation)
+    names(args.release, provider, ai)
     require(args.directory.is_absolute() and not args.directory.is_symlink())
     if args.operation == "build":
         root = Path(__file__).resolve().parent.parent
@@ -216,16 +231,16 @@ def main():
         require(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root).decode().strip() == args.release)
         subprocess.run(["git", "diff", "--exit-code", "HEAD", "--"], cwd=root, check=True, stdout=subprocess.DEVNULL)
         daemon_platform()
-        for name, dockerfile in zip(names(args.release, provider), ("Dockerfile.web", "Dockerfile", "Dockerfile.market-provider")):
+        for name, dockerfile in image_specs(args.release, provider, ai):
             subprocess.run(["docker", "build", "--pull", "--platform", "linux/amd64", "--build-arg", "RELEASE_SHA=" + args.release,
                             "--file", dockerfile, "--tag", name, "."], cwd=root, check=True, timeout=1800)
     if args.operation in ("build", "pack"):
-        result = package(args.directory, args.release, provider)
+        result = package(args.directory, args.release, provider, ai)
     elif args.operation == "check":
-        manifest = read_bundle(args.directory, args.release, provider)
+        manifest = read_bundle(args.directory, args.release, provider, ai)
         result = {"status": "image_bundle_checked_without_docker", "release_sha": args.release, "archive_sha256": manifest["archive_sha256"]}
     else:
-        result = load_or_verify(args.directory, args.release, provider, args.operation == "load")
+        result = load_or_verify(args.directory, args.release, provider, args.operation == "load", ai)
     print(canonical(result))
 
 

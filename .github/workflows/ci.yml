@@ -118,9 +118,9 @@ jobs:
           npm run build:funded-comparison
           npm run build:ai-explanation
       - name: schema, market, recovery and release fixtures
-        run: node --test tests/*/*.test.mjs
+        run: node --test --test-concurrency=2 tests/*/*.test.mjs
       - name: shell release checks
-        run: shellcheck scripts/deploy-workbench.sh tests/deployment/container-smoke.sh tests/deployment/provider-container-smoke.sh
+        run: shellcheck scripts/deploy-workbench.sh tests/deployment/container-smoke.sh tests/deployment/provider-container-smoke.sh tests/deployment/ai-container-smoke.sh
   http:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -163,6 +163,11 @@ jobs:
         env:
           WORKBENCH_TEST_PYTHON: python
         run: npm run test:workbench:http -- --no-build
+      - name: actual-clock fictional first-close HTTP acceptance
+        working-directory: web
+        env:
+          WORKBENCH_TEST_PYTHON: python
+        run: npm run test:first-close:http
       - name: dependency audit
         working-directory: web
         run: npm audit --audit-level=high
@@ -184,6 +189,8 @@ jobs:
         run: sudo --preserve-env=PATH bash tests/deployment/container-smoke.sh
       - name: optional provider native runtime without credentials or network
         run: bash tests/deployment/provider-container-smoke.sh
+      - name: isolated AI configuration and cleanup runtime without gateway transport
+        run: bash tests/deployment/ai-container-smoke.sh
       - name: preserve container evidence
         if: always()
         uses: actions/upload-artifact@v4

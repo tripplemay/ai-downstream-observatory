@@ -85,6 +85,95 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
     assert.deepEqual(financial(), initialFinancial);
     return { maximum_body_bytes: 32768, duplicate_json_rejected: true, auth_scope_not_client_supplied: true };
   });
+  await check('HTTP-I22', 'epoch controls authenticate and bind the session before strict small intents; no implicit workspace or activation', async () => {
+    const route=`${endpoint}/epoch-control`,facts=financial();
+    const counts=()=>read(db=>Object.fromEntries(['investor_epoch_controls','investor_epoch_control_requests','investor_epoch_control_results','job_runs','audit_events'].map(table=>[table,db.prepare(`SELECT count(*) n FROM ${table}`).get().n])));
+    const before=counts(),body={schema_version:'investor-epoch-control-submit-v1',epoch_id:'fictional-unregistered-epoch',expected_registration_hash:'a'.repeat(64),
+      expected_checkpoint:{id:'fictional-checkpoint',content_hash:'b'.repeat(64)},expected_revision:1,idempotency_key:'fictional-http-epoch-intent',enabled:true,
+      acknowledgements:{current_epoch_seen:true,continuous_research_only:true,preserve_history_and_human_trading:true}};
+    const send=(value,extra={})=>jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json',...extra}),body:typeof value==='string'?value:JSON.stringify(value)});
+    assert.equal((await jsonRequest(`${route}?model=fictional-model`)).status,401);
+    assert.equal((await jsonRequest(route,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:'{'})).status,401);
+    assert.equal((await jsonRequest(`${route}?model=fictional-model`,{headers:{Cookie:cookie}})).status,400);
+    assert.equal((await jsonRequest(`${route}?model=fictional-model`,{headers:headers({'X-Workbench-Session-Binding':'b'.repeat(64)})})).status,401);
+    for(const query of ['actor_id=other','model=a&nonce=b','model=a&model=b'])assert.equal((await jsonRequest(`${route}?${query}`,{headers:headers()})).status,400);
+    assert.equal((await send(body,{Origin:'https://wrong.example.test'})).status,403);
+    assert.equal((await send(body,{'X-Workbench-Session-Binding':'b'.repeat(64)})).status,401);
+    for(const value of [{...body,prices:[]},{...body,acknowledgements:{}},'{"enabled":true,"enabled":false}'])assert.equal((await send(value)).status,400);
+    const huge=await jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json'}),duplex:'half',body:(async function*(){yield Buffer.alloc(16385,120);})()});
+    assert.equal(huge.status,413);
+    const missing=await send(body);assert.equal(missing.status,409);assert.equal(missing.json.error,'EPOCH_CONTROL_WORKSPACE_REQUIRED');
+    assert.equal(missing.headers.get('cache-control'),'private, no-store');assert.doesNotMatch(JSON.stringify(missing.json),/workbench\.db|SELECT|\/Users\//);
+    assert.equal(read(db=>db.prepare('SELECT count(*) n FROM investor_workspaces').get().n),0);assert.deepEqual(counts(),before);assert.deepEqual(financial(),facts);
+    return {implicit_activation:false,implicit_workspace:false,source_or_ai_calls:0,maximum_body_bytes:16384,new_epoch_positive_journey_verified:false};
+  });
+  await check('HTTP-I23', 'epoch preview accepts only explicit session-bound small intents and never creates implicit research or finance', async () => {
+    const route=endpoint+'/epoch-preview',facts=financial();
+    const counts=()=>read(db=>Object.fromEntries(['investor_epoch_preview_requests','investor_epoch_preview_results','investor_model_epoch_previews','investor_model_epochs','job_runs','audit_events']
+      .map(table=>[table,db.prepare('SELECT count(*) n FROM '+table).get().n])));
+    const before=counts(),body={schema_version:'investor-epoch-preview-submit-v1',model_id:'fictional-model',expected_model_hash:'a'.repeat(64),
+      expected_revision:1,idempotency_key:'fictional-http-preview-intent',acknowledged_preview_only:true};
+    const send=(value,extra={})=>jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json',...extra}),body:typeof value==='string'?value:JSON.stringify(value)});
+    assert.equal((await jsonRequest(route+'?model=fictional-model')).status,401);
+    assert.equal((await jsonRequest(route,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:'{'})).status,401);
+    assert.equal((await jsonRequest(route+'?model=fictional-model',{headers:{Cookie:cookie}})).status,400);
+    for(const query of ['actor_id=other','model=a&nonce=b','model=a&model=b'])assert.equal((await jsonRequest(route+'?'+query,{headers:headers()})).status,400);
+    assert.equal((await send(body,{Origin:'https://wrong.example.test'})).status,403);
+    assert.equal((await send(body,{'X-Workbench-Session-Binding':'b'.repeat(64)})).status,401);
+    for(const value of [{...body,prices:[]},{...body,acknowledged_preview_only:false},'{"acknowledged_preview_only":true,"acknowledged_preview_only":false}'])assert.equal((await send(value)).status,400);
+    const huge=await jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json'}),duplex:'half',body:(async function*(){yield Buffer.alloc(4097,120);})()});
+    assert.equal(huge.status,413);
+    const missing=await send(body);assert.equal(missing.status,409);assert.equal(missing.json.error,'EPOCH_PREVIEW_WORKSPACE_REQUIRED');
+    assert.equal(missing.headers.get('cache-control'),'private, no-store');
+    assert.equal(read(db=>db.prepare('SELECT count(*) n FROM investor_workspaces').get().n),0);assert.deepEqual(counts(),before);assert.deepEqual(financial(),facts);
+    return {maximum_body_bytes:4096,implicit_research:false,source_or_ai_calls:0,positive_preview_http_journey_verified:false};
+  });
+  await check('HTTP-I24', 'epoch registration has separate authenticated acknowledgements and no implicit registration or activation', async () => {
+    const route=endpoint+'/epoch-registration',facts=financial();
+    const counts=()=>read(db=>Object.fromEntries(['investor_model_epoch_requests','investor_model_epochs','job_runs','audit_events'].map(n=>[n,db.prepare('SELECT count(*) n FROM '+n).get().n])));
+    const before=counts(),body={schema_version:'investor-model-epoch-submit-v1',preview_id:'fictional-preview',expected_preview_hash:'a'.repeat(64),
+      expected_revision:1,idempotency_key:'fictional-http-register-intent',acknowledgements:Object.fromEntries(['separate_current_epoch','displayed_source_and_correction_bindings',
+        'reported_coverage_not_objective_absence','economic_carry_not_point_in_time','preserve_original_model_and_history','no_strategy_cash_or_trading_change'].map(k=>[k,true]))};
+    const send=(v,extra={})=>jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json',...extra}),body:JSON.stringify(v)});
+    assert.equal((await jsonRequest(route+'?model=fictional-model')).status,401);
+    assert.equal((await jsonRequest(route+'?model=fictional-model',{headers:{Cookie:cookie}})).status,400);
+    assert.equal((await send(body,{Origin:'https://wrong.example.test'})).status,403);
+    assert.equal((await send(body,{'X-Workbench-Session-Binding':'b'.repeat(64)})).status,401);
+    for(const v of [{...body,enabled:true},{...body,acknowledgements:{}},{...body,quotes:[]}])assert.equal((await send(v)).status,400);
+    const missing=await send(body);assert.equal(missing.status,409);assert.equal(missing.json.error,'EPOCH_REGISTRATION_WORKSPACE_REQUIRED');
+    assert.equal(missing.headers.get('cache-control'),'private, no-store');
+    assert.equal(read(db=>db.prepare('SELECT count(*) n FROM investor_workspaces').get().n),0);assert.deepEqual(counts(),before);assert.deepEqual(financial(),facts);
+    return {implicit_epoch:false,implicit_activation:false,source_or_ai_calls:0,positive_registration_http_journey_verified:false};
+  });
+  await check('HTTP-I25','history preparation requires explicit session-bound intent and does not implicitly create research or provider jobs',async()=>{
+    const route=endpoint+'/epoch-history',facts=financial();
+    const counts=()=>read(db=>Object.fromEntries(['investor_epoch_history_intents','investor_epoch_history_results','investor_epoch_history_requests','investor_epoch_history_attempts','job_runs','audit_events'].map(n=>[n,db.prepare('SELECT count(*) n FROM '+n).get().n])));
+    const before=counts(),body={schema_version:'investor-epoch-history-workflow-submit-v1',action:'prepare',model_id:'fictional-model',expected_revision:0,idempotency_key:'fictional-http-history-intent',acknowledged_plan_only:true};
+    const send=(value,extra={})=>jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json',...extra}),body:typeof value==='string'?value:JSON.stringify(value)});
+    assert.equal((await jsonRequest(route+'?model=fictional-model')).status,401);
+    assert.equal((await jsonRequest(route+'?model=fictional-model',{headers:{Cookie:cookie}})).status,400);
+    assert.equal((await send(body,{Origin:'https://wrong.example.test'})).status,403);
+    assert.equal((await send(body,{'X-Workbench-Session-Binding':'b'.repeat(64)})).status,401);
+    for(const value of [{...body,prices:[]},{...body,acknowledged_plan_only:false},'{"action":"prepare","action":"confirm"}'])assert.equal((await send(value)).status,400);
+    const huge=await jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json'}),duplex:'half',body:(async function*(){yield Buffer.alloc(4097,120);})()});assert.equal(huge.status,413);
+    const missing=await send(body);assert.equal(missing.status,409);assert.equal(missing.json.error,'HISTORY_WORKFLOW_WORKSPACE_REQUIRED');assert.equal(missing.headers.get('cache-control'),'private, no-store');
+    assert.equal(read(db=>db.prepare('SELECT count(*) n FROM investor_workspaces').get().n),0);assert.deepEqual(counts(),before);assert.deepEqual(financial(),facts);
+    return {maximum_body_bytes:4096,implicit_workspace:false,implicit_download:false,provider_calls:0,positive_history_http_journey_verified:false};
+  });
+  await check('HTTP-I26','unknown history acknowledgement is explicit, session-bound and metadata-only, without implicit workspace or download',async()=>{
+    const route=endpoint+'/epoch-history-resolution',facts=financial(),ref={id:'fictional-ref',content_hash:'1'.repeat(64)};
+    const counts=()=>read(db=>Object.fromEntries(['investor_epoch_history_resolutions','investor_epoch_history_requests','investor_epoch_history_attempts','job_runs','audit_events'].map(n=>[n,db.prepare('SELECT count(*) n FROM '+n).get().n]))),before=counts();
+    const body={schema_version:'investor-epoch-history-resolution-submit-v1',action:'acknowledge_unknown',model_id:'fictional-model',expected_revision:0,idempotency_key:'fictional-http-resolution',batch:ref,slot:ref,attempt:ref,state_hash:'2'.repeat(64),reviewed_at:'2026-10-21T10:00:00.000Z',valid_until:'2026-10-21T10:05:00.000Z',acknowledgements:{outcome_stays_unknown:true,may_have_consumed_quota:true,separate_future_confirmation:true}};
+    const send=(value,extra={})=>jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json','X-Workbench-History-View':'unknown-review-v1',...extra}),body:typeof value==='string'?value:JSON.stringify(value)});
+    assert.equal((await jsonRequest(route+'?nonce=fictional-http-resolution')).status,401);
+    assert.equal((await send(body,{Origin:'https://wrong.example.test'})).status,403);assert.equal((await send(body,{'X-Workbench-Session-Binding':'b'.repeat(64)})).status,401);
+    assert.equal((await send(body,{'X-Workbench-History-View':'unrecognized'})).status,400);
+    for(const value of [{...body,new_download_authorized:true},{...body,acknowledgements:{}},'{"action":"acknowledge_unknown","action":"prepare"}'])assert.equal((await send(value)).status,400);
+    const huge=await jsonRequest(route,{method:'POST',headers:headers({Origin:origin,'Content-Type':'application/json','X-Workbench-History-View':'unknown-review-v1'}),duplex:'half',body:(async function*(){yield Buffer.alloc(4097,120);})()});assert.equal(huge.status,413);
+    const missing=await send(body);assert.equal(missing.status,409);assert.equal(missing.headers.get('cache-control'),'private, no-store');
+    assert.equal(read(db=>db.prepare('SELECT count(*) n FROM investor_workspaces').get().n),0);assert.deepEqual(counts(),before);assert.deepEqual(financial(),facts);
+    return {maximum_body_bytes:4096,implicit_workspace:false,implicit_download:false,provider_calls:0,positive_resolution_http_journey_verified:false};
+  });
   await check('HTTP-I20', 'AI explanation endpoint has current-session and strict small-body boundaries; reads never generate AI or financial facts', async () => {
     const route = `${endpoint}/ai-explanation`, body = { observation_id: 'fictional-observation', binding_hash: 'a'.repeat(64) };
     const facts = financial(), count = () => read(db => db.prepare('SELECT count(*) n FROM audit_events').get().n), before = count();
@@ -126,11 +215,74 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
       assert.equal((await request(route, { headers: headers() })).status, 200);
     return { revision: 1, profile_versions: 1, risk_unknown_retained: true, financial_tables_unchanged: true };
   });
+  await check('HTTP-I30', 'hypothetical correction API is private, GET-only for lookup and rejects inferred facts or scope before writing', async () => {
+    const route = `${endpoint}/correction-impact`, before = financial();
+    const counts = () => read(db => ['investor_correction_impact_requests', 'investor_correction_impact_results'].map(table => db.prepare(`SELECT count(*) n FROM ${table}`).get().n));
+    const original = counts();
+    assert.equal((await jsonRequest(route)).status, 401);
+    assert.equal((await jsonRequest(route, { headers: { Cookie: cookie } })).status, 400);
+    const result = await jsonRequest(`${route}?nonce=fictional-missing`, { headers: headers() });
+    assert.equal(result.status, 200); assert.equal(result.json.lookup_nonce, 'fictional-missing'); assert.equal(result.json.request, null); assert.equal(result.json.summary, null);
+    assert.equal(result.json.economic_correction_approved, false); assert.equal(result.headers.get('cache-control'), 'private, no-store');
+    for (const query of ['?request=a&nonce=b', '?preview=a&preview=b', '?actor_id=other']) assert.equal((await jsonRequest(route + query, { headers: headers() })).status, 400);
+    const send = (body, extra = {}) => jsonRequest(route, { method: 'POST', headers: headers({ Origin: origin, 'Content-Type': 'application/json', ...extra }), body });
+    assert.equal((await send('{}', { Origin: 'https://wrong.example.test' })).status, 403);
+    assert.equal((await send('{}', { 'X-Workbench-Session-Binding': 'b'.repeat(64) })).status, 401);
+    for (const body of ['{}', '{"model_id":"a","model_id":"b"}', JSON.stringify({ actor_id: 'other', gross_per_unit: '123' })]) assert.equal((await send(body)).status, 400);
+    assert.deepEqual(counts(), original); assert.deepEqual(financial(), before);
+    return { get_never_enqueues: true, original_nonce_only: true, no_implicit_answers_or_caller_facts: true, financial_writes: false };
+  });
+  await check('HTTP-I31', 'formal correction API separates explicit consent from hypotheses and only reads private metadata without an admitted comparison', async () => {
+    const route = `${endpoint}/correction-consent`, before = financial();
+    const counts = () => read(db => ['investor_correction_consent_requests', 'investor_correction_consents', 'investor_correction_consent_results'].map(table => db.prepare(`SELECT count(*) n FROM ${table}`).get().n));
+    const original = counts();
+    assert.equal((await jsonRequest(route)).status, 401);
+    assert.equal((await jsonRequest(route, { headers: { Cookie: cookie } })).status, 400);
+    const result = await jsonRequest(`${route}?nonce=fictional-missing`, { headers: headers() });
+    assert.equal(result.status, 200); assert.equal(result.json.lookup_nonce, 'fictional-missing'); assert.equal(result.json.request, null);
+    assert.equal(result.json.candidate, null); assert.equal(result.json.receipt, null); assert.equal(result.json.trading_permission, false);
+    assert.equal(result.headers.get('cache-control'), 'private, no-store');
+    for (const query of ['', '?request=a&nonce=b', '?impact=a&impact=b', '?actor_id=other']) assert.equal((await jsonRequest(route + query, { headers: headers() })).status, 400);
+    const send = (body, extra = {}) => jsonRequest(route, { method: 'POST', headers: headers({ Origin: origin, 'Content-Type': 'application/json', ...extra }), body });
+    assert.equal((await send('{}', { Origin: 'https://wrong.example.test' })).status, 403);
+    assert.equal((await send('{}', { 'X-Workbench-Session-Binding': 'b'.repeat(64) })).status, 401);
+    for (const body of ['{}', '{"expected_revision":1,"expected_revision":2}', JSON.stringify({ acknowledgements: { hypothetical_only: true } }), JSON.stringify({ baseline: {}, tax_per_unit: '0' })]) assert.equal((await send(body)).status, 400);
+    assert.equal((await send(JSON.stringify({ padding: 'x'.repeat(32769) }))).status, 413);
+    assert.deepEqual(counts(), original); assert.deepEqual(financial(), before);
+    return { get_never_enqueues: true, no_inferred_correction_or_caller_economics: true, metadata_only: true, maximum_body_bytes: 32768, provider_calls: 0, financial_writes: false };
+  });
+  await check('HTTP-I29', 'legacy compatibility API is private, read-only on GET, explicit on POST and closed to caller prices or scope', async () => {
+    const route = `${endpoint}/legacy-transition`, before = financial();
+    const counts = () => read(db => ['investor_legacy_transition_job_requests', 'investor_legacy_transition_previews', 'investor_legacy_transition_confirmations',
+      'investor_legacy_transition_admissions'].map(table => db.prepare(`SELECT count(*) n FROM ${table}`).get().n));
+    const original = counts();
+    assert.equal((await jsonRequest(route)).status, 401);
+    assert.equal((await jsonRequest(route, { headers: { Cookie: cookie } })).status, 400);
+    const value = await jsonRequest(route, { headers: headers() }); assert.equal(value.status, 200);
+    assert.equal(value.json.workspace_id, first.json.workspace_id); assert.equal(value.json.session_binding, binding);
+    assert.equal(value.json.model, null); assert.equal(value.json.request, null); assert.equal(value.json.view, null);
+    assert.equal(value.json.current_advice_certified, false); assert.equal(value.headers.get('cache-control'), 'private, no-store');
+    const absent = await jsonRequest(`${route}?nonce=fictional-unknown-original`, { headers: headers() });
+    assert.equal(absent.status, 200); assert.equal(absent.json.request, null); assert.equal(absent.json.lookup_nonce, 'fictional-unknown-original');
+    for (const query of ['?nonce=x&request=y', '?request=x&request=y', '?actor_id=other'])
+      assert.equal((await jsonRequest(route + query, { headers: headers() })).status, 400);
+    const intent = { kind: 'preview', model_id: 'fictional-no-model', expected_revision: 1, idempotency_key: 'fictional-legacy-http' };
+    const send = (body, extra = {}) => jsonRequest(route, { method: 'POST', headers: headers({ Origin: origin, 'Content-Type': 'application/json', ...extra }),
+      body: typeof body === 'string' ? body : JSON.stringify(body) });
+    assert.equal((await send(intent, { Origin: 'https://wrong.example.test' })).status, 403);
+    assert.equal((await send(intent, { 'X-Workbench-Session-Binding': 'b'.repeat(64) })).status, 401);
+    for (const body of [{ ...intent, quotes: [] }, { ...intent, actor_id: 'other' }, { kind: 'confirmation', body: {} }, '{"kind":"preview","kind":"preview"}'])
+      assert.equal((await send(body)).status, 400);
+    assert.equal((await send({ ...intent, padding: 'x'.repeat(32769) })).status, 413);
+    assert.equal((await send(intent)).status, 409); assert.deepEqual(counts(), original); assert.deepEqual(financial(), before);
+    return { no_implicit_migration: true, unknown_nonce_not_latest: true, maximum_body_bytes: 32768, provider_calls: 0, financial_writes: false };
+  });
   await check('HTTP-I28', 'versioned progress reads preserve cached strict clients and require the same authenticated bound session', async () => {
     const version = { 'X-Workbench-Investor-View': 'action-drafts-v1' };
     const maintenanceVersion = { 'X-Workbench-Investor-View': 'action-drafts-v2' };
-    const legacy = await get(), next = await get(version), maintenance = await get(maintenanceVersion), unknown = await get({ 'X-Workbench-Investor-View': 'action-drafts-v999' });
-    for (const response of [legacy, next, maintenance, unknown]) {
+    const firstCloseVersion = { 'X-Workbench-Investor-View': 'initial-close-v1' };
+    const legacy = await get(), next = await get(version), maintenance = await get(maintenanceVersion), firstClose = await get(firstCloseVersion), unknown = await get({ 'X-Workbench-Investor-View': 'action-drafts-v999' });
+    for (const response of [legacy, next, maintenance, firstClose, unknown]) {
       assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'private, no-store');
       const vary = response.headers.get('vary').split(/,\s*/);
       assert.ok(vary.includes('Cookie')); assert.ok(vary.includes('X-Workbench-Investor-View'));
@@ -143,6 +295,15 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
     assert.equal(maintenance.json.action_maintenance.status, 'not_configured');
     assert.equal(maintenance.json.action_maintenance.research_admitted_by_this_view, false);
     assert.equal(maintenance.json.action_drafts.status, 'not_configured');
+    assert.deepEqual(Object.keys(firstClose.json).sort(), Object.keys(maintenance.json).sort());
+    assert.equal(firstClose.json.action_maintenance.status, 'not_configured');
+    assert.equal(firstClose.json.action_maintenance.research_admitted_by_this_view, false);
+    assert.equal(firstClose.json.action_drafts.status, 'not_configured');
+    assert.equal((await jsonRequest(endpoint, { headers: { Cookie: cookie, ...firstCloseVersion } })).status, 400);
+    assert.equal((await get({ ...firstCloseVersion, 'X-Workbench-Session-Binding': 'b'.repeat(64) })).status, 401);
+    assert.equal((await jsonRequest(endpoint, { headers: firstCloseVersion })).status, 401);
+    assert.equal((await jsonRequest(endpoint, {method:'POST',headers:{Cookie:cookie,Origin:origin,'Content-Type':'application/json',...firstCloseVersion},
+      body:JSON.stringify({action:'evaluate',expected_revision:1,idempotency_key:'first-close-missing-binding'})})).status,400);
     assert.equal(next.json.action_drafts.status, 'not_configured');
     assert.equal(next.json.action_drafts.provider_online_verified, false);
     assert.equal((await jsonRequest(endpoint, { headers: { Cookie: cookie, ...version } })).status, 400);
@@ -153,7 +314,7 @@ export async function investorHttpCases({ check, request, jsonRequest, filename,
     assert.equal((await get({ ...version, 'X-Workbench-Session-Binding': 'b'.repeat(64) })).status, 401);
     assert.equal((await jsonRequest(endpoint, { headers: version })).status, 401);
     assert.deepEqual(financial(), initialFinancial);
-    return { legacy_shape_preserved: true, explicit_version_required: true, stale_binding: 401, missing_binding: 400, financial_writes: false };
+    return { legacy_shape_preserved: true, explicit_version_required: true, first_close_capability:'empty_workspace_metadata_only_not_collection', stale_binding: 401, missing_binding: 400, financial_writes: false };
   });
   await check('HTTP-I04', 'reevaluation preserves immutable history; blocked observations cannot be accepted as trade ideas', async () => {
     const state = await get(), observation = state.json.latest.id;
@@ -326,6 +487,11 @@ finally:
 from pathlib import Path
 from datetime import datetime,timezone
 from tests.investor.evidence_fixture import create,EXPIRY
+from tests.investor import evidence_fixture as reference_fixture
+from unittest.mock import patch
+import socket
+def forbidden_network(*args,**kwargs): raise AssertionError('OFFLINE_HTTP_FIXTURE_NETWORK_FORBIDDEN')
+socket.create_connection=forbidden_network;socket.getaddrinfo=forbidden_network
 from worker.investor.data_evidence import review_source
 from worker.investor.runtime import sync_research_requests
 from worker.orchestration.db import open_database
@@ -341,7 +507,15 @@ try:
     at=datetime.now(timezone.utc); at=at.replace(microsecond=at.microsecond//1000*1000)
     now=at.isoformat(timespec='milliseconds').replace('+00:00','Z')
     if sys.argv[2] in ('admit','calculate'):
-        if sys.argv[2]=='admit': create(db,workspace,actor,now=now)
+        if sys.argv[2]=='admit':
+            original=reference_fixture.research_input
+            def fictional_positive_tolerance():
+                data,plan,policy=original()
+                for candidate in [*plan['parameter_candidates'],plan['benchmark'],*policy['candidates']]:
+                    candidate['tolerance']={'absolute_cny':'0.01','weight':'0.005'}
+                return data,plan,policy
+            with patch.object(reference_fixture,'research_input',side_effect=fictional_positive_tolerance):
+                create(db,workspace,actor,now=now)
         sync_research_requests(db)
         result=run_one(db,'http-fictional-evidence',command_handler(db),job_type='investor_research')
         assert result is not None, 'NO_JOB'
@@ -349,11 +523,31 @@ try:
     elif sys.argv[2] in ('monitor','funding'):
         from tests.investor.live_monitor_fixture import create as monitor_create
         from worker.investor.evidence_monitor_runtime import discover_evidence_monitor_requests
+        from tests.investor.http_bootstrap_queue import run_bootstrap_core
         model=db.execute('SELECT m.id FROM investor_models m JOIN investor_profiles p ON p.id=m.profile_id WHERE m.workspace_id=? ORDER BY p.version DESC,m.rowid DESC LIMIT 1',(workspace,)).fetchone()
         assert model is not None
-        monitor_create(db,workspace,actor,model['id'],now,funding=sys.argv[2]=='funding')
-        discover_evidence_monitor_requests(db,now=now)
-        result=run_one(db,'http-fictional-monitor',command_handler(db),job_type='investor_evidence_monitor')
+        if sys.argv[2]=='monitor':
+            assert db.execute('SELECT count(*) FROM investor_monitor_evidence_inputs WHERE model_id=?',(model['id'],)).fetchone()[0]==0
+            monitor_create(db,workspace,actor,model['id'],now,receipts_only=True)
+            bootstrap=run_bootstrap_core(db,workspace,model['id'])
+            result=bootstrap['job']
+            source=db.execute('SELECT document_json FROM investor_monitor_evidence_inputs WHERE model_id=?',(model['id'],)).fetchone()
+            import json
+            assert source and json.loads(source[0])['schema_version']=='investor-monitor-data-input-v4'
+            print(json.dumps({'selected_types':bootstrap['selected_types'],'fixture_legacy_downloads':bootstrap['fixture_legacy_downloads'],
+                'real_provider_calls':bootstrap['real_provider_calls']}))
+        else:
+            from copy import deepcopy
+            from worker.investor.monitor_admission import admit_monitor_data,latest_monitor_evidence
+            from worker.investor.confirmed_feed import _windows
+            import json
+            source=latest_monitor_evidence(db,workspace,model['id']); document=json.loads(source['document_json'])
+            settings=deepcopy(document['settings'])
+            settings['funding_intent']={'id':'fictional-current-funding','amount_cny':'1000','expected_at':now}
+            admit_monitor_data(db,workspace,actor,model['id'],[window for _,window in _windows(db,workspace,document)],settings,
+                now=now,audited_action_knowledge=True)
+            discover_evidence_monitor_requests(db,now=now)
+            result=run_one(db,'http-fictional-monitor',command_handler(db),job_type='investor_evidence_monitor')
         assert result is not None, 'NO_JOB'
         assert result['status']=='succeeded', result['status']
     else:
@@ -366,9 +560,14 @@ finally:
 `, filename, mode], { cwd: fileURLToPath(new URL('../../', import.meta.url)), timeout: 60000, encoding: 'utf8', maxBuffer: 65536,
         env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, WORKBENCH_DATA_DIR: path.join(directory, 'auth') } });
       const diagnostic = (worker.stderr ?? '').split(/\r?\n/).map(line => line.trim())
-        .filter(line => /^(?:(?:[A-Za-z0-9_]+\.)*WorkbenchError: [A-Z][A-Z0-9_]{0,119}|AssertionError: (?:NO_JOB|skipped|failed|retry_queued|cancelled))$/.test(line)).at(-1)
+        .filter(line => /^(?:(?:[A-Za-z0-9_]+\.)*WorkbenchError: [A-Z][A-Z0-9_]{0,119}|AssertionError: (?:NO_JOB|skipped|failed|retry_queued|cancelled|(?:HTTP_BOOTSTRAP_|HTTP_FIXTURE_|UNEXPECTED_HTTP_|AMBIGUOUS_HTTP_|CHANGED_HTTP_)[A-Z0-9_]{1,80}))$/.test(line)).at(-1)
         ?? (worker.error?.code === 'ETIMEDOUT' ? 'ETIMEDOUT' : 'NO_SAFE_DIAGNOSTIC');
+      if (worker.status !== 0 && diagnosticsDirectory) {
+        mkdirSync(diagnosticsDirectory, { recursive: true, mode: 0o700 });
+        writeFileSync(path.join(diagnosticsDirectory, `bootstrap-${mode}.stderr`), worker.stderr ?? '', { mode: 0o600 });
+      }
       assert.equal(worker.status, 0, `Fictional evidence fixture did not complete (${mode}): ${diagnostic}`);
+      return worker.stdout.trim() ? JSON.parse(worker.stdout) : null;
     };
     await invoke('admit');
     let state = await get(); assert.equal(state.status, 200); assert.equal(state.json.research_task.status, 'calculated');
@@ -396,8 +595,17 @@ finally:
     assert.equal(state.json.plan.saved_for_observation, true); assert.equal(state.json.model_watch.status, 'awaiting_inputs');
     assert.equal(state.json.model_watch.model_nav_cny, null); assert.equal(state.json.effective_outcome, 'insufficient_evidence');
     const savedHtml = await (await request('/workbench', { headers: headers() })).text(); assert.match(savedHtml, /已保存为观察方案/);
-    await check('HTTP-I11', 'fictional receipt-qualified core monitor reaches SSR, pause/resume and human review without executing a change', async () => {
-      await invoke('monitor'); state = await get(); assert.equal(state.status, 200);
+    await check('HTTP-I11', 'ordinary saved model and explicit owner costs reach automatic v4 bootstrap, SSR, pause/resume and human review without executing a change', async () => {
+      const costs=state.json.monitor_costs;
+      assert.equal(costs.editable,true);assert.equal(costs.version,0);
+      const declared=await post({action:'set_monitor_costs',model_id:state.json.model_watch.id,model_hash:costs.model_hash,
+        expected_cost_version:0,expected_revision:state.json.revision,idempotency_key:'http-bootstrap-explicit-costs',
+        costs:{commission_bps:'1',minimum_fee_cny:'1',fx_bps:'2',slippage_bps:'3',maximum_cost_fraction:'0.01'},
+        validity_days:7,acknowledged_research_only:true});
+      assert.equal(declared.status,200);
+      const bootstrap=await invoke('monitor'); state = await get(); assert.equal(state.status, 200);
+      assert.equal(bootstrap.real_provider_calls,0);
+      assert.deepEqual(bootstrap.selected_types,bootstrap.fixture_legacy_downloads===1?['market_collect','investor_evidence_monitor']:['investor_evidence_monitor']);
       assert.equal(state.json.model_watch.status, 'research_observe'); assert.equal(state.json.effective_outcome, 'observe');
       assert.equal(state.json.model_watch.model_nav_cny, '10000'); assert.equal(state.json.model_watch.checkpoint_sequence, 1);
       assert.equal(state.json.latest.document.monitoring, 'active');
@@ -405,6 +613,9 @@ finally:
       const originalCheckpoints = read(db => db.prepare('SELECT * FROM investor_evidence_model_checkpoints ORDER BY sequence').all());
       const originalUnits = read(db => db.prepare('SELECT payload FROM investor_evidence_checkpoint_payloads ORDER BY rowid').all());
       const modelId = state.json.model_watch.id;
+      const source=read(db=>db.prepare('SELECT document_json FROM investor_monitor_evidence_inputs WHERE model_id=?').get(modelId));
+      assert.equal(JSON.parse(source.document_json).schema_version,'investor-monitor-data-input-v4');
+      assert.equal(read(db=>db.prepare("SELECT count(*) n FROM audit_events WHERE action='investor_bootstrap_monitor_source'").get().n),1);
       const paused = await post({ action: 'set_monitoring', model_id: modelId, enabled: false, expected_revision: state.json.revision, idempotency_key: 'http-qualified-pause' });
       assert.equal(paused.status, 200); state = await get(); assert.equal(state.json.model_watch.status, 'paused');
       assert.equal(state.json.effective_outcome, 'insufficient_evidence'); assert.equal(state.json.model_watch.model_nav_cny, null);
@@ -423,7 +634,9 @@ finally:
       assert.equal(review.status, 200); state = await get(); assert.equal(state.json.decisions[0].decision, 'accept_idea');
       assert.deepEqual(read(db => db.prepare('SELECT payload FROM investor_evidence_checkpoint_payloads ORDER BY rowid').all()), unitState);
       assert.deepEqual(financial(), initialFinancial);
-      return { stub_transport_only: true, real_provider_called: false, independent_model_and_cost_replay: true, unchanged_state_reused: true, review_changes_holdings: false };
+      return { stub_transport_only: true, real_provider_called: false, ordinary_cost_declaration:true, automatic_first_input_protocol:'investor-monitor-data-input-v4',
+        default_core_selected_types:bootstrap.selected_types,known_prior_fixture_downloads:bootstrap.fixture_legacy_downloads,
+        independent_model_and_cost_replay: true, unchanged_state_reused: true, review_changes_holdings: false };
     });
     await invoke('withdraw'); state = await get(); assert.equal(state.status, 200);
     assert.equal(state.json.research_task.status, 'outdated'); assert.equal(state.json.research_task.study, null);

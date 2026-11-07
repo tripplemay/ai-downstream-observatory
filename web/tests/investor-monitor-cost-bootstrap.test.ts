@@ -5,6 +5,9 @@ import test from "node:test";
 import { investorActor as actor, investorFixture, saveSyntheticProfile, syntheticProfile } from "./investor-fixture";
 import { executeInvestorCommand, getInvestorState } from "../src/server/investor/service";
 import { readInvestorMonitorEvidenceSource } from "../src/server/investor/monitor-source";
+import { readEvidenceCheckpoint } from "../src/server/investor/evidence-monitor";
+
+type Obj=Record<string,unknown>;
 
 function python(filename: string, module: string, args: string[]) {
   return JSON.parse(execFileSync(process.env.WORKBENCH_TEST_PYTHON ?? "python3", ["-m", module, "--db", filename, ...args], {
@@ -37,8 +40,11 @@ test("an ordinary owner cost declaration made before any monitor input is bound 
     assert.equal(result.fx_mock_calls, 1); assert.equal(result.expected_cost_gap, null); assert.equal(result.checkpoints, 1);
     const current = getInvestorState(f.db, actor, result.at); assert.equal(current.monitor_costs?.status, "known");
     const source = readInvestorMonitorEvidenceSource(f.db, current.workspace_id!, current.model_watch!.id, result.input_id, result.at);
-    assert.equal(source.unavailable_reason, null); assert.equal(source.document.schema_version, "investor-monitor-data-input-v3");
+    assert.equal(source.unavailable_reason, null); assert.equal(source.document.schema_version, "investor-monitor-data-input-v4");
     assert.deepEqual(source.projection, result.projection); assert.deepEqual(source.projection!.policy.costs, current.monitor_costs!.costs);
+    const model=f.db.prepare("SELECT * FROM investor_models").get() as Obj,header=f.db.prepare("SELECT * FROM investor_evidence_model_checkpoints").get() as Obj;
+    const checkpoint=readEvidenceCheckpoint(f.db,current.workspace_id!,model,JSON.parse(model.document_json as string),header.id,result.at);
+    assert.equal(checkpoint.unavailable_reason,null);assert.equal(checkpoint.checkpoint?.sequence,1);
     assert.deepEqual(stable(), frozen);
     assert.equal((f.db.prepare("SELECT count(*) n FROM investor_monitor_evidence_inputs").get() as { n: number }).n, 1);
     assert.equal((f.db.prepare("SELECT count(*) n FROM audit_events WHERE action='investor_bootstrap_monitor_source'").get() as { n: number }).n, 1);

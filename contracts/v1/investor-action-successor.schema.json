@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-action-successor.schema.json",
+  "$defs": {
+    "count": {"type": "integer", "minimum": 0, "maximum": 20000},
+    "append_proof": {
+      "type": "object",
+      "required": ["status", "previous_facts_hash", "reviewed_facts_hash", "previous_snapshot_hash", "current_snapshot_hash", "previous_coverage_end", "new_coverage_end", "added_event_count", "added_dividend_count", "added_split_count", "new_nominal_difference_count", "knowledge_basis", "late_knowledge_event_count", "continuation_timing_ready", "requires_separate_knowledge_or_start", "old_events_and_tax_assumption_unchanged", "owner_approval_verified", "source_authority_verified", "handover_registered", "research_admitted", "trading_permission", "provider_calls", "database_writes", "raw_amounts_or_tax_text_output"],
+      "properties": {
+        "status": {"const": "reviewed_append_prepared_only"},
+        "previous_facts_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "reviewed_facts_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "previous_snapshot_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "current_snapshot_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "previous_coverage_end": {"$ref": "common.schema.json#/$defs/date"},
+        "new_coverage_end": {"$ref": "common.schema.json#/$defs/date"},
+        "added_event_count": {"type": "integer", "minimum": 1, "maximum": 20000},
+        "added_dividend_count": {"$ref": "#/$defs/count"},
+        "added_split_count": {"$ref": "#/$defs/count"},
+        "new_nominal_difference_count": {"$ref": "#/$defs/count"},
+        "knowledge_basis": {"const": "current_complete_report_receipts_only"},
+        "late_knowledge_event_count": {"$ref": "#/$defs/count"},
+        "continuation_timing_ready": {"type": "boolean"},
+        "requires_separate_knowledge_or_start": {"type": "boolean"},
+        "old_events_and_tax_assumption_unchanged": {"const": true},
+        "owner_approval_verified": {"const": false},
+        "source_authority_verified": {"const": false},
+        "handover_registered": {"const": false},
+        "research_admitted": {"const": false},
+        "trading_permission": {"const": false},
+        "provider_calls": {"const": 0},
+        "database_writes": {"const": 0},
+        "raw_amounts_or_tax_text_output": {"const": false}
+      },
+      "additionalProperties": false,
+      "allOf": [{
+        "if": {"properties": {"late_knowledge_event_count": {"const": 0}}},
+        "then": {"properties": {"continuation_timing_ready": {"const": true}, "requires_separate_knowledge_or_start": {"const": false}}},
+        "else": {"properties": {"continuation_timing_ready": {"const": false}, "requires_separate_knowledge_or_start": {"const": true}}}
+      }]
+    },
+    "preview": {
+      "type": "object",
+      "required": ["status", "checked_at", "refresh_after", "previous_authority_id", "previous_authority_hash", "previous_control_id", "previous_control_hash", "previous_control_enabled", "previous_publication_id", "next_authority_id", "next_authority_hash", "next_control_id", "next_control_hash", "previous_manual_review_id", "next_manual_review_id", "next_manual_review_record_verified", "approval_performed_by_preview", "append_proof", "source_control_and_raw_bindings_verified", "continuation_timing_ready", "requires_separate_knowledge_or_start", "handover_registered", "next_rule_enabled", "quarantine_cleared", "provider_calls", "database_writes", "research_admitted", "trading_permission", "raw_amounts_or_tax_text_output"],
+      "properties": {
+        "status": {"const": "explicit_review_successor_prepared_not_registered"},
+        "checked_at": {"$ref": "common.schema.json#/$defs/instant"},
+        "refresh_after": {"$ref": "common.schema.json#/$defs/instant"},
+        "previous_authority_id": {"$ref": "common.schema.json#/$defs/id"},
+        "previous_authority_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "previous_control_id": {"$ref": "common.schema.json#/$defs/id"},
+        "previous_control_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "previous_control_enabled": {"type": "boolean"},
+        "previous_publication_id": {"oneOf": [{"$ref": "common.schema.json#/$defs/id"}, {"type": "null"}]},
+        "next_authority_id": {"$ref": "common.schema.json#/$defs/id"},
+        "next_authority_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "next_control_id": {"$ref": "common.schema.json#/$defs/id"},
+        "next_control_hash": {"$ref": "common.schema.json#/$defs/hash"},
+        "previous_manual_review_id": {"$ref": "common.schema.json#/$defs/id"},
+        "next_manual_review_id": {"$ref": "common.schema.json#/$defs/id"},
+        "next_manual_review_record_verified": {"const": true},
+        "approval_performed_by_preview": {"const": false},
+        "append_proof": {"$ref": "#/$defs/append_proof"},
+        "source_control_and_raw_bindings_verified": {"const": true},
+        "continuation_timing_ready": {"type": "boolean"},
+        "requires_separate_knowledge_or_start": {"type": "boolean"},
+        "handover_registered": {"const": false},
+        "next_rule_enabled": {"const": false},
+        "quarantine_cleared": {"const": false},
+        "provider_calls": {"const": 0},
+        "database_writes": {"const": 0},
+        "research_admitted": {"const": false},
+        "trading_permission": {"const": false},
+        "raw_amounts_or_tax_text_output": {"const": false}
+      },
+      "additionalProperties": false,
+      "allOf": [{
+        "if": {"properties": {"append_proof": {"type": "object", "properties": {"late_knowledge_event_count": {"const": 0}}}}},
+        "then": {"properties": {"continuation_timing_ready": {"const": true}, "requires_separate_knowledge_or_start": {"const": false}}},
+        "else": {"properties": {"continuation_timing_ready": {"const": false}, "requires_separate_knowledge_or_start": {"const": true}}}
+      }]
+    }
+  }
+}

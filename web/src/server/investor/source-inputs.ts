@@ -10,6 +10,8 @@ import { readInvestorConfirmedCapture } from "./confirmed-source";
 import { managedFxReviewUnavailable, verifyManagedFxReview } from "./managed-fx-source";
 import { currentCalendarReview } from "./calendar-continuation";
 import { MANAGED_ACTION_PREFIX, managedActionReviewUnavailable, readManagedActionReview } from "./managed-action-source";
+import { actionAvailabilityRefs, indexActionAvailability } from "./monitor-action-knowledge";
+import { checkpointActionReview } from "./action-checkpoint-replay";
 
 type Obj = Record<string, unknown>;
 type Row = { id: string; workspace_id: string; document_json: string; content_hash: string; created_at: string; actor_id: string; audit_id: string; valid_until: string; source_qualification: string };
@@ -46,6 +48,8 @@ export function latestInvestorResearchInput(db: Database.Database, workspace: st
 }
 
 function review(db: Database.Database, workspace: string, ref: Obj, now: string): Review {
+  const historical=checkpointActionReview(db,workspace,ref.review_id,now);
+  if(historical) {check(historical.row.content_hash===ref.review_hash&&historical.source.id===ref.source_id&&historical.source.content_hash===ref.source_hash);return historical;}
   if (typeof ref.review_id === "string" && ref.review_id.startsWith(MANAGED_ACTION_PREFIX)) {
     const value = readManagedActionReview(db, workspace, ref.review_id, now);
     check(value.row.content_hash === ref.review_hash && value.source.id === ref.source_id && value.source.content_hash === ref.source_hash);
@@ -100,6 +104,57 @@ export function readInvestorSourceReview(db: Database.Database, workspace: strin
   return value;
 }
 
+/** Actual retained SDK capture replay; no caller-supplied reviews or prices. */
+export function readInvestorHistoricalCapture(db: Database.Database, workspace: string, id: string, now: string) {
+  const capture = db.prepare("SELECT * FROM investor_price_captures WHERE id=? AND workspace_id=?").get(id, workspace) as Obj | undefined; check(capture);
+  const bound = ["rights", "listing", "calendar"].map(kind => {
+    const reference = db.prepare(`SELECT r.id review_id,r.content_hash review_hash,r.source_id,s.content_hash source_hash
+      FROM investor_data_reviews r JOIN investor_data_sources s ON s.id=r.source_id AND s.workspace_id=r.workspace_id
+      WHERE r.id=? AND r.workspace_id=? AND s.kind=?`).get(capture[kind + "_review_id"], workspace, kind) as Obj | undefined;
+    check(reference); return readInvestorSourceReview(db, workspace, reference, now);
+  });
+  return replayHistoricalCapture(db, workspace, capture, bound, now);
+}
+
+function replayHistoricalCapture(db: Database.Database, workspace: string, capture: Obj, bound: Review[], now: string) {
+  check(capture.workspace_id === workspace && capture.qualification === "isolated_official_sdk"
+    && investorInstant.safeParse(capture.created_at).success && investorInstant.safeParse(capture.retain_until).success
+    && priceInstant(capture.created_at) <= priceInstant(now) && priceInstant(now) < priceInstant(capture.retain_until)
+    && !db.prepare("SELECT 1 FROM investor_price_purges WHERE capture_id=?").get(capture.id));
+  const receipt = json(capture.receipt_json as string, 32768); check(hash(receipt) === capture.receipt_hash);
+  check(bound.length === 3);
+  ["rights", "listing", "calendar"].forEach((kind, index) => {
+    const value = bound[index], id = capture[kind + "_review_id"];
+    check(value.source.kind === kind && value.row.id === id && receipt[kind + "_review_id"] === id && obj(receipt.review_hashes)[kind] === value.row.content_hash);
+  });
+  const [rights, listing, calendar] = bound, grant = rights.facts, spec = listing.facts, days = calendar.facts;
+  readInvestorCurrentCalendarReview(db, workspace, calendar.row.id, now);
+  check((grant.markets as string[]).includes(spec.market as string) && ["private_research", "private_retention", "private_display", "private_backup"].every(use => (grant.uses as string[]).includes(use))
+    && priceInstant(grant.valid_from) <= priceInstant(capture.created_at) && priceInstant(grant.valid_from) <= priceInstant(now) && priceInstant(now) < priceInstant(grant.valid_until));
+  const capturedRequest = obj(receipt.request), tileStart = capturedRequest.start_date as string, tileEnd = capturedRequest.end_date as string;
+  check(spec.market === days.market && (days.range_start as string) <= tileStart && tileStart <= tileEnd && tileEnd <= (days.range_end as string)
+    && tileEnd < localDate(now, zones[spec.market as string]) && Date.parse(tileEnd) - Date.parse(tileStart) < 31 * 86400000);
+  const expected = list(days.days, 3660).filter(day => day.kind !== "closed" && tileStart <= (day.date as string) && (day.date as string) <= tileEnd
+    && priceInstant(day.close_at) >= priceInstant(spec.tradable_from) && (!spec.tradable_until || priceInstant(day.close_at) < priceInstant(spec.tradable_until))).map(day => day.date as string);
+  check(expected.length > 0);
+  eq(capturedRequest, { mapping: Object.fromEntries(["listing_id", "provider_symbol", "market", "currency"].map(key => [key, spec[key]])),
+    start_date: tileStart, end_date: tileEnd, expected_dates: expected, period: "day", adjust_type: "none", trade_session: "regular" });
+  const raw = db.prepare("SELECT projection FROM investor_price_payloads WHERE capture_id=?").get(capture.id) as { projection: Buffer } | undefined;
+  check(raw && Buffer.isBuffer(raw.projection) && raw.projection.length > 0 && raw.projection.length <= 2097152 && createHash("sha256").update(raw.projection).digest("hex") === capture.projection_sha256);
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(raw.projection), projection = json(text, 2097152); check(canonical(projection) === text);
+  const replay = replayLongportProjection(projection, spec as unknown as Parameters<typeof replayLongportProjection>[1], expected, { start_date: tileStart, end_date: tileEnd });
+  check(replay.digest === capture.projection_sha256 && priceInstant(replay.returned) < priceInstant(capture.created_at) + 1000n);
+  check(bound.every(value => priceInstant(value.row.created_at) <= priceInstant(replay.started)));
+  eq(receipt, { schema_version: "investor-price-capture-v1", capture_id: capture.id, workspace_id: workspace,
+    rights_review_id: rights.row.id, listing_review_id: listing.row.id, calendar_review_id: calendar.row.id,
+    review_hashes: { rights: rights.row.content_hash, listing: listing.row.content_hash, calendar: calendar.row.content_hash }, request: capturedRequest,
+    projection_sha256: capture.projection_sha256, qualification: "isolated_official_sdk", source: projection.source, created_at: capture.created_at,
+    retain_until: capture.retain_until, publication_time_status: "not_supplied", historical_archive_verified: false });
+  const retain = [priceInstant(grant.valid_until), priceInstant(rights.row.valid_until), priceInstant(capture.created_at) + BigInt(grant.retention_days as number) * 86400000000n].reduce((a, b) => a < b ? a : b);
+  check(capture.retain_until === new Date(Number(retain / 1000n)).toISOString());
+  return { capture, receipt, bindings: [{ rights, listing, calendar }], records: replay.records };
+}
+
 function unavailable(db: Database.Database, workspace: string, document: Obj, now: string) {
   if (now >= (document.valid_until as string)) return "REFERENCE_SOURCE_EXPIRED";
   const snapshot = obj(document.snapshot);
@@ -113,11 +168,11 @@ function unavailable(db: Database.Database, workspace: string, document: Obj, no
       catch { return "REFERENCE_SOURCE_NO_LONGER_CURRENT"; }
     }
     if (now >= (row.valid_until as string)) return "REFERENCE_SOURCE_EXPIRED";
-    const actions = managedActionReviewUnavailable(db, workspace, row.id, now); if (actions) return actions;
+    const actions = checkpointActionReview(db,workspace,row.id,now)?null:managedActionReviewUnavailable(db, workspace, row.id, now); if (actions) return actions;
     const managed = managedFxReviewUnavailable(db, workspace, row.id, now); if (managed) return managed;
   }
   for (const ref of list(snapshot.capture_refs, 1000)) {
-    const versioned = snapshot.schema_version === "investor-monitor-price-snapshot-v1";
+    const versioned = ["investor-monitor-price-snapshot-v1", "investor-monitor-source-snapshot-v2"].includes(snapshot.schema_version as string);
     check(versioned ? ["historical_sdk", "confirmed_sdk"].includes(ref.kind as string) : !Object.hasOwn(ref, "kind"));
     const confirmed = versioned && ref.kind === "confirmed_sdk", prefix = confirmed ? "investor_confirmed" : "investor_price", digest = confirmed ? "payload_sha256" : "projection_sha256";
     const row = db.prepare(`SELECT id,receipt_hash,${digest},retain_until FROM ${prefix}_captures WHERE id=? AND workspace_id=?`).get(ref.capture_id, workspace) as Obj | undefined;
@@ -162,10 +217,14 @@ export function readInvestorMonitorPriceSnapshot(db: Database.Database, workspac
   return readSnapshot(db, workspace, document, now, true);
 }
 
-function readSnapshot(db: Database.Database, workspace: string, document: Obj, now: string, confirmedSnapshot: boolean) {
+export function readInvestorAuditedMonitorSnapshot(db: Database.Database, workspace: string, document: Obj, now: string) {
+  return db.transaction(() => readSnapshot(db, workspace, document, now, true, true)).deferred();
+}
+
+function readSnapshot(db: Database.Database, workspace: string, document: Obj, now: string, confirmedSnapshot: boolean, auditedActions = false) {
   try {
     const snapshot = obj(document.snapshot), frozen = document.created_at as string, start = snapshot.range_start as string, end = snapshot.range_end as string;
-    validateInvestorSourceDocument(confirmedSnapshot ? "monitor_snapshot" : "snapshot", snapshot);
+    validateInvestorSourceDocument(auditedActions ? "audited_monitor_snapshot" : confirmedSnapshot ? "monitor_snapshot" : "snapshot", snapshot);
     check(investorInstant.safeParse(frozen).success && frozen <= now && investorInstant.safeParse(document.valid_until).success
       && snapshot.created_at === frozen && snapshot.mode === "reconstructed" && snapshot.workspace_id === workspace);
     const reason = unavailable(db, workspace, document, now);
@@ -178,6 +237,21 @@ function readSnapshot(db: Database.Database, workspace: string, document: Obj, n
       check(!reviews.has(ref.review_id as string)); const value = review(db, workspace, ref, now); check(value.row.created_at <= frozen);
       reviews.set(ref.review_id as string, value);
     }
+    const actionReviews = [...reviews.values()].filter(value => value.source.kind === "actions");
+    const availability = auditedActions ? actionAvailabilityRefs(db, workspace, actionReviews, now, frozen) : null;
+    if (availability) eq(snapshot.action_availability_refs, availability);
+    return assembleInvestorSourceSnapshot(db, workspace, document, now, confirmedSnapshot, reviews, availability);
+  } catch { throw new Error("INVESTOR_EVIDENCE_INVALID"); }
+}
+
+/** Internal assembly, not a source verifier: every supplied review must be independently authenticated. */
+export function assembleInvestorSourceSnapshot(db: Database.Database, workspace: string, document: Obj, now: string,
+  confirmedSnapshot: boolean, reviews: Map<string, VerifiedSourceReview>, availability: Obj[] | null) {
+  try {
+    const snapshot = obj(document.snapshot), frozen = document.created_at as string, start = snapshot.range_start as string, end = snapshot.range_end as string;
+    const captureRefs = list(snapshot.capture_refs, 1000), auditedActions = availability !== null;
+    const actionReviews = [...reviews.values()].filter(value => value.source.kind === "actions");
+    const available = availability ? indexActionAvailability(actionReviews, availability, frozen) : null;
     const assets = new Map<string, Review>(), calendars = new Map<string, Review>();
     const quotes = new Map<string, { capture: Obj; record: Obj }>(), used = new Set<string>();
     const deadlines = [...reviews.values()].map(value => value.row.valid_until);
@@ -205,41 +279,14 @@ function readSnapshot(db: Database.Database, workspace: string, document: Obj, n
         continue;
       }
       const capture = db.prepare("SELECT * FROM investor_price_captures WHERE id=? AND workspace_id=?").get(ref.capture_id, workspace) as Obj | undefined;
-      check(capture && capture.qualification === "isolated_official_sdk" && (capture.created_at as string) <= frozen && frozen <= now
-        && investorInstant.safeParse(capture.created_at).success && investorInstant.safeParse(capture.retain_until).success
-        && capture.receipt_hash === ref.receipt_hash && capture.projection_sha256 === ref.projection_sha256);
-      const receipt = json(capture.receipt_json as string, 32768); check(hash(receipt) === capture.receipt_hash);
+      check(capture && (capture.created_at as string) <= frozen && frozen <= now && capture.receipt_hash === ref.receipt_hash && capture.projection_sha256 === ref.projection_sha256);
       const bound = ["rights", "listing", "calendar"].map(kind => {
         const id = capture[kind + "_review_id"] as string, value = reviews.get(id); used.add(id);
-        check(value?.source.kind === kind && receipt[kind + "_review_id"] === id && obj(receipt.review_hashes)[kind] === value.row.content_hash);
-        return value;
+        check(value?.source.kind === kind); return value;
       });
-      const [rights, listing, calendar] = bound, grant = rights.facts, spec = listing.facts, days = calendar.facts;
-      check((grant.markets as string[]).includes(spec.market as string) && ["private_research", "private_retention", "private_display", "private_backup"].every(use => (grant.uses as string[]).includes(use))
-        && priceInstant(grant.valid_from) <= priceInstant(capture.created_at) && priceInstant(now) < priceInstant(grant.valid_until));
-      check(spec.market === days.market && (days.range_start as string) <= start && end <= (days.range_end as string));
-      const capturedRequest = obj(receipt.request), tileStart = capturedRequest.start_date as string, tileEnd = capturedRequest.end_date as string;
-      check((days.range_start as string) <= tileStart && tileStart <= tileEnd && tileEnd <= (days.range_end as string)
-        && Date.parse(tileEnd) - Date.parse(tileStart) < 31 * 86400000);
-      const expected = list(days.days, 3660).filter(day => day.kind !== "closed" && tileStart <= (day.date as string) && (day.date as string) <= tileEnd
-        && priceInstant(day.close_at) >= priceInstant(spec.tradable_from) && (!spec.tradable_until || priceInstant(day.close_at) < priceInstant(spec.tradable_until))).map(day => day.date as string);
-      check(expected.length > 0);
-      eq(capturedRequest, { mapping: Object.fromEntries(["listing_id", "provider_symbol", "market", "currency"].map(key => [key, spec[key]])),
-        start_date: tileStart, end_date: tileEnd, expected_dates: expected, period: "day", adjust_type: "none", trade_session: "regular" });
-      const raw = db.prepare("SELECT projection FROM investor_price_payloads WHERE capture_id=?").get(capture.id) as { projection: Buffer } | undefined;
-      check(raw && Buffer.isBuffer(raw.projection) && raw.projection.length <= 2097152 && createHash("sha256").update(raw.projection).digest("hex") === capture.projection_sha256);
-      const text = new TextDecoder("utf-8", { fatal: true }).decode(raw.projection), projection = json(text, 2097152); check(canonical(projection) === text);
-      const replay = replayLongportProjection(projection, spec as unknown as Parameters<typeof replayLongportProjection>[1], expected, { start_date: tileStart, end_date: tileEnd });
-      check(replay.digest === capture.projection_sha256 && priceInstant(replay.returned) < priceInstant(capture.created_at) + 1000n);
-      check(bound.every(value => priceInstant(value.row.created_at) <= priceInstant(replay.started)));
-      eq(receipt.source, projection.source);
-      eq(receipt, { schema_version: "investor-price-capture-v1", capture_id: capture.id, workspace_id: workspace,
-        rights_review_id: rights.row.id, listing_review_id: listing.row.id, calendar_review_id: calendar.row.id,
-        review_hashes: { rights: rights.row.content_hash, listing: listing.row.content_hash, calendar: calendar.row.content_hash }, request: capturedRequest,
-        projection_sha256: capture.projection_sha256, qualification: "isolated_official_sdk", source: projection.source, created_at: capture.created_at,
-        retain_until: capture.retain_until, publication_time_status: "not_supplied", historical_archive_verified: false });
-      const retain = [priceInstant(grant.valid_until), priceInstant(rights.row.valid_until), priceInstant(capture.created_at) + BigInt(grant.retention_days as number) * 86400000000n].reduce((a,b) => a < b ? a : b);
-      check(capture.retain_until === new Date(Number(retain / 1000n)).toISOString()); deadlines.push(capture.retain_until as string);
+      const [, listing, calendar] = bound, spec = listing.facts, days = calendar.facts;
+      check((days.range_start as string) <= start && end <= (days.range_end as string));
+      const replay = replayHistoricalCapture(db, workspace, capture, bound, now); deadlines.push(capture.retain_until as string);
       const identity = spec.listing_id as string, market = spec.market as string;
       check(!assets.has(identity) || assets.get(identity)!.row.id === listing.row.id); assets.set(identity, listing);
       check(!calendars.has(market) || calendars.get(market)!.row.id === calendar.row.id); calendars.set(market, calendar);
@@ -256,7 +303,7 @@ function readSnapshot(db: Database.Database, workspace: string, document: Obj, n
     for (const [identity, value] of actions) check(assets.has(identity) && (value.facts.range_start as string) <= start && end <= (value.facts.range_end as string));
     const currencies = new Set([...assets.values()].map(value => value.facts.currency as string).filter(currency => currency !== "CNY"));
     eq([...rates.keys()].sort(), [...currencies].sort());
-    const sessions: Obj[] = [], settlements: Obj[] = [], observations: Obj[] = [], events: Obj[] = [], expectedKeys = new Set<string>();
+    const sessions: Obj[] = [], settlements: Obj[] = [], observations: Obj[] = [], events: Obj[] = [], journal: Obj[] = [], expectedKeys = new Set<string>();
     for (const [market, value] of [...calendars].sort(([a],[b]) => cmp(a,b))) {
       const days = list(value.facts.days, 3660), rangeStart = value.facts.range_start as string, rangeEnd = value.facts.range_end as string;
       const count = (Date.parse(rangeEnd + "T00:00:00Z") - Date.parse(rangeStart + "T00:00:00Z")) / 86400000 + 1;
@@ -300,26 +347,35 @@ function readSnapshot(db: Database.Database, workspace: string, document: Obj, n
     for (const [identity, value] of actions) for (const event of list(value.facts.events)) {
       const day = localDate(event.at, zones[assets.get(identity)!.facts.market as string]);
       check(event.listing_id === identity && (value.facts.range_start as string) <= day && day <= (value.facts.range_end as string)
-        && priceInstant(event.published_at) <= priceInstant(event.at));
+        && (auditedActions || priceInstant(event.published_at) <= priceInstant(event.at)));
       if (event.type === "split") check(amount(event.ratio as string).gt(0));
       else check(amount(event.gross_per_unit as string).gte(0) && amount(event.tax_per_unit as string).gte(0)
         && amount(event.tax_per_unit as string).lte(amount(event.gross_per_unit as string)) && priceInstant(event.pay_at) >= priceInstant(event.at));
       if (start <= day && day <= end) {
+        if (auditedActions) {
+          const session = sessions.find(row => row.market === assets.get(identity)!.facts.market && row.session_date === day);
+          check(session !== undefined && priceInstant(event.at) <= priceInstant(session.close_at));
+        }
         check(!actionIds.has(event.id as string)); actionIds.add(event.id as string);
         events.push({ ...event, source_evidence: "review:" + value.row.id });
+        if (available) journal.push({ fact: { ...event }, availability: available(value.row.id, event.id) });
       }
     }
     const catalog = Object.fromEntries([...assets].sort(([a],[b]) => cmp(a,b)).map(([id,value]) => [id,value.facts]));
-    const dataset = { schema_version: "research-dataset-v2", mode: "reconstructed", source_evidence: "investor-data-snapshot:" + hash(snapshot),
+    const commonDataset = { mode: "reconstructed", source_evidence: "investor-data-snapshot:" + hash(snapshot),
       license_scope: "Recorded private research/retention/display/backup only; owner-reviewed sources, not provider certification; no external AI authority inferred",
       historical_archive_verified: false, corporate_actions_complete: true, publication_refs: [],
       assets: [...assets].sort(([a],[b]) => cmp(a,b)).map(([identity,value]) => ({ listing_id: identity, market: value.facts.market, currency: value.facts.currency,
         quantity_step: value.facts.quantity_step, tradable_from: value.facts.tradable_from, ...(value.facts.tradable_until ? { tradable_until: value.facts.tradable_until } : {}), source_evidence: "review:" + value.row.id })),
       sessions: sessions.sort((a,b) => cmp(a.close_at as string,b.close_at as string) || cmp(a.market as string,b.market as string)),
       settlements: settlements.sort((a,b) => cmp(a.session_date as string,b.session_date as string) || cmp(a.market as string,b.market as string)),
-      observations: observations.sort((a,b) => cmp(a.id as string,b.id as string)), actions: events.sort((a,b) => cmp(a.at as string,b.at as string) || cmp(a.id as string,b.id as string)) };
+      observations: observations.sort((a,b) => cmp(a.id as string,b.id as string)) };
+    const dataset = auditedActions ? { ...commonDataset, schema_version: "investor-monitor-source-dataset-v1", created_at: frozen,
+      use_scope: "monitor_only", action_knowledge_basis: "audited_owner_review_not_provider_publication",
+      reviewed_actions: journal.sort((a,b) => cmp(obj(a.fact).at as string,obj(b.fact).at as string) || cmp(obj(a.fact).id as string,obj(b.fact).id as string)) }
+      : { ...commonDataset, schema_version: "research-dataset-v2", actions: events.sort((a,b) => cmp(a.at as string,b.at as string) || cmp(a.id as string,b.id as string)) };
     check(observations.length <= 100000 && Buffer.byteLength(canonical(dataset)) + Buffer.byteLength(canonical(snapshot)) <= 16777216);
-    validateInvestorSourceDocument("dataset", dataset);
+    validateInvestorSourceDocument(auditedActions ? "monitor_dataset" : "dataset", dataset);
     check(hash(dataset) === document.dataset_hash && hash(catalog) === document.catalog_hash && [...deadlines].sort()[0] === document.valid_until);
     return { dataset, catalog, reviews: [...reviews.values()], valid_until: document.valid_until as string, unavailable_reason: null };
   } catch { throw new Error("INVESTOR_EVIDENCE_INVALID"); }

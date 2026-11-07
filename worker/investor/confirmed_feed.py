@@ -32,6 +32,11 @@ def _seed(db, workspace, model_id, input_id, at):
     # Expired prices are precisely why a listener is needed. Source retention,
     # current rights and the original frozen arithmetic still must verify.
     result = resolve_monitor_data(db, workspace, definition, document, now=at, evaluated_at=document["created_at"])
+    if result["unavailable_reason"] in ("MONITOR_DATA_PROJECTION_EXPIRED", "REFERENCE_SOURCE_NO_LONGER_CURRENT") \
+            and document["schema_version"] == "investor-monitor-data-input-v5":
+        from .legacy_transition_source import transition_listener_catalog
+        catalog = transition_listener_catalog(db, workspace, definition, input_id, at)
+        result = {"projection": None, "catalog": catalog, "source_only": True, "unavailable_reason": None}
     _assert(result["unavailable_reason"] is None, "CONFIRMED_FEED_SOURCE_UNAVAILABLE")
     control = _latest(db, "investor_model_controls", model_id, "version DESC")
     _assert(control is not None and control["enabled"] == 1 and control["created_at"] <= at, "CONFIRMED_FEED_MODEL_DISABLED")
@@ -46,15 +51,35 @@ def _source_refresh_context(db, workspace, model_id, input_id, at):
         if str(error) != "CONFIRMED_FEED_SOURCE_UNAVAILABLE":
             raise
     from .managed_actions import PREFIX, managed_review_header, managed_review_unavailable, paused_control_successor
+    from .action_review_selection import check_action_review_extension, retired_action_review
     model, definition, reference = current_monitor_model(db, workspace, model_id, at)
     source, document = monitor_evidence_document(db, workspace, model_id, input_id, at)
     control = _latest(db, "investor_model_controls", model_id, "version DESC")
     _assert(control is not None and control["enabled"] == 1 and control["created_at"] <= at, "CONFIRMED_FEED_MODEL_DISABLED")
     _assert(at < document["valid_until"], "CONFIRMED_FEED_SOURCE_UNAVAILABLE")
+    if document["schema_version"] in ("investor-monitor-data-input-v1", "investor-monitor-data-input-v2", "investor-monitor-data-input-v3"):
+        from .legacy_transition_source import approved_legacy_refresh_context
+        if approved_legacy_refresh_context(db, workspace, definition, source, document, at):
+            return model, definition, reference, control, source, document
     changed = set()
     for segment in document["segments"]:
         for ref in segment["snapshot"]["review_refs"]:
             identifier = ref["review_id"]
+            if retired_action_review(db, workspace, identifier, at):
+                _assert(document["schema_version"] in ("investor-monitor-data-input-v4", "investor-monitor-data-input-v5"), "CONFIRMED_FEED_ACTION_PROTOCOL_REVIEW_REQUIRED")
+                if document["schema_version"] == "investor-monitor-data-input-v5":
+                    from .legacy_transition_source import _context
+                    _context(db, workspace, definition, document["transition"], at)
+                from .managed_actions import action_refresh_basis, current_action_reviews
+                prior = action_refresh_basis(db, workspace, identifier, at)
+                _assert(prior["review"]["content_hash"] == ref["review_hash"] and prior["source"]["id"] == ref["source_id"]
+                    and prior["source"]["content_hash"] == ref["source_hash"], "CONFIRMED_FEED_SOURCE_UNAVAILABLE")
+                choices = [value for value in current_action_reviews(db, workspace, [prior["facts"]["listing_id"]], at)
+                    if value["facts"]["range_start"] <= segment["snapshot"]["range_start"] <= segment["snapshot"]["range_end"] <= value["facts"]["range_end"]]
+                _assert(len(choices) == 1, "CONFIRMED_FEED_ACTION_COVERAGE_NOT_UNIQUE")
+                check_action_review_extension(db, workspace, prior, choices[0], at,
+                    start_date=segment["snapshot"]["range_start"], end_date=segment["snapshot"]["range_end"])
+                changed.add(identifier); continue
             if not identifier.startswith(PREFIX):
                 continue
             header = managed_review_header(db, workspace, identifier, at)
@@ -154,7 +179,9 @@ def discover_confirmed_watches(db, *, limit=100, now=None, stop_requested=None):
                     if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
                     day = instant(at).astimezone(ZoneInfo(longport._MARKETS[market][0])).date().isoformat()
                     if db.execute("SELECT 1 FROM investor_confirmed_feed_requests WHERE model_id=? AND market=? AND session_date=?", (model["id"], market, day)).fetchone(): continue
-                    if any(target["market"] == market and instant(target["observed_at"]).astimezone(ZoneInfo(longport._MARKETS[market][0])).date().isoformat() >= day for target in result["projection"]["quotes"]): continue
+                    if db.execute("SELECT 1 FROM investor_initial_close_requests WHERE model_id=? AND market=? AND session_date=?", (model["id"], market, day)).fetchone(): continue
+                    if any(target["market"] == market and instant(target["observed_at"]).astimezone(ZoneInfo(longport._MARKETS[market][0])).date().isoformat() >= day
+                        for target in (result["projection"]["quotes"] if result.get("projection") is not None else [])): continue
                     planned = market_plan(db, model["workspace_id"], model, definition, control, source, document, result, market, day, at)
                     if planned is None: continue
                     plans.append(planned)
@@ -262,14 +289,25 @@ def _run(db, row, document, job, status, at, capture=None):
 
 
 def prepare_confirmed_watch(db, job, lease, *, clock=None, lease_seconds=300, stop_requested=None):
+    return _prepare_watch(db, job, lease, request_header=request_header, current=_current, publish_run=_run,
+        job_type=JOB_TYPE, clock=clock, lease_seconds=lease_seconds, stop_requested=stop_requested)
+
+
+def _prepare_watch(db, job, lease, *, request_header, current, publish_run, job_type, clock=None, lease_seconds=300, stop_requested=None,
+        during_watch=None, before_commit=None, commit_current=None):
+    _assert(db.execute("PRAGMA query_only").fetchone()[0] == 0, "WORKBENCH_READ_ONLY")
     clock = clock or (lambda: None); at = _clock(clock())
+    bound_job = db.execute("SELECT * FROM job_runs WHERE id=?", (lease.job_id,)).fetchone()
+    _assert(bound_job is not None and all(job[key] == bound_job[key] for key in
+        ("id", "job_type", "scope", "period", "input_version", "command_request_id", "max_attempts")), "CONFIRMED_FEED_BINDING_INVALID")
+    assert_lease(db, lease, now=at)
     row, document = request_header(db, job["scope"], job["period"], at)
-    _assert(job["job_type"] == JOB_TYPE and job["command_request_id"] is None and job["input_version"] == row["content_hash"] and job["max_attempts"] == 1)
+    _assert(job["job_type"] == job_type and job["command_request_id"] is None and job["input_version"] == row["content_hash"] and job["max_attempts"] == 1)
     if instant(at) < instant(document["not_before"]): raise WorkbenchError("CONFIRMED_FEED_NOT_DUE")
-    status, prepared = None, None
+    status, prepared, collection_prepared = None, None, False
     if instant(at) > instant(document["latest_start"]): status = "missed_window"
     else:
-        try: _current(db, row, document, at)
+        try: current(db, row, document, at)
         except WorkbenchError: status = "superseded"
     live_lease, last_beat = lease, instant(at)
     def guard():
@@ -283,31 +321,56 @@ def prepare_confirmed_watch(db, job, lease, *, clock=None, lease_seconds=300, st
         model = db.execute("SELECT profile_id,plan_id FROM investor_models WHERE id=?", (row["model_id"],)).fetchone()
         _assert(current and current["id"] == row["control_id"] and current["enabled"] == 1 and profile and selected
             and profile[0] == model["profile_id"] and selected[0] == model["plan_id"], "CONFIRMED_FEED_SUPERSEDED")
-        _assert(instant(now) < instant(document["valid_until"]) and instant(now) <= instant(document["stop_at"]) + timedelta(seconds=receiver.STARTUP_SECONDS), "CONFIRMED_FEED_WINDOW_ENDED")
+        if during_watch is not None: during_watch(db, row, document, now)
+        _assert(instant(now) < instant(document["valid_until"]), "CONFIRMED_FEED_WINDOW_ENDED")
+        # A timely frozen receipt may outlive the network window while current
+        # sources replay. Lease, rights and request expiry still guard persistence.
+        if not collection_prepared:
+            _assert(instant(now) <= instant(document["stop_at"]) + timedelta(seconds=receiver.STARTUP_SECONDS), "CONFIRMED_FEED_WINDOW_ENDED")
         if instant(now) - last_beat >= timedelta(seconds=max(1, lease_seconds // 3)):
             live_lease = heartbeat(db, live_lease, lease_seconds=lease_seconds, now=now); last_beat = instant(now)
         return False
+    def before_collect():
+        if guard(): raise WorkbenchError("WORKER_STOP_REQUESTED")
+        checked = instant(_clock(clock()))
+        _assert(checked <= instant(document["latest_start"]), "CONFIRMED_FEED_START_WINDOW_ENDED")
+        if job_type == "investor_initial_close":
+            _assert(not db.execute("SELECT 1 FROM investor_monitor_evidence_inputs WHERE model_id=?", (row["model_id"],)).fetchone(), "CONFIRMED_FEED_SUPERSEDED")
+        return ceil((instant(document["stop_at"]) - checked).total_seconds())
     if status is None:
         try:
             if guard(): raise WorkbenchError("WORKER_STOP_REQUESTED")
             duration = ceil((instant(document["stop_at"]) - instant(_clock(clock()))).total_seconds())
             _assert(1 <= duration <= receiver.MAX_WATCH_SECONDS)
             prepared = confirmed_capture.prepare_confirmed_prices(db, row["workspace_id"], row["actor_id"], document["targets"],
-                watch_seconds=duration, stop_requested=guard)
-        except Exception:
+                watch_seconds=duration, stop_requested=guard, before_collect=before_collect)
+            collection_prepared = True
+        except Exception as error:
             if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED") from None
             assert_lease(db, live_lease, now=_clock(clock()))
-            status = "transport_failed"
+            status = "missed_window" if isinstance(error, WorkbenchError) and str(error) == "CONFIRMED_FEED_START_WINDOW_ENDED" \
+                else "superseded" if isinstance(error, WorkbenchError) and str(error) == "CONFIRMED_FEED_SUPERSEDED" else "transport_failed"
+    if status is None and before_commit is not None:
+        try: before_commit(db, row, document, _clock(clock()))
+        except WorkbenchError as error:
+            if str(error) in ("WORKER_STOP_REQUESTED", "WORKBENCH_READ_ONLY", "RESTORE_PENDING_REVIEW", "STALE_OR_EXPIRED_LEASE"): raise
+            if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED") from None
+            assert_lease(db, live_lease, now=_clock(clock()))
+            status = "superseded"
     def commit_effect(connection):
         now = _clock(clock())
         if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
         assert_lease(connection, live_lease, now=now)
-        if status is not None: return _run(connection, row, document, job, status, now)
-        try: _current(connection, row, document, now)
-        except WorkbenchError: return _run(connection, row, document, job, "superseded", now)
+        if status is not None: return publish_run(connection, row, document, job, status, now)
+        try: (commit_current or current)(connection, row, document, now)
+        except WorkbenchError: return publish_run(connection, row, document, job, "superseded", now)
         capture = prepared(connection)
         _assert(capture["qualification"] == confirmed_capture.OFFICIAL)
-        return _run(connection, row, document, job, capture["status"], _clock(clock()), capture)
+        receipt = _object(capture["receipt_json"])
+        _assert(content_hash(receipt) == capture["receipt_hash"] and content_hash(receipt["bindings"]) == document["binding_hash"]
+            and instant(document["not_before"]) <= instant(receipt["call_started_at"]) <= instant(document["latest_start"]) + timedelta(seconds=receiver.STARTUP_SECONDS)
+            and instant(receipt["call_returned_at"]) <= instant(document["stop_at"]) + timedelta(seconds=receiver.STARTUP_SECONDS))
+        return publish_run(connection, row, document, job, capture["status"], _clock(clock()), capture)
     def commit(connection):
         try: return commit_effect(connection)
         except WorkbenchError as error:
@@ -320,7 +383,7 @@ def prepare_confirmed_watch(db, job, lease, *, clock=None, lease_seconds=300, st
 def _windows(db, workspace, document):
     values = []
     for segment in document["segments"]:
-        snapshot = segment["snapshot"]; confirmed = snapshot["schema_version"] == "investor-monitor-price-snapshot-v1"
+        snapshot = segment["snapshot"]; confirmed = snapshot["schema_version"] in ("investor-monitor-price-snapshot-v1", "investor-monitor-source-snapshot-v2")
         window = {"capture_ids": [ref["capture_id"] for ref in snapshot["capture_refs"] if not confirmed or ref["kind"] == "historical_sdk"],
             "action_review_ids": _snapshot_ids(db, workspace, snapshot, "actions"), "fx_review_ids": _snapshot_ids(db, workspace, snapshot, "fx"),
             "start_date": snapshot["range_start"], "end_date": snapshot["range_end"]}
@@ -330,6 +393,23 @@ def _windows(db, workspace, document):
         _assert(len(markets) == 1)
         values.append((markets.pop(), window))
     return values
+
+
+def _completed_refresh_current(db, request, document, at):
+    """Rebind an already completed capture, never start or retry a listener."""
+    try:
+        _current(db, request, document, at)
+        return
+    except WorkbenchError as error:
+        if str(error) != "CONFIRMED_FEED_SOURCE_UNAVAILABLE": raise
+    model, definition, _, control, source, stored = _source_refresh_context(db, request["workspace_id"], request["model_id"], request["input_id"], at)[:6]
+    _assert(control["id"] == request["control_id"], "CONFIRMED_FEED_SUPERSEDED")
+    # market_plan only needs catalog identities. All rights, listing, calendar,
+    # model, input and original watch bindings are independently rechecked.
+    identities = {row["listing_id"]: row for row in definition["targets"]}
+    planned = market_plan(db, request["workspace_id"], model, definition, control, source, stored,
+        {"catalog": identities}, request["market"], request["session_date"], at)
+    _assert(planned == document, "CONFIRMED_FEED_BINDING_INVALID")
 
 
 def _merge_completed(db, workspace, model, windows, at):
@@ -343,7 +423,7 @@ def _merge_completed(db, workspace, model, windows, at):
             if market != row["market"] or row["session_date"] <= window["end_date"]: continue
             _, request, spec = run_header(db, row, at)
             _assert(request["market"] == market and request["session_date"] == row["session_date"])
-            _current(db, request, spec, at)
+            _completed_refresh_current(db, request, spec, at)
             confirmed_capture.resolve_confirmed_capture(db, workspace, row["capture_id"], now=at)
             window.setdefault("confirmed_capture_ids", []).append(row["capture_id"]); window["end_date"] = row["session_date"]
 
@@ -370,6 +450,7 @@ def _refresh_fx_windows(db, workspace, definition, windows, settings, at):
 
 def _refresh_action_windows(db, workspace, definition, windows, at):
     from .managed_actions import action_refresh_basis, check_same_rule_extension, current_action_reviews
+    from .action_review_selection import check_action_review_extension, retired_action_review
     selected = current_action_reviews(db, workspace, [row["listing_id"] for row in definition["targets"]], at)
     for market, window in windows:
         identities = {row["listing_id"] for row in definition["targets"] if row["market"] == market}
@@ -382,7 +463,9 @@ def _refresh_action_windows(db, workspace, definition, windows, at):
             _assert(len(matches) == 1, "CONFIRMED_FEED_ACTION_COVERAGE_NOT_UNIQUE")
             current = matches[0]
             if current["review"]["id"] != prior["review"]["id"]:
-                check_same_rule_extension(db, workspace, prior, current, at)
+                if retired_action_review(db, workspace, prior["review"]["id"], at):
+                    check_action_review_extension(db, workspace, prior, current, at, start_date=window["start_date"], end_date=window["end_date"])
+                else: check_same_rule_extension(db, workspace, prior, current, at)
             replacements.append(current["review"]["id"])
         window["action_review_ids"] = sorted(replacements)
 
@@ -392,7 +475,9 @@ def _admit_windows(db, workspace, actor, model_id, context, windows, at, stop_re
     from .monitor_costs import current_settings
     if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
     settings = current_settings(db, workspace, context[1], context[5]["settings"], at)
-    admitted = admit_monitor_data(db, workspace, actor, model_id, [window for _,window in windows], settings, now=at)
+    knowledge = {"audited_action_knowledge": True} if context[5]["schema_version"] in ("investor-monitor-data-input-v4", "investor-monitor-data-input-v5") else {}
+    if context[5]["schema_version"] == "investor-monitor-data-input-v5": knowledge["legacy_transition"] = context[5]["transition"]
+    admitted = admit_monitor_data(db, workspace, actor, model_id, [window for _,window in windows], settings, now=at, **knowledge)
     _check_fx_selection(db, workspace, context[1], [window for _,window in windows], settings, at)
     _check_action_selection(db, workspace, context[1], [window for _,window in windows], at)
     if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
@@ -456,7 +541,14 @@ def refresh_monitor_sources(db, *, limit=100, now=None, stop_requested=None):
         AND i.id=(SELECT id FROM investor_monitor_evidence_inputs WHERE model_id=m.id AND workspace_id=m.workspace_id ORDER BY created_at DESC,rowid DESC LIMIT 1)
         AND (EXISTS(SELECT 1 FROM investor_confirmed_feed_runs r JOIN job_runs j ON j.id=r.job_id
               WHERE r.model_id=m.id AND r.workspace_id=m.workspace_id AND r.status='complete' AND j.status='succeeded'
-                AND r.created_at>=i.created_at AND r.created_at<=:at
+                AND r.created_at<=:at AND (r.created_at>=i.created_at
+                  OR (json_extract(i.document_json,'$.schema_version')='investor-monitor-data-input-v5'
+                    AND EXISTS(SELECT 1 FROM investor_legacy_transition_admissions bridge
+                      JOIN investor_legacy_transition_confirmations consent ON consent.id=bridge.transition_id AND consent.workspace_id=bridge.workspace_id AND consent.model_id=bridge.model_id
+                      JOIN investor_confirmed_feed_requests prior ON prior.id=r.request_id AND prior.workspace_id=r.workspace_id AND prior.model_id=r.model_id
+                      WHERE bridge.workspace_id=m.workspace_id AND bridge.model_id=m.id AND bridge.created_at>=r.created_at
+                        AND consent.id=json_extract(i.document_json,'$.transition.id') AND consent.content_hash=json_extract(i.document_json,'$.transition.content_hash')
+                        AND prior.input_id=consent.legacy_input_id)))
                 AND NOT EXISTS(SELECT 1 FROM json_each(i.document_json,'$.segments') s
                   JOIN json_each(s.value,'$.snapshot.capture_refs') ref WHERE json_extract(ref.value,'$.capture_id')=r.capture_id))
           OR EXISTS(SELECT 1 FROM investor_data_reviews r JOIN investor_data_sources s ON s.id=r.source_id AND s.workspace_id=r.workspace_id
@@ -471,7 +563,13 @@ def refresh_monitor_sources(db, *, limit=100, now=None, stop_requested=None):
                 AND NOT EXISTS(SELECT 1 FROM investor_action_unavailable_headers unavailable WHERE unavailable.id=p.id AND unavailable.workspace_id=p.workspace_id)
                 AND EXISTS(SELECT 1 FROM json_each(m.document_json,'$.targets') target WHERE json_extract(target.value,'$.listing_id')=a.listing_id)
                 AND NOT EXISTS(SELECT 1 FROM json_each(i.document_json,'$.segments') seg JOIN json_each(seg.value,'$.snapshot.review_refs') ref
-                  WHERE json_extract(ref.value,'$.review_id')=p.id)))
+                  WHERE json_extract(ref.value,'$.review_id')=p.id))
+          OR EXISTS(SELECT 1 FROM investor_action_review_confirmations successor JOIN investor_action_authorities a
+              ON a.id=successor.new_authority_id AND a.workspace_id=successor.workspace_id
+              WHERE successor.workspace_id=m.workspace_id AND successor.created_at>=i.created_at AND successor.created_at<=:at
+                AND EXISTS(SELECT 1 FROM json_each(m.document_json,'$.targets') target WHERE json_extract(target.value,'$.listing_id')=a.listing_id)
+                AND NOT EXISTS(SELECT 1 FROM json_each(i.document_json,'$.segments') seg JOIN json_each(seg.value,'$.snapshot.review_refs') ref
+                  WHERE json_extract(ref.value,'$.review_id')=successor.new_review_id)))
       ORDER BY i.created_at,m.id LIMIT :limit""", {"at":at,"limit":limit}).fetchall()
     refreshed = []
     for row in rows:

@@ -124,6 +124,14 @@ def _check_source_refs(db, workspace_id, document, now):
 
 
 def source_unavailable_reason(db, workspace_id, document, now):
+    return _source_unavailable_reason(db, workspace_id, document, now, storage_only=False)
+
+
+def source_storage_unavailable_reason(db, workspace_id, document, now):
+    return _source_unavailable_reason(db, workspace_id, document, now, storage_only=True)
+
+
+def _source_unavailable_reason(db, workspace_id, document, now, *, storage_only):
     if now >= document["valid_until"]:
         return "REFERENCE_SOURCE_EXPIRED"
     for ref in document["snapshot"]["review_refs"]:
@@ -138,8 +146,11 @@ def source_unavailable_reason(db, workspace_id, document, now):
                 return "REFERENCE_SOURCE_NO_LONGER_CURRENT"
         if now >= row["valid_until"]:
             return "REFERENCE_SOURCE_EXPIRED"
-        from .managed_actions import managed_review_unavailable as action_unavailable
-        managed = action_unavailable(db, workspace_id, row["id"], now)
+        from .managed_actions import managed_review_unavailable, managed_review_storage_unavailable
+        action_unavailable = managed_review_storage_unavailable if storage_only else managed_review_unavailable
+        from .action_checkpoint_replay import checkpoint_action_review
+        historical = checkpoint_action_review(db, workspace_id, row["id"], "actions", now)
+        managed = None if historical is not None else action_unavailable(db, workspace_id, row["id"], now)
         if managed:
             return managed
         from .managed_fx import managed_review_unavailable
@@ -147,7 +158,7 @@ def source_unavailable_reason(db, workspace_id, document, now):
         if managed:
             return managed
     for ref in document["snapshot"]["capture_refs"]:
-        versioned = document["snapshot"]["schema_version"] == "investor-monitor-price-snapshot-v1"
+        versioned = document["snapshot"]["schema_version"] in ("investor-monitor-price-snapshot-v1", "investor-monitor-source-snapshot-v2")
         _assert(ref.get("kind") in ("historical_sdk", "confirmed_sdk") if versioned else "kind" not in ref)
         confirmed = versioned and ref["kind"] == "confirmed_sdk"
         table, digest = ("investor_confirmed_captures", "payload_sha256") if confirmed else ("investor_price_captures", "projection_sha256")

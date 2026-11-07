@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "investor-initial-close.schema.json",
+  "$ref": "#/$defs/request",
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "at": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "engine_version", "workspace_id", "model_id", "model_hash", "control_id", "reference_input_id", "reference_input_hash", "market", "session_date", "targets", "binding_hash", "not_before", "latest_start", "stop_at", "valid_until", "live_advice_eligible"],
+      "properties": {
+        "schema_version": {"const": "investor-initial-close-request-v1"}, "engine_version": {"const": "investor-initial-close-producer-v1"},
+        "workspace_id": {"$ref": "#/$defs/id"}, "model_id": {"$ref": "#/$defs/id"}, "model_hash": {"$ref": "#/$defs/hash"}, "control_id": {"$ref": "#/$defs/id"},
+        "reference_input_id": {"$ref": "#/$defs/id"}, "reference_input_hash": {"$ref": "#/$defs/hash"},
+        "market": {"enum": ["CN", "HK", "US"]}, "session_date": {"type": "string", "format": "date"},
+        "targets": {"type": "array", "minItems": 1, "maxItems": 20, "uniqueItems": true, "items": {"$ref": "investor-confirmed-feed.schema.json#/$defs/target"}},
+        "binding_hash": {"$ref": "#/$defs/hash"}, "not_before": {"$ref": "#/$defs/at"}, "latest_start": {"$ref": "#/$defs/at"},
+        "stop_at": {"$ref": "#/$defs/at"}, "valid_until": {"$ref": "#/$defs/at"}, "live_advice_eligible": {"const": false}
+      }
+    },
+    "run": {"$ref": "investor-confirmed-feed.schema.json#/$defs/run"}
+  }
+}

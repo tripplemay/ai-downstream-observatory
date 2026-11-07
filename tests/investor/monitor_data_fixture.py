@@ -14,6 +14,25 @@ from worker.orchestration.db import WorkbenchError, canonical_json, new_id, open
 from worker.investor.data_evidence import _audit, review_source
 
 
+def late_action_receipts(db, workspace, windows, refs):
+    count = 0
+    for ref in refs:
+        old = ref["actions"]
+        facts = json.loads(old["document_json"])["facts"]
+        if not facts["events"]:
+            continue
+        for event in facts["events"]:
+            event["published_at"] = NOW
+        current = review_source(db, workspace, "synthetic-investor", old["source_id"], "approved", facts,
+            "Explicit FICTIONAL late-receipt timing fixture; no real source or approval", old["valid_until"], now=NOW)
+        for window in windows:
+            window["action_review_ids"] = [current["id"] if value == old["id"] else value for value in window["action_review_ids"]]
+        ref["actions"] = current
+        count += len(facts["events"])
+    if not count:
+        raise WorkbenchError("SYNTHETIC_ACTION_EVENTS_REQUIRED")
+
+
 def notification_batch(db, model, count, offset):
     from worker.orchestration.runtime import command_handler
     from worker.orchestration.jobs import run_one
@@ -62,12 +81,16 @@ def main():
     parser.add_argument("--notification-offset", type=int, default=0)
     parser.add_argument("--external-ai", action="store_true", help="Invented regression grant, no real AI call")
     parser.add_argument("--extra-closed-day", action="store_true", help="Invented calendar coverage for a funding-boundary regression only")
+    parser.add_argument("--audited-actions", action="store_true", help="Separate monitor-only action-availability protocol")
+    parser.add_argument("--late-actions", action="store_true", help="Explicit fictional after-event manual receipt; requires audited-actions")
     args = parser.parse_args()
+    if args.late_actions and not args.audited_actions:
+        raise WorkbenchError("SYNTHETIC_AUDITED_ACTION_PROTOCOL_REQUIRED")
     if not 0 <= args.notification_series <= 30 or args.notification_series and not (args.admit and args.monitor and args.later):
         raise WorkbenchError("SYNTHETIC_NOTIFICATION_SERIES_INVALID")
     if not 0 <= args.notification_batch <= 7 or not 0 <= args.notification_offset <= 30 or args.notification_batch + args.notification_offset > 30 \
             or args.notification_offset and not args.notification_batch or args.notification_batch and any((args.admit, args.monitor, args.later,
-                args.stale, args.queue, args.funding, args.legacy_monitor, args.notification_series, args.external_ai, args.extra_closed_day)):
+                args.stale, args.queue, args.funding, args.legacy_monitor, args.notification_series, args.external_ai, args.extra_closed_day, args.audited_actions, args.late_actions)):
         raise WorkbenchError("SYNTHETIC_NOTIFICATION_BATCH_INVALID")
     path = Path(args.db).resolve(strict=True)
     if path.parent.parent != Path(tempfile.gettempdir()).resolve() or not path.parent.name.startswith("etf-investor-synthetic-") or path.name != "workbench.db":
@@ -95,19 +118,21 @@ def main():
             model = models[0]; fixture.workspace_id = model["workspace_id"]
             _, definition, _ = current_monitor_model(db, model["workspace_id"], model["id"], NOW)
             _, windows, settings, refs = fixture.fixture(tuple(row["market"] for row in definition["targets"]), identities=[row["listing_id"] for row in definition["targets"]],
-                roles=definition["fixed_policy"]["parameters"]["roles"] if definition["schema_version"] == "investor-model-definition-v2" else None, external_ai=args.external_ai, extra_closed_day=args.extra_closed_day)
+                roles=definition["fixed_policy"]["parameters"]["roles"] if definition["schema_version"] == "investor-model-definition-v2" else None, external_ai=args.external_ai, extra_closed_day=args.extra_closed_day, events=args.late_actions)
             if args.funding:
                 settings["funding_intent"] = {"id": "fictional-funding", "amount_cny": "1000", "expected_at": NOW}
-            registered = admit_monitor_data(db, model["workspace_id"], "synthetic-investor", model["id"], windows, settings, now=NOW)
-            duplicate = admit_monitor_data(db, model["workspace_id"], "synthetic-investor", model["id"], windows, settings, now="2026-01-03T12:00:04.000Z")
+            if args.late_actions: late_action_receipts(db, fixture.workspace_id, windows, refs)
+            registered = admit_monitor_data(db, model["workspace_id"], "synthetic-investor", model["id"], windows, settings, now=NOW, audited_action_knowledge=args.audited_actions)
+            duplicate = admit_monitor_data(db, model["workspace_id"], "synthetic-investor", model["id"], windows, settings, now="2026-01-03T12:00:04.000Z", audited_action_knowledge=args.audited_actions)
             if registered["id"] != duplicate["id"]: raise WorkbenchError("SYNTHETIC_ADMISSION_NOT_IDEMPOTENT")
         else:
             if db.execute("SELECT count(*) FROM investor_workspaces").fetchone()[0]: raise WorkbenchError("SYNTHETIC_EMPTY_WORKSPACE_REQUIRED")
             db.execute("INSERT INTO investor_workspaces(id,owner_id,revision,created_at) VALUES('w','synthetic-investor',0,'2026-01-02T12:00:03.000Z')")
             definition, windows, settings, refs = fixture.fixture(events=True)
             registered = None
+            if args.late_actions: late_action_receipts(db, fixture.workspace_id, windows, refs)
         if args.stale: settings["max_quote_age_seconds"] = 1
-        result = build_monitor_data(db, fixture.workspace_id, definition, windows, settings, now=NOW)
+        result = build_monitor_data(db, fixture.workspace_id, definition, windows, settings, now=NOW, audited_action_knowledge=args.audited_actions)
         if args.queue:
             if not args.admit: raise WorkbenchError("SYNTHETIC_ADMITTED_MODEL_REQUIRED")
             from worker.investor.evidence_monitor_runtime import discover_evidence_monitor_requests

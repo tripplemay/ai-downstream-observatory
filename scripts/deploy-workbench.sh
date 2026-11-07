@@ -27,6 +27,11 @@ if ((execute)); then
   owner=$(stat -c '%u' "$config" 2>/dev/null || stat -f '%u' "$config")
   [[ "$owner" == 0 ]] || { printf 'Executable release configuration must be root-owned\n' >&2; exit 2; }
 fi
+# Optional paid transport must never inherit enablement from an operator's shell.
+WORKBENCH_AI_ENABLED=0
+WORKBENCH_AI_ENABLE_DISPATCH=0
+WORKBENCH_AI_CONFIG_FILE_HOST=""
+WORKBENCH_AI_CONSENT_FILE_HOST=""
 set -a
 # The root-owned private configuration is shell input, never downloaded model/file content.
 # shellcheck source=/dev/null
@@ -70,6 +75,24 @@ if [[ "$WORKBENCH_EODHD_ENABLED" == 1 ]]; then
   done
   export WORKBENCH_EODHD_CREDENTIALS_FILE
 fi
+[[ "$WORKBENCH_AI_ENABLED" == 0 || "$WORKBENCH_AI_ENABLED" == 1 ]] || { printf 'AI enable flag must be 0 or 1\n' >&2; exit 2; }
+[[ "$WORKBENCH_AI_ENABLE_DISPATCH" == 0 || "$WORKBENCH_AI_ENABLE_DISPATCH" == 1 ]] || { printf 'AI dispatch flag must be 0 or 1\n' >&2; exit 2; }
+[[ "$WORKBENCH_AI_ENABLED" == 1 || "$WORKBENCH_AI_ENABLE_DISPATCH" == 0 ]] || { printf 'AI dispatch requires the isolated AI service\n' >&2; exit 2; }
+if [[ "$WORKBENCH_AI_ENABLED" == 1 ]]; then
+  : "${WORKBENCH_AI_CONFIG_FILE_HOST:?Set independent protected AI configuration file}"
+  : "${WORKBENCH_AI_CONSENT_FILE_HOST:?Set independent protected AI consent file}"
+  [[ "$WORKBENCH_AI_CONFIG_FILE_HOST" != "$WORKBENCH_AI_CONSENT_FILE_HOST" ]] || { printf 'AI configuration and consent must be separate\n' >&2; exit 2; }
+  for ai_file in "$WORKBENCH_AI_CONFIG_FILE_HOST" "$WORKBENCH_AI_CONSENT_FILE_HOST"; do
+    safe_path "$ai_file" || { printf 'Invalid AI private file path\n' >&2; exit 2; }
+    for value in "$WORKBENCH_RUNTIME_ENV_FILE" "$WORKBENCH_BACKUP_KEY_FILE" "${WORKBENCH_MARKET_PROVIDER_ENV_FILE:-}" "${WORKBENCH_EODHD_CREDENTIALS_FILE:-}" "$config"; do
+      [[ "$ai_file" != "$value" ]] || { printf 'AI private files must be independent\n' >&2; exit 2; }
+    done
+    for value in "$WORKBENCH_DATA_DIR_HOST" "$WORKBENCH_BACKUP_DIR_HOST" "$WORKBENCH_RESTORE_PARENT_DIR" "$WORKBENCH_DEPLOY_ROOT/releases" "$WORKBENCH_DEPLOY_ROOT/incoming"; do
+      [[ "$ai_file" != "$value" && "$ai_file" != "$value/"* ]] || { printf 'AI private files must remain outside data and release artifacts\n' >&2; exit 2; }
+    done
+  done
+fi
+export WORKBENCH_AI_ENABLED WORKBENCH_AI_ENABLE_DISPATCH WORKBENCH_AI_CONFIG_FILE_HOST WORKBENCH_AI_CONSENT_FILE_HOST
 WORKBENCH_RELEASE_SHA=$release_sha
 COMPOSE_PARALLEL_LIMIT=${COMPOSE_PARALLEL_LIMIT:-1}
 for value in "$WORKBENCH_DEPLOY_ROOT" "$WORKBENCH_LEGACY_DIR" "$WORKBENCH_LEGACY_DATA_DIR" "$WORKBENCH_DATA_DIR_HOST" "$WORKBENCH_BACKUP_DIR_HOST" "$WORKBENCH_RESTORE_PARENT_DIR" "$WORKBENCH_RUNTIME_ENV_FILE" "$WORKBENCH_BACKUP_KEY_FILE"; do
@@ -92,6 +115,8 @@ if ((execute == 0)); then
   printf 'PLAN ONLY: %s\n' "$release_sha"
   printf 'Optional market provider enabled: %s\n' "$WORKBENCH_MARKET_PROVIDER_ENABLED"
   printf 'Optional EODHD drafts available: %s (not source authorization)\n' "$WORKBENCH_EODHD_ENABLED"
+  printf 'Optional AI explanation enabled: %s\n' "$WORKBENCH_AI_ENABLED"
+  printf 'AI explicit-request dispatch enabled: %s\n' "$WORKBENCH_AI_ENABLE_DISPATCH"
   printf 'Core research lease seconds: %s\n' "$WORKBENCH_CORE_LEASE_SECONDS"
   printf 'Verified off-host image bundle supplied: %s\n' "$([[ -n "$image_bundle" ]] && printf 1 || printf 0)"
   printf '%s\n' 'Validate protected configuration and isolated UID 10001 volumes' 'Build exact release-tagged web/worker images before stopping existing services' 'Back up current workbench with its compatible previous image, or snapshot legacy SQLite online' 'Stop previous writers; take final backup; migrate new schema explicitly' 'Archive legacy rows only as legacy research; never create actual funds' 'Create encrypted backup and restore into a new rehearsal directory' 'Start isolated workbench project; verify schema, auth, HTTP and worker health' 'Failure stops new writers and preserves all new facts; no database overwrite rollback'
@@ -111,6 +136,7 @@ read -r staged_sha < "$release_dir/.release-sha"
 secret_files=("$WORKBENCH_RUNTIME_ENV_FILE" "$WORKBENCH_BACKUP_KEY_FILE")
 if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then secret_files+=("$WORKBENCH_MARKET_PROVIDER_ENV_FILE"); fi
 if [[ "$WORKBENCH_EODHD_ENABLED" == 1 ]]; then secret_files+=("$WORKBENCH_EODHD_CREDENTIALS_FILE"); fi
+if [[ "$WORKBENCH_AI_ENABLED" == 1 ]]; then secret_files+=("$WORKBENCH_AI_CONFIG_FILE_HOST" "$WORKBENCH_AI_CONSENT_FILE_HOST"); fi
 for secret_file in "${secret_files[@]}"; do
   [[ -f "$secret_file" && ! -L "$secret_file" ]] || { printf 'Secret file missing or symlinked\n' >&2; exit 2; }
   mode=$(stat -c '%a' "$secret_file")
@@ -125,7 +151,22 @@ assert_eodhd_credentials() {
     [[ ! "$WORKBENCH_EODHD_CREDENTIALS_FILE" -ef "$value" ]] || { printf 'Aliased EODHD credentials rejected\n' >&2; return 1; }
   done
 }
+assert_ai_credentials() {
+  [[ "${WORKBENCH_AI_ENABLED:-0}" == 1 ]] || return 0
+  local file other bytes
+  for file in "$WORKBENCH_AI_CONFIG_FILE_HOST" "$WORKBENCH_AI_CONSENT_FILE_HOST"; do
+    [[ -f "$file" && ! -L "$file" && $(realpath "$file") == "$file" ]] || { printf 'Aliased AI private file path rejected\n' >&2; return 1; }
+    [[ $(stat -c '%u:%a:%h' "$file") == 10001:600:1 ]] || { printf 'AI private files require UID 10001, mode 0600 and one link\n' >&2; return 1; }
+    bytes=$(stat -c '%s' "$file")
+    ((bytes > 0 && bytes <= 16384)) || { printf 'AI private file size invalid\n' >&2; return 1; }
+    for other in "$WORKBENCH_RUNTIME_ENV_FILE" "$WORKBENCH_BACKUP_KEY_FILE" "${WORKBENCH_MARKET_PROVIDER_ENV_FILE:-}" "${WORKBENCH_EODHD_CREDENTIALS_FILE:-}" "$config"; do
+      [[ ! "$file" -ef "$other" ]] || { printf 'Aliased AI private files rejected\n' >&2; return 1; }
+    done
+  done
+  [[ ! "$WORKBENCH_AI_CONFIG_FILE_HOST" -ef "$WORKBENCH_AI_CONSENT_FILE_HOST" ]] || { printf 'AI configuration and consent alias one another\n' >&2; return 1; }
+}
 assert_eodhd_credentials
+assert_ai_credentials
 [[ $(stat -c '%u' "$WORKBENCH_BACKUP_KEY_FILE") == 10001 ]] || { printf 'Backup key must be readable by UID 10001 and mode 0600\n' >&2; exit 2; }
 [[ $(stat -c '%u' "$WORKBENCH_RUNTIME_ENV_FILE") == 0 ]] || { printf 'Runtime environment must be root-owned\n' >&2; exit 2; }
 if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then
@@ -163,11 +204,52 @@ if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then
   start_services+=(market-provider)
   release_images+=("etf-workbench-market-provider:$release_sha")
 fi
+if [[ "${WORKBENCH_AI_ENABLED:-0}" == 1 ]]; then
+  [[ -f "$release_dir/docker-compose.ai-explanation.yml" ]] || { printf 'AI Compose overlay missing\n' >&2; exit 2; }
+  compose_options+=(-f "$release_dir/docker-compose.ai-explanation.yml")
+  build_services+=(ai-explanation)
+  start_services+=(ai-explanation)
+  release_images+=("etf-workbench-ai-explanation:$release_sha")
+fi
 if [[ "${WORKBENCH_EODHD_ENABLED:-0}" == 1 ]]; then
   [[ -f "$release_dir/docker-compose.eodhd-drafts.yml" ]] || { printf 'EODHD Compose overlay missing\n' >&2; exit 2; }
   compose_options+=(-f "$release_dir/docker-compose.eodhd-drafts.yml")
 fi
 compose() { docker compose "${compose_options[@]}" "$@"; }
+ai_configuration_preflight() {
+  timeout 30 docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --pids-limit 64 --memory 1g --cpus 1 --tmpfs /tmp:mode=1777 --user 10001:10001 \
+    -e "WORKBENCH_AI_ENABLE_DISPATCH=$WORKBENCH_AI_ENABLE_DISPATCH" \
+    -e WORKBENCH_AI_CONFIG_FILE=/run/secrets/ai-gateway.json -e WORKBENCH_AI_CONSENT_FILE=/run/secrets/ai-sharing-consent.json \
+    --mount "type=bind,src=$WORKBENCH_AI_CONFIG_FILE_HOST,dst=/run/secrets/ai-gateway.json,readonly" \
+    --mount "type=bind,src=$WORKBENCH_AI_CONSENT_FILE_HOST,dst=/run/secrets/ai-sharing-consent.json,readonly" \
+    --entrypoint node "etf-workbench-ai-explanation:$release_sha" /app/web/scripts/run-ai-explanation.mjs --config-check
+}
+ai_explanation_ids() {
+  local ids id
+  ids=$(docker ps --all --filter "label=com.docker.compose.project=$WORKBENCH_PROJECT" --filter 'label=com.docker.compose.service=ai-explanation' --format '{{.ID}}') || return 1
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    [[ "$id" =~ ^[a-f0-9]{12,64}$ ]] || { printf 'Invalid AI container identity\n' >&2; return 1; }
+    printf '%s\n' "$id"
+  done <<< "$ids"
+}
+stop_ai_explanation_writers() {
+  local ids id
+  ids=$(ai_explanation_ids) || return 1
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    timeout 60 docker stop --time 30 "$id" >/dev/null || return 1
+    [[ $(docker inspect "$id" --format '{{.State.Running}}') == false ]] || return 1
+  done <<< "$ids"
+}
+assert_ai_explanation_stopped() {
+  local ids id
+  ids=$(ai_explanation_ids) || return 1
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    [[ $(docker inspect "$id" --format '{{.State.Running}}') == false ]] || return 1
+  done <<< "$ids"
+}
 market_provider_ids() {
   local ids id
   ids=$(docker ps --all --filter "label=com.docker.compose.project=$WORKBENCH_PROJECT" --filter 'label=com.docker.compose.service=market-provider' --format '{{.ID}}') || return 1
@@ -244,6 +326,7 @@ failed() {
   if ((writers_stopped || mutation_started)); then
     compose stop "${start_services[@]}" >/dev/null 2>&1 || true
     stop_market_provider_writers >/dev/null 2>&1 || true
+    stop_ai_explanation_writers >/dev/null 2>&1 || true
     printf '%s\n' '{"reason":"release failed; preserve new facts and reconcile before resuming"}' > "$WORKBENCH_DATA_DIR_HOST/RESTORE_PENDING_REVIEW"
     chown 10001:10001 "$WORKBENCH_DATA_DIR_HOST/RESTORE_PENDING_REVIEW"
     chmod 0600 "$WORKBENCH_DATA_DIR_HOST/RESTORE_PENDING_REVIEW"
@@ -257,7 +340,7 @@ compose config --no-env-resolution --quiet
 timeout 30 docker version --format '{{.Server.Version}}' > "$evidence/docker-version.txt"
 if [[ -n "$image_bundle" ]]; then
   [[ -f "$image_bundle" && ! -L "$image_bundle" && $(stat -c '%u' "$image_bundle") == 0 ]] || { printf 'Root-owned image bundle manifest required\n' >&2; exit 2; }
-  timeout 600 python3 "$release_dir/scripts/release-image-bundle.py" load --release "$release_sha" --directory "$(dirname "$image_bundle")" --market-provider "$WORKBENCH_MARKET_PROVIDER_ENABLED" > "$evidence/image-bundle-verification.json"
+  timeout 600 python3 "$release_dir/scripts/release-image-bundle.py" load --release "$release_sha" --directory "$(dirname "$image_bundle")" --market-provider "$WORKBENCH_MARKET_PROVIDER_ENABLED" --ai-explanation "$WORKBENCH_AI_ENABLED" > "$evidence/image-bundle-verification.json"
 else
   timeout 3600 docker compose "${compose_options[@]}" build --pull "${build_services[@]}"
 fi
@@ -267,6 +350,9 @@ for image in "${release_images[@]}"; do
 done
 docker image inspect "${release_images[@]}" --format '{{.Id}} {{index .Config.Labels "org.opencontainers.image.revision"}}' > "$evidence/image-identities.txt"
 compose run --rm --no-deps web node /app/scripts/check-workbench-runtime.mjs --config-only > "$evidence/auth-configuration.json"
+if [[ "$WORKBENCH_AI_ENABLED" == 1 ]]; then
+  ai_configuration_preflight > "$evidence/ai-configuration.json"
+fi
 if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then
   compose run --rm --no-deps --entrypoint python market-provider -c 'import os; from worker.market.providers.longport import _credentials, _load_sdk; assert not any(k in os.environ for k in ("WORKBENCH_PASSWORD_HASH","WORKBENCH_SESSION_SECRET")); _credentials(); _load_sdk(); print("provider credential presence and SDK import checked without network")' > "$evidence/market-provider-configuration.txt"
   compose run --rm --no-deps --entrypoint python market-provider -c 'from worker.market.providers.eodhd_capture import check_runtime_configuration; from worker.orchestration.db import canonical_json; print(canonical_json(check_runtime_configuration()))' > "$evidence/eodhd-configuration.json"
@@ -280,6 +366,7 @@ if ((first_release)); then
   assert_no_recovery
   writers_stopped=1
   stop_market_provider_writers
+  stop_ai_explanation_writers
   stop_writers docker compose -p "$WORKBENCH_LEGACY_PROJECT" -f "$WORKBENCH_LEGACY_DIR/docker-compose.yml"
   assert_stopped docker compose -p "$WORKBENCH_LEGACY_PROJECT" -f "$WORKBENCH_LEGACY_DIR/docker-compose.yml"
 else
@@ -290,10 +377,12 @@ else
   assert_release_capacity after_online_backup > "$evidence/capacity-before-stop.json"
   writers_stopped=1
   stop_market_provider_writers
+  stop_ai_explanation_writers
   WORKBENCH_RELEASE_SHA="$previous_sha" stop_writers docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$previous/docker-compose.yml"
   WORKBENCH_RELEASE_SHA="$previous_sha" assert_stopped docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$previous/docker-compose.yml"
   WORKBENCH_RELEASE_SHA="$previous_sha" docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$previous/docker-compose.yml" run --rm --no-deps backup > "$evidence/final-pre-migration-backup.json"
 fi
+assert_ai_explanation_stopped
 assert_market_provider_stopped
 assert_no_recovery
 mutation_started=1
@@ -319,10 +408,15 @@ if [[ "$WORKBENCH_MARKET_PROVIDER_ENABLED" == 1 ]]; then
 else
   assert_market_provider_stopped
 fi
+if [[ "$WORKBENCH_AI_ENABLED" == 1 ]]; then
+  compose exec -T ai-explanation node /app/web/scripts/run-ai-explanation.mjs --health > "$evidence/ai-readiness.txt"
+else
+  assert_ai_explanation_stopped
+fi
 [[ $(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$WORKBENCH_HTTP_PORT/api/workbench") == 401 ]]
 assert_no_recovery
 ln -s "$release_dir" "$WORKBENCH_DEPLOY_ROOT/.current-$release_sha-$$"
 mv -Tf "$WORKBENCH_DEPLOY_ROOT/.current-$release_sha-$$" "$WORKBENCH_DEPLOY_ROOT/current"
-printf '{"release_sha":"%s","status":"technical_cutover_verified","market_provider_enabled":%s,"local_restore_verified":true,"independent_host_restore_verified":false,"investment_gates_unchanged":true}\n' "$release_sha" "$WORKBENCH_MARKET_PROVIDER_ENABLED" > "$evidence/result.json"
+printf '{"release_sha":"%s","status":"technical_cutover_verified","market_provider_enabled":%s,"ai_explanation_enabled":%s,"ai_dispatch_enabled":%s,"local_restore_verified":true,"independent_host_restore_verified":false,"investment_gates_unchanged":true}\n' "$release_sha" "$WORKBENCH_MARKET_PROVIDER_ENABLED" "$WORKBENCH_AI_ENABLED" "$WORKBENCH_AI_ENABLE_DISPATCH" > "$evidence/result.json"
 trap - ERR
 printf 'Technical cutover verified; investment and independent-host recovery gates remain separate. Evidence: %s\n' "$evidence"

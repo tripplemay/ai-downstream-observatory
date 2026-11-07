@@ -11,7 +11,7 @@ test('synthetic image bundle cases cover portable runtime fingerprints, private 
   const run = spawnSync(process.env.WORKBENCH_PYTHON || 'python3', ['-m', 'unittest', 'discover', '-s', 'tests/deployment', '-p', 'test_image_bundle.py', '-v'],
     { cwd: root, encoding: 'utf8', timeout: 20000 });
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stderr, /Ran 7 tests/);
+  assert.match(run.stderr, /Ran 12 tests/);
 });
 test('protected release builds before SSH secrets and loads a per-attempt exact bundle before the original cutover gates', () => {
   const workflow = readFileSync(join(root, '.github/workflows/deploy.yml'), 'utf8');

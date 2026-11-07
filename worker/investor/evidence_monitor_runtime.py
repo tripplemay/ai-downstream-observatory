@@ -49,6 +49,23 @@ def _payload(db, table, key, identifier, maximum):
 
 def resolve_checkpoint(db, workspace, definition, checkpoint_id, now):
     if checkpoint_id is None: return None, None
+    protocol = db.execute("SELECT json_extract(i.document_json,'$.schema_version') FROM investor_evidence_model_checkpoints c JOIN investor_monitor_evidence_inputs i ON i.id=c.input_id AND i.workspace_id=c.workspace_id AND i.model_id=c.model_id WHERE c.id=? AND c.workspace_id=? AND c.model_id=?", (checkpoint_id, workspace, definition["model_id"])).fetchone()
+    if protocol is not None and protocol[0] == "investor-monitor-data-input-v6":
+        epoch = db.execute("SELECT id,model_id FROM investor_model_epochs WHERE checkpoint_id=? AND workspace_id=?", (checkpoint_id, workspace)).fetchone()
+        from .registered_model_epoch import read_registered_model_epoch
+        owner = db.execute("SELECT owner_id FROM investor_workspaces WHERE id=?", (workspace,)).fetchone()
+        _assert(owner is not None)
+        if epoch is not None:
+            _assert(epoch["model_id"] == definition["model_id"])
+            replay = read_registered_model_epoch(db, workspace, owner[0], epoch["id"], now=now)
+            _assert(replay["source"]["kernel_input"]["history"]["definition"] == definition)
+            return replay["source"]["candidate"]["checkpoint"], None
+        from .epoch_continuation import read_epoch_continuation_chain
+        publication = db.execute("SELECT id,epoch_id FROM investor_epoch_continuations WHERE checkpoint_id=? AND workspace_id=? AND model_id=? AND json_extract(document_json,'$.checkpoint_reused')=0 ORDER BY sequence LIMIT 1", (checkpoint_id, workspace, definition["model_id"])).fetchone()
+        _assert(publication is not None)
+        replay = read_epoch_continuation_chain(db, workspace, owner[0], publication["epoch_id"], now=now, publication_id=publication["id"])
+        _assert(replay["definition"] == definition)
+        return replay["source"]["candidate"]["checkpoint"], None
     head = db.execute("SELECT * FROM investor_evidence_model_checkpoints WHERE id=? AND workspace_id=? AND model_id=?", (checkpoint_id, workspace, definition["model_id"])).fetchone()
     _assert(head is not None and 1 <= head["sequence"] <= 1000)
     headers = db.execute("SELECT * FROM investor_evidence_model_checkpoints WHERE workspace_id=? AND model_id=? AND sequence<=? ORDER BY sequence", (workspace, definition["model_id"], head["sequence"])).fetchall()
@@ -63,7 +80,8 @@ def resolve_checkpoint(db, workspace, definition, checkpoint_id, now):
         row, document = monitor_evidence_document(db, workspace, definition["model_id"], header["input_id"], now)
         expiry = min(expiry, document["valid_until"])
         _assert(header["valid_until"] == expiry)
-        source = resolve_monitor_data(db, workspace, definition, document, now=now, evaluated_at=header["created_at"])
+        from .action_checkpoint_replay import replay_checkpoint_monitor_source
+        source = replay_checkpoint_monitor_source(db, workspace, definition, header, document, now)
         if source["unavailable_reason"]: return None, source["unavailable_reason"]
         from .monitor_costs import verify_settings
         verify_settings(db, workspace, definition, document["settings"], header["created_at"])
@@ -94,6 +112,8 @@ def discover_evidence_monitor_requests(db, *, limit=100, now=None):
           AND m.plan_id=(SELECT plan_id FROM investor_plan_selections WHERE workspace_id=m.workspace_id ORDER BY created_at DESC,rowid DESC LIMIT 1)
           AND json_extract(m.document_json,'$.data_mode')='reconstructed' AND json_extract(m.document_json,'$.valid_until')>?
           AND EXISTS(SELECT 1 FROM investor_monitor_evidence_inputs WHERE model_id=m.id)
+          AND (SELECT json_extract(document_json,'$.schema_version') FROM investor_monitor_evidence_inputs WHERE model_id=m.id
+            ORDER BY created_at DESC,rowid DESC LIMIT 1)!='investor-monitor-data-input-v6'
           ORDER BY COALESCE((SELECT MAX(created_at) FROM investor_evidence_monitor_requests WHERE model_id=m.id),'') ASC,m.id LIMIT ?""", (at, limit)).fetchall()
         for model in models:
             try: _, definition, _ = current_monitor_model(db, model["workspace_id"], model["id"], at)

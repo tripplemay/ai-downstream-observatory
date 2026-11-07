@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-model-epoch-source.schema.json",
+  "$defs": {
+    "id": {"$ref": "common.schema.json#/$defs/id"}, "hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "instant": {"$ref": "investor-planned-funding-monitor.schema.json#/$defs/instant"},
+    "reference": {"type": "object", "additionalProperties": false, "required": ["id", "content_hash"], "properties": {"id": {"$ref": "#/$defs/id"}, "content_hash": {"$ref": "#/$defs/hash"}}},
+    "correction_ref": {"type": "object", "additionalProperties": false, "required": ["correction_id", "confirmation_hash", "handover_id", "handover_hash"],
+      "properties": {"correction_id": {"$ref": "#/$defs/id"}, "confirmation_hash": {"$ref": "#/$defs/hash"}, "handover_id": {"$ref": "#/$defs/id"}, "handover_hash": {"$ref": "#/$defs/hash"}}},
+    "definition": {"type": "object", "additionalProperties": false,
+      "required": ["schema_version", "epoch_id", "workspace_id", "actor_id", "model_id", "model_hash", "model_control", "original_head_id", "binding", "created_at", "valid_until", "purpose"],
+      "properties": {
+        "schema_version": {"const": "investor-model-epoch-definition-v1"}, "epoch_id": {"$ref": "#/$defs/id"}, "workspace_id": {"$ref": "#/$defs/id"}, "actor_id": {"$ref": "#/$defs/id"},
+        "model_id": {"$ref": "#/$defs/id"}, "model_hash": {"$ref": "#/$defs/hash"}, "model_control": {"$ref": "#/$defs/reference"}, "original_head_id": {"$ref": "#/$defs/id"},
+        "binding": {"$ref": "investor-model-epoch-transition.schema.json#/$defs/binding"}, "created_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"},
+        "purpose": {"const": "private_economic_epoch_basis_not_trading_authority"}
+      }},
+    "projection": {"type": "object", "additionalProperties": false,
+      "required": ["schema_version", "epoch", "knowledge_protocol", "economic_projection"],
+      "properties": {
+        "schema_version": {"const": "investor-monitor-data-projection-v4"}, "epoch": {"$ref": "#/$defs/reference"},
+        "knowledge_protocol": {"const": "approved_economic_restatement_and_recorded_carry_not_pit"},
+        "economic_projection": {"$ref": "investor-monitor-data-projection-v2.schema.json"}
+      }},
+    "input": {"type": "object", "additionalProperties": false,
+      "required": ["schema_version", "workspace_id", "model_id", "target_definition_hash", "source_qualification", "segments", "settings", "epoch", "audited_projection_hash", "audited_valid_until", "carry_hash", "carry_count", "projection_hash", "created_at", "valid_until", "live_advice_eligible"],
+      "properties": {
+        "schema_version": {"const": "investor-monitor-data-input-v6"}, "workspace_id": {"$ref": "#/$defs/id"}, "model_id": {"$ref": "#/$defs/id"}, "target_definition_hash": {"$ref": "#/$defs/hash"},
+        "source_qualification": {"const": "owner_reviewed_reconstructed"}, "segments": {"$ref": "investor-monitor-data-input-v4.schema.json#/properties/segments"},
+        "settings": {"$ref": "investor-monitor-data-input-v4.schema.json#/properties/settings"}, "epoch": {"$ref": "#/$defs/reference"},
+        "audited_projection_hash": {"$ref": "#/$defs/hash"}, "audited_valid_until": {"$ref": "#/$defs/instant"}, "carry_hash": {"$ref": "#/$defs/hash"},
+        "carry_count": {"type": "integer", "minimum": 0, "maximum": 20000}, "projection_hash": {"$ref": "#/$defs/hash"},
+        "funding_binding": {"$ref": "investor-planned-funding-monitor.schema.json#/$defs/binding"}, "funding_context_hash": {"$ref": "#/$defs/hash"},
+        "created_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"}, "live_advice_eligible": {"const": false}
+      }, "dependentRequired": {"funding_binding": ["funding_context_hash"], "funding_context_hash": ["funding_binding"]}},
+    "proof": {"type": "object", "additionalProperties": false,
+      "required": ["schema_version", "workspace_id", "actor_id", "model_id", "epoch", "input_hash", "projection_hash", "original_head_id", "original_chain_hash", "checked_at", "valid_until", "status", "coverage_basis", "source_evidence_verified", "epoch_registered", "current_source_eligibility_restored", "checkpoint_created", "monitoring_resumed", "trading_permission", "provider_calls", "database_writes", "distribution"],
+      "properties": {
+        "schema_version": {"const": "investor-model-epoch-source-proof-v1"}, "workspace_id": {"$ref": "#/$defs/id"}, "actor_id": {"$ref": "#/$defs/id"}, "model_id": {"$ref": "#/$defs/id"},
+        "epoch": {"$ref": "#/$defs/reference"}, "input_hash": {"$ref": "#/$defs/hash"}, "projection_hash": {"$ref": "#/$defs/hash"}, "original_head_id": {"$ref": "#/$defs/id"}, "original_chain_hash": {"$ref": "#/$defs/hash"},
+        "checked_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"}, "status": {"const": "qualified_sources_prepared_not_registered"},
+        "coverage_basis": {"const": "selected_reports_and_owner_assumptions_not_objective_absence"}, "source_evidence_verified": {"const": true}, "epoch_registered": {"const": false},
+        "current_source_eligibility_restored": {"const": false}, "checkpoint_created": {"const": false}, "monitoring_resumed": {"const": false}, "trading_permission": {"const": false},
+        "provider_calls": {"const": 0}, "database_writes": {"const": 0}, "distribution": {"const": "private_owner_only_not_ai"}
+      }}
+  }
+}

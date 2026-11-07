@@ -12,6 +12,11 @@ on:
         required: false
         type: boolean
         default: false
+      ai_explanation:
+        description: Include isolated AI image; must match protected server configuration, dispatch remains separately controlled
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -52,10 +57,11 @@ jobs:
         env:
           RELEASE_SHA: ${{ inputs.release_sha }}
           INCLUDE_MARKET_PROVIDER: ${{ inputs.market_provider && '1' || '0' }}
+          INCLUDE_AI_EXPLANATION: ${{ inputs.ai_explanation && '1' || '0' }}
         run: |
           set -euo pipefail
           umask 077
-          python3 scripts/release-image-bundle.py build --release "$RELEASE_SHA" --directory "$RUNNER_TEMP/etf-release-images" --market-provider "$INCLUDE_MARKET_PROVIDER"
+          python3 scripts/release-image-bundle.py build --release "$RELEASE_SHA" --directory "$RUNNER_TEMP/etf-release-images" --market-provider "$INCLUDE_MARKET_PROVIDER" --ai-explanation "$INCLUDE_AI_EXPLANATION"
       - name: prepare exact source archive and pinned SSH trust
         env:
           RELEASE_SHA: ${{ inputs.release_sha }}

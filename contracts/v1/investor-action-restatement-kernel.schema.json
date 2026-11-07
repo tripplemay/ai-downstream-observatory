@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-action-restatement-kernel.schema.json",
+  "$ref": "#/$defs/input",
+  "$defs": {
+    "checkpoint": {"oneOf": [
+      {"$ref": "investor-evidence-model-checkpoint.schema.json"},
+      {"$ref": "investor-evidence-model-checkpoint-v2.schema.json"},
+      {"$ref": "investor-evidence-model-checkpoint-v3.schema.json"}
+    ]},
+    "projection": {"oneOf": [
+      {"$ref": "investor-monitor-data-projection.schema.json"},
+      {"$ref": "investor-monitor-data-projection-v2.schema.json"},
+      {"$ref": "investor-monitor-data-projection-v3.schema.json"}
+    ]},
+    "input": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "definition", "origin", "head", "origin_projection", "head_projection", "original_actions", "corrected_actions", "corrected_coverage", "checked_at"],
+      "properties": {
+        "schema_version": {"const": "investor-action-restatement-kernel-input-v1"},
+        "definition": {"oneOf": [{"$ref": "investor-model-definition.schema.json"}, {"$ref": "investor-model-definition-v2.schema.json"}]},
+        "origin": {"$ref": "#/$defs/checkpoint"}, "head": {"$ref": "#/$defs/checkpoint"},
+        "origin_projection": {"$ref": "#/$defs/projection"}, "head_projection": {"$ref": "#/$defs/projection"},
+        "original_actions": {"$ref": "#/$defs/ledger"},
+        "corrected_actions": {"$ref": "#/$defs/ledger"},
+        "corrected_coverage": {"$ref": "investor-monitor-data-projection.schema.json#/properties/corporate_action_coverage"},
+        "checked_at": {"$ref": "investor-planned-funding-monitor.schema.json#/$defs/instant"}
+      }
+    },
+    "ledger": {"type": "array", "maxItems": 20000, "items": {"$ref": "investor-model-snapshot.schema.json#/$defs/action"}},
+    "economics": {
+      "type": "object", "additionalProperties": false,
+      "required": ["initialized_at", "market_cutoffs", "quantities", "cash_by_currency", "receivables", "entitlements", "processed_actions", "initial_notional_cny"],
+      "properties": {
+        "initialized_at": {"$ref": "investor-model-checkpoint.schema.json#/$defs/cutoffs"},
+        "market_cutoffs": {"$ref": "investor-model-checkpoint.schema.json#/$defs/cutoffs"},
+        "quantities": {"$ref": "investor-model-monitor-v2.schema.json#/$defs/quantities"},
+        "cash_by_currency": {"$ref": "investor-model-checkpoint.schema.json#/properties/cash_by_currency"},
+        "receivables": {"$ref": "investor-model-checkpoint.schema.json#/properties/receivables"},
+        "entitlements": {"$ref": "investor-model-checkpoint.schema.json#/properties/entitlements"},
+        "processed_actions": {"$ref": "investor-model-checkpoint.schema.json#/properties/processed_actions"},
+        "initial_notional_cny": {"const": "10000"}
+      }
+    },
+    "amount_map": {"type": "object", "maxProperties": 20, "additionalProperties": {"$ref": "investor-model-monitor-v2.schema.json#/$defs/derived"}},
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "model_id", "checked_at", "basis", "original", "restated", "delta", "original_valuation_cny", "restated_valuation_cny", "difference_cny", "changed_action_count", "economics_changed", "valuation_basis", "knowledge_basis", "visibility", "source_evidence_verified", "checkpoint_created", "state_published", "historical_observations_rewritten", "historical_strategy_results_recomputed", "monitoring_resumed", "current_advice_certified", "trading_permission", "provider_calls", "database_writes"],
+      "properties": {
+        "schema_version": {"const": "investor-action-restatement-kernel-result-v1"},
+        "model_id": {"$ref": "common.schema.json#/$defs/id"}, "checked_at": {"$ref": "investor-planned-funding-monitor.schema.json#/$defs/instant"},
+        "basis": {"type": "object", "additionalProperties": false,
+          "required": ["definition_hash", "origin_hash", "head_hash", "origin_projection_hash", "head_projection_hash", "original_actions_hash", "corrected_actions_hash", "corrected_coverage_hash"],
+          "properties": {
+            "definition_hash": {"$ref": "common.schema.json#/$defs/hash"}, "origin_hash": {"$ref": "common.schema.json#/$defs/hash"}, "head_hash": {"$ref": "common.schema.json#/$defs/hash"},
+            "origin_projection_hash": {"$ref": "common.schema.json#/$defs/hash"}, "head_projection_hash": {"$ref": "common.schema.json#/$defs/hash"},
+            "original_actions_hash": {"$ref": "common.schema.json#/$defs/hash"}, "corrected_actions_hash": {"$ref": "common.schema.json#/$defs/hash"}, "corrected_coverage_hash": {"$ref": "common.schema.json#/$defs/hash"}
+          }},
+        "original": {"$ref": "#/$defs/economics"}, "restated": {"$ref": "#/$defs/economics"},
+        "delta": {"type": "object", "additionalProperties": false, "required": ["quantities", "cash_by_currency", "receivables_by_currency"],
+          "properties": {"quantities": {"$ref": "#/$defs/amount_map"}, "cash_by_currency": {"$ref": "#/$defs/amount_map"}, "receivables_by_currency": {"$ref": "#/$defs/amount_map"}}},
+        "original_valuation_cny": {"$ref": "investor-model-monitor-v2.schema.json#/$defs/derived"},
+        "restated_valuation_cny": {"$ref": "investor-model-monitor-v2.schema.json#/$defs/derived"},
+        "difference_cny": {"$ref": "investor-model-monitor-v2.schema.json#/$defs/derived"},
+        "changed_action_count": {"type": "integer", "minimum": 0, "maximum": 40000}, "economics_changed": {"type": "boolean"},
+        "valuation_basis": {"const": "same_original_checkpoint_quotes_and_fx_not_current_nav"},
+        "knowledge_basis": {"const": "corrected_economic_history_as_of_checked_at_not_point_in_time_strategy"},
+        "visibility": {"const": "private_owner_only_not_ai"},
+        "source_evidence_verified": {"const": false}, "checkpoint_created": {"const": false}, "state_published": {"const": false},
+        "historical_observations_rewritten": {"const": false}, "historical_strategy_results_recomputed": {"const": false},
+        "monitoring_resumed": {"const": false}, "current_advice_certified": {"const": false}, "trading_permission": {"const": false},
+        "provider_calls": {"const": 0}, "database_writes": {"const": 0}
+      }
+    }
+  }
+}

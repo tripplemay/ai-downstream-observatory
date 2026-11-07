@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-epoch-continuation.schema.json",
+  "$defs": {
+    "id": {"$ref": "common.schema.json#/$defs/id"}, "hash": {"$ref": "common.schema.json#/$defs/hash"},
+    "instant": {"$ref": "investor-planned-funding-monitor.schema.json#/$defs/instant"},
+    "ref": {"$ref": "investor-model-epoch-source.schema.json#/$defs/reference"},
+    "control_submit": {"type": "object", "additionalProperties": false,
+      "required": ["schema_version", "epoch_id", "expected_registration_hash", "expected_checkpoint", "expected_revision", "idempotency_key", "enabled", "acknowledgements"],
+      "properties": {
+        "schema_version": {"const": "investor-epoch-control-submit-v1"}, "epoch_id": {"$ref": "#/$defs/id"}, "expected_registration_hash": {"$ref": "#/$defs/hash"},
+        "expected_checkpoint": {"$ref": "#/$defs/ref"}, "expected_revision": {"type": "integer", "minimum": 1},
+        "idempotency_key": {"type": "string", "minLength": 8, "maxLength": 128}, "enabled": {"type": "boolean"},
+        "acknowledgements": {"type": "object", "additionalProperties": false,
+          "required": ["current_epoch_seen", "continuous_research_only", "preserve_history_and_human_trading"],
+          "properties": {"current_epoch_seen": {"const": true}, "continuous_research_only": {"const": true}, "preserve_history_and_human_trading": {"const": true}}}
+      }},
+    "control": {"type": "object", "additionalProperties": false,
+      "required": ["schema_version", "control_id", "workspace_id", "actor_id", "model_id", "epoch", "registration_hash", "version", "workspace_revision", "body", "created_at", "valid_until", "trading_permission"],
+      "properties": {
+        "schema_version": {"const": "investor-epoch-control-v1"}, "control_id": {"$ref": "#/$defs/id"}, "workspace_id": {"$ref": "#/$defs/id"}, "actor_id": {"$ref": "#/$defs/id"}, "model_id": {"$ref": "#/$defs/id"},
+        "epoch": {"$ref": "#/$defs/ref"}, "registration_hash": {"$ref": "#/$defs/hash"}, "version": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "workspace_revision": {"type": "integer", "minimum": 1}, "body": {"$ref": "#/$defs/control_submit"}, "created_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"}, "trading_permission": {"const": false}
+      }},
+    "monitor_request": {"type": "object", "additionalProperties": false,
+      "required": ["schema_version", "engine_version", "continuation_request_id", "epoch", "activation", "model_hash", "profile_hash", "control_id", "input_hash", "checkpoint_hash"],
+      "properties": {
+        "schema_version": {"const": "investor-evidence-monitor-request-v4"}, "engine_version": {"const": "investor-evidence-model-watcher-epoch-continuation-v1"},
+        "continuation_request_id": {"$ref": "#/$defs/id"}, "epoch": {"$ref": "#/$defs/ref"}, "activation": {"$ref": "#/$defs/ref"},
+        "model_hash": {"$ref": "#/$defs/hash"}, "profile_hash": {"$ref": "#/$defs/hash"}, "control_id": {"$ref": "#/$defs/id"}, "input_hash": {"$ref": "#/$defs/hash"}, "checkpoint_hash": {"$ref": "#/$defs/hash"}
+      }},
+    "request": {"type": "object", "additionalProperties": false,
+      "required": ["schema_version", "request_id", "workspace_id", "actor_id", "model_id", "epoch", "registration_hash", "activation", "previous_input", "previous_checkpoint", "workspace_revision", "context_key", "request_key", "input", "source_proof", "source_ceiling", "implementation_hash", "monitor_request", "created_at", "valid_until", "trading_permission"],
+      "properties": {
+        "schema_version": {"const": "investor-epoch-continuation-request-v1"}, "request_id": {"$ref": "#/$defs/id"}, "workspace_id": {"$ref": "#/$defs/id"}, "actor_id": {"$ref": "#/$defs/id"}, "model_id": {"$ref": "#/$defs/id"},
+        "epoch": {"$ref": "#/$defs/ref"}, "registration_hash": {"$ref": "#/$defs/hash"}, "activation": {"$ref": "#/$defs/ref"},
+        "previous_input": {"$ref": "#/$defs/ref"}, "previous_checkpoint": {"$ref": "#/$defs/ref"}, "workspace_revision": {"type": "integer", "minimum": 1}, "context_key": {"$ref": "#/$defs/hash"}, "request_key": {"$ref": "#/$defs/hash"},
+        "input": {"$ref": "investor-model-epoch-source.schema.json#/$defs/input"}, "source_proof": {"$ref": "investor-model-epoch-continuation-source.schema.json#/$defs/proof"},
+        "source_ceiling": {"$ref": "#/$defs/instant"}, "implementation_hash": {"$ref": "#/$defs/hash"}, "monitor_request": {"$ref": "#/$defs/monitor_request"},
+        "created_at": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"}, "trading_permission": {"const": false}
+      }},
+    "publication": {"type": "object", "additionalProperties": false,
+      "required": ["schema_version", "publication_id", "workspace_id", "actor_id", "model_id", "epoch", "sequence", "request", "activation", "previous_input", "previous_checkpoint", "previous_publication", "input", "checkpoint", "checkpoint_reused", "monitor_run_id", "observation_id", "job_id", "implementation_hash", "source_proof", "source_ceiling", "workspace_revision", "calculated_at", "created_at", "publication_deadline", "valid_until", "monitoring_resumed", "historical_observations_rewritten", "provider_calls", "trading_permission", "distribution"],
+      "properties": {
+        "schema_version": {"const": "investor-epoch-continuation-publication-v1"}, "publication_id": {"$ref": "#/$defs/id"}, "workspace_id": {"$ref": "#/$defs/id"}, "actor_id": {"$ref": "#/$defs/id"}, "model_id": {"$ref": "#/$defs/id"},
+        "epoch": {"$ref": "#/$defs/ref"}, "sequence": {"type": "integer", "minimum": 1, "maximum": 1000}, "request": {"$ref": "#/$defs/ref"}, "activation": {"$ref": "#/$defs/ref"},
+        "previous_input": {"$ref": "#/$defs/ref"}, "previous_checkpoint": {"$ref": "#/$defs/ref"}, "previous_publication": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/ref"}]},
+        "input": {"$ref": "#/$defs/ref"}, "checkpoint": {"$ref": "#/$defs/ref"}, "checkpoint_reused": {"type": "boolean"}, "monitor_run_id": {"$ref": "#/$defs/id"}, "observation_id": {"$ref": "#/$defs/id"}, "job_id": {"$ref": "#/$defs/id"},
+        "implementation_hash": {"$ref": "#/$defs/hash"}, "source_proof": {"$ref": "investor-model-epoch-continuation-source.schema.json#/$defs/proof"}, "source_ceiling": {"$ref": "#/$defs/instant"}, "workspace_revision": {"type": "integer", "minimum": 1},
+        "calculated_at": {"$ref": "#/$defs/instant"}, "created_at": {"$ref": "#/$defs/instant"}, "publication_deadline": {"$ref": "#/$defs/instant"}, "valid_until": {"$ref": "#/$defs/instant"},
+        "monitoring_resumed": {"const": true}, "historical_observations_rewritten": {"const": false}, "provider_calls": {"const": 0}, "trading_permission": {"const": false}, "distribution": {"const": "private_owner_only_not_ai"}
+      }}
+  }
+}

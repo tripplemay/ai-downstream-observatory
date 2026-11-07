@@ -4,6 +4,16 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { partitionFiles } from '../../web/scripts/ci-web-tests.mjs';
+import * as runner from '../../web/scripts/ci-web-tests.mjs';
+
+test('Web child environment explicitly selects test mode without mutating the parent or losing required executables',()=>{
+  for(const mode of [undefined,'production','development','test']) {
+    const parent={PATH:'/fictional/bin',MARKER:'preserved',...(mode===undefined?{}:{NODE_ENV:mode})},before={...parent};
+    const child=runner.webTestEnvironment(parent);
+    assert.deepEqual(child,{...parent,NODE_ENV:'test'});assert.deepEqual(parent,before);assert.notEqual(child,parent);
+  }
+  assert.match(readFileSync('web/scripts/ci-web-tests.mjs','utf8'),/env: webTestEnvironment\(\)/);
+});
 
 test('Web partition covers every original test file exactly once without depending on enumeration order', () => {
   const plans = Array.from({ length: 8 }, (_, shard) => JSON.parse(execFileSync(process.execPath,
@@ -31,6 +41,9 @@ test('all Web CI shards preserve pretest publishers and serial per-file executio
   assert.equal(scripts['test:ci:shard'], 'node scripts/ci-web-tests.mjs');
   assert.match(readFileSync('web/scripts/ci-web-tests.mjs', 'utf8'), /'--test-concurrency=1'/);
   assert.doesNotMatch(web, /continue-on-error:/);
+  const fixtures=ci.match(/^  fixtures:\n[\s\S]*?(?=^  http:)/m)?.[0];
+  assert.ok(fixtures);assert.match(fixtures,/node --test --test-concurrency=2 tests\/\*\/\*\.test\.mjs/);
+  assert.doesNotMatch(fixtures,/continue-on-error:/);
 });
 
 test('measured costs distribute expensive replays without omitting cheap or newly discovered files', () => {

@@ -1,7 +1,7 @@
 """Actual default roles on an owned test DB, invented past-day transport only."""
 
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 import json
 from pathlib import Path
@@ -15,6 +15,7 @@ from worker.market.providers import longport
 from worker.orchestration.db import WorkbenchError, canonical_json, instant, open_database
 from worker.orchestration.runtime import run_pending_once
 from worker.investor.initial_prices import discover_initial_prices, JOB_TYPE
+from worker.investor.runtime import _milliseconds
 from worker.orchestration.jobs import claim_job
 
 NOW = "2026-01-03T12:00:03.000Z"
@@ -22,7 +23,7 @@ NOW = "2026-01-03T12:00:03.000Z"
 
 def main():
     parser = argparse.ArgumentParser(); parser.add_argument("--db", required=True)
-    parser.add_argument("--mode", choices=("discover", "claim", "collect", "failed", "bootstrap", "complete"), default="complete"); args = parser.parse_args()
+    parser.add_argument("--mode", choices=("discover", "claim", "expired", "collect", "failed", "bootstrap", "complete"), default="complete"); args = parser.parse_args()
     filename = Path(args.db).resolve(strict=True)
     if filename.name != "workbench.db" or filename.parent.parent != Path(tempfile.gettempdir()).resolve() or not filename.parent.name.startswith("etf-investor-synthetic-"):
         raise WorkbenchError("SYNTHETIC_FIXTURE_DATABASE_REQUIRED")
@@ -37,10 +38,23 @@ def main():
         financial = ("portfolios", "accounts", "ledger_events", "postings", "position_movements", "approval_events", "activations", "reservations", "execution_reports")
         if any(db.execute("SELECT count(*) FROM " + table).fetchone()[0] for table in financial):
             raise WorkbenchError("SYNTHETIC_EMPTY_FINANCIAL_DATABASE_REQUIRED")
-        if args.mode in ("discover", "claim"):
-            discover_initial_prices(db, now=NOW)
-            if args.mode == "claim": claim_job(db, "fictional-acquisition-lease", job_type=JOB_TYPE, lease_seconds=300, now=NOW)
-            print(canonical_json({"stubbed_sdk_calls": 0, "real_provider_called": False, "real_gateway_called": False})); return
+        if args.mode in ("discover", "claim", "expired"):
+            checked = NOW
+            with patch("socket.create_connection", side_effect=AssertionError("NO_NETWORK")), \
+                    patch("socket.getaddrinfo", side_effect=AssertionError("NO_DNS")), \
+                    patch.object(longport, "read_private_credentials_file", side_effect=AssertionError("NO_CREDENTIAL_READ")), \
+                    patch.object(longport, "_collect_isolated", side_effect=AssertionError("NO_SDK_CALL")) as sdk:
+                discover_initial_prices(db, now=NOW)
+                if args.mode == "claim": claim_job(db, "fictional-acquisition-lease", job_type=JOB_TYPE, lease_seconds=300, now=NOW)
+                if args.mode == "expired":
+                    for _ in json.loads(model["document_json"])["targets"]:
+                        if claim_job(db, "fictional-expired-lease", job_type=JOB_TYPE, lease_seconds=300, now=checked) is None:
+                            raise WorkbenchError("SYNTHETIC_INITIAL_CLAIM_REQUIRED")
+                        checked = _milliseconds(instant(checked) + timedelta(seconds=300))
+                    if claim_job(db, "fictional-expiry-sweep", job_type=JOB_TYPE, lease_seconds=300, now=checked) is not None:
+                        raise WorkbenchError("SYNTHETIC_EXPIRED_RETRY_FORBIDDEN")
+                if sdk.call_count: raise WorkbenchError("SYNTHETIC_SDK_CALL_FORBIDDEN")
+            print(canonical_json({"stubbed_sdk_calls": 0, "real_provider_called": False, "real_gateway_called": False, "checked_at": checked})); return
         def collect(request):
             if args.mode == "failed": raise WorkbenchError("FICTIONAL_TRANSPORT_FAILURE")
             candles = [{"timestamp": datetime.fromisoformat(day).replace(tzinfo=ZoneInfo(longport._MARKETS[request["mapping"]["market"]][0])),

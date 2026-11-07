@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etf-workbench.invalid/contracts/v1/investor-epoch-preview-jobs.schema.json",
+  "$defs": {
+    "id": {"$ref":"common.schema.json#/$defs/id"},
+    "hash": {"$ref":"common.schema.json#/$defs/hash"},
+    "instant": {"$ref":"investor-reference-plan.schema.json#/$defs/instant"},
+    "submit": {
+      "type":"object","additionalProperties":false,
+      "required":["schema_version","model_id","expected_model_hash","expected_revision","idempotency_key","acknowledged_preview_only"],
+      "properties":{
+        "schema_version":{"const":"investor-epoch-preview-submit-v1"},"model_id":{"$ref":"#/$defs/id"},
+        "expected_model_hash":{"$ref":"#/$defs/hash"},"expected_revision":{"type":"integer","minimum":1,"maximum":9007199254740990},
+        "idempotency_key":{"allOf":[{"$ref":"#/$defs/id"},{"type":"string","minLength":8}]},"acknowledged_preview_only":{"const":true}
+      }
+    },
+    "request": {
+      "type":"object","additionalProperties":false,
+      "required":["schema_version","request_id","workspace_id","model_id","actor_id","body","request_hash","created_at","valid_until","trading_permission"],
+      "properties":{
+        "schema_version":{"const":"investor-epoch-preview-request-v1"},"request_id":{"$ref":"#/$defs/id"},
+        "workspace_id":{"$ref":"#/$defs/id"},"model_id":{"$ref":"#/$defs/id"},"actor_id":{"$ref":"#/$defs/id"},
+        "body":{"$ref":"#/$defs/submit"},"request_hash":{"$ref":"#/$defs/hash"},"created_at":{"$ref":"#/$defs/instant"},
+        "valid_until":{"$ref":"#/$defs/instant"},"trading_permission":{"const":false}
+      }
+    },
+    "result": {
+      "type":"object","additionalProperties":false,
+      "required":["schema_version","result_id","request_id","workspace_id","model_id","actor_id","request_hash","job_id","fencing_token","outcome","code","preview_id","preview_hash","created_at","valid_until","epoch_registered","monitoring_resumed","trading_permission"],
+      "properties":{
+        "schema_version":{"const":"investor-epoch-preview-result-v1"},"result_id":{"$ref":"#/$defs/id"},"request_id":{"$ref":"#/$defs/id"},
+        "workspace_id":{"$ref":"#/$defs/id"},"model_id":{"$ref":"#/$defs/id"},"actor_id":{"$ref":"#/$defs/id"},"request_hash":{"$ref":"#/$defs/hash"},
+        "job_id":{"$ref":"#/$defs/id"},"fencing_token":{"type":"integer","minimum":1},
+        "outcome":{"enum":["preview_ready","rejected"]},"code":{"enum":["EPOCH_PREVIEW_READY","EPOCH_PREVIEW_EXPIRED","EPOCH_PREVIEW_CHANGED","EPOCH_PREVIEW_SOURCE_UNAVAILABLE"]},
+        "preview_id":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/id"}]},"preview_hash":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/hash"}]},
+        "created_at":{"$ref":"#/$defs/instant"},"valid_until":{"$ref":"#/$defs/instant"},
+        "epoch_registered":{"const":false},"monitoring_resumed":{"const":false},"trading_permission":{"const":false}
+      },
+      "allOf":[{"if":{"properties":{"outcome":{"const":"preview_ready"}}},"then":{"properties":{"code":{"const":"EPOCH_PREVIEW_READY"},"preview_id":{"$ref":"#/$defs/id"},"preview_hash":{"$ref":"#/$defs/hash"}}},"else":{"properties":{"code":{"not":{"const":"EPOCH_PREVIEW_READY"}},"preview_id":{"type":"null"},"preview_hash":{"type":"null"}}}}]
+    }
+  }
+}

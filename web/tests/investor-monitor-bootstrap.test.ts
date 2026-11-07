@@ -39,9 +39,9 @@ test("default core bootstraps both saved model versions and Node verifies the fi
       assert.equal((f.db.prepare("SELECT count(*) n FROM investor_monitor_evidence_inputs").get() as { n: number }).n, 0);
       const value = helper(f, "tests.investor.confirmed_monitor_fixture", ["--admit", "--monitor", "--grouped", "--bootstrap"]);
       assert.equal(value.real_provider_called, false); assert.equal(value.real_gateway_called, false);
-      assert.ok(value.registered_input_id); assert.equal(value.document.schema_version, "investor-monitor-data-input-v2");
+      assert.ok(value.registered_input_id); assert.equal(value.document.schema_version, "investor-monitor-data-input-v4");
       const settings = value.document.settings as Obj, policy = settings.policy as Obj;
-      assert.equal(policy.version, "investor-monitor-bootstrap-quality-v2"); assert.equal(policy.costs, null);
+      assert.equal(policy.version, "investor-monitor-bootstrap-quality-v3"); assert.equal(policy.costs, null);
       assert.equal(settings.funding_intent, null); assert.equal(settings.max_quote_age_seconds, 604800);
       const before = f.db.prepare("SELECT total_changes() n").get();
       const input = readInvestorMonitorEvidenceSource(f.db, saved.workspace_id!, saved.model_watch!.id, value.registered_input_id, current);
