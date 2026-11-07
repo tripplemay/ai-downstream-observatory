@@ -44,9 +44,14 @@ export function getTradeRecordingContext(db: Database.Database, actor: Actor, ac
     const listings = db.prepare(`SELECT l.id,l.ticker,l.currency,l.market,i.name FROM listings l JOIN instruments i ON i.id=l.instrument_id
       WHERE EXISTS(SELECT 1 FROM audit_events a WHERE a.portfolio_id=? AND a.actor_id=? AND a.action='register_listing'
         AND a.object_type='workbench_command' AND json_extract(a.payload_json,'$.result.listing_id')=l.id)
+      OR EXISTS(SELECT 1 FROM catalog_entries c JOIN audit_events a ON a.portfolio_id=c.portfolio_id
+        AND a.object_id=c.listing_id AND a.created_at=c.created_at
+        WHERE c.portfolio_id=? AND c.listing_id=l.id AND a.actor_id=? AND a.action='add_catalog_entry'
+        AND a.object_type='catalog' AND json_extract(a.payload_json,'$.result.id')=l.id
+        AND json_extract(a.payload_json,'$.result.listing_id')=l.id AND json_extract(a.payload_json,'$.result.research_only')=1)
       OR EXISTS(SELECT 1 FROM position_movements p JOIN ledger_events e ON e.id=p.event_id WHERE e.portfolio_id=? AND p.listing_id=l.id)
       OR EXISTS(SELECT 1 FROM security_transit_movements p JOIN ledger_events e ON e.id=p.event_id WHERE e.portfolio_id=? AND p.listing_id=l.id)
-      ORDER BY l.market,l.ticker,l.id LIMIT 201`).all(book.id, actor.id, book.id, book.id) as TradeRecordingContext["listings"];
+      ORDER BY l.market,l.ticker,l.id LIMIT 201`).all(book.id, actor.id, book.id, actor.id, book.id, book.id) as TradeRecordingContext["listings"];
     if (listings.length > 200) throw new Error("INVESTOR_TRADE_CAPACITY_REQUIRES_REVIEW");
     const active = getActiveLedgerEvents(db, book.id, book.ledger_revision).filter(row => row.account_id === account.id);
     const entries = active.filter(row => ["buy", "sell", "settlement"].includes(row.event_type)).map(row => ({ row, value: readTradeLedgerCommand(row, book.id, account.id, now) }));

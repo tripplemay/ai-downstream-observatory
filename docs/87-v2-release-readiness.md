@@ -16,17 +16,17 @@
 
 | 设计要求 | 当前实现入口 | 仍须完成的产品级核验 |
 | --- | --- | --- |
-| P0：四项约束，可先看损失情景，不强制建账户 | `investor-workspace.tsx` 的 `ProfileForm`；`risk-scenarios.ts` | 历史构建 906 的明确风险入口及保存后定位通过合成原生纵切；当前 QEG 候选尚需同构建原生复核，未定风险记录更早，不冒充真实研究资格 |
+| P0：四项约束，可先看损失情景，不强制建账户 | `investor-workspace.tsx` 的 `ProfileForm`；`risk-scenarios.ts` | 5dad 的 QEG 构建已补未定/明确风险及保存定位的合成原生证据；后续成交回录修复仍需新构建验证，均不冒充真实研究资格 |
 | P0：合格小目录、来源、版本化策略和基准 | `source-inputs.ts`、`bounded-research.ts`、`reference-evidence.ts`；Python 研究内核 | 对实际选定 ETF 范围核对当前身份/日历/价格/公司行动/汇率/用途；来源不全不得生成确定权重 |
 | P0：目标权重、作用、重叠、成本、情景、反对理由 | `ReferencePlanCard`、`risk-scenarios.ts`、`reference-cost-methodology.ts` | 同一真实研究快照逐项可追溯；历史重建、示意和当前估值分别标明，不把未验证穿透写成已知分散 |
-| P0：保存为观察方案，不制造持仓或现金 | `service.ts`、`model-watch.ts` | 906 的合成普通入口到明确保存通过，金融表无研究写入；真实方案的重新登录及版本/状态一致性仍需独立核对 |
-| P1：各市场有效收盘后持续更新，三种互斥结论 | `confirmed_feed.py`、`epoch_confirmed_feed.py`、`epoch_continuation.py`；`evidence-monitor.ts` | 906 的合成 CN 正常、假设资金变化、时钟到期三分支通过原生纵切；当前候选、真实已授权范围及 HK/US 休市/时区/失败不得由旧收据推断 |
+| P0：保存为观察方案，不制造持仓或现金 | `service.ts`、`model-watch.ts` | 5dad/QEG 普通入口到明确保存已验，九张金融表为空；真实方案重新登录及后续版本仍单独验收 |
+| P1：各市场有效收盘后持续更新，三种互斥结论 | `confirmed_feed.py`、`epoch_confirmed_feed.py`、`epoch_continuation.py`；`evidence-monitor.ts` | 5dad/QEG 已补合成 CN 正常、假设资金变化、到期隐藏证据；整段等待零主状态 GET 附加断言失败，不能写全通过。真实范围及 HK/US 不由此推断 |
 | P1：变化卡及持久的采纳思路/暂缓/拒绝 | `investor-workspace.tsx`、`history.ts`、`service.ts` | 一页理解变化量、成本、风险、反证和下一复核；过期/改版不能继续决定，刷新后记录保留 |
 | P1：通知只来自已提交结果 | `notifications.ts`、`investor-notifications-panel.tsx` | 与当前阶段接续结果逐一核对、重启/重复不重复通知；站内通知不等同未配置的邮件或推送 |
-| P1：AI 在确定性结果后解释派生证据 | `ai-explanation-context.ts`、`ai-explanation-background.ts` | 已补受保护镜像包、开关、无网络配置预检、旧写入者停止与健康门禁；默认外发 0。新的 Linux 容器检查、有效真实来源/同意及真实组合解释仍需验收，不能用纯探针或健康替代 |
+| P1：AI 在确定性结果后解释派生证据 | `ai-explanation-context.ts`、`ai-explanation-background.ts` | 5dad 两套 Linux 原生容器检查已通过，默认外发 0；有效真实来源/同意及真实组合解释仍需验收，不能用无传输检查或健康替代 |
 | P1：长期接续及异常恢复不需要普通用户读 JSON | `investor-epoch-setup.tsx`、`investor-epoch-history.tsx`；迁移 71–73 | 当前批次未知处置已有合成纵切；跨模型/更早批次检索、更长轮转与故障恢复尚未由这份收据覆盖 |
 | P2：可选账户、简化事实导入、持仓/现金对照 | `investor-account-workspace.tsx`、`holdings.ts`、`cash-recording.ts`、CSV 向导 | 以小样例核对实际所用券商格式和来源；未认证原生格式不得称即插即用，计划投入不算到账 |
-| P2：账户级待审清单和人工执行闭环 | `proposal-review.ts`、`trade-recording.ts`、`execution-followup.ts`、`reconciliation.ts` | 各独立准入全部满足后，走自行交易、事实回录、对账、重估闭环；采纳思路/券商回报不能替代成交 |
+| P2：账户级待审清单和人工执行闭环 | `proposal-review.ts`、`trade-recording.ts`、`execution-followup.ts`、`reconciliation.ts` | QEG 仅已验虚构清单的明确批准/预占和重载不变。另已复现目录首次买入回录缺口并补小修复，待新构建/完整闭环；采纳思路/券商回报不能替代成交 |
 | 公共：四导航、结论优先、会话/过期/移动端 | `primary-navigation.ts`、`investor-workspace.tsx`、各客户端 | 在同一候选上完成“看结论、展开证据、记录决定”；M73 两张截图不代表所有 P0/P1/P2 页面通过 |
 
 表中 TypeScript 路径位于 `web/src/server/investor/` 或
@@ -35,10 +35,32 @@
 
 ## 已有证据的准确范围
 
+- `5dadcd1` push `42329530066` 与 PR `42329534862` 均已完整 19/19 成功。
+  PR 合并树 `e25a66f` 与 head 同为 `a43a4080f833207992a5b4cf080e616b69b3eaaf`。
+  两套 Python6 原223项均PASS；push Web4为248/248、Web6为341/341，零跳过。
+  没有 rerun/cancel、改预算或分片；单轮成功不证明性能余量、VPS或完整产品达标。
+  两套 Linux 原生 AI 受保护发布检查通过；真实网关/行情调用仍为0。
+- 同一 QEG 构建补普通原生验收：未定风险不默认选档，明确虚构风险后研究/
+  保存，CSS390/1454结果标题顶部96px；独立新基线按真实时钟完成单次未来
+  回调及core，继续观察、假设资金变化卡、一次暂缓重载保留。九张金融表
+  全空、三份输入、两份经济检查点、模型经济摘要不变，不是实际年度到账。
+  到期隐藏当前模型/变化卡/决定入口并保留历史；整段等待零主状态GET断言
+  失败77→78。过期收据的最后响应早于期限42.581秒，不把局部区间改称全程零GET。
+- 另一个隔离QEG夹具以明确虚构G/S和账户事实，只验既有清单选择/批准/预占：
+  一次命令200、一份批准/预占，另一清单未批准，账本及成交不变；重载保留、
+  手机390px无溢出。未提交成交/交收/CSV/对账/估值，不代表完整P2。
+  测试探针错误、首次错过采集窗口的失败、取消GET及自签名TLS均保留。
+  所有自建页/模拟/临时库已清理，两场服务1010/855文件及构建无运行中漂移。
+- 上述P2原生流程实际没有首次回录证券选项：目录证券不必由本人最初登记，
+  但旧回录范围只接受本人登记或既有持仓。新增回归先红后绿，修复仅接纳本人
+  在当前账本明确纳入目录且具有匹配审计的身份，不开放全局目录；旧草稿仍冲突，
+  他人/外账本/无审计成员仍拒绝。相关42项、类型、五发布器、原根468通过/
+  1可选跳过（188.299秒）；新的构建/HTTP/原生及
+  准确提交CI仍独立，不能拿5dad的绿灯和QEG替代后续修复验证。
 - 新 AI 发布候选的配置程序 3、发布相关 31、类型检查、Compose 六组合、
   ShellCheck 通过；根命令 468 通过/1 可选跳过，最后原生测试接线调整另验
   11 项。HTTP harness 自行构建 QEG 候选，完整 133/133、1606 源码运行中不变。
-  新 Linux 原生 AI 检查只已接线，未运行；没有新原生 UI、真实网关或生产验收。
+  后续 Linux/QEG 原生范围见上；仍没有真实网关或生产验收。
 - `25faf30` 两套 CI 均 17 成功、Web 4 / Web 6 分别 19 / 2 项在测试模式保护
   处失败，原件是 `NODE_ENV` 未设置，不是算术/超时。保留保护，测试启动器
   明确传测试环境后，父环境未设置该变量的实际原入口完成 248/248、零跳过。

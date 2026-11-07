@@ -8,6 +8,7 @@ import { tradeRecordingIntentSchema, type TradeRecordingIntent } from "../src/se
 import { getInvestorReconciliationContext } from "../src/server/investor/reconciliation";
 import { createAccount, createPortfolio, recordFact, revision } from "../src/server/ledger/service";
 import { registerListing } from "../src/server/workbench-commands";
+import { addCatalogEntry } from "../src/server/catalog/service";
 import { correctLedger } from "../src/server/ledger/corrections";
 import { storeJsonAttachment } from "../src/server/ledger/attachments";
 import { investorHoldingsFixture, holdingsNow as now } from "./investor-holdings-fixture";
@@ -59,6 +60,53 @@ test("manual context is owned, zero-write metadata; it never prefills money, qua
     assert.ok(!JSON.stringify(result).includes(account));
     for (const id of [account, "missing"]) assert.throws(() => context(f, id), /OUT_OF_SCOPE/);
     assert.throws(() => getTradeRecordingContext(f.db, { id: "fictional-foreign" }, f.account, now), /OUT_OF_SCOPE/);
+  } finally { f.close(); }
+});
+
+test("an owner-admitted catalog listing can record its first buy without an existing position or duplicate global registration", () => {
+  const f = investorHoldingsFixture(); try {
+    const other = { id: "fictional-listing-publisher", kind: "human" as const };
+    const foreign = createPortfolio(f.db, other, "Fictional listing publisher", now);
+    const listing = registerListing(f.db, other, { portfolio_id: foreign, expected_revision: 0, idempotency_key: "catalog-first-buy-listing",
+      name: "Fictional shared ETF", market: "CN", exchange: "SSE", ticker: "501996", currency: "CNY", asset_class: "unknown",
+      source_evidence: "Fictional catalog first-buy regression only" }, now).listing_id;
+    assert.ok(!context(f).listings.some(row => row.id === listing));
+    const stale = intent(f, { type: "buy", listing_id: listing, currency: "CNY", quantity: "2", consideration: "21", fee: "0.1" });
+    addCatalogEntry(f.db, { ...f.actor, kind: "human" }, { portfolio_id: f.portfolio, listing_id: listing,
+      expected_catalog_revision: 0, idempotency_key: "owner-admitted-first-buy" }, { now });
+    const before = rows(f, untouched), changes = f.db.prepare("SELECT total_changes() n").get();
+    assert.deepEqual(context(f).listings.map(row => row.id), [listing]);
+    assert.deepEqual(f.db.prepare("SELECT total_changes() n").get(), changes);
+    assert.throws(() => submit(f, stale, "stale-before-catalog-admission"), /INVESTOR_TRADE_CONTEXT_CONFLICT/);
+    const receipt = submit(f, intent(f, { type: "buy", listing_id: listing, currency: "CNY", quantity: "2", consideration: "21", fee: "0.1" }));
+    assert.ok(receipt.resource_id);
+    assert.equal(balance(f, "cash_settled"), "100");
+    assert.equal(balance(f, "trade_payable"), "-21.1");
+    assert.equal((f.db.prepare("SELECT quantity FROM position_projections WHERE account_id=? AND listing_id=?").get(f.account, listing) as { quantity: string }).quantity, "2");
+    assert.deepEqual(rows(f, untouched), before);
+  } finally { f.close(); }
+});
+
+test("catalog membership alone, another actor admission and owner admission in a foreign book do not expose first-buy identities", () => {
+  const f = investorHoldingsFixture(); try {
+    const other = { id: "fictional-other-catalog-actor", kind: "human" as const };
+    const foreign = createPortfolio(f.db, other, "Fictional foreign catalog", now);
+    const listings = ["501993", "501994", "501995"].map((ticker, index) => registerListing(f.db, other, {
+      portfolio_id: foreign, expected_revision: 0, idempotency_key: "foreign-catalog-listing-" + index,
+      name: "Fictional unowned ETF", market: "CN", exchange: "SSE", ticker, currency: "CNY", asset_class: "unknown",
+      source_evidence: "Fictional scope rejection only" }, now).listing_id);
+    f.db.prepare("INSERT INTO catalog_entries(portfolio_id,listing_id,created_at) VALUES(?,?,?)").run(f.portfolio, listings[0], now);
+    addCatalogEntry(f.db, other, { portfolio_id: f.portfolio, listing_id: listings[1], expected_catalog_revision: 0,
+      idempotency_key: "other-actor-admission" }, { now });
+    addCatalogEntry(f.db, { ...f.actor, kind: "human" }, { portfolio_id: foreign, listing_id: listings[2], expected_catalog_revision: 0,
+      idempotency_key: "owner-foreign-book-admission" }, { now });
+    const before = rows(f), changes = f.db.prepare("SELECT total_changes() n").get();
+    assert.deepEqual(context(f).listings, []);
+    assert.deepEqual(f.db.prepare("SELECT total_changes() n").get(), changes);
+    for (const [index, listing] of listings.entries()) assert.throws(() => submit(f, intent(f, {
+      type: "buy", listing_id: listing, currency: "CNY", quantity: "1", consideration: "10", fee: "0" }, "foreign-source-" + index),
+    "foreign-first-buy-" + index), /INVALID|OUT_OF_SCOPE/);
+    assert.deepEqual(rows(f), before);
   } finally { f.close(); }
 });
 
