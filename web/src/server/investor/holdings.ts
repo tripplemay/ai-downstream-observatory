@@ -120,9 +120,10 @@ export function getInvestorHoldings(db: Database.Database, actor: Actor, now = n
     for (const account of accounts.accounts) try { reconciliations.push(readInvestorReconciliation(db, actor, book.id, account.id, book.ledger_revision, now, options)); }
     catch (error) { const reason = gap(error); if (!result.gaps.includes(reason)) result.gaps.push(reason); }
     if (result.gaps.length) return finish();
+    // A new restatement may use an earlier reconciled cutoff; never fall back past its result.
     const valuation = db.prepare(`SELECT * FROM valuation_runs WHERE portfolio_id=? ORDER BY
-      substr(cutoff_at,1,19) DESC,substr(replace(substr(cutoff_at,21,6),'Z','')||'000000',1,6) DESC,
-      substr(created_at,1,19) DESC,substr(replace(substr(created_at,21,6),'Z','')||'000000',1,6) DESC,id DESC LIMIT 1`).get(book.id) as Valuation | undefined;
+      substr(created_at,1,19) DESC,substr(replace(substr(created_at,21,6),'Z','')||'000000',1,6) DESC,
+      substr(cutoff_at,1,19) DESC,substr(replace(substr(cutoff_at,21,6),'Z','')||'000000',1,6) DESC,id DESC LIMIT 1`).get(book.id) as Valuation | undefined;
     if (!valuation) { result.gaps.push("VALUATION_REQUIRED"); return finish(); }
     try {
       if (valuation.quality !== "complete" || valuation.nav_cny === null) throw new Error("VALUATION_NOT_COMPLETE");

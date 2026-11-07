@@ -26,7 +26,7 @@
 | P1：AI 在确定性结果后解释派生证据 | `ai-explanation-context.ts`、`ai-explanation-background.ts` | 5dad 两套 Linux 原生容器检查已通过，默认外发 0；有效真实来源/同意及真实组合解释仍需验收，不能用无传输检查或健康替代 |
 | P1：长期接续及异常恢复不需要普通用户读 JSON | `investor-epoch-setup.tsx`、`investor-epoch-history.tsx`；迁移 71–73 | 当前批次未知处置已有合成纵切；跨模型/更早批次检索、更长轮转与故障恢复尚未由这份收据覆盖 |
 | P2：可选账户、简化事实导入、持仓/现金对照 | `investor-account-workspace.tsx`、`holdings.ts`、`cash-recording.ts`、CSV 向导 | 以小样例核对实际所用券商格式和来源；未认证原生格式不得称即插即用，计划投入不算到账 |
-| P2：账户级待审清单和人工执行闭环 | `proposal-review.ts`、`trade-recording.ts`、`execution-followup.ts`、`reconciliation.ts` | QEG 仅已验虚构清单的明确批准/预占和重载不变。另已复现目录首次买入回录缺口并补小修复，待新构建/完整闭环；采纳思路/券商回报不能替代成交 |
+| P2：账户级待审清单和人工执行闭环 | `proposal-review.ts`、`trade-recording.ts`、`execution-followup.ts`、`reconciliation.ts` | d313/SB 已补首次成交、独立交收、原件关联、重载及独立对账的合成原生证据；历史事实正确不核销今日预占，正向核销仍未验。估值选择缺陷已复现并补修，待新构建验证；采纳思路/券商回报不能替代成交 |
 | 公共：四导航、结论优先、会话/过期/移动端 | `primary-navigation.ts`、`investor-workspace.tsx`、各客户端 | 在同一候选上完成“看结论、展开证据、记录决定”；M73 两张截图不代表所有 P0/P1/P2 页面通过 |
 
 表中 TypeScript 路径位于 `web/src/server/investor/` 或
@@ -57,6 +57,16 @@
   他人/外账本/无审计成员仍拒绝。相关42项、类型、五发布器、原根468通过/
   1可选跳过（188.299秒）；新的构建/HTTP/原生及
   准确提交CI仍独立，不能拿5dad的绿灯和QEG替代后续修复验证。
+- d313 后续干净输出构建 `SBz54xnjk-JHno0OMDJpg` 完整 HTTP 133/133，
+  1606 份清单源码无运行中变化。首次 H-z 构建在 SSR 处出现模块映射冲突，
+  失败原件保留；仅移开本 worktree 生成输出重建，不改代码/依赖/配置，
+  不把“缓存是唯一根因”写成定论。准确 d313 push CI 已完成 19/19；PR 仍独立。
+- 同一 SB 原生补验首次成交和单独交收、明确存证/关联、独立对账，刷新保留。
+  均为明确虚构资料，无真实提供方/券商。历史成交早于当前清单，正确不核销
+  预占，不声称正向核销已通过。估值真实 core 成功后，确认 GET 仍选中截至
+  日期更晚的旧账本版本，出现 `VALUATION_NOT_CURRENT`；本次 B6 为 FAIL。
+  新修复只按最近生成时点读取再原样核验，不回退到旧完整结果；相关 57 项
+  已通过，含最新证据无效的反例；新构建/原生和准确提交 CI 仍独立。完整 P2 未完成。
 - 新 AI 发布候选的配置程序 3、发布相关 31、类型检查、Compose 六组合、
   ShellCheck 通过；根命令 468 通过/1 可选跳过，最后原生测试接线调整另验
   11 项。HTTP harness 自行构建 QEG 候选，完整 133/133、1606 源码运行中不变。
