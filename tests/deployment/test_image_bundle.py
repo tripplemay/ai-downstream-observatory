@@ -39,9 +39,10 @@ class BundleTests(unittest.TestCase):
         path.write_bytes(raw)
         path.chmod(0o600)
 
-    def make(self, provider=False, mutate_tar=None):
+    def make(self, provider=False, mutate_tar=None, ai=False):
+        names = bundle.names(SHA, provider, ai=ai) if ai else bundle.names(SHA, provider)
         entries = [{"Config": "config-%d.json" % index, "RepoTags": [name], "Layers": ["layer-%d.tar" % index]}
-                   for index, name in enumerate(bundle.names(SHA, provider))]
+                   for index, name in enumerate(names)]
         records = []
         with io.BytesIO() as buffer:
             with tarfile.open(fileobj=buffer, mode="w") as archive:
@@ -57,13 +58,15 @@ class BundleTests(unittest.TestCase):
                     mutate_tar(archive)
             raw = gzip.compress(buffer.getvalue(), mtime=0)
         self.write(self.directory / bundle.ARCHIVE, raw)
-        for index, name in enumerate(bundle.names(SHA, provider)):
+        for index, name in enumerate(names):
             row = self.rows[index % 2]
             value = bundle.identity(row, SHA)
             records.append({"name": name, "origin_image_id": row["Id"], "identity": value,
                 "fingerprint": hashlib.sha256(bundle.canonical(value).encode()).hexdigest()})
         manifest = {"schema_version": bundle.VERSION, "release_sha": SHA, "platform": "linux/amd64", "market_provider": provider,
                     "archive_bytes": len(raw), "archive_sha256": hashlib.sha256(raw).hexdigest(), "images": records}
+        if ai:
+            manifest.update(schema_version=bundle.AI_VERSION, ai_explanation=True)
         self.manifest(manifest)
         return manifest
 
@@ -161,6 +164,82 @@ class BundleTests(unittest.TestCase):
             self.assertEqual(result["image_count"], 2)
             self.assertEqual(save.call_args.args[0], ["docker", "image", "save", "--platform", "linux/amd64", *bundle.names(SHA, False)])
             self.assertEqual(bundle.read_bundle(output, SHA, False)["archive_sha256"], result["archive_sha256"])
+        finally: os.umask(old)
+
+    def test_ai_inventory_is_explicit_and_keeps_disabled_v1_bundles_unchanged(self):
+        for provider in (False, True):
+            for ai in (False, True):
+                value = self.make(provider, ai=ai)
+                self.assertEqual(bundle.read_bundle(self.directory, SHA, provider, ai=ai), value)
+                self.assertEqual(value["schema_version"], bundle.AI_VERSION if ai else bundle.VERSION)
+                self.assertEqual("ai_explanation" in value, ai)
+                self.assertEqual(len(value["images"]), 2 + provider + ai)
+                with patch.object(bundle, "docker") as daemon, self.assertRaises(ValueError):
+                    bundle.load_or_verify(self.directory, SHA, provider, True, ai=not ai)
+                daemon.assert_not_called()
+
+    def test_ai_build_pairs_do_not_substitute_the_provider_dockerfile_and_reject_non_boolean_flags(self):
+        expected = [("etf-workbench-web:" + SHA, "Dockerfile.web"), ("etf-workbench-worker:" + SHA, "Dockerfile")]
+        self.assertEqual(bundle.image_specs(SHA, False, True), [*expected, ("etf-workbench-ai-explanation:" + SHA, "Dockerfile.ai-explanation")])
+        for provider in (False, True):
+            specs = bundle.image_specs(SHA, provider, True)
+            self.assertEqual([name for name, unused in specs], bundle.names(SHA, provider, True))
+            self.assertEqual(len(specs), 3 + provider)
+        for value in (0, 1, None, "true"):
+            with self.assertRaises(ValueError): bundle.names(SHA, False, value)
+            with self.assertRaises(ValueError): bundle.names(SHA, value, True)
+
+    def test_ai_v2_flag_schema_and_resealed_secret_or_platform_changes_fail_before_docker(self):
+        for change in (lambda value: value.update(ai_explanation=False), lambda value: value.update(ai_explanation=1),
+                       lambda value: value.pop("ai_explanation"), lambda value: value.update(schema_version=bundle.VERSION),
+                       lambda value: value.update(extra=True)):
+            value = self.make(ai=True); change(value); self.manifest(value)
+            with patch.object(bundle, "docker") as daemon, self.assertRaises(ValueError):
+                bundle.load_or_verify(self.directory, SHA, False, True, ai=True)
+            daemon.assert_not_called()
+        for change in (lambda row: row["identity"].update(platform="linux/arm64"),
+                       lambda row: row["identity"]["runtime_config"]["Env"].append("AI_API_KEY=FICTIONAL-NOT-A-CREDENTIAL")):
+            value = self.make(ai=True); target = value["images"][-1]; change(target)
+            target["fingerprint"] = hashlib.sha256(bundle.canonical(target["identity"]).encode()).hexdigest(); self.manifest(value)
+            with patch.object(bundle, "docker") as daemon, self.assertRaises(ValueError):
+                bundle.load_or_verify(self.directory, SHA, False, True, ai=True)
+            daemon.assert_not_called()
+
+    def test_ai_load_verifies_all_three_or_four_portable_runtime_identities(self):
+        for provider in (False, True):
+            value = self.make(provider, ai=True)
+            rows = [deepcopy(self.rows[index % 2]) for index in range(3 + provider)]
+            for row in rows: row["Id"] = "sha256:" + "e" * 64
+            calls = []
+            def daemon(arguments):
+                calls.append(arguments)
+                if arguments[0] == "version": return b"linux/amd64\n"
+                if arguments[:2] == ["image", "load"]: return b"Loaded image\n"
+                return json.dumps(rows).encode()
+            with patch.object(bundle, "docker", side_effect=daemon):
+                result = bundle.load_or_verify(self.directory, SHA, provider, True, ai=True)
+            self.assertEqual(result["image_count"], 3 + provider)
+            self.assertEqual(calls[-1][2:], bundle.names(SHA, provider, True))
+            self.assertEqual(result["runtime_fingerprints"], [row["fingerprint"] for row in value["images"]])
+
+    def test_ai_package_retains_private_bounded_archives_and_exact_opt_in_names(self):
+        self.make(ai=True)
+        with gzip.open(self.directory / bundle.ARCHIVE, "rb") as source: tar = source.read()
+        output = self.directory / "ai-packed"
+        class Process:
+            def __init__(self): self.stdout = io.BytesIO(tar)
+            def poll(self): return 0
+            def wait(self, timeout=None): return 0
+            def kill(self): raise AssertionError("completed fixture should not be killed")
+        rows = [self.rows[index % 2] for index in range(3)]
+        def daemon(arguments): return b"linux/amd64\n" if arguments[0] == "version" else json.dumps(rows).encode()
+        old = os.umask(0o077)
+        try:
+            with patch.object(bundle, "docker", side_effect=daemon), patch.object(bundle.subprocess, "Popen", return_value=Process()) as save:
+                result = bundle.package(output, SHA, False, ai=True)
+            self.assertEqual(result["image_count"], 3)
+            self.assertEqual(save.call_args.args[0][-3:], bundle.names(SHA, False, True))
+            self.assertEqual(bundle.read_bundle(output, SHA, False, ai=True)["schema_version"], bundle.AI_VERSION)
         finally: os.umask(old)
 
 

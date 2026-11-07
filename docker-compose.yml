@@ -50,7 +50,9 @@ services:
       - path: ${WORKBENCH_RUNTIME_ENV_FILE:-/etc/etf-workbench/runtime.env}
         required: true
         format: raw
-    environment: *runtime
+    environment:
+      <<: *runtime
+      WORKBENCH_AI_BACKGROUND_ENABLED: "0"
     ports:
       - "127.0.0.1:${WORKBENCH_HTTP_PORT:-5051}:3000"
     volumes: [*data]

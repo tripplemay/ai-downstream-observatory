@@ -16,14 +16,14 @@
 
 | 设计要求 | 当前实现入口 | 仍须完成的产品级核验 |
 | --- | --- | --- |
-| P0：四项约束，可先看损失情景，不强制建账户 | `investor-workspace.tsx` 的 `ProfileForm`；`risk-scenarios.ts` | 当前构建的确认风险普通入口及保存后定位已通过合成原生纵切；未定风险原生记录来自前一构建，不冒充同候选或真实研究资格 |
+| P0：四项约束，可先看损失情景，不强制建账户 | `investor-workspace.tsx` 的 `ProfileForm`；`risk-scenarios.ts` | 历史构建 906 的明确风险入口及保存后定位通过合成原生纵切；当前 QEG 候选尚需同构建原生复核，未定风险记录更早，不冒充真实研究资格 |
 | P0：合格小目录、来源、版本化策略和基准 | `source-inputs.ts`、`bounded-research.ts`、`reference-evidence.ts`；Python 研究内核 | 对实际选定 ETF 范围核对当前身份/日历/价格/公司行动/汇率/用途；来源不全不得生成确定权重 |
 | P0：目标权重、作用、重叠、成本、情景、反对理由 | `ReferencePlanCard`、`risk-scenarios.ts`、`reference-cost-methodology.ts` | 同一真实研究快照逐项可追溯；历史重建、示意和当前估值分别标明，不把未验证穿透写成已知分散 |
-| P0：保存为观察方案，不制造持仓或现金 | `service.ts`、`model-watch.ts` | 当前合成普通入口到明确保存通过，金融表无研究写入；真实方案的重新登录及版本/状态一致性仍需独立核对 |
-| P1：各市场有效收盘后持续更新，三种互斥结论 | `confirmed_feed.py`、`epoch_confirmed_feed.py`、`epoch_continuation.py`；`evidence-monitor.ts` | 当前合成 CN 日历的正常、假设资金变化、真实时钟到期三分支已通过原生纵切；真实已授权范围及 HK/US 的休市/时区/失败不得由该收据推断 |
+| P0：保存为观察方案，不制造持仓或现金 | `service.ts`、`model-watch.ts` | 906 的合成普通入口到明确保存通过，金融表无研究写入；真实方案的重新登录及版本/状态一致性仍需独立核对 |
+| P1：各市场有效收盘后持续更新，三种互斥结论 | `confirmed_feed.py`、`epoch_confirmed_feed.py`、`epoch_continuation.py`；`evidence-monitor.ts` | 906 的合成 CN 正常、假设资金变化、时钟到期三分支通过原生纵切；当前候选、真实已授权范围及 HK/US 休市/时区/失败不得由旧收据推断 |
 | P1：变化卡及持久的采纳思路/暂缓/拒绝 | `investor-workspace.tsx`、`history.ts`、`service.ts` | 一页理解变化量、成本、风险、反证和下一复核；过期/改版不能继续决定，刷新后记录保留 |
 | P1：通知只来自已提交结果 | `notifications.ts`、`investor-notifications-panel.tsx` | 与当前阶段接续结果逐一核对、重启/重复不重复通知；站内通知不等同未配置的邮件或推送 |
-| P1：AI 在确定性结果后解释派生证据 | `ai-explanation-context.ts`、`ai-explanation-background.ts` | 独立镜像/Compose 已有，但受保护镜像包/切换脚本还没有 AI 选项；先补发布链，再在有效研究/来源用途/用户许可下验收。纯探针或 worker 健康不是当前真实组合解释 |
+| P1：AI 在确定性结果后解释派生证据 | `ai-explanation-context.ts`、`ai-explanation-background.ts` | 已补受保护镜像包、开关、无网络配置预检、旧写入者停止与健康门禁；默认外发 0。新的 Linux 容器检查、有效真实来源/同意及真实组合解释仍需验收，不能用纯探针或健康替代 |
 | P1：长期接续及异常恢复不需要普通用户读 JSON | `investor-epoch-setup.tsx`、`investor-epoch-history.tsx`；迁移 71–73 | 当前批次未知处置已有合成纵切；跨模型/更早批次检索、更长轮转与故障恢复尚未由这份收据覆盖 |
 | P2：可选账户、简化事实导入、持仓/现金对照 | `investor-account-workspace.tsx`、`holdings.ts`、`cash-recording.ts`、CSV 向导 | 以小样例核对实际所用券商格式和来源；未认证原生格式不得称即插即用，计划投入不算到账 |
 | P2：账户级待审清单和人工执行闭环 | `proposal-review.ts`、`trade-recording.ts`、`execution-followup.ts`、`reconciliation.ts` | 各独立准入全部满足后，走自行交易、事实回录、对账、重估闭环；采纳思路/券商回报不能替代成交 |
@@ -35,6 +35,14 @@
 
 ## 已有证据的准确范围
 
+- 新 AI 发布候选的配置程序 3、发布相关 31、类型检查、Compose 六组合、
+  ShellCheck 通过；根命令 468 通过/1 可选跳过，最后原生测试接线调整另验
+  11 项。HTTP harness 自行构建 QEG 候选，完整 133/133、1606 源码运行中不变。
+  新 Linux 原生 AI 检查只已接线，未运行；没有新原生 UI、真实网关或生产验收。
+- `25faf30` 两套 CI 均 17 成功、Web 4 / Web 6 分别 19 / 2 项在测试模式保护
+  处失败，原件是 `NODE_ENV` 未设置，不是算术/超时。保留保护，测试启动器
+  明确传测试环境后，父环境未设置该变量的实际原入口完成 248/248、零跳过。
+  不改分片或预算；本机通过不是新准确提交完整 CI。
 - Web 合成前置数据增量：原 Web 4 的 35 文件、全部原名和分配不变，247/247、
   零跳过，538.708 秒，1604 份源码运行中不变。随后收紧 epoch 构造/原准备共用
   120 秒，补真实超时保护；最终相关 18/18、类型检查及根 460 通过/1 可选跳过
@@ -65,12 +73,12 @@
   cleanup/deprecation 日志当根因，也没有重跑、取消或放宽预算。本增量不声称
   修复该分片总耗时问题。
 
-## 本轮普通入口与三种结论的原生验收
+## 历史 906 构建的普通入口与三种结论原生验收
 
 依据为 [09 产品设计](09-product-v2-portfolio-first.md) 的首次使用及持续监测路径。
 范围是私有临时数据库、虚构 CN 日历/ETF/许可及一次虚构 SDK 回调；应用、HTTP、
 采集窗口和客户端到期均使用实际时钟。没有真实提供方、AI 或交易调用。
-本轮新标准构建为 `906_WxJf8Uk3BeQeZa-uK`，不是前一轮的复用构建。
+该增量当时的新标准构建为 `906_WxJf8Uk3BeQeZa-uK`，不是当前 QEG 构建。
 相关 Python 初始收盘 15 项、六个 Web 文件 71 项及类型检查通过；同构建完整
 认证 HTTP 133/133 通过，1601 份源码运行中无变化，证据目录
 `artifacts/verification/workbench-http/2026-11-06T23-48-50-794Z`。不等同全量

@@ -2,10 +2,19 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { openWorkbench } from "../src/server/workbench-db";
 import { runInvestorAiBackgroundPass } from "../src/server/investor/ai-explanation-background";
+import { readAiExplanationSettings } from "../src/server/investor/ai-explanation-process";
 
 const healthFile = "/tmp/etf-ai-runtime-health.json";
 export async function main(args: string[], verify: () => void) {
-  if (args.length > 1 || args.length === 1 && !["--once", "--health"].includes(args[0])) throw new Error("AI_RUNTIME_INPUT_INVALID");
+  if (args.length > 1 || args.length === 1 && !["--once", "--health", "--config-check"].includes(args[0])) throw new Error("AI_RUNTIME_INPUT_INVALID");
+  const flag = process.env.WORKBENCH_AI_ENABLE_DISPATCH ?? "0";
+  if (flag !== "0" && flag !== "1") throw new Error("AI_RUNTIME_INPUT_INVALID");
+  if (args[0] === "--config-check") {
+    verify();
+    if (flag === "1") readAiExplanationSettings(process.env.WORKBENCH_AI_CONFIG_FILE ?? "", process.env.WORKBENCH_AI_CONSENT_FILE ?? "", { id: "owner" }, new Date().toISOString());
+    process.stdout.write(JSON.stringify({ status: "ai_configuration_checked", dispatch_enabled: flag === "1", settings_checked: flag === "1", database_opened: false, transport_called: false }) + "\n");
+    return;
+  }
   if (args[0] === "--health") {
     const health = JSON.parse(readFileSync(healthFile, "utf8"));
     if (health.status !== "ready" || typeof health.at !== "number" || health.at > Date.now() || Date.now() - health.at > 120000) throw new Error("AI_RUNTIME_NOT_READY");
@@ -19,7 +28,7 @@ export async function main(args: string[], verify: () => void) {
       try {
         verify(); connection = openWorkbench();
         // Production authentication has one fixed owner. DB rows cannot select another principal or executable.
-        await runInvestorAiBackgroundPass(connection, { id: "owner" }, process.env.WORKBENCH_AI_ENABLE_DISPATCH === "1", { signal: abort.signal, assert_runtime: verify });
+        await runInvestorAiBackgroundPass(connection, { id: "owner" }, flag === "1", { signal: abort.signal, assert_runtime: verify });
         writeFileSync(healthFile, JSON.stringify({ status: "ready", at: Date.now() }), { mode: 0o600 });
       } catch {
         writeFileSync(healthFile, JSON.stringify({ status: "unavailable", at: Date.now() }), { mode: 0o600 });

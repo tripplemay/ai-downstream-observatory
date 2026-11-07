@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
@@ -9,6 +9,37 @@ import { investorActor, investorFixture, saveSyntheticProfile, seedSyntheticCand
 import { hash } from "../src/server/ledger/service";
 import { aiLimitations, aiMonitorContextSchema } from "../src/server/investor/ai-explanation-schemas";
 import { claimDurableAiRequest, finishDurableAiRequest, type AiRequestBinding } from "../src/server/investor/ai-explanation-store";
+
+test("built configuration preflight verifies explicit dispatch and private current consent without a database or transport", () => {
+  const directory=mkdtempSync(path.join(os.tmpdir(),"etf-ai-config-only-")),configFile=path.join(directory,"gateway.json"),consentFile=path.join(directory,"consent.json");
+  const database=path.join(directory,"must-not-create.db"),attempts=path.join(directory,"network-attempts"),guard=path.join(directory,"deny-network.cjs");
+  const now=Date.now(),config={schema_version:"readonly-ai-gateway-v1",base_url:"https://no-network.example.test/v1",api_key:"FICTIONAL_LOCAL_ONLY",model:"fictional-release-model",max_output_tokens:512};
+  const consent={schema_version:"investor-ai-sharing-consent-v1",principal_id:"owner",gateway_audience_hash:hash({base_url:config.base_url,model:config.model,request_profile:null}),
+    decision:"allow",allowed_categories:["model_ratios","target_deviation","strategy_trigger_codes"],source:"explicit_user_confirmation",
+    valid_from:new Date(now-60000).toISOString(),valid_until:new Date(now+3600000).toISOString()};
+  const writeConsent=(change:Record<string,unknown>={})=>writeFileSync(consentFile,JSON.stringify({...consent,...change}),{mode:0o600});
+  try {
+    writeFileSync(configFile,JSON.stringify(config),{mode:0o600});writeConsent();
+    writeFileSync(guard,`const fs=require('node:fs');const deny=()=>{fs.appendFileSync(${JSON.stringify(attempts)},'DENIED\\n');throw Error('FICTIONAL_NO_TRANSPORT')};
+for(const name of ['node:http','node:https']){require(name).request=deny;require(name).get=deny;}
+require('node:net').connect=deny;require('node:net').createConnection=deny;require('node:tls').connect=deny;globalThis.fetch=deny;`,{mode:0o600});
+    const run=(flag:string|undefined,args=["--config-check"],missing=false)=>spawnSync(process.execPath,["--require",guard,"scripts/run-ai-explanation.mjs",...args],{
+      encoding:"utf8",timeout:20000,env:{PATH:process.env.PATH,NODE_ENV:"test",WORKBENCH_DB_PATH:database,
+        ...(flag===undefined?{}:{WORKBENCH_AI_ENABLE_DISPATCH:flag}),WORKBENCH_AI_CONFIG_FILE:missing?"/must-not-read":configFile,
+        WORKBENCH_AI_CONSENT_FILE:missing?"/must-not-read":consentFile}});
+    for(const flag of [undefined,"0","1"]) {
+      const result=run(flag,undefined,flag!=="1");assert.equal(result.status,0,result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout),{status:"ai_configuration_checked",dispatch_enabled:flag==="1",settings_checked:flag==="1",database_opened:false,transport_called:false});
+    }
+    for(const flag of ["true","2",""])assert.equal(run(flag).status,1);
+    for(const change of [{valid_until:new Date(now-1).toISOString()},{principal_id:"foreign"},{gateway_audience_hash:"a".repeat(64)}]) {
+      writeConsent(change);const failed=run("1");assert.equal(failed.status,1);assert.equal(failed.stdout,"");assert.equal(failed.stderr,"AI_RUNTIME_UNAVAILABLE\n");
+    }
+    writeConsent();chmodSync(configFile,0o644);assert.equal(run("1").status,1);chmodSync(configFile,0o600);
+    assert.equal(run("0",["--config-check","--once"]).status,1);
+    assert.equal(existsSync(database),false);assert.equal(existsSync(attempts),false);
+  } finally {rmSync(directory,{recursive:true,force:true});}
+});
 
 test("built launcher verifies the complete source map and rejects tampered bundle, source or arbitrary CLI input", () => {
   const root = path.resolve(".."), directory = mkdtempSync(path.join(os.tmpdir(), "etf-ai-runtime-proof-"));
