@@ -23,7 +23,7 @@
 | P1：各市场有效收盘后持续更新，三种互斥结论 | `confirmed_feed.py`、`epoch_confirmed_feed.py`、`epoch_continuation.py`；`evidence-monitor.ts` | 当前合成 CN 日历的正常、假设资金变化、真实时钟到期三分支已通过原生纵切；真实已授权范围及 HK/US 的休市/时区/失败不得由该收据推断 |
 | P1：变化卡及持久的采纳思路/暂缓/拒绝 | `investor-workspace.tsx`、`history.ts`、`service.ts` | 一页理解变化量、成本、风险、反证和下一复核；过期/改版不能继续决定，刷新后记录保留 |
 | P1：通知只来自已提交结果 | `notifications.ts`、`investor-notifications-panel.tsx` | 与当前阶段接续结果逐一核对、重启/重复不重复通知；站内通知不等同未配置的邮件或推送 |
-| P1：AI 在确定性结果后解释派生证据 | `ai-explanation-context.ts`、`ai-explanation-background.ts` | 当前研究链/来源用途/用户许可均有效时的端到端验收；纯探针、固定虚构上下文和 worker 健康不是当前真实组合解释 |
+| P1：AI 在确定性结果后解释派生证据 | `ai-explanation-context.ts`、`ai-explanation-background.ts` | 独立镜像/Compose 已有，但受保护镜像包/切换脚本还没有 AI 选项；先补发布链，再在有效研究/来源用途/用户许可下验收。纯探针或 worker 健康不是当前真实组合解释 |
 | P1：长期接续及异常恢复不需要普通用户读 JSON | `investor-epoch-setup.tsx`、`investor-epoch-history.tsx`；迁移 71–73 | 当前批次未知处置已有合成纵切；跨模型/更早批次检索、更长轮转与故障恢复尚未由这份收据覆盖 |
 | P2：可选账户、简化事实导入、持仓/现金对照 | `investor-account-workspace.tsx`、`holdings.ts`、`cash-recording.ts`、CSV 向导 | 以小样例核对实际所用券商格式和来源；未认证原生格式不得称即插即用，计划投入不算到账 |
 | P2：账户级待审清单和人工执行闭环 | `proposal-review.ts`、`trade-recording.ts`、`execution-followup.ts`、`reconciliation.ts` | 各独立准入全部满足后，走自行交易、事实回录、对账、重估闭环；采纳思路/券商回报不能替代成交 |
@@ -35,6 +35,14 @@
 
 ## 已有证据的准确范围
 
+- `db49d61` push `42315189025` 已完成 19/19；PR `42315194803` 最终 18 成功、
+  Web 4 在总计 30 分钟时取消，未出现已完成用例断言失败或单次 120 秒超时。
+  PR 合并树与 head 同为 `92fff0d0a94c1756221ec42b87bc9ad90d322c44`。
+  完整日志和未完成 TAP 保留；最大已完成用例耗时 347.113 秒，不把取消当作通过。
+  当前类级纯合成前置数据优化已有十项保护、相关 34 项、原接续类
+  10 项及完整原 Python 6 分片 223/223（零跳过）通过；不改生产源码或预算。
+  本轮根合同测试另有 460 通过、1 明确可选跳过，185.600 秒。
+  其新准确提交 CI 尚未验证，不用父绿灯抵消历史取消。
 - `aa68048` 有相关 Python 56、orchestration 183、Web 74、根测试 460 通过/
   1 可选跳过、标准构建、完整认证 HTTP 133/133，以及当前批次未知处置的合成
   桌面/手机纵切。详见研发追踪中的原始清单、时钟和失败保留说明。

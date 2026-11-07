@@ -5,6 +5,10 @@ from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from copy import deepcopy
 import io
 import json
+import os
+from pathlib import Path
+import sqlite3
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
@@ -423,6 +427,131 @@ class FixtureDatasetShapesTests(unittest.TestCase):
         with patch.dict(checker.checkers, {"date-time": (mutate, original[1])}), redirect_stderr(io.StringIO()), shapes.fixture_dataset_shapes() as metrics:
             snapshot.validate_dataset(value)
             self.assertEqual(metrics["entries"], 0)
+
+
+class FrozenEpochTemplateTests(unittest.TestCase):
+    def setUp(self):
+        from tests.investor import epoch_template_fixture
+        self.templates = epoch_template_fixture
+
+    def database(self, *, prefix="etf-correction-http-", applied="2026-01-01T00:00:00Z"):
+        directory = TemporaryDirectory(prefix=prefix); self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / "workbench.db"
+        db = sqlite3.connect(path, isolation_level=None); self.addCleanup(db.close)
+        db.execute("PRAGMA journal_mode=WAL"); db.execute("PRAGMA foreign_keys=ON"); db.execute("PRAGMA user_version=1")
+        db.executescript("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,filename TEXT,checksum TEXT,applied_at TEXT);"
+            "CREATE TABLE facts(id TEXT PRIMARY KEY,payload BLOB); CREATE TABLE sequence_probe(id INTEGER PRIMARY KEY AUTOINCREMENT);"
+            "INSERT INTO sqlite_sequence(name,seq) VALUES('sequence_probe',0);")
+        db.execute("INSERT INTO schema_migrations VALUES(1,'fixture.sql','fictional-checksum',?)", (applied,))
+        return db
+
+    def source(self):
+        db = self.database(); baseline = self.templates.pristine_fingerprint(db)
+        db.execute("INSERT INTO facts(rowid,id,payload) VALUES(17,'a',?)", (b"\x00\xffretained",))
+        value = {"references": ["a"], "fictional": True}
+        template = self.templates.FrozenEpochTemplate.capture(db, baseline, value)
+        self.assertIsNotNone(template); self.addCleanup(template.close)
+        return db, baseline, value, template
+
+    def test_copies_preserve_raw_bytes_rowids_schema_and_full_metadata_without_external_files(self):
+        source, _, _, template = self.source(); target = self.database(applied="2026-01-02T00:00:00Z")
+        copied = template.restore(target)
+        self.assertEqual(list(source.iterdump()), list(target.iterdump()))
+        self.assertEqual(source.execute("SELECT rowid,* FROM facts").fetchall(), target.execute("SELECT rowid,* FROM facts").fetchall())
+        self.assertEqual(copied, {"references": ["a"], "fictional": True})
+        self.assertEqual(target.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+        self.assertEqual(target.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+        self.assertEqual(target.execute("PRAGMA foreign_key_check").fetchall(), [])
+
+    def test_every_case_has_independent_values_and_database_writes_never_change_the_template(self):
+        _, _, original, template = self.source(); first, second = self.database(), self.database()
+        original["references"].append("caller-mutated")
+        value = template.restore(first); value["references"].append("first-only")
+        first.execute("UPDATE facts SET payload=?", (b"first-only",))
+        self.assertEqual(template.restore(second), {"references": ["a"], "fictional": True})
+        self.assertEqual(second.execute("SELECT payload FROM facts").fetchone()[0], b"\x00\xffretained")
+        before = list(first.iterdump())
+        with self.assertRaisesRegex(AssertionError, "TARGET_NOT_PRISTINE"): template.restore(first)
+        self.assertEqual(before, list(first.iterdump()))
+
+    def test_nonempty_changed_schema_or_migration_history_cannot_be_overwritten(self):
+        _, _, _, template = self.source()
+        for sql in ("INSERT INTO facts VALUES('new',x'01')", "ALTER TABLE facts ADD COLUMN extra TEXT",
+                    "UPDATE schema_migrations SET checksum='changed'", "UPDATE sqlite_sequence SET seq=3"):
+            target = self.database(); target.execute(sql); before = list(target.iterdump())
+            with self.assertRaisesRegex(AssertionError, "TARGET_NOT_PRISTINE"): template.restore(target)
+            self.assertEqual(before, list(target.iterdump()))
+
+    def test_transactions_readonly_recovery_and_attached_databases_are_rejected_before_copy(self):
+        _, _, _, template = self.source()
+        for mode in ("transaction", "readonly", "recovery", "attached"):
+            target = self.database()
+            if mode == "transaction": target.execute("BEGIN")
+            elif mode == "readonly": target.execute("PRAGMA query_only=ON")
+            elif mode == "attached": target.execute("ATTACH ':memory:' AS extra")
+            else:
+                path = Path(target.execute("PRAGMA database_list").fetchone()[2]).parent / "RESTORE_PENDING_REVIEW"
+                path.touch()
+            before = list(target.iterdump())
+            with self.assertRaisesRegex(AssertionError, "TARGET_NOT_PRISTINE"): template.restore(target)
+            self.assertEqual(before, list(target.iterdump()))
+
+    def test_scope_does_not_accept_other_temporary_prefixes_or_changed_template_rowids(self):
+        _, _, _, template = self.source(); outside = self.database(prefix="not-an-epoch-fixture-")
+        before = list(outside.iterdump())
+        with self.assertRaisesRegex(AssertionError, "TARGET_NOT_PRISTINE"): template.restore(outside)
+        self.assertEqual(before, list(outside.iterdump()))
+        target = self.database(); before = list(target.iterdump())
+        template._db.execute("PRAGMA query_only=OFF"); template._db.execute("UPDATE facts SET rowid=51 WHERE id='a'"); template._db.execute("PRAGMA query_only=ON")
+        with self.assertRaisesRegex(AssertionError, "TEMPLATE_CHANGED"): template.restore(target)
+        self.assertEqual(before, list(target.iterdump()))
+
+    def test_oversize_external_scratch_references_and_non_json_values_decline_the_optimization(self):
+        source, baseline, _, _ = self.source(); before = list(source.iterdump())
+        with patch.object(self.templates, "MAX_BYTES", 1):
+            self.assertIsNone(self.templates.FrozenEpochTemplate.capture(source, baseline, {"fixture": True}))
+        self.assertIsNone(self.templates.FrozenEpochTemplate.capture(source, baseline, {"tuple": (1, 2)}))
+        self.assertIsNone(self.templates.FrozenEpochTemplate.capture(source, baseline, {"object": object()}))
+        self.assertIsNone(self.templates.FrozenEpochTemplate.capture(source, baseline, {"nan": float("nan")}))
+        directory = str(Path(source.execute("PRAGMA database_list").fetchone()[2]).parent)
+        self.assertIsNone(self.templates.FrozenEpochTemplate.capture(source, baseline, {"external_file": directory + "/raw.xml"}))
+        self.assertEqual(before, list(source.iterdump()))
+        source.execute("BEGIN")
+        with self.assertRaisesRegex(AssertionError, "SOURCE_NOT_QUIESCENT"):
+            self.templates.FrozenEpochTemplate.capture(source, baseline, {"fixture": True})
+        source.execute("ROLLBACK")
+
+    def test_close_is_idempotent_and_a_closed_template_cannot_populate_a_new_case(self):
+        _, _, _, template = self.source(); target = self.database(); before = list(target.iterdump())
+        template.close(); template.close()
+        with self.assertRaisesRegex(AssertionError, "TEMPLATE_CLOSED"): template.restore(target)
+        self.assertEqual(before, list(target.iterdump()))
+
+    def test_failed_construction_discards_the_builder_and_does_not_register_a_template(self):
+        from unittest.mock import Mock
+        builder = Mock(); builder.db = self.database()
+        with patch.object(self.templates.setup, "CurrentCorrectionFixtureTests", return_value=builder), \
+                patch.object(self.templates, "create", side_effect=RuntimeError("FICTIONAL_CONSTRUCTION_FAILED")):
+            with self.assertRaisesRegex(RuntimeError, "FICTIONAL_CONSTRUCTION_FAILED"): self.templates.build_epoch_template()
+        builder.setUp.assert_called_once(); builder.doCleanups.assert_called_once()
+
+    def test_hardlinked_targets_are_refused_without_touching_either_name(self):
+        _, _, _, template = self.source(); target = self.database()
+        path = Path(target.execute("PRAGMA database_list").fetchone()[2]); os.link(path, path.parent / "alias.db")
+        before = list(target.iterdump())
+        with self.assertRaisesRegex(AssertionError, "TARGET_NOT_PRISTINE"): template.restore(target)
+        self.assertEqual(before, list(target.iterdump()))
+
+    def test_suite_cleanup_releases_the_only_template_and_restores_uncached_manual_setup(self):
+        from unittest.mock import Mock
+        from tests.investor import test_epoch_continuation as cases
+        template = Mock()
+        with patch.object(cases, "build_epoch_template", return_value=template) as build:
+            cases.EpochContinuationTests.setUpClass()
+            self.assertIs(cases.EpochContinuationTests._seed_template, template)
+            cases.EpochContinuationTests.doClassCleanups()
+            self.assertIsNone(cases.EpochContinuationTests._seed_template)
+        build.assert_called_once(); template.close.assert_called_once()
 
 
 if __name__ == "__main__":

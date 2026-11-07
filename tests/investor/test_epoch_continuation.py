@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from tests.investor import test_current_correction_fixture as setup
 from tests.investor import fixture_dataset_shapes as shapes
+from tests.investor.epoch_template_fixture import build_epoch_template
 from tests.investor.epoch_continuation_source_fixture import create, next_sources, NOW
 from tests.investor.epoch_source_fixture import NOW as FIRST
 from tests.investor.registered_epoch_fixture import reseal_wrong_continuation_state
@@ -24,6 +25,17 @@ from worker.research import snapshot
 
 class EpochContinuationTests(unittest.TestCase):
     setUp = setup.CurrentCorrectionFixtureTests.setUp
+    _seed_template = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls._seed_template = build_epoch_template()
+        cls.addClassCleanup(cls._close_seed_template)
+
+    @classmethod
+    def _close_seed_template(cls):
+        template, cls._seed_template = cls._seed_template, None
+        if template is not None: template.close()
 
     def test_active_epoch_default_longport_callback_then_core_keeps_the_original_economic_chain(self):
         from tests.investor.epoch_feed_fixture import positive
@@ -38,7 +50,9 @@ class EpochContinuationTests(unittest.TestCase):
         final_fences(self)
 
     def seed(self):
-        self.saved = create(self.db, self.path); self.epoch_id = self.saved["registration"]["epoch"]["id"]
+        template = type(self)._seed_template
+        self.saved = template.restore(self.db) if template is not None else create(self.db, self.path)
+        self.epoch_id = self.saved["registration"]["epoch"]["id"]
         self.assertIsNone(contracts._VALIDATION_SCOPE.get(), "fixture construction must not retain a shape scope in the actual test")
 
     def body(self, enabled=True, key="fictional-explicit-epoch-activation"):

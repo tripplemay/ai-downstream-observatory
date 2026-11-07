@@ -136,3 +136,54 @@ do not establish a statistically reliable speedup, CI qualification or a VPS
 performance claim. The 120-second fixture and 30-minute CI budgets, test
 discovery, eight-shard assignment, production configuration and all original
 assertions remain unchanged. Aggregate CI timeouts still require verification.
+
+## 2026-11-07: class-owned synthetic prerequisite
+
+Profiling one offline epoch case found substantial repeated serialization and
+prerequisite construction. An alternative JSON encoder was measured in ABBA
+order and rejected: roughly 1% improvement does not justify replacing a real
+serialization path in these tests. No production serializer was changed.
+
+Only `EpochContinuationTests` now constructs its fixed fictional prerequisite
+once per class, under the original network/credential denials and original
+construction assertions. A single in-memory SQLite template plus its JSON return
+value is limited to 8 MiB. Each case still gets a new exclusive scratch database;
+the template is copied only into that class's otherwise empty, matching migrated
+schema. Migration application timestamps alone are excluded from the pristine
+target comparison; all source metadata, rows, rowids, BLOB hashes, schema and
+versions are included in the complete copy fingerprint. WAL/FK settings and
+foreign keys are checked again. No production database or backup is copied.
+
+The actual case bodies, current-source checks, raw replay, arithmetic, idempotency,
+revocation and explicit uncached validation comparison remain unchanged. They run
+against the independent case database, not a cached proof or calculated result.
+Values cannot share mutable containers between cases. Suite cleanup releases the
+one template and resets the class slot; manual fixture setup outside the suite
+retains the original construction path. Oversize, non-JSON or external scratch
+references decline this optimization and keep the original construction path.
+
+Ten guards cover pristine/schema/history/sequence checks, transactions, read-only
+and recovery state, attached or out-of-scope databases, hardlinks, raw BLOB/rowid
+integrity, mutation isolation, bounds and resource cleanup. The first eight were
+red before implementation. Related tests: 34 passed; original epoch class: all
+10 passed in 140.144 seconds. The original Python shard 6 case IDs and assignment
+were compared with the retained CI discovery record: all 223 passed, zero skipped,
+in 579.153 seconds, with no monitored-source change during execution. This is not
+a Linux-runner or VPS performance claim and does not certify the next CI result.
+
+The preliminary ABBA single-case sample was 16.700/16.798 seconds original versus
+8.644/8.651 with the template. Its one-time construction cost was 8.453 seconds;
+it must not be omitted when evaluating a whole suite. Earlier prototype failures
+around variable migration timestamps and the empty `sqlite_sequence` row are
+retained, not reclassified as passing or production defects. Evidence remains in
+`artifacts/verification/v2-release-audit-20261107/`.
+
+The original root CI selection also passed 460 tests with one explicit optional
+skip in 185.600 seconds. The parent `db49d61` push passed all 19 jobs, but its PR
+run ended with 18 successful jobs and Web shard 4 cancelled at the aggregate
+30-minute limit. Its merge tree matches the head. The retained incomplete TAP
+contains 194 completed tests, no completed assertion failure, and a largest
+test duration of 347.113 seconds. This Python-only template does not claim to
+fix that Web timeout. A separate actual Node CPU profile of that largest test
+passed locally in 112.770 seconds; further optimization remains separate from
+these class-owned prerequisites and from production acceptance.
