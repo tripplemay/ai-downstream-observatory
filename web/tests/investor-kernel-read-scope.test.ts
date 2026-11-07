@@ -1,3 +1,5 @@
+import { hash } from "../src/server/ledger/service";
+import { parseSealedInvestorJson } from "../src/server/investor/sealed-json";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { withInvestorKernelReadScope as scope, verifyInvestorKernelProof as proof } from "../src/server/investor/kernel-read-scope";
@@ -117,4 +119,94 @@ test("nested reads have distinct proof sets, restore the parent on success/failu
   });
   assert.equal(count, 3);
   scope(() => proof(key(1), verify)); assert.equal(count, 4);
+});
+
+function scanCount(read: () => void) {
+  const original = JSON.parse;
+  let count = 0;
+  JSON.parse = function(raw: string, ...args: unknown[]) {
+    if (raw === '"probe"') count++;
+    return Reflect.apply(original, JSON, [raw, ...args]);
+  } as typeof JSON.parse;
+  try { read(); return count; }
+  finally { JSON.parse = original; }
+}
+
+test("one synchronous read verifies exact sealed JSON once but returns fresh independent values", () => {
+  const original = { probe: { values: ["fictional", "1.00"] } }, raw = JSON.stringify(original), digest = hash(original);
+  const count = scanCount(() => scope(() => {
+    for (let index = 0; index < 20; index++) {
+      const value = parseSealedInvestorJson(raw, digest) as typeof original;
+      assert.deepEqual(value, original);
+      value.probe.values[0] = "changed locally, not retained evidence";
+    }
+  }));
+  assert.equal(count, 1, "repeated duplicate-key/depth and canonical seal checks are pure, not source authority");
+});
+
+test("same claimed seal never admits different raw bytes, duplicate keys, excess depth or rejected documents", () => {
+  const original = { probe: 1 }, raw = JSON.stringify(original), digest = hash(original);
+  scope(() => {
+    assert.deepEqual(parseSealedInvestorJson(raw, digest), original);
+    for (const invalid of ['{"probe":1,"probe":1}', '{"pr\\u006fbe":1,"probe":1}'])
+      for (let attempt = 0; attempt < 2; attempt++) assert.throws(() => parseSealedInvestorJson(invalid, digest), /DUPLICATE_JSON_KEY/);
+    assert.throws(() => parseSealedInvestorJson('{"probe":2}', digest), /EVIDENCE_INVALID/);
+    assert.throws(() => parseSealedInvestorJson(raw, "a".repeat(64)), /EVIDENCE_INVALID/);
+    const tooDeep = '{"probe":' + "[".repeat(64) + "0" + "]".repeat(64) + "}";
+    for (let attempt = 0; attempt < 2; attempt++) assert.throws(() => parseSealedInvestorJson(tooDeep, hash(JSON.parse(tooDeep))), /JSON_DEPTH_EXCEEDED/);
+    assert.throws(() => parseSealedInvestorJson("{", digest), SyntaxError);
+    assert.deepEqual(parseSealedInvestorJson(raw, digest), original);
+  });
+});
+
+test("nested, subsequent and standalone reads never inherit another read's JSON proof", () => {
+  const value = { probe: "fictional" }, raw = JSON.stringify(value), digest = hash(value);
+  const read = () => assert.deepEqual(parseSealedInvestorJson(raw, digest), value);
+  const count = scanCount(() => {
+    read(); read();
+    scope(() => { read(); read(); scope(() => { read(); read(); }); read(); });
+    scope(() => { read(); read(); });
+    read();
+  });
+  assert.equal(count, 6);
+});
+
+test("wire representations, Unicode and negative zero retain the original strict-parser semantics", () => {
+  for (const raw of ['{"probe":-0}', '{ "probe" : 1e2 }', '{"probe":"\\ud800"}', '{"probe":"\ud800"}', '{"probe":"\ufffd"}',
+    '{"probe":{"__proto__":{"polluted":true}}}', '{"probe":' + "[".repeat(63) + "0" + "]".repeat(63) + "}"]) {
+    const expected = JSON.parse(raw);
+    scope(() => {
+      assert.deepEqual(parseSealedInvestorJson(raw, hash(expected)), expected);
+      assert.deepEqual(parseSealedInvestorJson(raw, hash(expected)), expected);
+    });
+  }
+  assert.equal(({} as Record<string, unknown>).polluted, undefined);
+  for (const value of [null, [], true, 1, "text"]) assert.throws(() => parseSealedInvestorJson(JSON.stringify(value), hash(value)), /EVIDENCE_INVALID/);
+  assert.throws(() => parseSealedInvestorJson("[1e400]", "a".repeat(64)), /EVIDENCE_INVALID/);
+  scope(() => {
+    const raw = '{"probe":"\ud800"}', digest = hash(JSON.parse(raw));
+    parseSealedInvestorJson(raw, digest);
+    assert.throws(() => parseSealedInvestorJson('{"probe":"\ufffd"}', digest), /EVIDENCE_INVALID/);
+  });
+});
+
+test("JSON checks share the original 64-entry proof budget and never cache rejections", () => {
+  const count = scanCount(() => scope(() => {
+    for (let index = 0; index < 65; index++) {
+      const value = { probe: index }, raw = JSON.stringify(value), digest = hash(value);
+      parseSealedInvestorJson(raw, digest);
+      parseSealedInvestorJson(raw, digest);
+    }
+    parseSealedInvestorJson('{"probe":0}', hash({ probe: 0 }));
+    let checks = 0;
+    proof(() => hash("additional-proof"), () => checks++);
+    proof(() => hash("additional-proof"), () => checks++);
+    assert.equal(checks, 2);
+  }));
+  assert.equal(count, 66);
+  const bad = '{"probe":1,"probe":1}', digest = hash({ probe: 1 });
+  const invalidScans = scanCount(() => scope(() => {
+    for (let attempt = 0; attempt < 2; attempt++) assert.throws(() => parseSealedInvestorJson(bad, digest), /DUPLICATE_JSON_KEY/);
+  }));
+  assert.equal(invalidScans, 4);
 });

@@ -110,16 +110,33 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
   let fees = zero(), fxFees = zero(), slipFees = zero(), rounding = zero(), buys = zero(), sells = zero();
   const decisions = new Set(plan.decision_times.map(economicInstant).filter(at => start <= at && at <= end));
   const actions = new Map<bigint, ContinuousDataset["actions"]>();
+  type IndexedAction = { action: ContinuousDataset["actions"][number]; at: bigint; published: bigint; ingested: bigint | null };
+  const actionIndex = new Map<string, IndexedAction[]>();
   for (const at of [start, end, ...decisions, ...contributions.keys(), ...releases.keys()]) clock.add(at);
   for (const session of data.sessions) { clock.add(economicInstant(session.close_at)); clock.add(economicInstant(session.available_at)); }
   for (const row of data.observations) if (row.metric === "fx_cny_per_unit") clock.add(market.available(row));
   for (const action of data.actions) {
     const at = economicInstant(action.at);
+    const indexed = actionIndex.get(action.listing_id) ?? [];
+    indexed.push({ action, at, published: economicInstant(action.published_at),
+      ingested: data.mode === "actual_replay" ? economicInstant(action.ingested_at!) : null });
+    actionIndex.set(action.listing_id, indexed);
     if (start <= at && at <= end) {
       const rows = actions.get(at) ?? []; rows.push(action); actions.set(at, rows); clock.add(at);
       if (action.pay_at) clock.add(economicInstant(action.pay_at));
     }
   }
+  for (const rows of actionIndex.values()) rows.sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1
+    : a.action.type !== b.action.type ? a.action.type === "split" ? -1 : 1 : a.action.id < b.action.id ? -1 : a.action.id > b.action.id ? 1 : 0);
+  // Per-run facts only; (after, through] preserves quote/ex-action and next-close boundaries.
+  function* actionsBetween(listing: string, after: bigint, through: bigint) {
+    const rows = actionIndex.get(listing);
+    if (!rows) return;
+    let low = 0, high = rows.length;
+    while (low < high) { const middle = (low + high) >> 1; if (rows[middle].at <= after) low = middle + 1; else high = middle; }
+    for (let index = low; index < rows.length && rows[index].at <= through; index++) yield rows[index];
+  }
+  const actionKnown = (row: IndexedAction, at: bigint) => row.published <= at && (data.mode !== "actual_replay" || row.ingested! <= at);
   const cny = () => cash.get("CNY")!;
   const quoteFx = (currency: string, at: bigint): [Decimal, string | null] => {
     const [rate, id] = market.fx(currency, at); return [new Decimal(rate.toFixed()), id];
@@ -128,10 +145,9 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
   const mark = (listing: string, at: bigint, decision = false): [Decimal, string, ObjectValue] => {
     const [source, id] = market.price(listing, at, decision), raw = new Decimal(source.toFixed()), observed = economicInstant(market.observations.get(id)!.observed_at);
     let price = raw; const applied: string[] = [];
-    for (const action of data.actions.filter(row => row.listing_id === listing && observed < economicInstant(row.at) && economicInstant(row.at) <= at)
-      .sort((a, b) => economicInstant(a.at) < economicInstant(b.at) ? -1 : economicInstant(a.at) > economicInstant(b.at) ? 1
-        : a.type !== b.type ? a.type === "split" ? -1 : 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) {
-      requireEconomic(economicInstant(action.published_at) <= at && (data.mode !== "actual_replay" || economicInstant(action.ingested_at!) <= at), "CORPORATE_ACTION_CARRY_NOT_KNOWN:" + action.id);
+    for (const indexed of actionsBetween(listing, observed, at)) {
+      const action = indexed.action;
+      requireEconomic(actionKnown(indexed, at), "CORPORATE_ACTION_CARRY_NOT_KNOWN:" + action.id);
       price = action.type === "split" ? price.div(action.ratio!) : price.minus(action.gross_per_unit!);
       requireEconomic(price.gt(0), "NONPOSITIVE_EX_ACTION_CARRY_MARK:" + listing); applied.push(action.id);
     }
@@ -284,9 +300,8 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
           needs: needsDocument, execution: Object.fromEntries(["commission_bps", "minimum_fee_cny", "fx_bps", "slippage_bps",
             "buy_price_buffer_bps", "buy_fx_buffer_bps", "cash_quantum", "max_fx_age_seconds"].map(key => [key, ex[key as keyof typeof ex]])) };
         preparation = prepareSettledCashBuys(document);
-        for (const [listing, close] of executable) requireEconomic(!data.actions.some(action => action.listing_id === listing
-          && economicInstant(action.published_at) <= at && (data.mode !== "actual_replay" || economicInstant(action.ingested_at!) <= at)
-          && at < economicInstant(action.at) && economicInstant(action.at) <= close), "KNOWN_ACTION_BEFORE_SCHEDULED_CLOSE");
+        for (const [listing, close] of executable) for (const indexed of actionsBetween(listing, at, close))
+          requireEconomic(!actionKnown(indexed, at), "KNOWN_ACTION_BEFORE_SCHEDULED_CLOSE");
       } catch (error) { events.push({ ...base, outcome: "blocked", reason_codes: [failure(error)], cash_intent_id: declaration.id }); return; }
       const planned: Order[] = preparation.orders.map(prepared => {
         const order: Order = { id: prepared.order_id, listing: prepared.listing_id, side: "buy", quantity: new Decimal(prepared.quantity),
@@ -396,14 +411,9 @@ export function runContinuousEconomics(data: ContinuousDataset, plan: Continuous
       const deferred: ObjectValue[] = [];
       for (const order of planned) {
         if (order.state !== "scheduled") continue;
-        const relevant = data.actions.filter(action => action.listing_id === order.listing).sort((a, b) => {
-          const left = economicInstant(a.at), right = economicInstant(b.at);
-          return left < right ? -1 : left > right ? 1 : a.type !== b.type ? a.type === "split" ? -1 : 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-        });
-        for (const action of relevant) {
-          const known = economicInstant(action.published_at) <= at && (data.mode !== "actual_replay" || economicInstant(action.ingested_at!) <= at);
-          const actionAt = economicInstant(action.at);
-          if (known && at < actionAt && actionAt <= order.execute!) deferred.push({ listing_id: order.listing, side: order.side,
+        for (const indexed of actionsBetween(order.listing, at, order.execute!)) {
+          const action = indexed.action;
+          if (actionKnown(indexed, at)) deferred.push({ listing_id: order.listing, side: order.side,
             planned_close_at: economicStamp(order.execute!), action_id: action.id, action_at: action.at });
         }
       }
