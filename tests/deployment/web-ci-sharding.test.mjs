@@ -4,6 +4,16 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { partitionFiles } from '../../web/scripts/ci-web-tests.mjs';
+import * as runner from '../../web/scripts/ci-web-tests.mjs';
+
+test('Web child environment explicitly selects test mode without mutating the parent or losing required executables',()=>{
+  for(const mode of [undefined,'production','development','test']) {
+    const parent={PATH:'/fictional/bin',MARKER:'preserved',...(mode===undefined?{}:{NODE_ENV:mode})},before={...parent};
+    const child=runner.webTestEnvironment(parent);
+    assert.deepEqual(child,{...parent,NODE_ENV:'test'});assert.deepEqual(parent,before);assert.notEqual(child,parent);
+  }
+  assert.match(readFileSync('web/scripts/ci-web-tests.mjs','utf8'),/env: webTestEnvironment\(\)/);
+});
 
 test('Web partition covers every original test file exactly once without depending on enumeration order', () => {
   const plans = Array.from({ length: 8 }, (_, shard) => JSON.parse(execFileSync(process.execPath,

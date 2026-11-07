@@ -7,6 +7,9 @@ import { parseArgs } from 'node:util';
 
 const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const historicalCosts = JSON.parse(readFileSync(path.join(web, 'scripts/ci-web-costs.json'), 'utf8'));
+export function webTestEnvironment(parent = process.env) {
+  return { ...parent, NODE_ENV: 'test' };
+}
 export function partitionFiles(files, count, costs = historicalCosts.seconds_by_file) {
   if (!Number.isInteger(count) || count < 1 || count > 32 || !files.length || new Set(files).size !== files.length) throw new Error('INVALID_TEST_PARTITION');
   if (!costs || typeof costs !== 'object' || Array.isArray(costs) || Object.values(costs).some(value => !Number.isSafeInteger(value) || value < 1)) throw new Error('INVALID_TEST_COST');
@@ -41,7 +44,7 @@ async function main() {
   writeFileSync(base + '.json', JSON.stringify(report, null, 2) + '\n', { flag: 'wx' });
   const log = createWriteStream(base + '.tap', { flags: 'wx' });
   const child = spawn(process.execPath, [path.join(web, 'node_modules/tsx/dist/cli.mjs'), '--test', '--test-concurrency=1', '--test-reporter=tap', ...groups[shard]],
-    { cwd: web, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    { cwd: web, env: webTestEnvironment(), stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout.on('data', value => { process.stdout.write(value); log.write(value); });
   child.stderr.on('data', value => { process.stderr.write(value); log.write(value); });
   const result = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => resolve({ code, signal })); });
