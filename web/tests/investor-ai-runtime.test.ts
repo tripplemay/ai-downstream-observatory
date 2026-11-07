@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { aiSourceFiles } from "../../scripts/ai-explanation-source.mjs";
 import { checkAiRuntimeHealth } from "../scripts/ai-runtime-health.mjs";
+import { aiExplanationImplementationHash } from "../src/server/investor/ai-explanation-process";
 import { investorActor, investorFixture, saveSyntheticProfile, seedSyntheticCandidate } from "./investor-fixture";
 import { hash } from "../src/server/ledger/service";
 import { aiLimitations, aiMonitorContextSchema } from "../src/server/investor/ai-explanation-schemas";
@@ -52,6 +53,14 @@ test("built launcher verifies the complete source map and rejects tampered bundl
     }
     const command = (args: string[]) => spawnSync(process.execPath, [path.join(directory, "web/scripts/run-ai-explanation.mjs"), ...args], { encoding: "utf8", timeout: 20000 });
     assert.equal(command(["--check"]).status, 0);
+    const healthHelper = path.join(directory, "web/scripts/ai-runtime-health.mjs"), healthHelperOriginal = readFileSync(healthHelper);
+    const previousDirectory = process.cwd();
+    try {
+      process.chdir(directory);
+      const before = aiExplanationImplementationHash();
+      writeFileSync(healthHelper, Buffer.concat([healthHelperOriginal, Buffer.from("\n")]));
+      assert.notEqual(aiExplanationImplementationHash(), before, "the shared health source must participate in the explanation implementation binding");
+    } finally { writeFileSync(healthHelper, healthHelperOriginal); process.chdir(previousDirectory); }
     const bundle = path.join(directory, "web/dist/ai-explanation.mjs"), original = readFileSync(bundle);
     writeFileSync(bundle, Buffer.concat([original, Buffer.from("\n")]));
     const changed = command(["--check"]); assert.equal(changed.status, 1); assert.equal(changed.stderr, "AI_RUNTIME_UNAVAILABLE\n");

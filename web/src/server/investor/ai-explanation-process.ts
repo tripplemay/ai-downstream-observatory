@@ -65,7 +65,7 @@ const files = ["worker/research/ai_gateway.py", "worker/research/ai.py", "worker
   "web/src/server/investor/ai-explanation-memory.ts",
   "web/src/server/investor/ai-explanation-store.ts", "web/src/server/investor/ai-explanation-retention.ts",
   "web/src/server/investor/ai-explanation-background.ts", "web/scripts/ai-explanation-worker.ts",
-  "web/scripts/build-ai-explanation.mjs", "web/scripts/run-ai-explanation.mjs", "scripts/ai-explanation-source.mjs",
+  "web/scripts/build-ai-explanation.mjs", "web/scripts/run-ai-explanation.mjs", "web/scripts/ai-runtime-health.mjs", "scripts/ai-explanation-source.mjs",
   "migrations/0038_investor_ai_requests.sql", "migrations/0039_investor_ai_queue_guards.sql",
   "contracts/v1/ai-monitor-context.schema.json", "contracts/v1/ai-monitor-review.schema.json", "contracts/v1/ai-research-review.schema.json", "contracts/v1/common.schema.json"];
 function rootDirectory() { return realpathSync(existsSync(path.resolve("migrations/manifest.json")) ? process.cwd() : path.resolve("..")); }
