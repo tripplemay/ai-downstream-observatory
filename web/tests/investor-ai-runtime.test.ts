@@ -4,7 +4,9 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rm
 import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { aiSourceFiles } from "../../scripts/ai-explanation-source.mjs";
+import { checkAiRuntimeHealth } from "../scripts/ai-runtime-health.mjs";
 import { investorActor, investorFixture, saveSyntheticProfile, seedSyntheticCandidate } from "./investor-fixture";
 import { hash } from "../src/server/ledger/service";
 import { aiLimitations, aiMonitorContextSchema } from "../src/server/investor/ai-explanation-schemas";
@@ -60,6 +62,47 @@ test("built launcher verifies the complete source map and rejects tampered bundl
     // Bad CLI input is refused before it can open a database or execute a caller-selected command.
     const actual = spawnSync(process.execPath, ["scripts/run-ai-explanation.mjs", "--db", "/arbitrary"], { encoding: "utf8", timeout: 20000 });
     assert.equal(actual.status, 1); assert.equal(actual.stderr, "AI_RUNTIME_UNAVAILABLE\n");
+    const manifestFile = path.join(directory, "web/dist/ai-explanation.manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
+    const unusableBundle = Buffer.from('throw new Error("HEALTH_MUST_NOT_IMPORT_APPLICATION");\n');
+    writeFileSync(bundle, unusableBundle);
+    manifest.bundle_sha256 = createHash("sha256").update(unusableBundle).digest("hex");
+    writeFileSync(manifestFile, JSON.stringify(manifest));
+    const guard = path.join(directory, "health-only.cjs");
+    writeFileSync(guard, `const fs=require('node:fs'),original=fs.readFileSync;
+fs.readFileSync=function(file,...args){if(file==='/tmp/etf-ai-runtime-health.json')return JSON.stringify({status:process.env.FICTIONAL_HEALTH_STATUS,at:Date.now()-Number(process.env.FICTIONAL_HEALTH_AGE)});return original.call(this,file,...args)};
+require('node:module').syncBuiltinESMExports();`);
+    const health = (flag = "0", args = ["--health"], age = 0, status = "ready") => spawnSync(process.execPath, ["--require", guard, path.join(directory, "web/scripts/run-ai-explanation.mjs"), ...args],
+      { encoding: "utf8", timeout: 10000, env: { PATH: process.env.PATH, NODE_ENV: "test", WORKBENCH_AI_ENABLE_DISPATCH: flag,
+        FICTIONAL_HEALTH_AGE: String(age), FICTIONAL_HEALTH_STATUS: status } });
+    assert.equal(health().status, 0, "health must verify integrity and heartbeat without importing the application bundle");
+    assert.equal(health("true").status, 1);
+    assert.equal(health("0", ["--health", "--once"]).status, 1);
+    assert.equal(health("0", ["--health"], 120001).status, 1);
+    assert.equal(health("0", ["--health"], -60000).status, 1);
+    assert.equal(health("0", ["--health"], 0, "unavailable").status, 1);
+    const helper = path.join(directory, "web/scripts/ai-runtime-health.mjs"), helperOriginal = readFileSync(helper);
+    writeFileSync(helper, Buffer.concat([helperOriginal, Buffer.from("\n")]));
+    assert.equal(health().status, 1, "health must still reject an altered source file");
+    writeFileSync(helper, helperOriginal);
+    assert.equal(health().status, 0);
+    writeFileSync(bundle, Buffer.concat([unusableBundle, Buffer.from("\n")]));
+    assert.equal(health().status, 1, "health must still reject an altered application bundle");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("lightweight AI health preserves ready, expiry, future-clock and malformed heartbeat rejection", () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "etf-ai-heartbeat-")), file = path.join(directory, "heartbeat.json");
+  const now = 1794027600000;
+  const write = (value: unknown) => writeFileSync(file, JSON.stringify(value));
+  try {
+    for (const at of [now, now - 120000]) { write({ status: "ready", at }); assert.doesNotThrow(() => checkAiRuntimeHealth(file, now)); }
+    for (const value of [{ status: "ready", at: now - 120001 }, { status: "ready", at: now + 1 },
+      { status: "unavailable", at: now }, { status: "ready", at: String(now) }, { status: "ready", at: null }, null, []]) {
+      write(value); assert.throws(() => checkAiRuntimeHealth(file, now));
+    }
+    writeFileSync(file, "{"); assert.throws(() => checkAiRuntimeHealth(file, now));
+    rmSync(file); assert.throws(() => checkAiRuntimeHealth(file, now));
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 

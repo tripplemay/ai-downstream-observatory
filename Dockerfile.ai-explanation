@@ -41,7 +41,7 @@ RUN python3 -m venv /opt/workbench-ai && /opt/workbench-ai/bin/pip install --no-
 COPY --from=production-dependencies /app/web/node_modules ./node_modules/
 COPY --from=builder /app/web/src/server/ ./src/server/
 COPY --from=builder /app/web/package.json /app/web/package-lock.json /app/web/tsconfig.json ./
-COPY --from=builder /app/web/scripts/ai-explanation-worker.ts /app/web/scripts/build-ai-explanation.mjs /app/web/scripts/run-ai-explanation.mjs ./scripts/
+COPY --from=builder /app/web/scripts/ai-explanation-worker.ts /app/web/scripts/ai-runtime-health.mjs /app/web/scripts/build-ai-explanation.mjs /app/web/scripts/run-ai-explanation.mjs ./scripts/
 COPY --from=builder /app/web/dist/ai-explanation.mjs /app/web/dist/ai-explanation.manifest.json ./dist/
 COPY --from=builder /app/scripts/ai-explanation-source.mjs /app/scripts/
 COPY --from=builder /app/contracts/ /app/contracts/
