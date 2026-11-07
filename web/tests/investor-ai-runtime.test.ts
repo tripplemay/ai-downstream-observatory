@@ -53,14 +53,16 @@ test("built launcher verifies the complete source map and rejects tampered bundl
     }
     const command = (args: string[]) => spawnSync(process.execPath, [path.join(directory, "web/scripts/run-ai-explanation.mjs"), ...args], { encoding: "utf8", timeout: 20000 });
     assert.equal(command(["--check"]).status, 0);
-    const healthHelper = path.join(directory, "web/scripts/ai-runtime-health.mjs"), healthHelperOriginal = readFileSync(healthHelper);
     const previousDirectory = process.cwd();
-    try {
-      process.chdir(directory);
-      const before = aiExplanationImplementationHash();
-      writeFileSync(healthHelper, Buffer.concat([healthHelperOriginal, Buffer.from("\n")]));
-      assert.notEqual(aiExplanationImplementationHash(), before, "the shared health source must participate in the explanation implementation binding");
-    } finally { writeFileSync(healthHelper, healthHelperOriginal); process.chdir(previousDirectory); }
+    for (const relative of ["web/scripts/ai-runtime-health.mjs", "web/src/server/market-date.ts"]) {
+      const helperSource = path.join(directory, relative), helperOriginal = readFileSync(helperSource);
+      try {
+        process.chdir(directory);
+        const before = aiExplanationImplementationHash();
+        writeFileSync(helperSource, Buffer.concat([helperOriginal, Buffer.from("\n")]));
+        assert.notEqual(aiExplanationImplementationHash(), before, "shared helper sources must participate in the explanation implementation binding");
+      } finally { writeFileSync(helperSource, helperOriginal); process.chdir(previousDirectory); }
+    }
     const bundle = path.join(directory, "web/dist/ai-explanation.mjs"), original = readFileSync(bundle);
     writeFileSync(bundle, Buffer.concat([original, Buffer.from("\n")]));
     const changed = command(["--check"]); assert.equal(changed.status, 1); assert.equal(changed.stderr, "AI_RUNTIME_UNAVAILABLE\n");

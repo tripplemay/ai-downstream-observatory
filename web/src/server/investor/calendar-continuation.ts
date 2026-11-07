@@ -4,6 +4,7 @@ import { parseStrictJson } from "../strict-json";
 import { priceInstant } from "../market-price-source";
 import { investorInstant } from "./schemas";
 import { validateInvestorSourceDocument } from "./kernel-contracts";
+import { verifyInvestorKernelProof } from "./kernel-read-scope";
 import type { VerifiedSourceReview } from "./source-inputs";
 
 type Obj = Record<string, unknown>;
@@ -14,7 +15,14 @@ function obj(value: unknown): Obj { check(value !== null && typeof value === "ob
 function json(raw: unknown) { check(typeof raw === "string" && Buffer.byteLength(raw) <= 8192); return obj(parseStrictJson(raw)); }
 function rows(value: unknown): Obj[] { check(Array.isArray(value) && value.length > 0 && value.length <= 3660); return value.map(obj); }
 
+/** Pure content only; current review, audit, ownership and expiry stay outside reuse. */
 function verifyCalendar(value: VerifiedSourceReview) {
+  verifyInvestorKernelProof(() => hash({ check: "investor-calendar-facts-v1", source_kind: value.source.kind,
+    created_at: value.row.created_at, valid_until: value.row.valid_until, source_created_at: value.source.created_at, facts: value.facts }),
+  () => verifyCalendarFacts(value));
+}
+
+function verifyCalendarFacts(value: VerifiedSourceReview) {
   check(value.source.kind === "calendar" && investorInstant.safeParse(value.row.created_at).success
     && investorInstant.safeParse(value.row.valid_until).success && investorInstant.safeParse(value.source.created_at).success);
   const facts = value.facts, days = rows(facts.days), start = Date.parse(facts.range_start + "T00:00:00Z");

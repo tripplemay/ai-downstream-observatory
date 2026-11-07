@@ -7,6 +7,7 @@ import { executeInvestorCommand, getInvestorState } from "../src/server/investor
 import { readInvestorCurrentCalendarReview, readInvestorResearchSource } from "../src/server/investor/source-inputs";
 import { readInvestorMonitorEvidenceSource } from "../src/server/investor/monitor-source";
 import { hash, canonical } from "../src/server/ledger/service";
+import { withInvestorKernelReadScope } from "../src/server/investor/kernel-read-scope";
 
 type F = ReturnType<typeof investorFixture>;
 type Obj = Record<string, unknown>;
@@ -65,12 +66,15 @@ test("plain review and later withdrawal never inherit continuity approval", () =
     try {
       const saved = setup(f);
       const original = helper(f, "tests.investor.calendar_continuation_fixture", ["--mode", "append"]);
-      const changed = helper(f, "tests.investor.calendar_continuation_fixture", ["--mode", mode]);
-      assert.equal(changed.unavailable_reason, "REFERENCE_SOURCE_NO_LONGER_CURRENT");
-      const before = f.db.prepare("SELECT total_changes() n").get();
-      assert.equal(readInvestorResearchSource(f.db, saved.workspace_id!, { input_id: null, evidence_input_id: original.source_input_id }, now)?.unavailable_reason, "REFERENCE_SOURCE_NO_LONGER_CURRENT");
-      assert.throws(() => readInvestorCurrentCalendarReview(f.db, saved.workspace_id!, original.original_calendar_review_id, now));
-      assert.deepEqual(f.db.prepare("SELECT total_changes() n").get(), before); noFinance(f);
+      withInvestorKernelReadScope(() => {
+        assert.equal(readInvestorResearchSource(f.db, saved.workspace_id!, { input_id: null, evidence_input_id: original.source_input_id }, now)?.unavailable_reason, null);
+        const changed = helper(f, "tests.investor.calendar_continuation_fixture", ["--mode", mode]);
+        assert.equal(changed.unavailable_reason, "REFERENCE_SOURCE_NO_LONGER_CURRENT");
+        const before = f.db.prepare("SELECT total_changes() n").get();
+        assert.equal(readInvestorResearchSource(f.db, saved.workspace_id!, { input_id: null, evidence_input_id: original.source_input_id }, now)?.unavailable_reason, "REFERENCE_SOURCE_NO_LONGER_CURRENT");
+        assert.throws(() => readInvestorCurrentCalendarReview(f.db, saved.workspace_id!, original.original_calendar_review_id, now));
+        assert.deepEqual(f.db.prepare("SELECT total_changes() n").get(), before); noFinance(f);
+      });
     } finally { f.close(); }
   }
 });
@@ -82,11 +86,13 @@ test("expired intermediate equality witness is not a renewed origin or a new dat
     const first = helper(f, "tests.investor.calendar_continuation_fixture", ["--mode", "append-short"]);
     const second = helper(f, "tests.investor.calendar_continuation_fixture", ["--mode", "append-long"]);
     const at = "2026-01-03T12:00:05.000Z", before = f.db.prepare("SELECT total_changes() n").get();
-    assert.equal(readInvestorCurrentCalendarReview(f.db, saved.workspace_id!, first.original_calendar_review_id, at).row.id, second.new_review_id);
-    assert.equal(readInvestorResearchSource(f.db, saved.workspace_id!, { input_id: null, evidence_input_id: first.source_input_id }, at)?.unavailable_reason, null);
-    const deadline = (f.db.prepare("SELECT valid_until FROM investor_data_reviews WHERE id=?").get(first.original_calendar_review_id) as { valid_until: string }).valid_until;
-    assert.equal(readInvestorCurrentCalendarReview(f.db, saved.workspace_id!, second.new_review_id, deadline).row.id, second.new_review_id);
-    assert.throws(() => readInvestorCurrentCalendarReview(f.db, saved.workspace_id!, first.original_calendar_review_id, deadline));
+    withInvestorKernelReadScope(() => {
+      assert.equal(readInvestorCurrentCalendarReview(f.db, saved.workspace_id!, first.original_calendar_review_id, at).row.id, second.new_review_id);
+      assert.equal(readInvestorResearchSource(f.db, saved.workspace_id!, { input_id: null, evidence_input_id: first.source_input_id }, at)?.unavailable_reason, null);
+      const deadline = (f.db.prepare("SELECT valid_until FROM investor_data_reviews WHERE id=?").get(first.original_calendar_review_id) as { valid_until: string }).valid_until;
+      assert.equal(readInvestorCurrentCalendarReview(f.db, saved.workspace_id!, second.new_review_id, deadline).row.id, second.new_review_id);
+      assert.throws(() => readInvestorCurrentCalendarReview(f.db, saved.workspace_id!, first.original_calendar_review_id, deadline));
+    });
     assert.deepEqual(f.db.prepare("SELECT total_changes() n").get(), before); noFinance(f);
   } finally { f.close(); }
 });

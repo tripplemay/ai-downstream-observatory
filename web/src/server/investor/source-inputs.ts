@@ -4,6 +4,7 @@ import { canonical, hash } from "../ledger/service";
 import { amount } from "../ledger/decimal";
 import { parseStrictJson } from "../strict-json";
 import { priceInstant, replayLongportProjection } from "../market-price-source";
+import { formatMarketLocalDate } from "../market-date";
 import { investorInstant } from "./schemas";
 import { validateInvestorSourceDocument } from "./kernel-contracts";
 import { readInvestorConfirmedCapture } from "./confirmed-source";
@@ -28,8 +29,7 @@ function json(raw: string, maximum = 8388608) { check(Buffer.byteLength(raw) <= 
 function sealed(row: Row, now: string) { const value = json(row.document_json); check(hash(value) === row.content_hash && investorInstant.safeParse(row.created_at).success && row.created_at <= now); return value; }
 function localDate(value: unknown, zone: string) {
   check(typeof value === "string"); priceInstant(value);
-  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(value));
-  return ["year", "month", "day"].map(key => parts.find(part => part.type === key)!.value).join("-");
+  return formatMarketLocalDate(new Date(value), zone);
 }
 function audit(db: Database.Database, workspace: string, row: Row, action: string, kind: string) {
   const owner = db.prepare("SELECT owner_id FROM investor_workspaces WHERE id=?").get(workspace) as { owner_id: string } | undefined;
