@@ -128,7 +128,8 @@ test('AI image selection, config preflight, old writer fences, failure cleanup a
   assert.match(deploy,/--ai-explanation "\$WORKBENCH_AI_ENABLED"/);
   assert.equal((deploy.match(/stop_market_provider_writers\n  stop_ai_explanation_writers/g)??[]).length,2);
   assert.match(deploy,/assert_ai_explanation_stopped\nassert_market_provider_stopped\nassert_no_recovery\nmutation_started=1/);
-  assert.match(deploy,/stop_ai_explanation_writers >\/dev\/null 2>&1 \|\| true[\s\S]*?RESTORE_PENDING_REVIEW/);
+  assert.match(deploy,/write_recovery_barrier \|\| true[\s\S]*?stop_ai_explanation_writers >\/dev\/null 2>&1 \|\| true/);
+  assert.match(deploy,/release-barrier\.py" fence --release "\$release_sha" --data-dir "\$WORKBENCH_DATA_DIR_HOST"/);
   assert.ok(deploy.indexOf('ai-configuration.json')<deploy.indexOf('pre-stop-backup.json'));
   assert.match(deploy,/ai-explanation.*--health > "\$evidence\/ai-readiness\.txt"/);
   assert.match(deploy,/else\n  assert_ai_explanation_stopped\nfi/);

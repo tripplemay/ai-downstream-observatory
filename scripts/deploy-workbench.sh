@@ -327,22 +327,30 @@ else
 fi
 writers_stopped=0
 mutation_started=0
+record_cutover_intent() {
+  python3 "$release_dir/scripts/release-barrier.py" begin --release "$release_sha" --evidence-dir "$evidence" --data-dir "$WORKBENCH_DATA_DIR_HOST" --project "$WORKBENCH_PROJECT" > /dev/null
+}
+write_recovery_barrier() {
+  python3 "$release_dir/scripts/release-barrier.py" fence --release "$release_sha" --data-dir "$WORKBENCH_DATA_DIR_HOST" > /dev/null
+}
 failed() {
   result=$?
-  trap - ERR
+  if (($#)); then result=$1; fi
+  trap - ERR HUP INT TERM
   if ((writers_stopped || mutation_started)); then
+    write_recovery_barrier || true
     compose stop "${start_services[@]}" >/dev/null 2>&1 || true
     stop_market_provider_writers >/dev/null 2>&1 || true
     stop_ai_explanation_writers >/dev/null 2>&1 || true
-    printf '%s\n' '{"reason":"release failed; preserve new facts and reconcile before resuming"}' > "$WORKBENCH_DATA_DIR_HOST/RESTORE_PENDING_REVIEW"
-    chown 10001:10001 "$WORKBENCH_DATA_DIR_HOST/RESTORE_PENDING_REVIEW"
-    chmod 0600 "$WORKBENCH_DATA_DIR_HOST/RESTORE_PENDING_REVIEW"
   fi
   printf '{"release_sha":"%s","status":"failed","database_overwritten":false,"writers_stopped":%s}\n' "$release_sha" "$writers_stopped" > "$evidence/result.json"
   printf 'Release failed; sources and new facts preserved. Review %s\n' "$evidence" >&2
   exit "$result"
 }
 trap failed ERR
+trap 'failed 129' HUP
+trap 'failed 130' INT
+trap 'failed 143' TERM
 compose config --no-env-resolution --quiet
 timeout 30 docker version --format '{{.Server.Version}}' > "$evidence/docker-version.txt"
 if [[ -n "$image_bundle" ]]; then
@@ -371,6 +379,8 @@ if ((first_release == 0)); then assert_release_capacity > "$evidence/capacity-af
 if ((first_release)); then
   compose run --rm --no-deps -e WORKBENCH_DB_PATH= archive-legacy > "$evidence/legacy-online-snapshot.json"
   assert_no_recovery
+  record_cutover_intent
+  assert_no_recovery
   writers_stopped=1
   stop_market_provider_writers
   stop_ai_explanation_writers
@@ -382,6 +392,8 @@ else
   WORKBENCH_RELEASE_SHA="$previous_sha" docker compose --env-file "$config" -p "$WORKBENCH_PROJECT" -f "$previous/docker-compose.yml" run --rm --no-deps backup > "$evidence/pre-stop-backup.json"
   assert_no_recovery
   assert_release_capacity after_online_backup > "$evidence/capacity-before-stop.json"
+  record_cutover_intent
+  assert_no_recovery
   writers_stopped=1
   stop_market_provider_writers
   stop_ai_explanation_writers
