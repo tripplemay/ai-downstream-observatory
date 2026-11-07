@@ -1,5 +1,34 @@
 # Research source reconstruction: bounded pure-validation reuse
 
+## Live overview read investigation, 2026-11-07
+
+An authenticated overview request exhausted its 90-second client budget; matching
+proxy metadata recorded 499 and no response body. A separate network-denied,
+1-CPU, read-only diagnostic sampled the exact deployed source. Its 45.6-second
+CPU profile identified repeated calendar checks and formatter construction.
+The controller hit an asynchronous container-removal assertion; the original
+failure remains, cleanup was subsequently verified without repeating the probe.
+This is not completed public-page, load, recovery or latency-SLA acceptance.
+
+The new Node changes keep all source bytes, arithmetic and currentness checks:
+
+- Calendar content validation uses the existing synchronous, success-only,
+  64-entry kernel proof scope. Its digest binds all consumed facts and kind/time
+  metadata. Current source/version/audit/ownership/expiry and continuity queries
+  remain outside reuse and still execute on every call. Nothing survives the
+  owning synchronous read.
+- Only three fixed Intl formatter configurations are retained. Dates, quotes,
+  permissions and financial conclusions are not cached. Other timezones retain
+  the old uncached behavior. Leap/DST/cross-date output is compared byte-for-byte
+  with the previous implementation, including its error behavior.
+
+New regressions first failed at 20 versus 1 calendar walks and 105 versus 3
+formatter constructions. They also cover a changed last day of a three-year
+calendar, malformed metadata/clock facts, same-scope version changes/withdrawal,
+origin expiry, and independent subsequent reads. These are mechanism counts,
+not an asserted production speedup. Complete exact-head CI, protected rollout
+and a new actual public business read remain required.
+
 ## Purpose
 
 The research path must rebuild admitted history before evaluating a portfolio.

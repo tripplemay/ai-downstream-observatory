@@ -3,6 +3,7 @@ import { lstatSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { aiSourceFiles } from '../../scripts/ai-explanation-source.mjs';
+import { checkAiRuntimeHealth } from './ai-runtime-health.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 export function verifyAiRuntime() {
@@ -21,6 +22,11 @@ try {
   verifyAiRuntime();
   const args = process.argv.slice(2);
   if (args.length === 1 && args[0] === '--check') process.stdout.write('AI_RUNTIME_BUILD_VERIFIED\n');
+  else if (args.length === 1 && args[0] === '--health') {
+    const flag = process.env.WORKBENCH_AI_ENABLE_DISPATCH ?? '0';
+    if (flag !== '0' && flag !== '1') throw new Error('AI_RUNTIME_INPUT_INVALID');
+    checkAiRuntimeHealth();
+  }
   else {
     const worker = await import('../dist/ai-explanation.mjs');
     await worker.main(args, verifyAiRuntime);

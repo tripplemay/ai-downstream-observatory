@@ -8,6 +8,7 @@ import { canonical, hash } from "../ledger/service";
 import { amount } from "../ledger/decimal";
 import { parseStrictJson } from "../strict-json";
 import { priceInstant } from "../market-price-source";
+import { formatMarketLocalDate } from "../market-date";
 import { investorInstant } from "./schemas";
 import { readInvestorSourceReview } from "./source-inputs";
 
@@ -28,8 +29,7 @@ function equal(a: unknown, b: unknown) { check(canonical(a) === canonical(b)); }
 function full(pattern: RegExp, value: unknown): value is string { return typeof value === "string" && pattern.exec(value)?.[0] === value; }
 function utc6(value: unknown): string { check(typeof value === "string"); priceInstant(value); return value.replace(/(?:\.(\d{1,6}))?Z$/, (_, fraction: string | undefined) => "." + (fraction ?? "").padEnd(6, "0") + "Z"); }
 function localDate(value: string, zone: string) {
-  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(value));
-  return ["year", "month", "day"].map(key => parts.find(part => part.type === key)!.value).join("-");
+  return formatMarketLocalDate(new Date(value), zone);
 }
 function target(raw: unknown): Target {
   const value = obj(raw), mapping = obj(value.mapping), market = mapping.market as Target["mapping"]["market"];

@@ -12,6 +12,7 @@ import batchSchema from "../../../contracts/v1/market-price-provider-batch.schem
 import { canonical, hash } from "./ledger/service";
 import { amount } from "./ledger/decimal";
 import { parseStrictJson } from "./strict-json";
+import { formatMarketLocalDate } from "./market-date";
 import { readMarketReferenceVersion, type MappingFacts, type CalendarFacts, type PriceCollectRequest } from "./market-references/service";
 import { verifyScheduledPriceCollectionRequest, type PriceCollectionRequestRow } from "./price-schedules/verification";
 
@@ -32,8 +33,7 @@ export function priceInstant(value: unknown): bigint {
 }
 function utc6(value: string) { priceInstant(value); return value.replace(/(?:\.(\d{1,6}))?Z$/, (_, fraction: string | undefined) => "." + (fraction ?? "").padEnd(6, "0") + "Z"); }
 function localDate(value: string, zone: string) {
-  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(value));
-  return ["year", "month", "day"].map(type => parts.find(part => part.type === type)!.value).join("-");
+  return formatMarketLocalDate(new Date(value), zone);
 }
 const zones = { CN: "Asia/Shanghai", HK: "Asia/Hong_Kong", US: "America/New_York" };
 function selectedReferences(db: Database.Database, portfolio: string, input: PriceCollectRequest, knownAt: string) {

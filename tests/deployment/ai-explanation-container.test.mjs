@@ -2,6 +2,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
+test('both AI and Web runtime images retain the source-bound lightweight health module',()=>{
+  for(const file of ['Dockerfile.ai-explanation','Dockerfile.web']) {
+    const docker=readFileSync(new URL('../../'+file,import.meta.url),'utf8');
+    assert.match(docker,/^COPY --from=builder[^\n]*\/app\/web\/scripts\/ai-runtime-health\.mjs[^\n]*\.\/scripts\/$/m,file);
+  }
+});
+
 test('AI sidecar retains pinned proof sources and defaults to cleanup without broker tools or public ports', () => {
   const docker = readFileSync(new URL('../../Dockerfile.ai-explanation', import.meta.url), 'utf8');
   for (const value of ['build:ai-explanation', 'ai-explanation.manifest.json', 'run-ai-explanation.mjs --check', 'USER 10001:10001',

@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
+import { checkAiRuntimeHealth } from "./ai-runtime-health.mjs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { openWorkbench } from "../src/server/workbench-db";
 import { runInvestorAiBackgroundPass } from "../src/server/investor/ai-explanation-background";
@@ -16,8 +17,7 @@ export async function main(args: string[], verify: () => void) {
     return;
   }
   if (args[0] === "--health") {
-    const health = JSON.parse(readFileSync(healthFile, "utf8"));
-    if (health.status !== "ready" || typeof health.at !== "number" || health.at > Date.now() || Date.now() - health.at > 120000) throw new Error("AI_RUNTIME_NOT_READY");
+    checkAiRuntimeHealth();
     return;
   }
   const abort = new AbortController(), stop = () => abort.abort();

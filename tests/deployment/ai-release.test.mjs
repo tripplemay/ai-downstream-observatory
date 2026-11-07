@@ -108,6 +108,20 @@ ai_configuration_preflight`;
   for(const value of args)assert.doesNotMatch(value,/--env-file|WORKBENCH_DB_PATH|\/app\/data|LONGPORT_|LONGBRIDGE_|PASSWORD|SESSION_SECRET/);
 });
 
+test('AI cutover requires an actually running and Docker-healthy exact service container',()=>{
+  const script=`${definition('assert_ai_explanation_healthy')}
+compose() { printf '%s\\n' "\${IDS:-}"; return "\${LIST_STATUS:-0}"; }
+docker() { [[ "$1" == inspect ]] || exit 90; printf '%s\\n' "\${STATE:-}"; return "\${INSPECT_STATUS:-0}"; }
+assert_ai_explanation_healthy`;
+  const run=extra=>spawnSync('bash',['-c',script],{encoding:'utf8',env:{...process.env,IDS:'a'.repeat(12),STATE:'true healthy',...extra}});
+  assert.equal(run({}).status,0);
+  for(const extra of [{STATE:'true starting'},{STATE:'true unhealthy'},{STATE:'false healthy'},{STATE:''},
+    {IDS:''},{IDS:'unrelated'},{IDS:`${'a'.repeat(12)}\n${'b'.repeat(12)}`},{LIST_STATUS:'1'},{INSPECT_STATUS:'1'}])
+    assert.notEqual(run(extra).status,0,JSON.stringify(extra));
+  assert.match(deploy,/ai-readiness\.txt"\n  assert_ai_explanation_healthy/);
+  assert.ok(deploy.indexOf('ai-readiness.txt')<deploy.indexOf('ln -s "$release_dir"'));
+});
+
 test('AI image selection, config preflight, old writer fences, failure cleanup and health are wired into guarded cutover',()=>{
   const workflow=readFileSync(join(root,'.github/workflows/deploy.yml'),'utf8');
   assert.match(workflow,/ai_explanation:/);assert.match(workflow,/--ai-explanation "\$INCLUDE_AI_EXPLANATION"/);

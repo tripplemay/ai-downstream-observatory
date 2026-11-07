@@ -16,6 +16,7 @@ export function aiSourceFiles(root) {
   for (const folder of ['accounting', 'market', 'orchestration', 'performance', 'research', 'governance_verification', 'investor', 'ai_explanation'])
     scan(`worker/${folder}`, ['.py']);
   names.push('requirements-workbench.txt', 'scripts/ai-explanation-source.mjs', 'web/scripts/ai-explanation-worker.ts',
+    'web/scripts/ai-runtime-health.mjs',
     'web/scripts/build-ai-explanation.mjs', 'web/scripts/run-ai-explanation.mjs', 'web/package.json', 'web/package-lock.json', 'web/tsconfig.json');
   return Object.fromEntries(names.sort().map(relative => {
     let component = root;

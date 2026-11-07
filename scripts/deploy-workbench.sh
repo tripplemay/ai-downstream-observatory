@@ -250,6 +250,13 @@ assert_ai_explanation_stopped() {
     [[ $(docker inspect "$id" --format '{{.State.Running}}') == false ]] || return 1
   done <<< "$ids"
 }
+assert_ai_explanation_healthy() {
+  local id state
+  id=$(compose ps --quiet ai-explanation) || return 1
+  [[ "$id" =~ ^[a-f0-9]{12,64}$ ]] || { printf 'Exact AI service container required\n' >&2; return 1; }
+  state=$(docker inspect "$id" --format '{{.State.Running}} {{.State.Health.Status}}') || return 1
+  [[ "$state" == 'true healthy' ]] || { printf 'AI container health is not ready\n' >&2; return 1; }
+}
 market_provider_ids() {
   local ids id
   ids=$(docker ps --all --filter "label=com.docker.compose.project=$WORKBENCH_PROJECT" --filter 'label=com.docker.compose.service=market-provider' --format '{{.ID}}') || return 1
@@ -410,6 +417,7 @@ else
 fi
 if [[ "$WORKBENCH_AI_ENABLED" == 1 ]]; then
   compose exec -T ai-explanation node /app/web/scripts/run-ai-explanation.mjs --health > "$evidence/ai-readiness.txt"
+  assert_ai_explanation_healthy
 else
   assert_ai_explanation_stopped
 fi
