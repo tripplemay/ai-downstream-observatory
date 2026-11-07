@@ -1,5 +1,47 @@
 # Research source reconstruction: bounded pure-validation reuse
 
+## Cold-read result and per-replay action index, 2026-11-07
+
+The protected `ca80cff` release completed and all five actual containers were
+healthy, but a new authenticated overview still reached the unchanged 90-second
+client deadline with no body. Successful technical cutover is not usable-page
+acceptance. A single bounded, network-denied, read-only profile of this exact
+release completed its own container cleanup and saved 45.45 seconds of samples;
+the state calculation itself did not finish within its original budget.
+Draft/maintenance/history phases took approximately 0.42/2.21/0.03 seconds before
+entering plan evidence. Sampled source reconstruction and kernel verification
+were both substantial; their inclusive timings overlap and are not additive.
+
+Economic replay repeatedly filtered and sorted the complete corporate-action
+history at each mark or order review, reparsing identical timestamps. The new
+implementation builds a listing/time index inside each calculation, preserving
+the original `(observed_at, valuation_at]` and `(decision_at, next_close]`
+boundaries. Equal-time splits precede dividends with the original ID ordering.
+Publication/ingestion knowledge checks, all source and action validation, Decimal
+precision, complete Python/Node arithmetic replay and result seals stay intact.
+No index or authority survives its calculation, and no price/result is reused.
+
+The new scan regression failed first at 715 full-list scans versus zero. Eight
+new cases retain complete pre-index trace hashes for all four engine versions,
+quote/action boundary and permutation behavior, fresh subsequent inputs, absent
+actions and invalid/late-learned facts. The related 65-case suite, including
+Python/Node full-event and ten-year comparisons, passed with no skips. An initial
+boundary fixture incorrectly treated a same-close historical mark as an older
+quote; its failure is retained, and separate same-close/ex-session cases now
+exercise both boundaries without dropping the carry assertions.
+
+Independent cold-process synthetic measurements retained identical complete
+trace hashes: 1,095 days/313 actions took 1.625/1.646 seconds before versus
+0.260/0.259 seconds after in ABBA order; 3,650 days/1,043 actions took 16.147
+versus 0.651 seconds. These deliberately action-dense fixtures establish neither
+representative production speedup nor a latency SLA. Source reconstruction
+remains expensive. TypeScript, all five fixed publishers and the original root
+suite (470 passed, one original optional skip) passed. Clean build
+`J8QqpZPJX45KXcZWHeQwz` passed all 133 HTTP cases with 1612 source files unchanged.
+The public overview, exact-head CI and protected rollout must still be
+independently accepted. No timeout, shard, investment parameter, source-use or
+trading boundary is changed.
+
 ## Live overview read investigation, 2026-11-07
 
 An authenticated overview request exhausted its 90-second client budget; matching
