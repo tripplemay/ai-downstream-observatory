@@ -54,7 +54,7 @@ test("built launcher verifies the complete source map and rejects tampered bundl
     const command = (args: string[]) => spawnSync(process.execPath, [path.join(directory, "web/scripts/run-ai-explanation.mjs"), ...args], { encoding: "utf8", timeout: 20000 });
     assert.equal(command(["--check"]).status, 0);
     const previousDirectory = process.cwd();
-    for (const relative of ["web/scripts/ai-runtime-health.mjs", "web/src/server/market-date.ts", "web/src/server/investor/sealed-json.ts"]) {
+    for (const relative of ["web/scripts/ai-runtime-health.mjs", "web/src/server/market-date.ts", "web/src/server/investor/sealed-json.ts", "web/src/server/investor/kernel-read-scope.ts"]) {
       const helperSource = path.join(directory, relative), helperOriginal = readFileSync(helperSource);
       try {
         process.chdir(directory);

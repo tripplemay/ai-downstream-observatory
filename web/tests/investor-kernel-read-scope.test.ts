@@ -2,7 +2,7 @@ import { hash } from "../src/server/ledger/service";
 import { parseSealedInvestorJson } from "../src/server/investor/sealed-json";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { withInvestorKernelReadScope as scope, verifyInvestorKernelProof as proof } from "../src/server/investor/kernel-read-scope";
+import { investorKernelProofKey, withInvestorKernelReadScope as scope, verifyInvestorKernelProof as proof } from "../src/server/investor/kernel-read-scope";
 import { actionPython, readActionFixtureTimings } from "./action-maintenance-fixture";
 import { investorFixture } from "./investor-fixture";
 import { FictionalPrerequisite } from "./fictional-prerequisite-fixture";
@@ -63,6 +63,58 @@ test("fictional prerequisite capture never copies financial facts or accepts a c
 });
 
 const key = (n: number) => () => n.toString(16).padStart(64, "0");
+test("ephemeral calculation keys bind every supported JSON value without replacing canonical evidence hashes", () => {
+  const value={input:{rows:[{at:"2026-01-01T00:00:00.000001Z",value:"1.00",valid:true}],empty:null},result:{checks:1}};
+  const original=structuredClone(value), persisted=hash(value), first=investorKernelProofKey(value);
+  assert.match(first!,/^[a-f0-9]{64}$/);
+  assert.notEqual(first,persisted);
+  assert.equal(investorKernelProofKey(value),first);
+  const cloned=investorKernelProofKey(structuredClone(value));assert.match(cloned!,/^[a-f0-9]{64}$/);
+  let checks=0;
+  scope(()=>{proof(()=>first,()=>{checks++;});proof(()=>cloned,()=>{checks++;});});
+  assert.equal(checks,cloned===first?1:2,"equivalent V8 representations may miss, never skip a required verification");
+  value.input.rows[0].value="1.01";assert.notEqual(investorKernelProofKey(value),first);
+  value.input.rows[0].value="1.00";value.input.rows[0].valid=false;assert.notEqual(investorKernelProofKey(value),first);
+  assert.equal(hash(original),persisted);
+  for(const [before,after] of [["\ud800","\ufffd"],["\udc00","\ufffd"],[0,-0],[1,null],[false,true]])
+    assert.notEqual(investorKernelProofKey({value:before}),investorKernelProofKey({value:after}));
+  const noPrototype=Object.assign(Object.create(null),{value:1});assert.ok(investorKernelProofKey(noPrototype));
+});
+test("unsupported calculation-key values are uncacheable rather than passed through a lossy serializer", () => {
+  class Foreign { value=1; }
+  for(const value of [undefined,()=>1,Symbol("x"),1n,NaN,Infinity,new Date(0),new Map(),new Set(),new Error("same"),
+    /x/,new Number(1),new Foreign(),Buffer.from([1]),new Uint8Array([1])])
+    assert.equal(investorKernelProofKey(value),null);
+  const aliases={value:1};assert.equal(investorKernelProofKey({left:aliases,right:aliases}),null);
+  const cycle:Record<string,unknown>={};cycle.self=cycle;assert.equal(investorKernelProofKey(cycle),null);
+  let deep:unknown=0;for(let n=0;n<70;n++)deep=[deep];assert.equal(investorKernelProofKey(deep),null);
+  assert.equal(investorKernelProofKey(new Array(1000001).fill(null)),null);
+  const proxy=new Proxy({value:1},{getPrototypeOf(){throw new Error("NON_JSON_PROTO_TRAP");}});
+  assert.equal(investorKernelProofKey(proxy),null);
+  assert.doesNotThrow(()=>hash(proxy),"callers can preserve the original canonical fallback for unsupported representations");
+});
+test("calculation keys decline hidden, accessor, symbolic and sparse fields without invoking getters", () => {
+  let reads=0;
+  const accessor={get value(){reads++;return 1;}};
+  const hidden=Object.defineProperty({value:1},"hidden",{value:2});
+  const symbol={value:1,[Symbol("hidden")]:2};
+  const sparse=new Array(2);sparse[1]=1;
+  const extra=Object.assign([1],{extra:2});
+  const arrayGetter=Object.defineProperty([],0,{get(){reads++;return 1;},enumerable:true});
+  for(const value of [accessor,hidden,symbol,sparse,extra,arrayGetter])assert.equal(investorKernelProofKey(value),null);
+  assert.equal(reads,0);
+});
+test("binary calculation keys share the original success-only 64-proof budget and read isolation", () => {
+  let checks=0;
+  scope(()=>{
+    for(let n=0;n<70;n++)proof(()=>investorKernelProofKey({check:"fictional",value:n}),()=>{checks++;});
+    for(let n=0;n<70;n++)proof(()=>investorKernelProofKey({check:"fictional",value:n}),()=>{checks++;});
+    assert.throws(()=>proof(()=>investorKernelProofKey({invalid:true}),()=>{throw new Error("REJECTED");}),/REJECTED/);
+  });
+  assert.equal(checks,76);
+  scope(()=>proof(()=>investorKernelProofKey({check:"fictional",value:0}),()=>{checks++;}));
+  assert.equal(checks,77);
+});
 test("offline timing diagnostics contain only bounded fixed scalar phases, never child documents or warnings", () => {
   const row={phase:"progress",checks:128,validated:8,hits:120,uncacheable:0,entries:8,key_ms:5.1,validation_ms:12,elapsed_ms:18};
   const line=(value:unknown)=>"FICTIONAL_SHAPE_TIMING "+JSON.stringify(value)+"\n";

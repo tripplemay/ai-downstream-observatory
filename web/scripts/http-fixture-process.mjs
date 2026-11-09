@@ -1,5 +1,17 @@
 import { execFile } from 'node:child_process';
 
+// Register before any requests: a signal exit keeps exitCode null, even after exit.
+export function observeHttpFixtureServer(child) {
+  let spawnError = false, stopping;
+  child.once('error', () => { spawnError = true; });
+  const closed = new Promise(resolve => child.once('close', (exit_code, signal) => resolve({ exit_code, signal })));
+  return () => stopping ??= (async () => {
+    const unexpected_exit = spawnError || child.exitCode !== null || child.signalCode !== null;
+    if (!unexpected_exit) child.kill('SIGTERM');
+    return { ...await closed, spawn_error: spawnError, unexpected_exit };
+  })();
+}
+
 // Keep HTTP close events and idle timers running while fixture children execute.
 export function runHttpFixture(command, args, options) {
   const { input, ...config } = options;

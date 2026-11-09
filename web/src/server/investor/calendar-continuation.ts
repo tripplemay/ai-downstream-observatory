@@ -4,7 +4,7 @@ import { parseStrictJson } from "../strict-json";
 import { priceInstant } from "../market-price-source";
 import { investorInstant } from "./schemas";
 import { validateInvestorSourceDocument } from "./kernel-contracts";
-import { verifyInvestorKernelProof } from "./kernel-read-scope";
+import { investorKernelProofKey, verifyInvestorKernelProof } from "./kernel-read-scope";
 import type { VerifiedSourceReview } from "./source-inputs";
 
 type Obj = Record<string, unknown>;
@@ -17,8 +17,11 @@ function rows(value: unknown): Obj[] { check(Array.isArray(value) && value.lengt
 
 /** Pure content only; current review, audit, ownership and expiry stay outside reuse. */
 function verifyCalendar(value: VerifiedSourceReview) {
-  verifyInvestorKernelProof(() => hash({ check: "investor-calendar-facts-v1", source_kind: value.source.kind,
-    created_at: value.row.created_at, valid_until: value.row.valid_until, source_created_at: value.source.created_at, facts: value.facts }),
+  verifyInvestorKernelProof(() => {
+    const binding = { check: "investor-calendar-facts-v1", source_kind: value.source.kind,
+      created_at: value.row.created_at, valid_until: value.row.valid_until, source_created_at: value.source.created_at, facts: value.facts };
+    return investorKernelProofKey(binding) ?? hash(binding);
+  },
   () => verifyCalendarFacts(value));
 }
 
