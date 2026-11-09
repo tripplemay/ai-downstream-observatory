@@ -5,6 +5,8 @@ import { actionPython, probeActionMutation, resealActionRow } from "./action-mai
 import { investorFixture } from "./investor-fixture";
 import { enqueueActionReviewJob, readActionReviewJobStatus } from "../src/server/investor/action-review-jobs";
 import { readActionReviewConfirmation } from "../src/server/investor/action-review-lineage";
+import { readActionReviewResponse } from "../src/server/investor/action-review-read";
+import { blankActionReviewDrafts, buildActionReviewConfirmation, fillActionReviewNoonAssumptions } from "../src/components/workbench/investor-action-review-client";
 
 type Obj = Record<string, unknown>;
 const AT = "2026-11-03T06:00:03.001Z", LATER = "2026-11-03T06:00:04.001Z", actor = { id: "synthetic-investor" };
@@ -114,4 +116,26 @@ test("a resealed wrong resource or fence is not a truthful worker result", t => 
     resealActionRow(f.db, "investor_action_review_job_results", result.id as string, doc => Object.assign(doc, columns), columns);
   }, () => assert.throws(() => f.status(), mode));
   assert.equal(f.status().request?.status, "preview_ready");
+});
+
+test("explicit local noon assumptions pass the unchanged default core and independent replay without provider or financial writes",t=>{
+  const f=fixture(t);f.preview();
+  const upstream=()=>Object.fromEntries(["investor_issuer_requests","investor_issuer_captures","investor_eodhd_requests","investor_eodhd_captures"]
+    .map(table=>[table,f.db.prepare(`SELECT rowid,* FROM ${table} ORDER BY rowid`).all()]));
+  const original=upstream(),before=f.db.prepare("SELECT total_changes() n").get();
+  const response=readActionReviewResponse(f.db,actor,"a".repeat(64),null,AT);
+  assert.ok(response.view?.confirmation_supported);const view=response.view,clock=Date.parse(AT);
+  const drafts=blankActionReviewDrafts(view).map(draft=>fillActionReviewNoonAssumptions(view,draft,clock));
+  assert.ok(drafts.every(draft=>draft.tax_per_unit===""));
+  assert.throws(()=>buildActionReviewConfirmation(view,drafts,true,false,"fictional-noon-tax-missing",clock),/TAX_REQUIRED/);
+  assert.deepEqual(f.db.prepare("SELECT total_changes() n").get(),before);
+  const explicit=drafts.map(draft=>({...draft,tax_per_unit:"0.432109"}));
+  const intent=buildActionReviewConfirmation(view,explicit,true,false,"fictional-noon-confirmation",clock);
+  const queued=enqueueActionReviewJob(f.db,actor,intent,LATER);f.work(LATER);
+  const status=f.status(LATER);assert.equal(status.request?.status,"confirmed");assert.equal(status.workspace_revision,2);
+  const receipt=readActionReviewConfirmation(f.db,"w",actor.id,status.request!.resource_id,LATER),request=receipt.request as Obj;
+  assert.equal(request.enable_rule,false);assert.equal(receipt.research_admitted,false);assert.equal(receipt.trading_permission,false);
+  assert.deepEqual(request.new_events,[{type:"dividend",date:"2026-11-02",at:"2026-11-02T17:00:00Z",pay_at:"2026-11-09T17:00:00Z",tax_per_unit:"0.432109"}]);
+  assert.deepEqual(enqueueActionReviewJob(f.db,actor,intent,LATER),queued);assert.deepEqual(upstream(),original);
+  assert.equal((f.db.prepare("SELECT count(*) n FROM investor_action_review_confirmations").get() as Obj).n,1);
 });

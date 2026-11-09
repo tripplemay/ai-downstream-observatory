@@ -6,12 +6,12 @@ import { Input } from "@/components/ui/input";
 import { useSessionBoundary } from "@/components/session-boundary";
 import { SESSION_INVALIDATED_EVENT } from "@/components/session-boundary-state";
 import type { ActionReviewResponse, ActionReviewView } from "@/server/investor/action-review-schemas";
-import { useInvestorDisplayClock } from "./investor-display-clock";
+import { useInvestorDisplayTime } from "./investor-display-clock";
 import { InvestorCorrectionImpact } from "./investor-correction-impact";
 import { InvestorActionRecovery } from "./investor-action-recovery";
 import { InvestorCorrectionConsent } from "./investor-correction-consent";
 import { actionReviewAttempt, actionReviewErrorText, blankActionReviewDrafts, buildActionReviewConfirmation,
-  parseActionReviewResponse, readActionReviewJson, type ActionReviewAttempt, type ActionReviewDraft } from "./investor-action-review-client";
+  fillActionReviewNoonAssumptions, parseActionReviewResponse, readActionReviewJson, type ActionReviewAttempt, type ActionReviewDraft } from "./investor-action-review-client";
 
 const field="flex min-w-0 flex-col gap-2 text-sm";
 const labels:Record<string,string>={queued:"已受理，等待后台核对",running:"后台正在核对原文与版本",preview_ready:"预览已登记，确认前仍须核对当前原文",
@@ -54,8 +54,10 @@ export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange
   const tracking=useRef<string|null>(null),viewKey=useRef<string|null>(null),draftSymbol=useRef<string|null>(null);
   const verified=session?.verified===true&&session.sessionBinding===binding&&!invalidated.current;
   const current=useRef({scope,verified,disabled,correctionLocked});current.current={scope,verified,disabled,correctionLocked};
-  const now=useInvestorDisplayClock(data?.checked_at??null,[data?.view?.refresh_after,data?.view?.preview.valid_until]
+  const {now,readNow}=useInvestorDisplayTime(data?.checked_at??null,[data?.view?.refresh_after,data?.view?.preview.valid_until]
     .filter(Boolean).map(value=>Date.parse(value!)).join("|"));
+  const localReview=useRef({view:data?.view??null,drafts,readNow,readOnly:data?.read_only??true});
+  localReview.current={view:data?.view??null,drafts,readNow,readOnly:data?.read_only??true};
   const protectCorrection=useCallback((locked:boolean)=>{
     if(!alive.current||!current.current.verified||current.current.scope!==scope)return;
     current.current.correctionLocked=locked;
@@ -137,6 +139,25 @@ export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange
     }catch(error){setError(actionReviewErrorText(error));}
   }
   function edit(index:number,key:"at"|"pay_at"|"tax_per_unit",value:string) {setDrafts(rows=>rows.map((row,i)=>i===index?{...row,[key]:value}:row));setAck(false);setError("");}
+  function chooseNoon(expected:ActionReviewView,type:ActionReviewDraft["type"],date:string) {
+    const live=localReview.current;
+    if(!alive.current||invalidated.current||current.current.scope!==scope||!current.current.verified||current.current.disabled
+      ||current.current.correctionLocked||active.current||pending.current||live.readOnly||live.view!==expected)return;
+    const draft=live.drafts.find(row=>row.type===type&&row.date===date);
+    if(!draft||draft.at&&(type==="split"||draft.pay_at))return;
+    try {
+      const clock=live.readNow();
+      fillActionReviewNoonAssumptions(expected,draft,clock);
+      setDrafts(rows=>{
+        if(!alive.current||invalidated.current||current.current.scope!==scope||!current.current.verified||current.current.disabled
+          ||current.current.correctionLocked||active.current||pending.current||localReview.current.readOnly||localReview.current.view!==expected)return rows;
+        const currentClock=localReview.current.readNow();
+        if(currentClock>=Date.parse(expected.refresh_after)||currentClock>=Date.parse(expected.preview.valid_until))return rows;
+        return rows.map(row=>row.type===type&&row.date===date?fillActionReviewNoonAssumptions(expected,row,clock):row);
+      });
+      setAck(false);setError("");
+    }catch(error){setError(actionReviewErrorText(error));}
+  }
   const view=data?.view,stale=!view||now>=Date.parse(view.refresh_after)||now>=Date.parse(view.preview.valid_until);
   const locked=disabled||busy||!verified||!!data?.read_only||uncertain||stale;
   return <section aria-labelledby="action-review-title" className="min-w-0 rounded-2xl border bg-card p-5 shadow-sm md:p-6">
@@ -177,6 +198,12 @@ export function InvestorActionReview({workspaceId,binding,disabled,onScopeChange
           <p className="text-sm">来源只报告日期。以下时刻采用 UTC，由你明确选择为研究假设，不冒充提供方的精确时刻；换算后的纽约日期须与来源一致。未知税额不要填零。</p>
           {drafts.map((row,index)=><div key={row.type+row.date} className="grid min-w-0 gap-3 rounded-xl border p-3 sm:grid-cols-2">
             <h4 className="text-sm font-medium sm:col-span-2">{row.date} · {row.type==="dividend"?"分配报告":"拆分报告"}的研究假设</h4>
+            <div className="min-w-0 space-y-2 sm:col-span-2">
+              <p id={`action-review-noon-${index}`} className="text-xs text-muted-foreground">可明确选择纽约当地正午（12:00）作为研究假设，按各日期换算为 UTC；不是来源提供的精确时刻，会影响研究事件的先后顺序。只填写空白时间，不覆盖已有输入，也不填写税额或确认审阅。</p>
+              <Button type="button" variant="outline" className="h-auto min-h-11 max-w-full whitespace-normal text-left"
+                aria-describedby={`action-review-noon-${index}`} disabled={locked||!!row.at&&(row.type==="split"||!!row.pay_at)}
+                onClick={()=>chooseNoon(view,row.type,row.date)}>采用纽约正午假设填写空白时间</Button>
+            </div>
             <label className={field}>研究有效时刻（UTC）<Input type="datetime-local" step="1" required value={row.at} onChange={event=>edit(index,"at",event.target.value)}/></label>
             {row.type==="dividend"&&<><label className={field}>研究支付时刻（UTC）<Input type="datetime-local" step="1" required value={row.pay_at} onChange={event=>edit(index,"pay_at",event.target.value)}/></label>
               <label className={field}>每份研究税额（USD）<Input inputMode="decimal" autoComplete="off" maxLength={60} required value={row.tax_per_unit} onChange={event=>edit(index,"tax_per_unit",event.target.value)}/></label></>}
