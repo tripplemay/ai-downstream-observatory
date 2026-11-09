@@ -135,7 +135,7 @@ jobs:
           else
             mkdir -p "$root/releases"
             stage=$(mktemp -d "$root/releases/.stage-$sha-XXXXXX")
-            tar --extract --gzip --file release.tar.gz --directory "$stage" --no-same-owner
+            tar --extract --gzip --file release.tar.gz --directory "$stage" --no-same-owner --no-same-permissions
             printf '%s\n' "$sha" > "$stage/.release-sha"
             cp release.tar.gz.sha256 "$stage/.release-tar.sha256"
             (cd "$stage" && find . -type f ! -name .release-files.sha256 -print0 | sort -z | xargs -0 sha256sum > .release-files.sha256)

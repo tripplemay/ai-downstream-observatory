@@ -56,6 +56,31 @@ function run(t, program) {
   assert.equal(result.status, 0, result.stderr);
 }
 
+test('actual source staging strips archive write bits before the unchanged host source guard', t => run(t, String.raw`
+workflow=(source.parent/'.github/workflows/deploy.yml').read_text()
+line=next(row.strip() for row in workflow.splitlines() if row.strip().startswith('tar --extract '))
+assert '--no-same-permissions' in line, 'root tar must not preserve Git archive group-write bits'
+for p in [release,*release.rglob('*')]:p.chmod(0o775 if p.is_dir() else 0o664)
+(release/'scripts/deploy-workbench.sh').chmod(0o775)
+archive=r/'release.tar.gz'
+subprocess.run(['tar','--create','--gzip','--file',str(archive),'--directory',str(release),'.'],check=True,capture_output=True)
+before={str(p.relative_to(release)):hashlib.sha256(p.read_bytes()).hexdigest() for p in release.rglob('*') if p.is_file()}
+release.rename(r/'archive-input');release.mkdir(mode=0o700)
+old=line.replace('--no-same-permissions','--same-permissions')
+subprocess.run(['bash','-c','umask 077; stage=$1; '+old,'fixture',str(release)],cwd=r,check=True,capture_output=True)
+j=job()
+try:j._source()
+except ValueError:pass
+else:raise AssertionError('unmodified strict guard must reject the old root extraction modes')
+shutil.rmtree(release);release.mkdir(mode=0o700)
+subprocess.run(['bash','-c','umask 077; stage=$1; '+line,'fixture',str(release)],cwd=r,check=True,capture_output=True)
+j._source()
+assert all(not p.lstat().st_mode&0o022 for p in [release,*release.rglob('*')])
+assert (release/'scripts/deploy-workbench.sh').stat().st_mode&0o100
+assert before=={str(p.relative_to(release)):hashlib.sha256(p.read_bytes()).hexdigest() for p in release.rglob('*') if p.is_file()}
+assert not calls and not (r/'release-jobs').exists()
+`));
+
 test('atomic submission starts one detached exec service, pins the absolute budget and never retries an existing SHA', t => run(t, String.raw`
 j=job();deadline=int(time.time())+120;create=m.barrier['_create'];observed=[]
 def staged(fd,name,value,*args):

@@ -1,5 +1,83 @@
 # Research source reconstruction: bounded pure-validation reuse
 
+## Ephemeral calculation-key encoding, 2026-11-09
+
+Production was read-only verified at `75a7303`, with five healthy roles, no
+recovery barrier, one archive and no plaintext rehearsal. A new exact-source,
+network-denied diagnostic mounted only read-only database/WAL files, with one
+CPU and the unchanged 90-second workload limit. It saved 45.53 seconds of CPU
+samples and removed its own container. The complete state did not finish;
+plan evidence consumed about 67.40 seconds before the next phase began. The
+controller's approximately 100.54 seconds includes termination and cleanup,
+not an enlarged workload budget or completed public-page acceptance.
+
+Source reconstruction and economic replay both remain substantial. In the
+sample, canonical encoding/hash generation and garbage collection were also
+prominent. Inclusive sample durations overlap and must not be added. This is
+not evidence that only encoding causes the full-page latency.
+
+The new helper changes only temporary success-proof identities for calendar
+facts and full research request/result checks. It accepts a bounded plain JSON
+tree, then hashes a domain-separated V8 serialization. Accessors, hidden or
+symbolic fields, exotic prototypes, non-finite values, sparse arrays, aliases,
+cycles, excessive depth or eligibility work fall back to the original canonical
+key path. The first/full verification and every current owner, audit, source,
+version, time and usage check remain unchanged. All persisted canonical hashes,
+Decimal settings, economic replay and the synchronous 64-proof limit are kept.
+No input, returned value, serialized buffer or authority verdict is retained
+in the proof set; it still contains only digests and ends with its owning read.
+
+This encoding is deliberately not a canonical evidence format. Equivalent
+JavaScript representations may serialize differently, causing additional
+verification rather than acceptance. This limitation is documented in the
+[Node 22 serialization API](https://nodejs.org/docs/latest-v22.x/api/v8.html#serialization-api).
+The first local representation-equality assumption failed and its receipt is
+retained; the regression now explicitly requires verification on such misses,
+while retaining changed-value, Unicode and invalid-representation rejection.
+
+Four new scope tests and the existing full scope suite pass 18/18. The related
+Web suites pass 42/42, including independent bounded economics, live latest-head
+checks, same-scope withdrawal, invalid/resealed calendar and owner/audit cases.
+The AI implementation hash now binds the shared helper and its tamper test.
+An offline Node 25.7 ABBA microbenchmark, including fresh JSON parsing, measured
+30 calendar keys at 43.63/38.57 ms canonical versus 27.97/27.54 ms binary; a
+1.22 MB research key took 246.98/246.72 versus 165.80/163.45 ms. This is only
+key-generation evidence, not Node 22/Linux or production latency acceptance.
+Exact-head CI, a fresh authenticated build, and eventual protected rollout remain
+independent gates. No provider, AI, migration, backup or production mutation was
+initiated by this increment.
+
+The separate source-staging fix adds `--no-same-permissions` under the existing
+private umask. Actual archive round trips first reproduce group-writable source
+rejection and then pass the unchanged strict supervisor source guard while
+preserving every byte and owner execute bit. Related release tests pass 22/22;
+Linux/root CI remains required. Existing staged artifacts are not silently
+rewritten, source checks are not relaxed, and release budgets do not change.
+
+The first local HTTP attempt exited without a manifest or retained server log;
+it is incomplete, not passing evidence. A minimal child-process reproduction
+proved a cleanup defect: after a signal exit, `exitCode` stays null and waiting
+for a newly registered `exit` event stalls. This does not establish what
+originally terminated that server. The harness now observes `close` immediately
+after spawn, preserves exit/signal metadata, drains the pipes and rejects an
+unexpected exit without replacing an already recorded case failure. Five new
+cleanup regressions and the original five process guards pass 10/10. No case,
+fixture timeout, job budget or production process was removed or changed.
+
+A fresh full production build and authenticated loopback HTTP run subsequently
+passed all 133 cases in 203.59 seconds, with 1,617 source hashes unchanged and
+normal requested server cleanup. Parent `NODE_ENV` was unset, as in the standard
+HTTP command; the tested Next server explicitly runs in production mode. Both
+the environment difference and cleanup change are recorded, so this success
+does not assign the original failure to either one. The local runtime is Node
+25.7, not Linux Node 22 or real-provider/browser/performance acceptance.
+
+The final original two-level root selection retained all 114 files and passed
+509 tests with one original optional skip, zero failures/cancellations, in
+193.73 seconds. All 1,652 monitored code hashes were unchanged during execution.
+The 274-file Web discovery, historical costs and eight-shard assignment also
+match the base; the new guards were added to existing files, not moved shards.
+
 ## Exact sealed-document proof and original shard preservation, 2026-11-07
 
 The action-index head `723f70f` did not pass full Linux CI: both push and PR

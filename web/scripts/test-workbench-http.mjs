@@ -13,6 +13,7 @@ import { verificationHttpCases } from './verification-http-cases.mjs';
 import { priceScheduleHttpCases } from './price-schedule-http-cases.mjs';
 import { csvBackgroundHttpCases } from './csv-background-http-cases.mjs';
 import { investorHttpCases } from './investor-http-cases.mjs';
+import { observeHttpFixtureServer } from './http-fixture-process.mjs';
 
 const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const root = path.dirname(web);
@@ -69,7 +70,7 @@ async function main() {
   const directory = mkdtempSync(path.join(tmpdir(), 'etf-workbench-http-'));
   const filename = path.join(directory, 'workbench.db');
   const legacy = path.join(directory, 'legacy-must-not-be-opened.db');
-  let server;
+  let server, stopServer;
   let logs = '';
   const password = randomBytes(24).toString('base64url');
   const salt = randomBytes(16);
@@ -165,6 +166,7 @@ async function main() {
           WORKBENCH_PASSWORD_HASH: passwordHash, WORKBENCH_SESSION_SECRET: randomBytes(48).toString('base64url'), WORKBENCH_ORIGIN: origin },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
+      stopServer = observeHttpFixtureServer(server);
       server.stdout.on('data', chunk => { logs = (logs + chunk).slice(-16000); });
       server.stderr.on('data', chunk => { logs = (logs + chunk).slice(-16000); });
       let ready = false;
@@ -2031,10 +2033,13 @@ catch(error) { console.log(JSON.stringify({error:error.message})); } finally {db
       } finally { db.close(); }
     });
   } finally {
-    if (server && server.exitCode === null) await new Promise(resolve => { server.once('exit', resolve); server.kill('SIGTERM'); });
+    if (stopServer) report.server_exit = await stopServer();
     const sanitizedLogs = logs.replaceAll(directory, '[temporary-fixture]').replaceAll(password, '[redacted]');
     writeFileSync(path.join(output, 'server.log'), sanitizedLogs);
     rmSync(directory, { recursive: true, force: true });
+    if (!report.cases.some(item => item.status === 'FAIL')) {
+      assert.ok(!report.server_exit?.unexpected_exit, 'HTTP fixture server exited before requested cleanup.');
+    }
   }
 }
 

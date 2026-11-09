@@ -117,7 +117,7 @@ import { verifyBoundedResearchSummary, type BoundedResearchPlan } from "./bounde
 import type { ContinuousDataset } from "./continuous-market";
 import type { ContinuousParameters } from "./continuous-economics";
 import { executionChecksUsable, phaseExecutionReview } from "./research-execution";
-import { verifyInvestorKernelProof } from "./kernel-read-scope";
+import { investorKernelProofKey, verifyInvestorKernelProof } from "./kernel-read-scope";
 
 const ajv = new Ajv2020({ strict: true, strictRequired: false });
 addFormats(ajv);
@@ -322,13 +322,16 @@ export function verifyInvestorKernelResult(rawRequest: unknown, rawResult: unkno
       const version = object(input.plan).schema_version;
       requireTrue(version === "research-plan-v6" ? ajv.getSchema(strategyResultV3.$id)!(result)
         : version === "research-plan-v5" ? ajv.getSchema(strategyResultV2.$id)!(result) : validateStrategy(result));
-      verifyInvestorKernelProof(() => ["research-plan-v3", "research-plan-v4", "research-plan-v5", "research-plan-v6"].includes(version as string)
-        ? hash({
+      verifyInvestorKernelProof(() => {
+        if (!["research-plan-v3", "research-plan-v4", "research-plan-v5", "research-plan-v6"].includes(version as string)) return null;
+        const binding = {
           input, result, decimal: {
             precision: Decimal.precision, rounding: Decimal.rounding,
             minE: Decimal.minE, maxE: Decimal.maxE, toExpNeg: Decimal.toExpNeg, toExpPos: Decimal.toExpPos, modulo: Decimal.modulo
           }
-        }) : null, () => {
+        };
+        return investorKernelProofKey(binding) ?? hash(binding);
+      }, () => {
           for (const name of ["dataset", "plan", "policy", "profile"]) requireTrue(result[name + "_hash"] === hash(input[name]));
           requireTrue(result.data_mode === object(input.dataset).mode);
           const candidates = object(input.policy).candidates as JsonObject[];
