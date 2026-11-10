@@ -91,6 +91,8 @@ jobs:
           VPS_PATH: ${{ secrets.VPS_PATH }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_SSH_HOST_KEY: ${{ secrets.VPS_SSH_HOST_KEY }}
+          INCLUDE_MARKET_PROVIDER: ${{ inputs.market_provider && '1' || '0' }}
+          INCLUDE_AI_EXPLANATION: ${{ inputs.ai_explanation && '1' || '0' }}
         run: |
           set -euo pipefail
           umask 077
@@ -105,6 +107,10 @@ jobs:
           [[ -s ~/.ssh/id_ed25519 && -s ~/.ssh/known_hosts ]]
           git archive --format=tar.gz --output=release.tar.gz "$RELEASE_SHA"
           sha256sum release.tar.gz > release.tar.gz.sha256
+          python3 scripts/release-image-bundle.py budget --release "$RELEASE_SHA" --directory "$RUNNER_TEMP/etf-release-images" --market-provider "$INCLUDE_MARKET_PROVIDER" --ai-explanation "$INCLUDE_AI_EXPLANATION" --source-archive "$PWD/release.tar.gz" > "$RUNNER_TEMP/upload-budget.json"
+          budget=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["budget_base64"])' "$RUNNER_TEMP/upload-budget.json")
+          [[ "$budget" =~ ^[A-Za-z0-9+/=]+$ && ${#budget} -le 8192 ]]
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "$VPS_USER@$VPS_HOST" python3 - --pre-upload-root "$VPS_PATH" --release "$RELEASE_SHA" --upload-budget "$budget" < scripts/check-release-capacity.py
           image_upload="images-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "$VPS_USER@$VPS_HOST" "set -eu; umask 077; mkdir -p '$VPS_PATH/incoming/$RELEASE_SHA/$image_upload'; test ! -e '$VPS_PATH/incoming/$RELEASE_SHA/$image_upload/release-images.json'; test ! -e '$VPS_PATH/incoming/$RELEASE_SHA/$image_upload/release-images.tar.gz'"
           scp -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4 release.tar.gz release.tar.gz.sha256 "$VPS_USER@$VPS_HOST:$VPS_PATH/incoming/$RELEASE_SHA/"
