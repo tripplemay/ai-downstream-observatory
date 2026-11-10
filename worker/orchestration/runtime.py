@@ -463,7 +463,7 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
     supported = role_commands(role)
     if role == "longport" and (type(lease_seconds) is not int or lease_seconds < 180):
         raise WorkbenchError("PRICE_WORKER_LEASE_TOO_SHORT")
-    if stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
+    if role == "longport" and stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
     def phase(function, *args, **kwargs):
         if timings is None: return function(*args, **kwargs)
         with timings.phase(function.__name__):
@@ -475,8 +475,6 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
     # Honor the existing 120-second provider reservation before any potentially
     # expensive discovery. No new authority or retry; the normal fenced claimant
     # and handler still enforce the live window, mutex and current permissions.
-    if role == "longport" and _close_window_reserved(connection, clock()):
-        return claim()
     if role == "core":
         from worker.investor.epoch_preview_jobs import discover_epoch_previews
         phase(discover_epoch_previews, connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
@@ -530,6 +528,7 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
         phase(discover_current_fx, connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
         phase(discover_issuer_requests, connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
         phase(discover_eodhd_requests, connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
+        if _close_window_reserved(connection, clock()): return claim()
         phase(discover_initial_closes, connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
         phase(discover_confirmed_watches, connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
         phase(discover_epoch_watches, connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)

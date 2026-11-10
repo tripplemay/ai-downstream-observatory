@@ -20,7 +20,8 @@ It introduces no cross-request authorization/result cache and no new service.
 - Positive candidates retain the original source, owner, audit, calendar,
   licensing, expiry, arithmetic, transaction and fencing checks.
 - Within the existing 120-second close reservation, the provider worker checks
-  the normal fenced claimant before discovery. It defers discovery only for
+  the normal fenced claimant after lightweight daily FX/issuer/EODHD request
+  registration but before expensive price discovery. It defers heavy discovery only for
   that bounded window and preserves the existing supported-type filter, mutex,
   oldest-ready ordering and one-job-per-cycle behavior.
 
@@ -30,6 +31,9 @@ Each worker emits `worker_phase_timings` aggregates at most once per minute,
 plus one final non-empty aggregate on shutdown. Metrics contain phase names,
 counts, errors, wall seconds, process CPU seconds and maximum wall duration;
 never source documents, quotes, positions, workspace IDs or credentials.
+The `--once` machine interface retains its original empty-or-one-result JSON
+output with no timing log, including on shutdown. Verifier interruption retains
+its original domain error and evidence behavior.
 
 `cycle` includes its child phases: do not add its time to the child totals.
 Process CPU is not host utilization; use cgroup counter deltas over a measured

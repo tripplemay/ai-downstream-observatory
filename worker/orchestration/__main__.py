@@ -72,10 +72,10 @@ def main(argv=None):
                     print(canonical_json({"error": type(exc).__name__, "message": str(exc)}), file=sys.stderr, flush=True)
                     if args.once:
                         return 1
-                timings.flush()
+                if not args.once: timings.flush()
                 time.sleep(args.poll_seconds)
         finally:
-            timings.flush(force=True)
+            if not args.once: timings.flush(force=True)
             connection.close()
     except (WorkbenchError, OSError) as exc:
         print(canonical_json({"error": str(exc)}), file=sys.stderr)
