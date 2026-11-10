@@ -15,7 +15,7 @@ PARSER = "investor-longbridge-reconstructed-v1"
 
 
 def build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_ids, start_date, end_date, *, now=None, allow_synthetic=False, snapshot_at=None):
-    with _fact_validation_scope():
+    with _fact_validation_scope(reuse=True):
         return _build_dataset(db, workspace_id, capture_ids, action_review_ids, fx_review_ids, start_date, end_date,
             now=now, allow_synthetic=allow_synthetic, snapshot_at=snapshot_at)
 

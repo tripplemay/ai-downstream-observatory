@@ -33,6 +33,29 @@ def rights():
 
 
 class PureFactValidationReuseTests(unittest.TestCase):
+    def test_explicit_nested_reuse_keeps_default_isolation_and_revalidates_changed_facts(self):
+        with patch.object(data_evidence, "validate_contract", wraps=validate_contract) as schema:
+            with _fact_validation_scope():
+                validate_facts("rights", rights())
+                outer = data_evidence._FACT_VALIDATIONS.get()
+                with _fact_validation_scope(reuse=True):
+                    self.assertIs(data_evidence._FACT_VALIDATIONS.get(), outer)
+                    validate_facts("rights", rights())
+                    self.assertEqual(schema.call_count, 1)
+                    changed = rights(); changed["retention_days"] = 29
+                    validate_facts("rights", changed)
+                    self.assertEqual(schema.call_count, 2)
+                with _fact_validation_scope():
+                    self.assertIsNot(data_evidence._FACT_VALIDATIONS.get(), outer)
+                    validate_facts("rights", rights())
+                    self.assertEqual(schema.call_count, 3)
+            self.assertIsNone(data_evidence._FACT_VALIDATIONS.get())
+            with _fact_validation_scope(reuse=True):
+                self.assertEqual(data_evidence._FACT_VALIDATIONS.get(), set())
+                validate_facts("rights", rights())
+            self.assertEqual(schema.call_count, 4)
+        self.assertIsNone(data_evidence._FACT_VALIDATIONS.get())
+
     def test_nested_scopes_restore_outer_cache_and_leave_no_reuse_after_exit(self):
         with patch.object(data_evidence, "validate_contract", wraps=validate_contract) as schema:
             with _fact_validation_scope():
@@ -151,7 +174,7 @@ class SnapshotValidationReuseTests(unittest.TestCase):
         values = fixture.create(self.db, "w", "synthetic-investor", admit=False)
         arguments = (self.db, "w", values["captures"], values["actions"], [], fixture.START, fixture.END)
         before = self.db.total_changes
-        with patch.object(data_snapshot, "_fact_validation_scope", nullcontext), \
+        with patch.object(data_snapshot, "_fact_validation_scope", lambda **_: nullcontext()), \
                 patch.object(data_evidence, "validate_contract", wraps=validate_contract) as schemas:
             original = data_snapshot.build_dataset(*arguments, now=fixture.NOW)
         self.assertEqual(schemas.call_count, len(values["captures"]) * 3 + 2)
