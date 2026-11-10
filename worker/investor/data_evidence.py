@@ -23,8 +23,11 @@ _MAX_FACT_VALIDATIONS = 128
 
 
 @contextmanager
-def _fact_validation_scope():
+def _fact_validation_scope(*, reuse=False):
     """Reuse pure validation only; source/audit/currentness reads never cache."""
+    if reuse and _FACT_VALIDATIONS.get() is not None:
+        with contract_validation_scope(): yield
+        return
     token = _FACT_VALIDATIONS.set(set())
     try:
         with contract_validation_scope(): yield

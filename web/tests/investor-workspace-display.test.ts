@@ -56,6 +56,55 @@ function mount(t: { after: (fn: () => void) => void }, state = displayState(), v
   };
 }
 
+test("registered observation with missing evidence never asks the user to enable it again", async t => {
+  for (const status of ["awaiting_inputs", "awaiting_evaluation", "queued", "running", "retrying", "blocked", "outdated", "expired", "overdue", "failed"] as const) {
+    const state = historicalDisplayState(true); state.model_watch!.status = status;
+    const original = JSON.stringify(state), h = mount(t, state); await h.flush();
+    assert.ok(h.button("暂停观察任务"));
+    assert.match(h.words(h.card("下一次复核")), /观察任务已登记，当前尚无有效监测结论/);
+    assert.match(h.words(h.card("下一次复核")), /无需重复启用/);
+    assert.doesNotMatch(h.words(h.card("下一次复核")), /尚未启用|持续监测 ·/);
+    assert.equal(h.requests.length, 0); assert.equal(JSON.stringify(state), original); h.close();
+  }
+});
+test("absent and paused watches cannot inherit an old active observation's monitoring claim", async t => {
+  for (const paused of [false, true]) {
+    const state = compositionDisplayState();
+    if (paused) { state.model_watch!.enabled = false; state.model_watch!.status = "paused"; }
+    else state.model_watch = null;
+    const original = JSON.stringify(state), h = mount(t, state); await h.flush();
+    assert.equal(state.latest!.document.monitoring, "active");
+    assert.match(h.words(h.card("下一次复核")), paused ? /观察任务已暂停/ : /尚未登记持续观察任务/);
+    assert.doesNotMatch(h.words(h.card("下一次复核")), /持续监测 ·|本次结果的下次复核/);
+    assert.equal(h.requests.length, 0); assert.equal(JSON.stringify(state), original); h.close();
+  }
+});
+test("registered current research results show their review date without asserting a live worker", async t => {
+  for (const outcome of ["observe", "decision_required"] as const) {
+    const state = compositionDisplayState(outcome), original = JSON.stringify(state), h = mount(t, state); await h.flush();
+    assert.match(h.words(h.card("下一次复核")), /观察任务已登记 · 本次结果的下次复核：/);
+    assert.ok(h.words(h.card("下一次复核")).includes(displayUntil));
+    assert.match(h.words(h.card("下一次复核")), /登记状态不代表后台实时在线/);
+    assert.equal(h.requests.length, 0); assert.equal(JSON.stringify(state), original); h.close();
+  }
+});
+test("registered synthetic results remain explicitly test-only in the next-review card", async t => {
+  const h = mount(t, displayState("observe", "watch")); await h.flush();
+  assert.match(h.words(h.card("下一次复核")), /仅有合成测试结果，不作为真实监测结论/);
+  assert.doesNotMatch(h.words(h.card("下一次复核")), /持续监测 ·|本次结果的下次复核/);
+  assert.equal(h.requests.length, 0);
+});
+test("known expiry preserves registration but removes the old review date without requests or clock rollback revival", async t => {
+  const state = compositionDisplayState(), original = JSON.stringify(state), h = mount(t, state); await h.flush();
+  await h.fundingLock(true); await h.advance(until);
+  assert.match(h.words(h.card("下一次复核")), /已知期限已到/);
+  assert.match(h.words(h.card("下一次复核")), /观察任务已登记，当前尚无有效监测结论/);
+  assert.doesNotMatch(h.words(h.card("下一次复核")), /本次结果的下次复核/);
+  await h.advance(before - 10000, 1000); await h.wake();
+  assert.doesNotMatch(h.words(h.card("下一次复核")), /本次结果的下次复核/);
+  assert.equal(h.requests.length, 0); assert.equal(JSON.stringify(state), original);
+});
+
 test("qualified model composition leads the overview while reference evidence stays available in a closed keyboard disclosure", async t => {
   const state = compositionDisplayState(), original = JSON.stringify(state), h = mount(t, state); await h.flush();
   const current = h.card("当前研究模型")!; assert.ok(current);
@@ -74,9 +123,12 @@ test("epoch-scoped controls replace the generic toggle; pending control hides de
   (control.props.onGuardChange as (value:boolean)=>void)(true);await h.flush();
   assert.equal(h.card("当前研究模型"),undefined);assert.equal(h.node("InvestorAiPanel"),undefined);assert.equal(h.headline(),"证据不足");
   assert.match(h.words(h.card("持续观察")),/旧净值和变化暂不作为当前结论/);
+  assert.match(h.words(h.card("下一次复核")),/观察开关正在核对/);
+  assert.doesNotMatch(h.words(h.card("下一次复核")),/本次结果的下次复核/);
   (h.node("InvestorEpochControl")!.props.onChanged as ()=>void)();await h.waitRequests(1);assert.equal(h.requests[0].method,"GET");
   await h.flush();assert.equal(h.card("当前研究模型"),undefined);
   await h.reply(0,{...state,session_binding:binding});assert.ok(h.card("当前研究模型"));assert.ok(h.node("InvestorAiPanel"));
+  assert.match(h.words(h.card("下一次复核")),/本次结果的下次复核/);
   assert.equal(h.requests.filter(row=>row.method==="POST").length,0);
 });
 test("history and epoch controls keep independent locks and require authenticated parent recheck after download changes",async t=>{

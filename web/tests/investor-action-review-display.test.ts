@@ -154,3 +154,54 @@ test("rejected reviews explain every closed failure in ordinary language without
     assert.equal(h.node("form"),undefined);assert.equal(h.requests.filter(row=>row.method==="POST").length,0);h.close();
   }
 });
+
+test("noon assumption shortcut is an explicit local choice and cannot fill tax, consent, enable or submit",async t=>{
+  const h=mount(t);await h.ready();
+  assert.deepEqual(h.nodes().filter(row=>row.type==="Input").map(row=>row.props.value),["","",""]);
+  assert.match(h.text(),/纽约当地正午.*研究假设/);assert.match(h.text(),/不是来源提供的精确时刻/);
+  const button=h.button("采用纽约正午假设填写空白时间")!;assert.equal(button.props.type,"button");
+  await h.click("采用纽约正午假设填写空白时间");
+  assert.deepEqual(h.nodes().filter(row=>row.type==="Input").map(row=>row.props.value),["2026-11-02T17:00:00","2026-11-09T17:00:00",""]);
+  assert.deepEqual(h.nodes().filter(row=>row.type==="input").map(row=>row.props.checked),[false,false]);
+  assert.equal(h.requests.length,1);assert.equal(h.button("采用纽约正午假设填写空白时间")!.props.disabled,true);
+  await h.check(0);h.submit();await h.flush();assert.equal(h.requests.length,1);assert.match(h.text(),/每份研究税额/);
+  await h.edit(2,"0.432109");await h.check(0);h.submit();await h.waitRequests(2);
+  const intent=JSON.parse(h.requests[1].options.body as string);assert.equal(intent.kind,"confirmation");assert.equal(intent.body.enable_rule,false);
+  assert.deepEqual(intent.body.new_events,[{type:"dividend",date:"2026-11-02",at:"2026-11-02T17:00:00Z",pay_at:"2026-11-09T17:00:00Z",tax_per_unit:"0.432109"}]);
+});
+
+test("noon shortcut fills only blank fields, clears prior consent and rejects a retained click after completion or a parent lock",async t=>{
+  const h=mount(t);await h.ready();await h.edit(0,"2026-11-02T14:30");await h.edit(2,"0.5");await h.check(1);await h.check(0);
+  const old=h.button("采用纽约正午假设填写空白时间")!.props.onClick as ()=>void;
+  await h.click("采用纽约正午假设填写空白时间");
+  assert.deepEqual(h.nodes().filter(row=>row.type==="Input").map(row=>row.props.value),["2026-11-02T14:30","2026-11-09T17:00:00","0.5"]);
+  assert.deepEqual(h.nodes().filter(row=>row.type==="input").map(row=>row.props.checked),[false,true]);
+  await h.check(0);old();await h.flush();assert.equal(h.nodes().filter(row=>row.type==="input")[0].props.checked,true);
+  await h.edit(1,"");await h.change({disabled:true});old();await h.flush();
+  assert.equal(h.nodes().filter(row=>row.type==="Input")[1].props.value,"");assert.equal(h.requests.length,1);
+  await h.invalidate();old();await h.flush();assert.equal(h.nodes().some(row=>row.type==="Input"),false);
+  h.close();old();assert.equal(h.requests.length,1);assert.equal(h.timers.size,0);
+});
+
+test("noon shortcut refuses stale clocks, read-only views and pending reads without posting or changing research inputs",async t=>{
+  const h=mount(t);await h.click("查看并复核资料更新");const value=reviewResponse();value.view!.refresh_after=new Date(now+1000).toISOString();await h.reply(0,value);
+  const old=h.button("采用纽约正午假设填写空白时间")!.props.onClick as ()=>void;
+  h.setWall(now+1001);old();await h.flush();
+  assert.deepEqual(h.nodes().filter(row=>row.type==="Input").map(row=>row.props.value),["","",""]);assert.equal(h.requests.length,1);
+  h.setWall(now);await h.click("核对受理状态");old();await h.flush();
+  assert.deepEqual(h.nodes().filter(row=>row.type==="Input").map(row=>row.props.value),["","",""]);
+  await h.reply(1,reviewResponse({read_only:true}));old();await h.flush();
+  assert.equal(h.button("采用纽约正午假设填写空白时间")!.props.disabled,true);assert.equal(h.requests.length,2);
+  assert.equal(h.requests.filter(row=>row.method==="POST").length,0);
+});
+
+test("noon shortcut latches monotonic expiry after a backward wall clock and rejects callbacks from a replaced view",async t=>{
+  const h=mount(t);await h.click("查看并复核资料更新");const value=reviewResponse();value.view!.refresh_after=new Date(now+1000).toISOString();await h.reply(0,value);
+  const old=h.button("采用纽约正午假设填写空白时间")!.props.onClick as ()=>void;
+  await h.advance(now-3600000,1001);old();await h.flush();
+  assert.deepEqual(h.nodes().filter(row=>row.type==="Input").map(row=>row.props.value),["","",""]);assert.equal(h.requests.length,1);
+  h.setWall(now);await h.click("核对受理状态");const replacement=reviewResponse();
+  replacement.view!.refresh_after=new Date(now+10000).toISOString();await h.reply(1,replacement);old();await h.flush();
+  assert.deepEqual(h.nodes().filter(row=>row.type==="Input").map(row=>row.props.value),["","",""]);
+  assert.equal(h.requests.filter(row=>row.method==="POST").length,0);
+});

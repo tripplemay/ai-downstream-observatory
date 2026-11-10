@@ -108,7 +108,7 @@ def source_document(db, workspace_id, input_id, now):
 
 
 def check_source_refs(db, workspace_id, document, now):
-    with _fact_validation_scope():
+    with _fact_validation_scope(reuse=True):
         _check_source_refs(db, workspace_id, document, now)
 
 

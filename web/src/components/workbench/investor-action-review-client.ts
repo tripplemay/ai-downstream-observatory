@@ -17,6 +17,18 @@ async function digest(value:unknown) {
 }
 const ny=new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"});
 function nyDay(at:string) {const parts=ny.formatToParts(new Date(at));return ["year","month","day"].map(key=>parts.find(row=>row.type===key)!.value).join("-");}
+const nyTime=new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York",calendar:"iso8601",numberingSystem:"latn",hourCycle:"h23",
+  year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit"});
+function noonUtcInput(day:string) {
+  const code="ACTION_REVIEW_ASSUMPTION_UNAVAILABLE",start=Date.parse(day+"T12:00:00Z");
+  requireValue(/^\d{4}-\d{2}-\d{2}$/.test(day)&&Number.isFinite(start)&&new Date(start).toISOString().slice(0,10)===day,code);
+  const parts=(at:number)=>Object.fromEntries(nyTime.formatToParts(at).filter(row=>row.type!=="literal").map(row=>[row.type,row.value]));
+  const local=parts(start),at=start+(12-Number(local.hour))*3600000-Number(local.minute)*60000-Number(local.second)*1000;
+  const actual=parts(at);
+  requireValue([actual.year.padStart(4,"0"),actual.month,actual.day].join("-")===day
+    &&actual.hour==="12"&&actual.minute==="00"&&actual.second==="00",code);
+  return new Date(at).toISOString().slice(0,19);
+}
 function utcInput(value:string) {
   requireValue(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(value),"ACTION_REVIEW_TIME_REQUIRED");
   return value+(value.length===16?":00Z":"Z");
@@ -28,6 +40,25 @@ export function blankActionReviewDrafts(view:ActionReviewView):ActionReviewDraft
     if(row.current.splits.length)entries.push({type:"split",date:row.date,at:"",pay_at:"",tax_per_unit:""});
   }
   return entries;
+}
+/** An explicit local research convention, never a provider timestamp or approval. */
+export function fillActionReviewNoonAssumptions(view:ActionReviewView,draft:ActionReviewDraft,now:number):ActionReviewDraft {
+  const code="ACTION_REVIEW_ASSUMPTION_UNAVAILABLE";
+  requireValue(Number.isFinite(now)&&now<Date.parse(view.refresh_after)&&now<Date.parse(view.preview.valid_until),"ACTION_REVIEW_VIEW_STALE");
+  requireValue(view.confirmation_supported&&view.status==="new_reported_actions",code);
+  const changes=view.changes.filter(row=>row.date===draft.date);
+  requireValue(changes.length===1&&changes[0].disposition==="new_report"&&!changes[0].outside_common_coverage,code);
+  const source=changes[0].current;
+  if(draft.type==="split") {
+    requireValue(source.splits.length>0&&source.splits.every(row=>row.date===draft.date),code);
+    return {...draft,at:draft.at||noonUtcInput(draft.date)};
+  }
+  requireValue(draft.type==="dividend"&&source.issuer.length>0&&source.issuer.every(row=>row.ex_date===draft.date),code);
+  const days=new Set(source.issuer.map(row=>row.pay_date));
+  requireValue(days.size===1&&source.issuer[0].pay_date>=draft.date,code);
+  const pay=source.issuer[0].pay_date;
+  requireValue(source.dividends.every(row=>row.date===draft.date&&(row.payment_date===null||row.payment_date===pay)),code);
+  return {...draft,at:draft.at||noonUtcInput(draft.date),pay_at:draft.pay_at||noonUtcInput(pay)};
 }
 export function buildActionReviewConfirmation(view:ActionReviewView,drafts:ActionReviewDraft[],acknowledged:boolean,enable:boolean,nonce:string,now=Date.now()) {
   requireValue(view.confirmation_supported && acknowledged,"ACTION_REVIEW_ACK_REQUIRED");
@@ -87,6 +118,7 @@ export function actionReviewErrorText(error:unknown) {
     ACTION_REVIEW_TIME_REQUIRED:"请填写有效和支付研究时刻（UTC），并确保换算后的纽约日期与来源日期一致。",
     ACTION_REVIEW_TAX_REQUIRED:"请明确填写每份研究税额，范围为零至发行人毛额；不会自动填零。",
     ACTION_REVIEW_VIEW_STALE:"预览已到复核时间，请先重新读取状态；不会延长原确认期限。",
+    ACTION_REVIEW_ASSUMPTION_UNAVAILABLE:"当前报告日期不明确或不能普通追加，不能快捷填写；请逐项核对来源，不会猜测时刻或税额。",
     ACTION_REVIEW_JOB_VERSION_CHANGED:"工作区版本已变化，请重新准备预览并核对，原同意不会沿用。",
     ACTION_REVIEW_JOB_BUSY:"已有任务正在处理，请先核对受理状态。",
     ACTION_REVIEW_JOB_RULE_UNAVAILABLE:"暂时无法定位唯一维护规则，不会采用最新记录覆盖其他来源。",

@@ -1,5 +1,6 @@
 """Actual first-close job lifecycle on invented retained authorities only."""
 
+from collections import Counter
 from copy import deepcopy
 from datetime import timedelta
 import json
@@ -9,7 +10,7 @@ from unittest.mock import patch
 
 from tests.investor import current_first_close_fixture, evidence_fixture, test_initial_prices as history, test_monitor_data as data
 from tests.investor.confirmed_capture_fixture import FictionalReceiver
-from worker.investor import confirmed_capture, confirmed_feed, initial_close, initial_prices
+from worker.investor import confirmed_capture, confirmed_feed, data_evidence, initial_close, initial_prices
 from worker.investor.data_evidence import review_source
 from worker.orchestration.db import WorkbenchError, instant, stamp, open_database
 from worker.orchestration.jobs import claim_job, complete_job, enqueue_job
@@ -130,6 +131,75 @@ class InitialCloseTests(unittest.TestCase):
         result, calls, _ = self.watch(binding_at="2026-01-04T06:58:10.000Z", requests=requests)
         self.assertEqual((result["status"], calls), ("succeeded", 1)); self.assertEqual(requests[0]["watch_seconds"], 290)
         self.assert_no_finance()
+
+    def test_preparation_reuses_exact_pure_facts_but_fenced_commit_validates_fresh(self):
+        self.prepare(); initial_close.discover_initial_closes(self.db, now=EARLY)
+        phase = ["outside"]; counts = {"prepare": Counter(), "commit": Counter()}
+        original_prepare = initial_close.prepare_initial_close
+        original_precision = data_evidence.validate_time_precision
+        def prepare(*args, **kwargs):
+            self.assertIsNone(data_evidence._FACT_VALIDATIONS.get())
+            phase[0] = "prepare"
+            try: return original_prepare(*args, **kwargs)
+            finally:
+                phase[0] = "commit"
+                self.assertIsNone(data_evidence._FACT_VALIDATIONS.get())
+        def precision(facts):
+            if phase[0] in counts:
+                counts[phase[0]][json.dumps(facts, sort_keys=True)] += 1
+            return original_precision(facts)
+        with patch.object(initial_close, "prepare_initial_close", side_effect=prepare), \
+                patch.object(data_evidence, "validate_time_precision", side_effect=precision):
+            result, calls, transport = self.watch()
+        self.assertEqual((result["status"], calls, transport), ("succeeded", 1, 1))
+        self.assertTrue(counts["prepare"])
+        self.assertEqual(sorted(counts["prepare"].values()), [1] * len(counts["prepare"]))
+        self.assertTrue(set(counts["prepare"]) <= set(counts["commit"]))
+        self.assertIsNone(data_evidence._FACT_VALIDATIONS.get())
+        self.assertEqual(self.db.execute("SELECT count(*) FROM investor_confirmed_captures").fetchone()[0], 1)
+        self.assert_no_finance()
+
+    def test_preparation_exception_restores_outer_scope_and_next_call_starts_empty(self):
+        self.prepare(); initial_close.discover_initial_closes(self.db, now=EARLY)
+        lease = claim_job(self.db, "fictional-scope-failure", 300, initial_close.JOB_TYPE, now=START)
+        job = dict(self.db.execute("SELECT * FROM job_runs WHERE id=?", (lease.job_id,)).fetchone())
+        def header(*args, **kwargs):
+            cache = data_evidence._FACT_VALIDATIONS.get()
+            self.assertIsNotNone(cache); self.assertEqual(cache, set())
+            cache.add(("fictional", b"private-scope-marker"))
+            raise WorkbenchError("FICTIONAL_SCOPE_FAILURE")
+        with data_evidence._fact_validation_scope():
+            outer = data_evidence._FACT_VALIDATIONS.get()
+            outer.add(("fictional", b"outer-scope-marker"))
+            with patch.object(initial_close, "request_header", side_effect=header) as headers, \
+                    patch.object(longport_confirmed, "collect_confirmed_days") as sdk:
+                for _ in range(2):
+                    with self.assertRaisesRegex(WorkbenchError, "FICTIONAL_SCOPE_FAILURE"):
+                        initial_close.prepare_initial_close(self.db, job, lease, clock=lambda: START)
+                    self.assertIs(data_evidence._FACT_VALIDATIONS.get(), outer)
+                    self.assertEqual(outer, {("fictional", b"outer-scope-marker")})
+                self.assertEqual(headers.call_count, 2); sdk.assert_not_called()
+        self.assertIsNone(data_evidence._FACT_VALIDATIONS.get())
+        self.assertEqual(self.db.execute("SELECT count(*) FROM investor_confirmed_captures").fetchone()[0], 0)
+        self.assert_no_finance()
+
+    def test_audit_corruption_after_preparation_is_not_hidden_by_pure_validation_scope(self):
+        self.prepare(); initial_close.discover_initial_closes(self.db, now=EARLY)
+        audit_id = self.refs[0]["rights"]["audit_id"]
+        original_prepare = initial_close.prepare_initial_close
+        def prepare(*args, **kwargs):
+            result = original_prepare(*args, **kwargs)
+            self.assertIsNone(data_evidence._FACT_VALIDATIONS.get())
+            self.db.execute("DROP TRIGGER audit_events_no_update")
+            self.db.execute("UPDATE audit_events SET payload_json='{}' WHERE id=?", (audit_id,))
+            return result
+        with patch.object(initial_close, "prepare_initial_close", side_effect=prepare):
+            result, calls, transport = self.watch()
+        self.assertEqual((result["status"], calls, transport), ("skipped", 1, 1))
+        self.assertEqual(self.db.execute("SELECT status FROM investor_initial_close_runs").fetchone()[0], "superseded")
+        self.assertEqual(self.db.execute("SELECT count(*) FROM investor_confirmed_captures").fetchone()[0], 0)
+        row = self.db.execute("SELECT attempt_count,max_attempts FROM job_runs WHERE job_type=?", (initial_close.JOB_TYPE,)).fetchone()
+        self.assertEqual(tuple(row), (1, 1)); self.assert_no_finance()
 
     def test_default_roles_first_close_bootstraps_then_ordinary_next_close_continues_without_replaying_history(self):
         self.prepare()

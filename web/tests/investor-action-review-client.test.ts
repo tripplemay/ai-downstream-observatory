@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { hash } from "../src/server/ledger/service";
 import { actionReviewAcknowledgements } from "../src/server/investor/action-review-schemas";
-import { actionReviewAttempt, actionReviewErrorText, blankActionReviewDrafts, buildActionReviewConfirmation, parseActionReviewResponse, readActionReviewJson } from "../src/components/workbench/investor-action-review-client";
+import { actionReviewAttempt, actionReviewErrorText, blankActionReviewDrafts, buildActionReviewConfirmation, fillActionReviewNoonAssumptions, parseActionReviewResponse, readActionReviewJson } from "../src/components/workbench/investor-action-review-client";
 import { filledReviewDrafts, reviewAt, reviewBinding as binding, reviewIntent, reviewNow as now, reviewResponse, reviewView } from "./action-review-client-fixture";
 
 test("all research assumptions start blank; only explicit tax, UTC instants, consent and separate enable choice enter the exact closed intent",()=>{
@@ -54,4 +54,70 @@ test("client JSON transport is bounded fatal UTF8 and duplicate-key strict, with
   let cancelled=false;const stream=new ReadableStream({start(controller){controller.enqueue(new Uint8Array(4194305));},cancel(){cancelled=true;return new Promise<void>(()=>{});}});
   await assert.rejects(readActionReviewJson(new Response(stream)),/RESPONSE_INVALID/);assert.equal(cancelled,true);
   assert.doesNotMatch(actionReviewErrorText(new Error("SYNTHETIC_PRIVATE_VALUE")),/SYNTHETIC_PRIVATE_VALUE/);
+});
+
+test("explicit noon choice fills only local time assumptions, never tax, consent, rule enabling or source facts",()=>{
+  const view=reviewView(),before=hash(view),blank=blankActionReviewDrafts(view)[0];
+  const filled=fillActionReviewNoonAssumptions(view,blank,now);
+  assert.deepEqual(filled,{...blank,at:"2026-11-02T17:00:00",pay_at:"2026-11-09T17:00:00"});
+  assert.deepEqual(blank,blankActionReviewDrafts(view)[0]);assert.equal(hash(view),before);
+  assert.throws(()=>buildActionReviewConfirmation(view,[filled],true,false,"fictional-no-tax",now),/TAX_REQUIRED/);
+  assert.throws(()=>buildActionReviewConfirmation(view,[{...filled,tax_per_unit:"0.432109"}],false,false,"fictional-no-consent",now),/ACK_REQUIRED/);
+  const intent=buildActionReviewConfirmation(view,[{...filled,tax_per_unit:"0.432109"}],true,false,"fictional-noon",now);
+  assert.equal(intent.body.enable_rule,false);
+  assert.deepEqual(intent.body.new_events,[{type:"dividend",date:"2026-11-02",at:"2026-11-02T17:00:00Z",pay_at:"2026-11-09T17:00:00Z",tax_per_unit:"0.432109"}]);
+  assert.equal(view.research_admitted,false);assert.equal(view.trading_permission,false);assert.equal(view.provider_calls,0);
+});
+
+test("New York noon uses each reported date across DST boundaries and ignores the computer time zone",()=>{
+  const original=process.env.TZ;
+  try {
+    for(const zone of ["UTC","Asia/Bangkok","America/Los_Angeles"]) {
+      process.env.TZ=zone;
+      for(const [day,pay,at,payAt] of [
+        ["2026-03-07","2026-03-08","2026-03-07T17:00:00","2026-03-08T16:00:00"],
+        ["2026-10-31","2026-11-01","2026-10-31T16:00:00","2026-11-01T17:00:00"],
+        ["2028-02-29","2028-03-01","2028-02-29T17:00:00","2028-03-01T17:00:00"],
+      ]) {
+        const view=reviewView(),row=view.changes[0];row.date=day;
+        row.current.issuer[0].ex_date=day;row.current.issuer[0].pay_date=pay;
+        row.current.dividends[0].date=day;row.current.dividends[0].payment_date=pay;
+        const filled=fillActionReviewNoonAssumptions(view,blankActionReviewDrafts(view)[0],now);
+        assert.equal(filled.at,at,zone+":"+day);assert.equal(filled.pay_at,payAt,zone+":"+pay);
+      }
+    }
+  } finally {if(original===undefined)delete process.env.TZ;else process.env.TZ=original;}
+});
+
+test("noon choice preserves every entered value and handles a reported split without inventing a payment or tax",()=>{
+  const view=reviewView(),filled=filledReviewDrafts()[0];
+  assert.deepEqual(fillActionReviewNoonAssumptions(view,filled,now),filled);
+  assert.deepEqual(fillActionReviewNoonAssumptions(view,{...filled,pay_at:""},now),{...filled,pay_at:"2026-11-09T17:00:00"});
+  assert.deepEqual(fillActionReviewNoonAssumptions(view,{...filled,at:""},now),{...filled,at:"2026-11-02T17:00:00"});
+  view.changes[0].current={issuer:[],dividends:[],splits:[{date:"2026-11-02",numerator:"2",denominator:"1",record_hash:"f".repeat(64)}]};
+  const split=fillActionReviewNoonAssumptions(view,blankActionReviewDrafts(view)[0],now);
+  assert.deepEqual(split,{type:"split",date:"2026-11-02",at:"2026-11-02T17:00:00",pay_at:"",tax_per_unit:""});
+  assert.deepEqual(buildActionReviewConfirmation(view,[split],true,false,"fictional-split",now).body.new_events,
+    [{type:"split",date:"2026-11-02",at:"2026-11-02T17:00:00Z"}]);
+});
+
+test("noon choice rejects stale, ambiguous or unqualified source dates instead of guessing or changing a draft",()=>{
+  const base=reviewView(),draft=blankActionReviewDrafts(base)[0],before=hash(draft);
+  for(const clock of [NaN,Infinity,Date.parse(base.refresh_after),Date.parse(base.preview.valid_until)]) {
+    assert.throws(()=>fillActionReviewNoonAssumptions(base,draft,clock),/VIEW_STALE/);
+  }
+  const variants=[{confirmation_supported:false},{status:"historical_correction_required" as const}];
+  for(const variant of variants)assert.throws(()=>fillActionReviewNoonAssumptions({...base,...variant},draft,now),/ASSUMPTION_UNAVAILABLE/);
+  for(const change of [
+    (view:typeof base)=>{view.changes[0].outside_common_coverage=true;},
+    (view:typeof base)=>{view.changes[0].disposition="historical_correction";},
+    (view:typeof base)=>{view.changes.push(structuredClone(view.changes[0]));},
+    (view:typeof base)=>{view.changes[0].current.issuer.push({...view.changes[0].current.issuer[0],pay_date:"2026-11-10"});},
+    (view:typeof base)=>{view.changes[0].current.issuer[0].ex_date="2026-11-01";},
+    (view:typeof base)=>{view.changes[0].current.issuer[0].pay_date="2026-11-01";},
+    (view:typeof base)=>{view.changes[0].current.issuer[0].pay_date="2026-02-30";},
+  ]) {const view=structuredClone(base);change(view);assert.throws(()=>fillActionReviewNoonAssumptions(view,draft,now),/ASSUMPTION_UNAVAILABLE/);}
+  assert.throws(()=>fillActionReviewNoonAssumptions(base,{...draft,date:"2026-11-01"},now),/ASSUMPTION_UNAVAILABLE/);
+  assert.throws(()=>fillActionReviewNoonAssumptions(base,{...draft,type:"split"},now),/ASSUMPTION_UNAVAILABLE/);
+  assert.equal(hash(draft),before);
 });

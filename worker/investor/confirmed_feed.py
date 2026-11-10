@@ -293,6 +293,8 @@ def prepare_confirmed_watch(db, job, lease, *, clock=None, lease_seconds=300, st
         job_type=JOB_TYPE, clock=clock, lease_seconds=lease_seconds, stop_requested=stop_requested)
 
 
+# Cache only pure validation during preparation, never the deferred fenced commit.
+@_fact_validation_scope()
 def _prepare_watch(db, job, lease, *, request_header, current, publish_run, job_type, clock=None, lease_seconds=300, stop_requested=None,
         during_watch=None, before_commit=None, commit_current=None):
     _assert(db.execute("PRAGMA query_only").fetchone()[0] == 0, "WORKBENCH_READ_ONLY")

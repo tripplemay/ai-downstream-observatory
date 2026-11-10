@@ -52,7 +52,7 @@ def main():
         results, timings = {}, {"uncached": [], "scoped": []}
         for _ in range(args.repeats):
             for label in ("uncached", "scoped"):
-                scope = patch.object(data_snapshot, "_fact_validation_scope", nullcontext) if label == "uncached" else nullcontext()
+                scope = patch.object(data_snapshot, "_fact_validation_scope", lambda **_: nullcontext()) if label == "uncached" else nullcontext()
                 with scope:
                     started = perf_counter()
                     result = data_snapshot.build_dataset(*arguments, now=now)
