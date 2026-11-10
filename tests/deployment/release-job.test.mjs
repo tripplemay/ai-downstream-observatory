@@ -160,6 +160,8 @@ test('exit zero alone is not success; actual source, current link, schema and he
 j=job();j.submit(int(time.time())+120);e=phase();containers=fleet()
 j._write('execution.json',{'exit_code':0});(r/'current').symlink_to(release,target_is_directory=True)
 (e/'result.json').write_text(json.dumps({'release_sha':sha,'status':'technical_cutover_verified','local_restore_verified':True}));(e/'result.json').chmod(0o600)
+verified=j._finalize(None,None,None,worker_completed=True);assert verified['status']=='VERIFIED_PENDING_MANAGER_EXIT'
+assert not (j.directory/'terminal.json').exists()
 x=j.finalize('success','exited','0');assert x['status']=='SUCCEEDED' and x['schema_version']==1
 assert not (data/'RESTORE_PENDING_REVIEW').exists()
 unit_state='loaded';assert j.status()['status']=='RUNNING'
@@ -171,8 +173,112 @@ j=job();j.submit(int(time.time())+120);e=phase();containers=fleet('unhealthy')
 j._write('execution.json',{'exit_code':0});(r/'current').symlink_to(release,target_is_directory=True)
 (e/'result.json').write_text(json.dumps({'release_sha':sha,'status':'technical_cutover_verified','local_restore_verified':True}));(e/'result.json').chmod(0o600)
 containers[0]['Config']['Labels']['com.docker.compose.project']='unrelated'
-x=j.finalize('success','exited','0');assert x['status']=='FAILED_RECOVERY_REQUIRED' and x['cleanup_complete'] is False
+x=j._finalize(None,None,None,worker_completed=True);assert x['status']=='FAILED_RECOVERY_REQUIRED' and x['cleanup_complete'] is False
 assert (data/'RESTORE_PENDING_REVIEW').exists() and not any(c[:2]==['docker','stop'] for c in calls)
+`));
+
+test('slow successful verification runs inside the original worker deadline and the stop hook only reads its receipt', t => run(t, String.raw`
+j=job();start=int(time.time());j.clock=lambda:start;j.submit(start+120)
+def success(command,**kw):
+ global containers
+ if command[0]=='bash':
+  calls.append(command);e=phase();containers=fleet();(r/'current').symlink_to(release,target_is_directory=True)
+  p=e/'result.json';p.write_text(json.dumps({'release_sha':sha,'status':'technical_cutover_verified','local_restore_verified':True}));p.chmod(0o600)
+  return subprocess.CompletedProcess(command,0,'','')
+ return backend(command,**kw)
+j.runner=success;original=j._schema;checked=[]
+def slow_schema(path):
+ checked.append(True);j.clock=lambda:start+110;return original(path)
+j._schema=slow_schema
+assert j.worker()==0 and checked==[True] and not (j.directory/'terminal.json').exists()
+assert j._bound('verified.json')['status']=='VERIFIED_PENDING_MANAGER_EXIT'
+j._schema=lambda _:(_ for _ in ()).throw(AssertionError('stop hook must not repeat integrity scan'))
+terminal=j.finalize('success','exited','0')
+assert terminal['status']=='SUCCEEDED' and terminal['completion_basis']=='manager_exit_after_worker_verification'
+assert j.finalize('success','exited','0')==terminal
+assert len([c for c in calls if c[0]=='bash'])==1
+assert '--property=TimeoutStopSec=90s' in next(c for c in calls if c[0]=='systemd-run')
+`));
+
+test('verified cutover alone never turns a killed manager main process into automatic success', t => run(t, String.raw`
+j=job();j.submit(int(time.time())+120);e=phase();containers=fleet()
+j._write('execution.json',{'exit_code':0});(r/'current').symlink_to(release,target_is_directory=True)
+p=e/'result.json';p.write_text(json.dumps({'release_sha':sha,'status':'technical_cutover_verified','local_restore_verified':True}));p.chmod(0o600)
+assert j._finalize(None,None,None,worker_completed=True)['status']=='VERIFIED_PENDING_MANAGER_EXIT'
+assert not (j.directory/'terminal.json').exists()
+j._schema=lambda _:(_ for _ in ()).throw(AssertionError('no full scan in failure hook'))
+x=j.finalize('signal','killed','9')
+assert x['status']=='FAILED_RECOVERY_REQUIRED' and x['cleanup_complete'] is True
+assert (data/'RESTORE_PENDING_REVIEW').is_file() and not any(c['State']['Running'] for c in containers)
+`));
+
+test('manager exit still rechecks live image identity after worker verification without repeating the schema scan', t => run(t, String.raw`
+j=job();j.submit(int(time.time())+120);e=phase();containers=fleet()
+j._write('execution.json',{'exit_code':0});(r/'current').symlink_to(release,target_is_directory=True)
+p=e/'result.json';p.write_text(json.dumps({'release_sha':sha,'status':'technical_cutover_verified','local_restore_verified':True}));p.chmod(0o600)
+assert j._finalize(None,None,None,worker_completed=True)['status']=='VERIFIED_PENDING_MANAGER_EXIT'
+containers[0]['Image']='sha256:'+'9'*64
+j._schema=lambda _:(_ for _ in ()).throw(AssertionError('schema scan stays in worker budget'))
+x=j.finalize('success','exited','0')
+assert x['status']=='FAILED_RECOVERY_REQUIRED' and (data/'RESTORE_PENDING_REVIEW').is_file()
+assert not any(c['State']['Running'] for c in containers)
+`));
+
+test('late successful command cannot buy verification time, and a missing worker receipt cannot be forged by hook success', t => run(t, String.raw`
+j=job();start=int(time.time());j.clock=lambda:start;j.submit(start+120);e=phase();containers=fleet()
+j._write('execution.json',{'exit_code':0});(r/'current').symlink_to(release,target_is_directory=True)
+p=e/'result.json';p.write_text(json.dumps({'release_sha':sha,'status':'technical_cutover_verified','local_restore_verified':True}));p.chmod(0o600)
+j.clock=lambda:start+121
+j._schema=lambda _:(_ for _ in ()).throw(AssertionError('no late full scan'))
+x=j._finalize(None,None,None,worker_completed=True)
+assert x['status']=='FAILED_RECOVERY_REQUIRED' and (data/'RESTORE_PENDING_REVIEW').is_file()
+# A different hook invocation cannot relabel the failure receipt.
+assert j.finalize('success','exited','0')==x
+`));
+
+test('manual reconciliation is explicit, post-deadline, independently verified and never an automatic success receipt', t => run(t, String.raw`
+j=job();start=int(time.time());j.clock=lambda:start;j.submit(start+120);e=phase();containers=fleet()
+j._write('execution.json',{'exit_code':0});(r/'current').symlink_to(release,target_is_directory=True)
+p=e/'result.json';p.write_text(json.dumps({'release_sha':sha,'status':'technical_cutover_verified','local_restore_verified':True}));p.chmod(0o600)
+for acknowledge in (False,True):
+ try:j.reconcile(acknowledge)
+ except ValueError:pass
+ else:raise AssertionError('no implicit or in-budget reconciliation')
+j.clock=lambda:start+121;unit_state='loaded'
+try:j.reconcile(True)
+except ValueError:pass
+else:raise AssertionError('live manager is not reconcilable')
+unit_state='not-found';containers[0]['State']['Health']['Status']='unhealthy'
+try:j.reconcile(True)
+except ValueError:pass
+else:raise AssertionError('current health mandatory')
+containers=fleet();record=j.reconcile(True)
+assert record['status']=='TECHNICAL_CUTOVER_RECONCILED' and record['automatic_release_succeeded'] is False
+assert not (j.directory/'terminal.json').exists() and j.status()['status']=='UNKNOWN_REQUIRES_REVIEW'
+assert j._reconciled() and j._intent()['deadline_epoch']==start+120
+try:j.reconcile(True)
+except ValueError:pass
+else:raise AssertionError('manual operation is once only')
+assert not any(c[:2]==['docker','stop'] or c[0]=='bash' for c in calls)
+`));
+
+test('manual receipt unlocks only a new release submission; changed bound execution is rejected', t => run(t, String.raw`
+j=job();start=int(time.time());j.clock=lambda:start;j.submit(start+120);e=phase();containers=fleet()
+j._write('execution.json',{'exit_code':0});(r/'current').symlink_to(release,target_is_directory=True)
+p=e/'result.json';p.write_text(json.dumps({'release_sha':sha,'status':'technical_cutover_verified','local_restore_verified':True}));p.chmod(0o600)
+old_release=release;old_bundle=bundle;old_sha=sha
+sha='b'*40;release=r/'releases'/sha;shutil.copytree(old_release,release);(release/'.release-sha').write_text(sha+'\n');seal()
+bundle=r/'incoming'/sha/'images-123-1/release-images.json';bundle.parent.mkdir(mode=0o700,parents=True);bundle.write_text(json.dumps({'release_sha':sha,'market_provider':False}));bundle.chmod(0o600)
+next_job=job();next_job.clock=lambda:start+121
+try:next_job.submit(start+241)
+except ValueError as error:assert str(error)=='ANOTHER_RELEASE_REQUIRES_RECONCILIATION'
+else:raise AssertionError('missing terminal requires a separate decision')
+assert not next_job.directory.exists()
+j.clock=lambda:start+121;j.reconcile(True)
+next_job.submit(start+241)
+assert len([c for c in calls if c[0]=='systemd-run'])==2
+p=j.directory/'execution.json';value=json.loads(p.read_text());value['exit_code']=23;p.write_text(json.dumps(value))
+assert not j._reconciled()
 `));
 
 test('expired budgets and unsafe state directories cannot submit a service', t => run(t, String.raw`

@@ -121,6 +121,21 @@ class InitialCloseTests(unittest.TestCase):
             result = run_pending_once(self.db, "fictional-first-close", role="longport", clock=lambda: times[0])
         return result, mock.calls, transport.call_count
 
+    def test_exact_close_reservation_boundary_skips_discovery_and_keeps_once_only_capture(self):
+        from worker.orchestration.runtime import _close_window_reserved
+        self.prepare(); initial_close.discover_initial_closes(self.db, now=EARLY)
+        self.assertFalse(_close_window_reserved(self.db, "2026-01-04T06:55:59.999999Z"))
+        self.assertTrue(_close_window_reserved(self.db, "2026-01-04T06:56:00.000000Z"))
+        self.assertTrue(_close_window_reserved(self.db, "2026-01-04T06:59:30.000000Z"))
+        self.assertFalse(_close_window_reserved(self.db, "2026-01-04T06:59:30.000001Z"))
+        with patch.object(initial_close, "discover_initial_closes", side_effect=AssertionError("NO_SLOW_DISCOVERY")), \
+                patch.object(initial_prices, "discover_initial_prices", side_effect=AssertionError("NO_SLOW_HISTORY_SCAN")):
+            result, calls, transport = self.watch()
+        self.assertEqual((result["status"], calls, transport), ("succeeded", 1, 1))
+        self.assertEqual(result["attempt_count"], 1)
+        self.assertFalse(_close_window_reserved(self.db, START))
+        self.assert_no_finance()
+
     def test_actual_io_boundary_rejects_a_start_window_consumed_by_validation_and_shrinks_remaining_watch(self):
         self.prepare()
         result, calls, transport = self.watch(binding_at=LATE)

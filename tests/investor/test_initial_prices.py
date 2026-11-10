@@ -117,6 +117,39 @@ class InitialPriceTests(unittest.TestCase):
             self.assertEqual(initial_prices.discover_initial_prices(self.db, now=NOW), [])
         sdk.assert_not_called(); self.assertEqual(self.db.total_changes, before); self.assert_no_finance()
 
+    def test_reserved_sessions_skip_reference_rebuild_without_retrying_unknown_outcomes(self):
+        self.prepare(fixed=True)
+        jobs = initial_prices.discover_initial_prices(self.db, now=NOW)
+        self.assertEqual(len(jobs), 2)
+        before = self.db.total_changes
+        attempts = self.db.execute("SELECT count(*) FROM job_attempts").fetchone()[0]
+        with patch.object(initial_prices, "_context", side_effect=AssertionError("NO_IDLE_REBUILD")), \
+                patch.object(longport, "_collect_isolated", side_effect=AssertionError("NO_PROVIDER")):
+            again = initial_prices.discover_initial_prices(self.db, now=NOW)
+        self.assertEqual([job["id"] for job in again], [])
+        self.assertEqual(self.db.total_changes, before)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM job_attempts").fetchone()[0], attempts)
+        self.assert_no_finance()
+
+    def test_negative_header_check_never_authorizes_a_missing_target_or_future_session(self):
+        self.prepare()
+        model = self.db.execute("SELECT * FROM investor_models").fetchone()
+        self.assertTrue(initial_prices._may_need_request(self.db, model, NOW))
+        initial_prices.discover_initial_prices(self.db, now=NOW)
+        self.assertFalse(initial_prices._may_need_request(self.db, model, NOW))
+        # A new session must invalidate the exclusion even with no DB changes.
+        original = initial_prices._calendar_search_header
+        def next_session(*args):
+            value = original(*args)
+            value["facts"]["days"][-1].update(kind="full", close_at="2026-01-03T07:00:00.000Z")
+            return value
+        with patch.object(initial_prices, "_calendar_search_header", side_effect=next_session):
+            self.assertTrue(initial_prices._may_need_request(self.db, model, NOW))
+        with patch.object(initial_prices, "_calendar_search_header", return_value=None):
+            self.assertTrue(initial_prices._may_need_request(self.db, model, NOW))
+        self.assertTrue(initial_prices._may_need_request(self.db, {**dict(model), "plan_id": "missing"}, NOW))
+        self.assert_no_finance()
+
     def test_withdrawn_authority_and_foreign_model_never_reach_sdk(self):
         self.prepare()
         data_evidence.review_source(self.db, "w", "synthetic-investor", self.refs[0]["rights"]["source_id"], "withdrawn", None,

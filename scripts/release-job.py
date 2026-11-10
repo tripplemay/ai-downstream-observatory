@@ -89,7 +89,7 @@ class ReleaseJob:
             os.close(fd)
 
     def _write(self, name, value):
-        require(name in {"intent.json", "started.json", "execution.json", "terminal.json"})
+        require(name in {"intent.json", "started.json", "execution.json", "verified.json", "terminal.json", "reconciliation.json"})
         self._directory(self.directory, True)
         fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
@@ -184,9 +184,9 @@ class ReleaseJob:
                 prior = self._read(directory / "intent.json")
                 other = ReleaseJob(self.root, directory.name, prior["workflow_run"], prior["attempt"], prior["config"],
                                    owner_uid=self.owner_uid, app_uid=self.app_uid, app_gid=self.app_gid, runner=self.runner, clock=self.clock)
-                require((directory / "terminal.json").is_file() and other._bound("terminal.json")["status"] in
-                        {"SUCCEEDED", "FAILED_PRE_CUTOVER", "FAILED_RECOVERY_REQUIRED"}
-                        and other._manager()["ActiveState"] not in ACTIVE,
+                terminal = (directory / "terminal.json").is_file()
+                closed = other._bound("terminal.json")["status"] in {"SUCCEEDED", "FAILED_PRE_CUTOVER", "FAILED_RECOVERY_REQUIRED"} if terminal else other._reconciled()
+                require(closed and other._manager()["ActiveState"] not in ACTIVE,
                         "ANOTHER_RELEASE_REQUIRES_RECONCILIATION")
             require(self._manager()["LoadState"] == "not-found", "RELEASE_UNIT_ALREADY_EXISTS")
             previous = None
@@ -242,6 +242,11 @@ class ReleaseJob:
         except subprocess.TimeoutExpired:
             code = 124
         self._write("execution.json", {"exit_code": code, "finished_at": datetime.now(timezone.utc).isoformat()})
+        if code == 0:
+            # Full verification belongs to ExecStart's original absolute budget,
+            # not the short failure-cleanup hook's TimeoutStopSec.
+            verified = self._finalize(None, None, None, worker_completed=True)
+            return 0 if verified["status"] == "VERIFIED_PENDING_MANAGER_EXIT" else 1
         return code
 
     def _fleet(self, project):
@@ -301,47 +306,109 @@ class ReleaseJob:
             db.close()
 
     def finalize(self, service_result, exit_code, exit_status):
+        return self._finalize(service_result, exit_code, exit_status, worker_completed=False)
+
+    def _cutover_evidence(self):
+        folders = list((self.root / "release-evidence").glob(self.sha + "-*"))
+        require(len(folders) <= 1, "AMBIGUOUS_RELEASE_EVIDENCE_KEEP_BARRIER")
+        evidence = folders[0] if folders else None
+        phase, result, data = None, None, None
+        if evidence:
+            self._directory(evidence, True)
+            if (evidence / "cutover-started.json").exists():
+                phase = self._read(evidence / "cutover-started.json")
+                require(phase.get("format") == "etf-release-cutover-intent-v1" and phase.get("release_sha") == self.sha)
+                require(re.fullmatch(r"[a-z0-9][a-z0-9_-]*", phase.get("project", "")))
+                data = Path(phase["data_dir"])
+                _, fd = barrier["_directory"](data, self.app_uid)
+                os.close(fd)
+            if (evidence / "result.json").exists():
+                result = self._read(evidence / "result.json")
+                require(result.get("release_sha") == self.sha)
+        return evidence, phase, result, data
+
+    def _verify_live_cutover(self, intent, evidence, phase, result, data):
+        require(phase is not None and result is not None and result.get("status") == "technical_cutover_verified" and result.get("local_restore_verified") is True)
+        require(self._source() == intent["source_manifest_sha256"] and
+                hashlib.sha256(self._file(self.config, maximum=1024**2)).hexdigest() == intent["config_sha256"])
+        require((self.root / "current").is_symlink() and (self.root / "current").resolve() == self.release)
+        require(not (data / "RESTORE_PENDING_REVIEW").exists() and not (data / "RESTORE_PENDING_REVIEW").is_symlink())
+        fleet = self._fleet(phase["project"])
+        self._scope_fleet(fleet, phase, intent, True)
+        loaded = self._read(evidence / "image-bundle-verification.json")
+        names = ["web", "worker"] + (["market-provider"] if intent["market_provider"] else []) + (["ai-explanation"] if intent["ai_explanation"] else [])
+        image_ids = loaded["runtime_image_ids"]
+        require(loaded["release_sha"] == self.sha and loaded["status"] == "loaded_images_verified"
+                and type(image_ids) is list and len(image_ids) == len(names)
+                and all(re.fullmatch(r"sha256:[a-f0-9]{64}", item) for item in image_ids))
+        expected = {"etf-workbench-" + name + ":" + self.sha: image for name, image in zip(names, image_ids)}
+        require(all(item["Image"] == expected[item["Config"]["Image"]] for item in fleet))
+        return expected
+
+    def _verify_cutover(self, intent, evidence, phase, result, data):
+        self._verify_live_cutover(intent, evidence, phase, result, data)
+        schema = self._schema(data)
+        self._verify_live_cutover(intent, evidence, phase, result, data)
+        return schema
+
+    def _reconciled(self):
+        if not (self.directory / "reconciliation.json").exists(): return False
+        record = self._bound("reconciliation.json")
+        return (record.get("status") == "TECHNICAL_CUTOVER_RECONCILED" and record.get("automatic_release_succeeded") is False
+            and record.get("execution_sha256") == digest(self.directory / "execution.json")
+            and record.get("source_manifest_sha256") == self._intent()["source_manifest_sha256"])
+
+    def reconcile(self, acknowledge_missing_terminal=False):
+        require(acknowledge_missing_terminal is True, "EXPLICIT_MANUAL_RECONCILIATION_REQUIRED")
+        with self._lock(self.root / ".release-job-submit.lock"), self._lock(self.root / ".release.lock"):
+            intent = self._intent()
+            require(not (self.directory / "terminal.json").exists() and not (self.directory / "reconciliation.json").exists())
+            require(intent["deadline_epoch"] < self.clock() and self._manager()["ActiveState"] not in ACTIVE)
+            execution = self._bound("execution.json")
+            require(type(execution["exit_code"]) is int and execution["exit_code"] == 0)
+            evidence, phase, result, data = self._cutover_evidence()
+            schema = self._verify_cutover(intent, evidence, phase, result, data)
+            require(self._manager()["ActiveState"] not in ACTIVE)
+            return self._write("reconciliation.json", {"status": "TECHNICAL_CUTOVER_RECONCILED",
+                "automatic_release_succeeded": False, "execution_sha256": digest(self.directory / "execution.json"),
+                "source_manifest_sha256": intent["source_manifest_sha256"], "schema_version": schema,
+                "operator_uid": os.geteuid(), "operator_script_sha256": digest(__file__),
+                "finished_at": datetime.now(timezone.utc).isoformat()})
+
+    def _finalize(self, service_result, exit_code, exit_status, *, worker_completed):
         intent = self._intent()
         with self._lock(self.root / ".release.lock"):
             if (self.directory / "terminal.json").exists():
                 return self._bound("terminal.json")
-            folders = list((self.root / "release-evidence").glob(self.sha + "-*"))
-            require(len(folders) <= 1, "AMBIGUOUS_RELEASE_EVIDENCE_KEEP_BARRIER")
-            evidence = folders[0] if folders else None
-            phase, result = None, None
-            if evidence:
-                self._directory(evidence, True)
-                if (evidence / "cutover-started.json").exists():
-                    phase = self._read(evidence / "cutover-started.json")
-                    require(phase.get("format") == "etf-release-cutover-intent-v1" and phase.get("release_sha") == self.sha)
-                    require(re.fullmatch(r"[a-z0-9][a-z0-9_-]*", phase.get("project", "")))
-                    data = Path(phase["data_dir"])
-                    _, fd = barrier["_directory"](data, self.app_uid)
-                    os.close(fd)
-                if (evidence / "result.json").exists():
-                    result = self._read(evidence / "result.json")
-                    require(result.get("release_sha") == self.sha)
+            evidence, phase, result, data = self._cutover_evidence()
             successful, schema = False, None
             try:
                 execution = self._bound("execution.json")
-                require((service_result, exit_code, exit_status) == ("success", "exited", "0") and
-                        type(execution["exit_code"]) is int and execution["exit_code"] == 0)
-                require(phase is not None and result is not None and result.get("status") == "technical_cutover_verified" and result.get("local_restore_verified") is True)
-                require(self._source() == intent["source_manifest_sha256"] and
-                        hashlib.sha256(self._file(self.config, maximum=1024**2)).hexdigest() == intent["config_sha256"])
-                require((self.root / "current").is_symlink() and (self.root / "current").resolve() == self.release)
-                require(not (data / "RESTORE_PENDING_REVIEW").exists() and not (data / "RESTORE_PENDING_REVIEW").is_symlink())
-                fleet = self._fleet(phase["project"])
-                self._scope_fleet(fleet, phase, intent, True)
-                loaded = self._read(evidence / "image-bundle-verification.json")
-                names = ["web", "worker"] + (["market-provider"] if intent["market_provider"] else []) + (["ai-explanation"] if intent["ai_explanation"] else [])
-                image_ids = loaded["runtime_image_ids"]
-                require(loaded["release_sha"] == self.sha and loaded["status"] == "loaded_images_verified"
-                        and type(image_ids) is list and len(image_ids) == len(names)
-                        and all(re.fullmatch(r"sha256:[a-f0-9]{64}", item) for item in image_ids))
-                expected = {"etf-workbench-" + name + ":" + self.sha: image for name, image in zip(names, image_ids)}
-                require(all(item["Image"] == expected[item["Config"]["Image"]] for item in fleet))
-                schema = self._schema(data)
+                require(type(execution["exit_code"]) is int and execution["exit_code"] == 0)
+                require(0 < intent["deadline_epoch"] - self.clock() <= 75 * 60, "RELEASE_DEADLINE_EXPIRED")
+                if worker_completed:
+                    schema = self._verify_cutover(intent, evidence, phase, result, data)
+                    checked = self.clock()
+                    require(0 < intent["deadline_epoch"] - checked <= 75 * 60, "RELEASE_DEADLINE_EXPIRED")
+                    return self._write("verified.json", {"status": "VERIFIED_PENDING_MANAGER_EXIT", "schema_version": schema,
+                        "execution_sha256": digest(self.directory / "execution.json"), "verified_epoch": checked,
+                        "deadline_epoch": intent["deadline_epoch"], "source_manifest_sha256": intent["source_manifest_sha256"],
+                        "cutover_intent_sha256": digest(evidence / "cutover-started.json"), "result_sha256": digest(evidence / "result.json"),
+                        "image_verification_sha256": digest(evidence / "image-bundle-verification.json")})
+                verified = self._bound("verified.json")
+                require((service_result, exit_code, exit_status) == ("success", "exited", "0"))
+                require(verified["status"] == "VERIFIED_PENDING_MANAGER_EXIT" and
+                        verified["execution_sha256"] == digest(self.directory / "execution.json") and
+                        verified["source_manifest_sha256"] == intent["source_manifest_sha256"] and
+                        verified["deadline_epoch"] == intent["deadline_epoch"] and
+                        type(verified["verified_epoch"]) in (int, float) and verified["verified_epoch"] <= self.clock() < intent["deadline_epoch"])
+                require(evidence is not None and verified["cutover_intent_sha256"] == digest(evidence / "cutover-started.json") and
+                        verified["result_sha256"] == digest(evidence / "result.json") and
+                        verified["image_verification_sha256"] == digest(evidence / "image-bundle-verification.json"))
+                self._verify_live_cutover(intent, evidence, phase, result, data)
+                schema = verified["schema_version"]
+                require(type(schema) is int and schema > 0)
+                require(0 < intent["deadline_epoch"] - self.clock() <= 75 * 60, "RELEASE_DEADLINE_EXPIRED")
                 successful = True
             except (OSError, ValueError, KeyError, TypeError, sqlite3.Error, subprocess.SubprocessError):
                 pass
@@ -366,6 +433,7 @@ class ReleaseJob:
                         cleanup = False
             return self._write("terminal.json", {"status": status, "cleanup_complete": cleanup,
                 "schema_version": schema, "database_overwritten": False, "service_result": service_result,
+                "completion_basis": "manager_exit_after_worker_verification" if successful else "worker_verification_failure" if worker_completed else "stop_hook_failure_cleanup",
                 "finished_at": datetime.now(timezone.utc).isoformat()})
 
     def status(self):
@@ -382,16 +450,18 @@ class ReleaseJob:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=("submit", "worker", "finalize", "status"))
+    parser.add_argument("phase", choices=("submit", "worker", "finalize", "status", "reconcile"))
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--release", required=True)
     parser.add_argument("--workflow-run", required=True)
     parser.add_argument("--attempt", required=True)
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--deadline", type=int)
+    parser.add_argument("--acknowledge-missing-terminal", action="store_true")
     args = parser.parse_args()
     require(os.geteuid() == 0, "AUTHORIZED_ROOT_OPERATOR_REQUIRED")
     require((args.deadline is not None) == (args.phase == "submit"))
+    require(args.acknowledge_missing_terminal == (args.phase == "reconcile"))
     job = ReleaseJob(args.root, args.release, args.workflow_run, args.attempt, args.config)
     if args.phase in ("worker", "finalize"):
         require(re.fullmatch(r"[a-f0-9]{32}", os.environ.get("INVOCATION_ID", "")) is not None, "MANAGED_RELEASE_CONTEXT_REQUIRED")
@@ -401,6 +471,8 @@ def main():
         raise SystemExit(job.worker())
     elif args.phase == "finalize":
         value = job.finalize(os.environ.get("SERVICE_RESULT"), os.environ.get("EXIT_CODE"), os.environ.get("EXIT_STATUS"))
+    elif args.phase == "reconcile":
+        value = job.reconcile(args.acknowledge_missing_terminal)
     else:
         value = job.status()
     print(json.dumps(value, sort_keys=True))

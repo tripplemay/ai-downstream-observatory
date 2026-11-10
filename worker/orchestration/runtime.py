@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from datetime import timedelta
 
 from worker.market import ingest_document, persist_valuation, prepare_valuation
 from worker.market.contracts import validate_contract
@@ -11,7 +12,7 @@ from worker.research import (
     freeze_candidate, persist_trial, prepare_trial, record_review, record_trial_failure,
     register_experiment, register_trial, review_context, unseal_holdout,
 )
-from .db import WorkbenchError, content_hash
+from .db import WorkbenchError, content_hash, instant, stamp
 from .evaluations import discover_due_cycles, monthly_request_binding
 from .collections import (
     COLLECTION_TERMINAL_CODES, collection_request_binding, discover_due_collections,
@@ -442,28 +443,53 @@ def command_handler(connection, clock=None, lease_seconds=300, stop_requested=No
     return handle
 
 
+def _close_window_reserved(connection, at):
+    current = stamp(at)
+    horizon = stamp(instant(current) + timedelta(seconds=120))
+    for kind, table in (("investor_initial_close", "investor_initial_close_requests"),
+                        ("investor_confirmed_watch", "investor_confirmed_feed_requests"),
+                        ("investor_epoch_confirmed_watch", "investor_epoch_feed_requests")):
+        if connection.execute(f"""SELECT 1 FROM job_runs j JOIN {table} r ON r.id=j.period AND r.workspace_id=j.scope
+            WHERE j.job_type=? AND j.status IN ('queued','retry_queued') AND j.attempt_count<j.max_attempts
+              AND j.not_before<=? AND r.latest_start>=? LIMIT 1""", (kind, horizon, current)).fetchone():
+            return True
+    return False
+
+
 def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery_limit=100, stop_requested=None,
                      discovery_state=None, role="core", collection_discovery_limit=100, collection_discovery_state=None,
-                     price_collection_discovery_limit=100, price_collection_discovery_state=None):
+                     price_collection_discovery_limit=100, price_collection_discovery_state=None, timings=None):
     clock = (lambda: None) if clock is None else clock
     supported = role_commands(role)
     if role == "longport" and (type(lease_seconds) is not int or lease_seconds < 180):
         raise WorkbenchError("PRICE_WORKER_LEASE_TOO_SHORT")
+    if role == "longport" and stop_requested and stop_requested(): raise WorkbenchError("WORKER_STOP_REQUESTED")
+    def phase(function, *args, **kwargs):
+        if timings is None: return function(*args, **kwargs)
+        with timings.phase(function.__name__):
+            return function(*args, **kwargs)
+    types = (*supported, "investor_research", "investor_funded_study", "investor_monitor", "investor_evidence_monitor", "investor_epoch_preview", "investor_epoch_control", "investor_epoch_history_workflow", "investor_action_review", "investor_legacy_transition", "investor_correction_impact", "investor_correction_consent") if role == "core" else (*supported, "investor_confirmed_watch", "investor_epoch_confirmed_watch", "investor_initial_close", "investor_initial_prices", "investor_epoch_history", "investor_current_fx", "investor_issuer_capture", "investor_eodhd_capture") if role == "longport" else supported
+    def claim():
+        return phase(run_one, connection, owner, command_handler(connection, clock, lease_seconds, stop_requested, role),
+            job_type=types, lease_seconds=lease_seconds, clock=clock)
+    # Honor the existing 120-second provider reservation before any potentially
+    # expensive discovery. No new authority or retry; the normal fenced claimant
+    # and handler still enforce the live window, mutex and current permissions.
     if role == "core":
         from worker.investor.epoch_preview_jobs import discover_epoch_previews
-        discover_epoch_previews(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(discover_epoch_previews, connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         from worker.investor.epoch_history_workflow import discover_history_workflows
-        discover_history_workflows(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(discover_history_workflows, connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         from worker.investor.epoch_control_jobs import discover_epoch_controls
-        discover_epoch_controls(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(discover_epoch_controls, connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         from worker.investor.correction_consent import discover_correction_consents
-        discover_correction_consents(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(discover_correction_consents, connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         from worker.investor.correction_impact_jobs import discover_correction_impact_requests
-        discover_correction_impact_requests(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(discover_correction_impact_requests, connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         from worker.investor.legacy_transition_jobs import discover_legacy_transition_requests
-        discover_legacy_transition_requests(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(discover_legacy_transition_requests, connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         from worker.investor.action_review_jobs import discover_action_review_requests
-        discover_action_review_requests(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(discover_action_review_requests, connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         from worker.investor.runtime import sync_research_requests
         from worker.investor.funded_study_runtime import sync_funded_study_requests
         from worker.investor.funded_result_retention import purge_due_funded_results
@@ -475,22 +501,22 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
         from worker.investor.managed_fx import publish_current_fx
         from worker.investor.managed_actions import publish_current_actions
         from worker.investor.monitor_costs import refresh_cost_inputs
-        purge_due_source_payloads(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
-        publish_current_fx(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
-        publish_current_actions(connection, limit=discovery_limit, clock=clock, stop_requested=stop_requested)
-        refresh_cost_inputs(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
-        admit_completed_feeds(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
-        refresh_monitor_sources(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
-        bootstrap_monitor_inputs(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(purge_due_source_payloads, connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(publish_current_fx, connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(publish_current_actions, connection, limit=discovery_limit, clock=clock, stop_requested=stop_requested)
+        phase(refresh_cost_inputs, connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(admit_completed_feeds, connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(refresh_monitor_sources, connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(bootstrap_monitor_inputs, connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
         from worker.investor.epoch_continuation import discover_epoch_continuations
-        discover_epoch_continuations(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
-        sync_research_requests(connection, limit=discovery_limit, now=clock())
-        purge_due_funded_results(connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
-        sync_funded_study_requests(connection, limit=discovery_limit, now=clock())
-        discover_monitor_requests(connection, limit=discovery_limit, now=clock())
-        discover_evidence_monitor_requests(connection, limit=discovery_limit, now=clock())
-        discover_due_cycles(connection, limit=discovery_limit, now=clock(), state=discovery_state)
-        discover_due_collections(connection, limit=collection_discovery_limit, now=clock(), state=collection_discovery_state)
+        phase(discover_epoch_continuations, connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(sync_research_requests, connection, limit=discovery_limit, now=clock())
+        phase(purge_due_funded_results, connection, limit=discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(sync_funded_study_requests, connection, limit=discovery_limit, now=clock())
+        phase(discover_monitor_requests, connection, limit=discovery_limit, now=clock())
+        phase(discover_evidence_monitor_requests, connection, limit=discovery_limit, now=clock())
+        phase(discover_due_cycles, connection, limit=discovery_limit, now=clock(), state=discovery_state)
+        phase(discover_due_collections, connection, limit=collection_discovery_limit, now=clock(), state=collection_discovery_state)
     elif role == "longport":
         from worker.investor.initial_close import discover_initial_closes
         from worker.investor.confirmed_feed import discover_confirmed_watches
@@ -499,17 +525,18 @@ def run_pending_once(connection, owner, lease_seconds=300, clock=None, discovery
         from worker.investor.managed_fx import discover_current_fx
         from worker.investor.issuer_schedule import discover_issuer_requests
         from worker.investor.eodhd_sources import discover_eodhd_requests
-        discover_current_fx(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
-        discover_issuer_requests(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
-        discover_eodhd_requests(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
-        discover_initial_closes(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
-        discover_confirmed_watches(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
-        discover_epoch_watches(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
-        discover_initial_prices(connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
-        discover_due_price_collections(connection, limit=price_collection_discovery_limit, now=clock(),
+        phase(discover_current_fx, connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(discover_issuer_requests, connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(discover_eodhd_requests, connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
+        if _close_window_reserved(connection, clock()): return claim()
+        phase(discover_initial_closes, connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(discover_confirmed_watches, connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(discover_epoch_watches, connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
+        if _close_window_reserved(connection, clock()): return claim()
+        phase(discover_initial_prices, connection, limit=price_collection_discovery_limit, now=clock(), stop_requested=stop_requested)
+        phase(discover_due_price_collections, connection, limit=price_collection_discovery_limit, now=clock(),
                                       state=price_collection_discovery_state)
-    sync_requests(connection, now=clock(), command_types=supported)
+    phase(sync_requests, connection, now=clock(), command_types=supported)
     # One oldest-ready selection avoids starving periodic jobs behind a busy
     # ingestion stream while still excluding unsupported modules' jobs.
-    types = (*supported, "investor_research", "investor_funded_study", "investor_monitor", "investor_evidence_monitor", "investor_epoch_preview", "investor_epoch_control", "investor_epoch_history_workflow", "investor_action_review", "investor_legacy_transition", "investor_correction_impact", "investor_correction_consent") if role == "core" else (*supported, "investor_confirmed_watch", "investor_epoch_confirmed_watch", "investor_initial_close", "investor_initial_prices", "investor_epoch_history", "investor_current_fx", "investor_issuer_capture", "investor_eodhd_capture") if role == "longport" else supported
-    return run_one(connection, owner, command_handler(connection, clock, lease_seconds, stop_requested, role), job_type=types, lease_seconds=lease_seconds, clock=clock)
+    return claim()

@@ -1,6 +1,6 @@
 """First monitor input from retained reviewed evidence, never guessed prices."""
 
-from datetime import timedelta
+from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
 from worker.market.providers.longport import _MARKETS
@@ -78,6 +78,39 @@ def _candidate(db, workspace, row, targets, at):
         "created_at": value["capture"]["created_at"]}
 
 
+def _calendar_search_header(db, workspace, identifier, at):
+    # A sealed, owner/audit-bound search hint is NOT a validated calendar grant.
+    # Superseded/continued or otherwise ambiguous heads require the full path.
+    value = review_header(db, workspace, identifier, now=at)
+    head = db.execute("SELECT id FROM investor_data_reviews WHERE source_id=? ORDER BY version DESC LIMIT 1",
+        (value["source"]["id"],)).fetchone()
+    if (head is None or head[0] != identifier or value["source"]["kind"] != "calendar"
+            or value["review"]["decision"] != "approved" or at >= value["review"]["valid_until"]): return None
+    return value
+
+
+def _historical_may_cover_close(db, workspace, row, at):
+    # Negative-only filter: a request ending before the required session cannot
+    # supply its quote. Unknown/invalid headers fall through to the full replay.
+    # Never cache this decision or use it to admit a source/authorize collection.
+    if row["kind"] != "historical": return True
+    try:
+        header = db.execute("SELECT calendar_review_id,receipt_json FROM investor_price_captures WHERE id=? AND workspace_id=?",
+            (row["id"], workspace)).fetchone()
+        calendar = _calendar_search_header(db, workspace, header["calendar_review_id"], at)
+        if calendar is None: return True
+        facts = calendar["facts"]
+        local_day = instant(at).astimezone(ZoneInfo(_MARKETS[facts["market"]][0])).date().isoformat()
+        if not facts["range_start"] <= local_day <= facts["range_end"]: return False
+        days = [day for day in facts["days"] if day["kind"] != "closed" and instant(day["close_at"]) <= instant(at)]
+        if not days: return False
+        required = max(days, key=lambda day: instant(day["close_at"]))["date"]
+        end = _object(header["receipt_json"])["request"]["end_date"]
+        return not (date.fromisoformat(end).isoformat() == end and end < required)
+    except (WorkbenchError, KeyError, TypeError, ValueError):
+        return True
+
+
 def _reviews(db, workspace, kind, at, listing_ids=None):
     if kind == "actions" and listing_ids is not None:
         from .managed_actions import current_action_reviews
@@ -137,6 +170,7 @@ def _plan_bootstrap(db, workspace, model_id, at):
           AND c.status='complete' AND c.created_at<=? AND c.retain_until>?
         ORDER BY created_at DESC,id LIMIT ?""", (workspace, at, at, earliest, workspace, at, at, MAX_CAPTURE_CANDIDATES + 1)).fetchall()
     _assert(len(rows) <= MAX_CAPTURE_CANDIDATES, "INVESTOR_BOOTSTRAP_SOURCE_LIMIT")
+    rows = [row for row in rows if _historical_may_cover_close(db, workspace, row, at)]
     _assert(rows, "INVESTOR_BOOTSTRAP_PRICES_NOT_READY")
     model, definition, reference = current_monitor_model(db, workspace, model_id, at)
     targets = {target["listing_id"]: target for target in reference["targets"]}

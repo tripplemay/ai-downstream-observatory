@@ -4,10 +4,11 @@ from datetime import timedelta
 import subprocess
 import sys
 import unittest
+import json
 from unittest.mock import patch
 
 from tests.market.support import NOW, database, seed_account
-from worker.orchestration.db import WorkbenchError, canonical_json, content_hash, open_database, stamp
+from worker.orchestration.db import ROOT, WorkbenchError, canonical_json, content_hash, open_database, stamp
 from worker.orchestration.jobs import claim_job, complete_job, enqueue_job
 from worker.orchestration.runtime import command_handler, run_pending_once, sync_requests
 
@@ -95,6 +96,58 @@ class ProviderRoleTests(unittest.TestCase):
             with self.assertRaisesRegex(WorkbenchError, code):
                 run_pending_once(self.db, "synthetic-worker", clock=lambda: NOW, **kwargs)
             self.assertEqual(list(self.db.iterdump()), before)
+
+    def test_reserved_close_window_claims_before_discovery_using_original_fenced_selector(self):
+        from worker.orchestration import runtime
+        for reservation in (True, False):
+            order = []
+            def claimed(*args, **kwargs):
+                order.append("claim"); return {"status": "skipped"}
+            with patch.object(runtime, "_close_window_reserved", return_value=reservation), \
+                    patch.object(runtime, "run_one", side_effect=claimed) as claim, \
+                    patch("worker.investor.eodhd_sources.discover_eodhd_requests", side_effect=lambda *args, **kwargs: order.append("daily_request")), \
+                    patch("worker.investor.initial_prices.discover_initial_prices", return_value=[]) as discovery:
+                self.assertEqual(run_pending_once(self.db, "fictional-provider", clock=lambda: NOW, role="longport")["status"], "skipped")
+            self.assertEqual(discovery.call_count, 0 if reservation else 1)
+            claim.assert_called_once()
+            self.assertIn("investor_initial_close", claim.call_args.kwargs["job_type"])
+            self.assertIn("market_collect_prices", claim.call_args.kwargs["job_type"])
+            self.assertEqual(claim.call_args.kwargs["lease_seconds"], 300)
+            self.assertEqual(order, ["daily_request", "claim"])
+        self.assertEqual(self.db.execute("SELECT count(*) FROM job_attempts").fetchone()[0], 0)
+
+    def test_cli_once_keeps_empty_or_single_result_json_without_phase_log_output(self):
+        command = [sys.executable, "-m", "worker.orchestration", "--db", str(self.path), "--once"]
+        empty = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=15)
+        self.assertEqual((empty.returncode, empty.stdout, empty.stderr), (0, "", ""))
+        from tests.market.support import document
+        payload = {"document": document(batch_id="fictional-cli-once"), "publish": True}
+        self.db.execute("""INSERT INTO command_requests(id,portfolio_id,command_type,idempotency_key,
+            payload_hash,payload_json,actor_id,created_at) VALUES('fictional-cli-once','p','market_ingest','fictional-cli-once',?,?,'synthetic-owner',?)""",
+            (content_hash(payload), canonical_json(payload), stamp(NOW)))
+        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        job = self.db.execute("SELECT id FROM job_runs WHERE command_request_id='fictional-cli-once'").fetchone()
+        self.assertEqual(json.loads(result.stdout), {"job_id": job["id"], "status": "succeeded"})
+        self.assertEqual(result.stderr, "")
+
+    def test_phase_timings_are_aggregate_only_flush_bounded_and_preserve_failures(self):
+        from worker.orchestration.timing import WorkerTimings
+        now, emitted = [0.0], []
+        metrics = WorkerTimings("core", emitted.append, monotonic=lambda: now[0], cpu=lambda: now[0] / 2)
+        for failed in (False, True):
+            try:
+                with metrics.phase("fictional_phase"):
+                    now[0] += 2
+                    if failed: raise WorkbenchError("EXPECTED")
+            except WorkbenchError: pass
+        metrics.flush(); self.assertEqual(emitted, [])
+        now[0] = 60
+        metrics.flush()
+        item = emitted[0]["phases"]["fictional_phase"]
+        self.assertEqual(item, {"count": 2, "errors": 1, "wall_seconds": 4.0, "cpu_seconds": 2.0, "max_seconds": 2.0})
+        self.assertEqual(metrics.phases, {})
+        metrics.flush(force=True); self.assertEqual(len(emitted), 1)
 
     def test_cli_optional_runtime_is_checked_before_opening_database(self):
         result = subprocess.run([sys.executable, "-m", "worker.orchestration", "--role", "longport",

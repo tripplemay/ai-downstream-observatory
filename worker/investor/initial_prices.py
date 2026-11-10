@@ -13,7 +13,7 @@ from .confirmed_capture import resolve_confirmed_capture
 from .data_evidence import _assert, _audit, _audit_binding, _fact_validation_scope, _object, _owner, collection_binding, resolve_capture
 from .model_runtime import _clock, _latest
 from .monitor_admission import current_monitor_model
-from .monitor_bootstrap import MAX_QUOTE_AGE_SECONDS
+from .monitor_bootstrap import MAX_QUOTE_AGE_SECONDS, _calendar_search_header
 from .reference_plan import reference_source_current
 from .source_inputs import resolve_evidence_input
 
@@ -107,6 +107,50 @@ def _available(db, workspace, spec, at):
     return False
 
 
+def _may_need_request(db, model, at):
+    # Only exclude sessions already reserved by the immutable once-only ledger.
+    # Raw reference pointers are search hints, never collection authority. Any
+    # uncertainty takes the original fully validated path below.
+    try:
+        workspace = model["workspace_id"]
+        definition = _object(model["document_json"])
+        plan = db.execute("SELECT document_json FROM investor_reference_plans WHERE id=? AND workspace_id=?",
+            (model["plan_id"], workspace)).fetchone()
+        source_id = _object(plan[0])["reference_evidence"]["source_input_id"]
+        source = db.execute("SELECT document_json FROM investor_evidence_inputs WHERE id=? AND workspace_id=?",
+            (source_id, workspace)).fetchone()
+        refs = _object(source[0])["snapshot"]["capture_refs"]
+        calendars = {}
+        for ref in refs:
+            row = db.execute("SELECT calendar_review_id,receipt_json FROM investor_price_captures WHERE id=? AND workspace_id=?",
+                (ref["capture_id"], workspace)).fetchone()
+            identity = _object(row["receipt_json"])["request"]["mapping"]["listing_id"]
+            calendars.setdefault(identity, set()).add(row["calendar_review_id"])
+        sessions = {}
+        for target in definition["targets"]:
+            identities = calendars.get(target["listing_id"], set())
+            if len(identities) != 1: return True
+            calendar_id = next(iter(identities))
+            if calendar_id not in sessions:
+                calendar = _calendar_search_header(db, workspace, calendar_id, at)
+                if calendar is None: return True
+                facts = calendar["facts"]
+                local_day = instant(at).astimezone(ZoneInfo(longport._MARKETS[facts["market"]][0])).date().isoformat()
+                if not facts["range_start"] <= local_day <= facts["range_end"]: return True
+                days = [day for day in facts["days"] if day["kind"] != "closed" and instant(day["close_at"]) <= instant(at)]
+                if not days: return True
+                day = max(days, key=lambda value: instant(value["close_at"]))
+                sessions[calendar_id] = facts["market"], day["date"]
+            market, day = sessions[calendar_id]
+            if not db.execute("SELECT 1 FROM investor_initial_close_requests WHERE model_id=? AND market=? AND session_date=?",
+                    (model["id"], market, day)).fetchone() and not db.execute(
+                    "SELECT 1 FROM investor_initial_price_requests WHERE model_id=? AND listing_id=? AND session_date=?",
+                    (model["id"], target["listing_id"], day)).fetchone(): return True
+        return not bool(definition["targets"])
+    except (WorkbenchError, KeyError, TypeError, ValueError):
+        return True
+
+
 def discover_initial_prices(db, *, limit=100, now=None, stop_requested=None):
     _assert(type(limit) is int and 1 <= limit <= 1000); at = _clock(now)
     _assert(not db.in_transaction, "INITIAL_PRICE_DISCOVERY_REQUIRES_AUTOCOMMIT")
@@ -123,6 +167,7 @@ def discover_initial_prices(db, *, limit=100, now=None, stop_requested=None):
             # A concurrent commit prevents this WAL read snapshot from upgrading
             # to a writer. Never publish a plan checked against an older snapshot.
             with transaction(db, immediate=False), _fact_validation_scope():
+                if not _may_need_request(db, model, at): continue
                 context = _context(db, model["workspace_id"], model["id"], at)
                 plans = []
                 for identity in sorted(context[4]):

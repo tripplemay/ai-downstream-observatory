@@ -10,6 +10,7 @@ from .evaluations import DiscoveryState
 from .collections import CollectionDiscoveryState
 from .price_collections import PriceCollectionDiscoveryState
 from .runtime import run_pending_once
+from .timing import WorkerTimings
 
 
 def main(argv=None):
@@ -50,16 +51,19 @@ def main(argv=None):
         discovery_state = DiscoveryState()
         collection_discovery_state = CollectionDiscoveryState()
         price_collection_discovery_state = PriceCollectionDiscoveryState()
+        timings = WorkerTimings(args.role, lambda value: print(canonical_json(value), flush=True))
         try:
             while not stop:
                 try:
-                    result = run_pending_once(connection, owner, args.lease_seconds,
+                    with timings.phase("cycle"):
+                        result = run_pending_once(connection, owner, args.lease_seconds,
                                               discovery_limit=args.evaluation_discovery_limit,
                                               stop_requested=lambda: stop, discovery_state=discovery_state,
                                               role=args.role, collection_discovery_limit=args.collection_discovery_limit,
                                               collection_discovery_state=collection_discovery_state,
                                               price_collection_discovery_limit=args.price_collection_discovery_limit,
-                                              price_collection_discovery_state=price_collection_discovery_state)
+                                              price_collection_discovery_state=price_collection_discovery_state,
+                                              timings=timings)
                     if result is not None:
                         print(canonical_json({"job_id": result["id"], "status": result["status"]}), flush=True)
                     if args.once:
@@ -68,8 +72,10 @@ def main(argv=None):
                     print(canonical_json({"error": type(exc).__name__, "message": str(exc)}), file=sys.stderr, flush=True)
                     if args.once:
                         return 1
+                if not args.once: timings.flush()
                 time.sleep(args.poll_seconds)
         finally:
+            if not args.once: timings.flush(force=True)
             connection.close()
     except (WorkbenchError, OSError) as exc:
         print(canonical_json({"error": str(exc)}), file=sys.stderr)

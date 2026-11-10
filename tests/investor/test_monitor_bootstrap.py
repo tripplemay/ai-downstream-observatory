@@ -45,6 +45,41 @@ class MonitorBootstrapTests(unittest.TestCase):
     def gap(self):
         return json.loads(self.db.execute("SELECT payload_json FROM outbox WHERE topic='investor.monitor_bootstrap_gap'").fetchone()[0])
 
+    def test_stale_receipt_ranges_reject_before_reference_and_payload_replay(self):
+        from tests.investor.test_initial_prices import InitialPriceTests
+        InitialPriceTests.prepare(self, fixed=True)
+        before = self.db.total_changes
+        with patch.object(monitor_bootstrap, "current_monitor_model", side_effect=AssertionError("NO_IDLE_REBUILD")), \
+                patch.object(monitor_bootstrap, "_candidate", side_effect=AssertionError("NO_STALE_REPLAY")):
+            with self.assertRaisesRegex(WorkbenchError, "INVESTOR_BOOTSTRAP_PRICES_NOT_READY"):
+                monitor_bootstrap.plan_bootstrap(self.db, "w", self.definition["model_id"], NOW)
+        self.assertEqual(self.db.total_changes, before)
+        self.assert_no_finance()
+
+    def test_ambiguous_header_falls_through_and_filter_does_not_hide_candidate_limit(self):
+        self.model()
+        row = self.db.execute("SELECT 'historical' kind,id FROM investor_price_captures LIMIT 1").fetchone()
+        with patch.object(monitor_bootstrap, "_calendar_search_header", side_effect=WorkbenchError("REVIEW_INVALID")):
+            self.assertTrue(monitor_bootstrap._historical_may_cover_close(self.db, "w", row, self.now))
+        with patch.object(monitor_bootstrap, "MAX_CAPTURE_CANDIDATES", 0), \
+                patch.object(monitor_bootstrap, "_historical_may_cover_close", side_effect=AssertionError("BOUND_FIRST")):
+            with self.assertRaisesRegex(WorkbenchError, "INVESTOR_BOOTSTRAP_SOURCE_LIMIT"):
+                monitor_bootstrap.plan_bootstrap(self.db, "w", self.definition["model_id"], self.now)
+        self.assert_no_finance()
+
+    def test_search_hint_does_not_run_fact_validation_or_accept_a_superseded_calendar(self):
+        self.model()
+        row = self.db.execute("SELECT calendar_review_id FROM investor_price_captures ORDER BY created_at DESC LIMIT 1").fetchone()
+        identifier = row[0]
+        from worker.investor import data_evidence
+        with patch.object(data_evidence, "validate_facts", side_effect=AssertionError("NO_NEGATIVE_SCHEMA_REPLAY")):
+            value = monitor_bootstrap._calendar_search_header(self.db, "w", identifier, self.now)
+        self.assertIsNotNone(value)
+        review_source(self.db, "w", "synthetic-investor", value["source"]["id"], "approved", deepcopy(value["facts"]),
+            "Fictional superseded search hint", fixtures.EXPIRY, now=self.now)
+        self.assertIsNone(monitor_bootstrap._calendar_search_header(self.db, "w", identifier, self.now))
+        self.assert_no_finance()
+
     def test_default_core_creates_first_input_without_json_or_sdk_for_both_model_versions(self):
         for fixed in (False, True):
             if fixed: self.setUp()
