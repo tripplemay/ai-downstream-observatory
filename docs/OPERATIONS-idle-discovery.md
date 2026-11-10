@@ -9,6 +9,10 @@ It introduces no cross-request authorization/result cache and no new service.
 - Historical bootstrap receipts whose request range cannot contain the required
   closed session are rejected before reference reconstruction or payload replay.
   Candidate-count bounds run first; ambiguous/invalid metadata falls through.
+  Calendar search hints retain owner/audit/hash binding and latest-approved-head
+  checks, but do not replay pure fact-schema validation. They never act as grants;
+  positive candidates still resolve and fully validate the original calendar.
+  Superseded/continued heads conservatively take the original path.
 - Initial historical-price discovery skips reconstruction only when every hinted
   target/session is already reserved in the immutable once-only request ledger.
   A new session or missing/ambiguous hint returns to full validation. This cannot

@@ -13,7 +13,7 @@ from .confirmed_capture import resolve_confirmed_capture
 from .data_evidence import _assert, _audit, _audit_binding, _fact_validation_scope, _object, _owner, collection_binding, resolve_capture
 from .model_runtime import _clock, _latest
 from .monitor_admission import current_monitor_model
-from .monitor_bootstrap import MAX_QUOTE_AGE_SECONDS
+from .monitor_bootstrap import MAX_QUOTE_AGE_SECONDS, _calendar_search_header
 from .reference_plan import reference_source_current
 from .source_inputs import resolve_evidence_input
 
@@ -126,14 +126,15 @@ def _may_need_request(db, model, at):
                 (ref["capture_id"], workspace)).fetchone()
             identity = _object(row["receipt_json"])["request"]["mapping"]["listing_id"]
             calendars.setdefault(identity, set()).add(row["calendar_review_id"])
-        from .calendar_continuation import current_calendar_review
         sessions = {}
         for target in definition["targets"]:
             identities = calendars.get(target["listing_id"], set())
             if len(identities) != 1: return True
             calendar_id = next(iter(identities))
             if calendar_id not in sessions:
-                facts = current_calendar_review(db, workspace, calendar_id, at)["facts"]
+                calendar = _calendar_search_header(db, workspace, calendar_id, at)
+                if calendar is None: return True
+                facts = calendar["facts"]
                 local_day = instant(at).astimezone(ZoneInfo(longport._MARKETS[facts["market"]][0])).date().isoformat()
                 if not facts["range_start"] <= local_day <= facts["range_end"]: return True
                 days = [day for day in facts["days"] if day["kind"] != "closed" and instant(day["close_at"]) <= instant(at)]

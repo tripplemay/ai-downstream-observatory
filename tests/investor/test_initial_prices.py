@@ -138,13 +138,14 @@ class InitialPriceTests(unittest.TestCase):
         initial_prices.discover_initial_prices(self.db, now=NOW)
         self.assertFalse(initial_prices._may_need_request(self.db, model, NOW))
         # A new session must invalidate the exclusion even with no DB changes.
-        from worker.investor import calendar_continuation
-        original = calendar_continuation.current_calendar_review
+        original = initial_prices._calendar_search_header
         def next_session(*args):
             value = original(*args)
             value["facts"]["days"][-1].update(kind="full", close_at="2026-01-03T07:00:00.000Z")
             return value
-        with patch.object(calendar_continuation, "current_calendar_review", side_effect=next_session):
+        with patch.object(initial_prices, "_calendar_search_header", side_effect=next_session):
+            self.assertTrue(initial_prices._may_need_request(self.db, model, NOW))
+        with patch.object(initial_prices, "_calendar_search_header", return_value=None):
             self.assertTrue(initial_prices._may_need_request(self.db, model, NOW))
         self.assertTrue(initial_prices._may_need_request(self.db, {**dict(model), "plan_id": "missing"}, NOW))
         self.assert_no_finance()

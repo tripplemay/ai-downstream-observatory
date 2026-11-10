@@ -8,7 +8,7 @@ from worker.market.contracts import validate_contract
 from worker.orchestration.db import WorkbenchError, content_hash, instant, transaction
 from worker.orchestration.jobs import enqueue_notification
 from .confirmed_capture import resolve_confirmed_capture
-from .data_evidence import _assert, _audit, _fact_validation_scope, _object, resolve_capture, resolve_review, review_header
+from .data_evidence import _assert, _audit, _object, resolve_capture, resolve_review, review_header
 from .model_runtime import _clock
 from .monitor_admission import admit_monitor_data, current_monitor_model
 from .reference_plan import reference_source_current
@@ -78,6 +78,17 @@ def _candidate(db, workspace, row, targets, at):
         "created_at": value["capture"]["created_at"]}
 
 
+def _calendar_search_header(db, workspace, identifier, at):
+    # A sealed, owner/audit-bound search hint is NOT a validated calendar grant.
+    # Superseded/continued or otherwise ambiguous heads require the full path.
+    value = review_header(db, workspace, identifier, now=at)
+    head = db.execute("SELECT id FROM investor_data_reviews WHERE source_id=? ORDER BY version DESC LIMIT 1",
+        (value["source"]["id"],)).fetchone()
+    if (head is None or head[0] != identifier or value["source"]["kind"] != "calendar"
+            or value["review"]["decision"] != "approved" or at >= value["review"]["valid_until"]): return None
+    return value
+
+
 def _historical_may_cover_close(db, workspace, row, at):
     # Negative-only filter: a request ending before the required session cannot
     # supply its quote. Unknown/invalid headers fall through to the full replay.
@@ -86,7 +97,8 @@ def _historical_may_cover_close(db, workspace, row, at):
     try:
         header = db.execute("SELECT calendar_review_id,receipt_json FROM investor_price_captures WHERE id=? AND workspace_id=?",
             (row["id"], workspace)).fetchone()
-        calendar = resolve_review(db, workspace, header["calendar_review_id"], "calendar", now=at)
+        calendar = _calendar_search_header(db, workspace, header["calendar_review_id"], at)
+        if calendar is None: return True
         facts = calendar["facts"]
         local_day = instant(at).astimezone(ZoneInfo(_MARKETS[facts["market"]][0])).date().isoformat()
         if not facts["range_start"] <= local_day <= facts["range_end"]: return False
@@ -158,8 +170,7 @@ def _plan_bootstrap(db, workspace, model_id, at):
           AND c.status='complete' AND c.created_at<=? AND c.retain_until>?
         ORDER BY created_at DESC,id LIMIT ?""", (workspace, at, at, earliest, workspace, at, at, MAX_CAPTURE_CANDIDATES + 1)).fetchall()
     _assert(len(rows) <= MAX_CAPTURE_CANDIDATES, "INVESTOR_BOOTSTRAP_SOURCE_LIMIT")
-    with _fact_validation_scope():
-        rows = [row for row in rows if _historical_may_cover_close(db, workspace, row, at)]
+    rows = [row for row in rows if _historical_may_cover_close(db, workspace, row, at)]
     _assert(rows, "INVESTOR_BOOTSTRAP_PRICES_NOT_READY")
     model, definition, reference = current_monitor_model(db, workspace, model_id, at)
     targets = {target["listing_id"]: target for target in reference["targets"]}
