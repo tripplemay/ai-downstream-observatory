@@ -125,6 +125,22 @@ function currentReferenceProgress(state: InvestorState, plan: InvestorPlan | nul
     detail: "已登记模型观察任务。行情、后台进度和当前结论分开核对；保存成功不代表行情完整或无需调整。",
     href: "#research-model-watch", action: "查看监测进度" };
 }
+function monitoringReviewStatus(state: InvestorState, plan: InvestorPlan | null, watch: InvestorModelWatch | null,
+  outcome: InvestorState["effective_outcome"], stale: boolean, now: number): string {
+  if (!watch) return "尚未登记持续观察任务；手动检查不代表后台持续运行。";
+  if (!watch.enabled) return "观察任务已暂停；历史结果不代表当前仍在监测。";
+  const observation = state.latest?.document;
+  if (!stale && !state.read_only && watch.status === "synthetic_preview")
+    return "观察任务已登记；目前仅有合成测试结果，不作为真实监测结论。";
+  if (!stale && !state.read_only && (outcome === "observe" || outcome === "decision_required")
+    && observation?.outcome === outcome && observation.monitoring === "active" && observation.next_review_at
+    && Date.parse(observation.next_review_at) > now && watch.source_qualification === "owner_reviewed_reconstructed"
+    && watch.status === (outcome === "observe" ? "research_observe" : "research_decision")
+    && watch.evaluation_input_version === observation.input_version
+    && plan?.quality === "current" && watch.plan_id === plan.id && watch.profile_id === state.profile?.id)
+    return `观察任务已登记 · 本次结果的下次复核：${observation.next_review_at}。登记状态不代表后台实时在线。`;
+  return "观察任务已登记，当前尚无有效监测结论；请核对监测进度与数据缺口，无需重复启用。";
+}
 export function currentInvestorDisplay(state: InvestorState, nowMs: number) {
   const now = Math.max(nowMs, Date.parse(state.checked_at));
   const plan = currentPlanDisplay(state.plan, now);
@@ -148,10 +164,10 @@ export function currentInvestorDisplay(state: InvestorState, nowMs: number) {
     value.code === "RECONSTRUCTED_RESEARCH_ONLY" && researchBlocker ? { ...value, ...researchBlocker } : value)];
   // Progress describes saved artifacts; it never promotes the monitoring outcome.
   const referenceProgress = currentReferenceProgress(state, plan, modelWatch, localGaps.length > 0, now);
+  const outcome = localGaps.length ? "insufficient_evidence" as const : state.effective_outcome;
   // This display-only projection can invalidate, never promote or rewrite server history.
   return { plan, researchTask, modelWatch, gaps, researchBlocker, stale: localGaps.length > 0,
-    referenceProgress,
-    outcome: localGaps.length ? "insufficient_evidence" as const : state.effective_outcome };
+    referenceProgress, monitoringReview: monitoringReviewStatus(state, plan, modelWatch, outcome, localGaps.length > 0, now), outcome };
 }
 export function investorPollInterval(state: InvestorState | null): number | null {
   if (!state?.profile) return null;

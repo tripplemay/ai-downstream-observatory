@@ -2,6 +2,36 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { currentInvestorDisplay, currentPlanDisplay } from "../src/components/workbench/research-format";
 import { displayBefore, displayUntil, displayState, historicalDisplayState } from "./investor-display-state-fixture";
+import { compositionDisplayState } from "./investor-model-composition-fixture";
+
+test("review copy requires current matching research evidence, not just an active observation or enabled flag", () => {
+  const baseline = compositionDisplayState(), before = Date.parse(displayBefore);
+  const changes: ((state: typeof baseline) => void)[] = [
+    state => { state.read_only = true; },
+    state => { state.effective_outcome = "insufficient_evidence"; },
+    state => { state.latest!.document.monitoring = "not_enabled"; },
+    state => { state.latest!.document.next_review_at = null; },
+    state => { state.latest!.document.outcome = "insufficient_evidence"; },
+    state => { state.model_watch!.status = "blocked"; },
+    state => { state.model_watch!.source_qualification = "not_available"; },
+    state => { state.model_watch!.evaluation_input_version = "0".repeat(64); },
+    state => { state.model_watch!.plan_id = "fictional-other-plan"; },
+    state => { state.model_watch!.profile_id = "fictional-other-profile"; },
+    state => { state.plan!.quality = "different_profile"; },
+    state => { state.plan = null; },
+  ];
+  assert.match(currentInvestorDisplay(baseline, before).monitoringReview, /本次结果的下次复核/);
+  for (const change of changes) {
+    const state = structuredClone(baseline); change(state); const original = JSON.stringify(state);
+    const result = currentInvestorDisplay(state, before);
+    assert.match(result.monitoringReview, /观察任务已登记，当前尚无有效监测结论/);
+    assert.doesNotMatch(result.monitoringReview, /本次结果的下次复核/);
+    assert.equal(result.outcome, state.effective_outcome);
+    assert.equal(JSON.stringify(state), original);
+  }
+  const checkedAfter = { ...baseline, checked_at: displayUntil };
+  assert.doesNotMatch(currentInvestorDisplay(checkedAfter, before).monitoringReview, /本次结果的下次复核/);
+});
 
 test("current projection invalidates at the exact review boundary but never rewrites history or promotes evidence", () => {
   const state = displayState(), original = JSON.stringify(state), until = Date.parse(displayUntil);
