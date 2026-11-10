@@ -8,6 +8,6 @@ test('web image builds and retains the fixed comparison bundle and its complete 
     'build-funded-comparison.mjs', 'funded-comparison-source.mjs', '/app/web/src/server/', '/app/web/package-lock.json', 'migrations/ /app/migrations/', 'contracts/ /app/contracts/'])
     assert.ok(docker.includes(value), value);
   const core = readFileSync(new URL('../../worker/orchestration/runtime.py', import.meta.url), 'utf8');
-  assert.ok(core.indexOf('purge_due_funded_results(connection') > core.lastIndexOf('if role == "core":'));
-  assert.ok(core.indexOf('purge_due_funded_results(connection') < core.lastIndexOf('elif role == "longport":'));
+  assert.ok(core.indexOf('phase(purge_due_funded_results, connection') > core.lastIndexOf('if role == "core":'));
+  assert.ok(core.indexOf('phase(purge_due_funded_results, connection') < core.lastIndexOf('elif role == "longport":'));
 });

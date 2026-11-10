@@ -96,6 +96,38 @@ class ProviderRoleTests(unittest.TestCase):
                 run_pending_once(self.db, "synthetic-worker", clock=lambda: NOW, **kwargs)
             self.assertEqual(list(self.db.iterdump()), before)
 
+    def test_reserved_close_window_claims_before_discovery_using_original_fenced_selector(self):
+        from worker.orchestration import runtime
+        for reservation in (True, False):
+            with patch.object(runtime, "_close_window_reserved", return_value=reservation), \
+                    patch.object(runtime, "run_one", return_value={"status": "skipped"}) as claim, \
+                    patch("worker.investor.initial_prices.discover_initial_prices", return_value=[]) as discovery:
+                self.assertEqual(run_pending_once(self.db, "fictional-provider", clock=lambda: NOW, role="longport")["status"], "skipped")
+            self.assertEqual(discovery.call_count, 0 if reservation else 1)
+            claim.assert_called_once()
+            self.assertIn("investor_initial_close", claim.call_args.kwargs["job_type"])
+            self.assertIn("market_collect_prices", claim.call_args.kwargs["job_type"])
+            self.assertEqual(claim.call_args.kwargs["lease_seconds"], 300)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM job_attempts").fetchone()[0], 0)
+
+    def test_phase_timings_are_aggregate_only_flush_bounded_and_preserve_failures(self):
+        from worker.orchestration.timing import WorkerTimings
+        now, emitted = [0.0], []
+        metrics = WorkerTimings("core", emitted.append, monotonic=lambda: now[0], cpu=lambda: now[0] / 2)
+        for failed in (False, True):
+            try:
+                with metrics.phase("fictional_phase"):
+                    now[0] += 2
+                    if failed: raise WorkbenchError("EXPECTED")
+            except WorkbenchError: pass
+        metrics.flush(); self.assertEqual(emitted, [])
+        now[0] = 60
+        metrics.flush()
+        item = emitted[0]["phases"]["fictional_phase"]
+        self.assertEqual(item, {"count": 2, "errors": 1, "wall_seconds": 4.0, "cpu_seconds": 2.0, "max_seconds": 2.0})
+        self.assertEqual(metrics.phases, {})
+        metrics.flush(force=True); self.assertEqual(len(emitted), 1)
+
     def test_cli_optional_runtime_is_checked_before_opening_database(self):
         result = subprocess.run([sys.executable, "-m", "worker.orchestration", "--role", "longport",
                                  "--db", str(self.path.parent / "missing.db"), "--once"],
