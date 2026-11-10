@@ -40,9 +40,12 @@ when its cycle fails. These metrics do not bypass any validation or drive policy
 
 Full successful release verification (including database integrity, migration
 hashes, source/config identity and actual healthy image IDs) runs inside the
-managed worker's original 75-minute absolute deadline. The 90-second stop hook
-reads an existing terminal receipt or performs failure fencing; it never repeats
-an expensive success scan. Neither budget is extended.
+managed worker's original 75-minute absolute deadline and produces only a
+`VERIFIED_PENDING_MANAGER_EXIT` receipt. The 90-second stop hook requires the
+actual manager-reported successful main-process exit before publishing terminal
+success; otherwise it performs failure fencing. It never repeats an expensive
+success scan. A killed main process cannot be blessed by the verification receipt
+alone. Neither budget is extended.
 
 An old missing terminal receipt is not automatic success. Explicit operator-only
 `reconcile --acknowledge-missing-terminal` can record a once-only, post-deadline

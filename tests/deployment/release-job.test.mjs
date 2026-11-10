@@ -160,7 +160,9 @@ test('exit zero alone is not success; actual source, current link, schema and he
 j=job();j.submit(int(time.time())+120);e=phase();containers=fleet()
 j._write('execution.json',{'exit_code':0});(r/'current').symlink_to(release,target_is_directory=True)
 (e/'result.json').write_text(json.dumps({'release_sha':sha,'status':'technical_cutover_verified','local_restore_verified':True}));(e/'result.json').chmod(0o600)
-x=j._finalize(None,None,None,worker_completed=True);assert x['status']=='SUCCEEDED' and x['schema_version']==1
+verified=j._finalize(None,None,None,worker_completed=True);assert verified['status']=='VERIFIED_PENDING_MANAGER_EXIT'
+assert not (j.directory/'terminal.json').exists()
+x=j.finalize('success','exited','0');assert x['status']=='SUCCEEDED' and x['schema_version']==1
 assert not (data/'RESTORE_PENDING_REVIEW').exists()
 unit_state='loaded';assert j.status()['status']=='RUNNING'
 unit_state='not-found';assert j.status()['status']=='SUCCEEDED'
@@ -188,12 +190,38 @@ j.runner=success;original=j._schema;checked=[]
 def slow_schema(path):
  checked.append(True);j.clock=lambda:start+110;return original(path)
 j._schema=slow_schema
-assert j.worker()==0 and checked==[True]
-terminal=j._bound('terminal.json');assert terminal['status']=='SUCCEEDED' and terminal['completion_basis']=='managed_worker_verification'
+assert j.worker()==0 and checked==[True] and not (j.directory/'terminal.json').exists()
+assert j._bound('verified.json')['status']=='VERIFIED_PENDING_MANAGER_EXIT'
 j._schema=lambda _:(_ for _ in ()).throw(AssertionError('stop hook must not repeat integrity scan'))
+terminal=j.finalize('success','exited','0')
+assert terminal['status']=='SUCCEEDED' and terminal['completion_basis']=='manager_exit_after_worker_verification'
 assert j.finalize('success','exited','0')==terminal
 assert len([c for c in calls if c[0]=='bash'])==1
 assert '--property=TimeoutStopSec=90s' in next(c for c in calls if c[0]=='systemd-run')
+`));
+
+test('verified cutover alone never turns a killed manager main process into automatic success', t => run(t, String.raw`
+j=job();j.submit(int(time.time())+120);e=phase();containers=fleet()
+j._write('execution.json',{'exit_code':0});(r/'current').symlink_to(release,target_is_directory=True)
+p=e/'result.json';p.write_text(json.dumps({'release_sha':sha,'status':'technical_cutover_verified','local_restore_verified':True}));p.chmod(0o600)
+assert j._finalize(None,None,None,worker_completed=True)['status']=='VERIFIED_PENDING_MANAGER_EXIT'
+assert not (j.directory/'terminal.json').exists()
+j._schema=lambda _:(_ for _ in ()).throw(AssertionError('no full scan in failure hook'))
+x=j.finalize('signal','killed','9')
+assert x['status']=='FAILED_RECOVERY_REQUIRED' and x['cleanup_complete'] is True
+assert (data/'RESTORE_PENDING_REVIEW').is_file() and not any(c['State']['Running'] for c in containers)
+`));
+
+test('manager exit still rechecks live image identity after worker verification without repeating the schema scan', t => run(t, String.raw`
+j=job();j.submit(int(time.time())+120);e=phase();containers=fleet()
+j._write('execution.json',{'exit_code':0});(r/'current').symlink_to(release,target_is_directory=True)
+p=e/'result.json';p.write_text(json.dumps({'release_sha':sha,'status':'technical_cutover_verified','local_restore_verified':True}));p.chmod(0o600)
+assert j._finalize(None,None,None,worker_completed=True)['status']=='VERIFIED_PENDING_MANAGER_EXIT'
+containers[0]['Image']='sha256:'+'9'*64
+j._schema=lambda _:(_ for _ in ()).throw(AssertionError('schema scan stays in worker budget'))
+x=j.finalize('success','exited','0')
+assert x['status']=='FAILED_RECOVERY_REQUIRED' and (data/'RESTORE_PENDING_REVIEW').is_file()
+assert not any(c['State']['Running'] for c in containers)
 `));
 
 test('late successful command cannot buy verification time, and a missing worker receipt cannot be forged by hook success', t => run(t, String.raw`

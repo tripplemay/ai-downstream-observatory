@@ -89,7 +89,7 @@ class ReleaseJob:
             os.close(fd)
 
     def _write(self, name, value):
-        require(name in {"intent.json", "started.json", "execution.json", "terminal.json", "reconciliation.json"})
+        require(name in {"intent.json", "started.json", "execution.json", "verified.json", "terminal.json", "reconciliation.json"})
         self._directory(self.directory, True)
         fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
@@ -245,8 +245,8 @@ class ReleaseJob:
         if code == 0:
             # Full verification belongs to ExecStart's original absolute budget,
             # not the short failure-cleanup hook's TimeoutStopSec.
-            terminal = self._finalize(None, None, None, worker_completed=True)
-            return 0 if terminal["status"] == "SUCCEEDED" else 1
+            verified = self._finalize(None, None, None, worker_completed=True)
+            return 0 if verified["status"] == "VERIFIED_PENDING_MANAGER_EXIT" else 1
         return code
 
     def _fleet(self, project):
@@ -327,7 +327,7 @@ class ReleaseJob:
                 require(result.get("release_sha") == self.sha)
         return evidence, phase, result, data
 
-    def _verify_cutover(self, intent, evidence, phase, result, data):
+    def _verify_live_cutover(self, intent, evidence, phase, result, data):
         require(phase is not None and result is not None and result.get("status") == "technical_cutover_verified" and result.get("local_restore_verified") is True)
         require(self._source() == intent["source_manifest_sha256"] and
                 hashlib.sha256(self._file(self.config, maximum=1024**2)).hexdigest() == intent["config_sha256"])
@@ -343,11 +343,12 @@ class ReleaseJob:
                 and all(re.fullmatch(r"sha256:[a-f0-9]{64}", item) for item in image_ids))
         expected = {"etf-workbench-" + name + ":" + self.sha: image for name, image in zip(names, image_ids)}
         require(all(item["Image"] == expected[item["Config"]["Image"]] for item in fleet))
+        return expected
+
+    def _verify_cutover(self, intent, evidence, phase, result, data):
+        self._verify_live_cutover(intent, evidence, phase, result, data)
         schema = self._schema(data)
-        fleet = self._fleet(phase["project"])
-        self._scope_fleet(fleet, phase, intent, True)
-        require(all(item["Image"] == expected[item["Config"]["Image"]] for item in fleet))
-        require(not (data / "RESTORE_PENDING_REVIEW").exists() and not (data / "RESTORE_PENDING_REVIEW").is_symlink())
+        self._verify_live_cutover(intent, evidence, phase, result, data)
         return schema
 
     def _reconciled(self):
@@ -383,9 +384,30 @@ class ReleaseJob:
             successful, schema = False, None
             try:
                 execution = self._bound("execution.json")
-                require(worker_completed and type(execution["exit_code"]) is int and execution["exit_code"] == 0)
+                require(type(execution["exit_code"]) is int and execution["exit_code"] == 0)
                 require(0 < intent["deadline_epoch"] - self.clock() <= 75 * 60, "RELEASE_DEADLINE_EXPIRED")
-                schema = self._verify_cutover(intent, evidence, phase, result, data)
+                if worker_completed:
+                    schema = self._verify_cutover(intent, evidence, phase, result, data)
+                    checked = self.clock()
+                    require(0 < intent["deadline_epoch"] - checked <= 75 * 60, "RELEASE_DEADLINE_EXPIRED")
+                    return self._write("verified.json", {"status": "VERIFIED_PENDING_MANAGER_EXIT", "schema_version": schema,
+                        "execution_sha256": digest(self.directory / "execution.json"), "verified_epoch": checked,
+                        "deadline_epoch": intent["deadline_epoch"], "source_manifest_sha256": intent["source_manifest_sha256"],
+                        "cutover_intent_sha256": digest(evidence / "cutover-started.json"), "result_sha256": digest(evidence / "result.json"),
+                        "image_verification_sha256": digest(evidence / "image-bundle-verification.json")})
+                verified = self._bound("verified.json")
+                require((service_result, exit_code, exit_status) == ("success", "exited", "0"))
+                require(verified["status"] == "VERIFIED_PENDING_MANAGER_EXIT" and
+                        verified["execution_sha256"] == digest(self.directory / "execution.json") and
+                        verified["source_manifest_sha256"] == intent["source_manifest_sha256"] and
+                        verified["deadline_epoch"] == intent["deadline_epoch"] and
+                        type(verified["verified_epoch"]) in (int, float) and verified["verified_epoch"] <= self.clock() < intent["deadline_epoch"])
+                require(evidence is not None and verified["cutover_intent_sha256"] == digest(evidence / "cutover-started.json") and
+                        verified["result_sha256"] == digest(evidence / "result.json") and
+                        verified["image_verification_sha256"] == digest(evidence / "image-bundle-verification.json"))
+                self._verify_live_cutover(intent, evidence, phase, result, data)
+                schema = verified["schema_version"]
+                require(type(schema) is int and schema > 0)
                 require(0 < intent["deadline_epoch"] - self.clock() <= 75 * 60, "RELEASE_DEADLINE_EXPIRED")
                 successful = True
             except (OSError, ValueError, KeyError, TypeError, sqlite3.Error, subprocess.SubprocessError):
@@ -411,7 +433,7 @@ class ReleaseJob:
                         cleanup = False
             return self._write("terminal.json", {"status": status, "cleanup_complete": cleanup,
                 "schema_version": schema, "database_overwritten": False, "service_result": service_result,
-                "completion_basis": "managed_worker_verification" if worker_completed else "stop_hook_failure_cleanup",
+                "completion_basis": "manager_exit_after_worker_verification" if successful else "worker_verification_failure" if worker_completed else "stop_hook_failure_cleanup",
                 "finished_at": datetime.now(timezone.utc).isoformat()})
 
     def status(self):
