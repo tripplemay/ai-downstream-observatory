@@ -1,6 +1,7 @@
 """Build public source off-host; verify bounded image bundles before cutover."""
 
 import argparse
+import base64
 import gzip
 import hashlib
 import json
@@ -11,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import zlib
 
 
 VERSION = "workbench-image-bundle-v1"
@@ -212,14 +214,66 @@ def load_or_verify(directory, release, provider, load, ai=False):
             "identity_basis": "uncompressed_layer_diff_ids_and_runtime_configuration_not_backend_specific_image_ids"}
 
 
+def archive_budget(path, maximum=MAX_EXPANDED):
+    outer, expanded, count = 0, 0, 0
+    with tarfile.open(path, "r|gz") as archive:
+        for member in archive:
+            safe_member(member.name)
+            count += 1
+            require(count <= 10000 and (member.isfile() or member.isdir()))
+            outer += member.size
+            require(0 <= member.size <= maximum and outer <= maximum)
+            if not member.isfile():
+                continue
+            source = archive.extractfile(member)
+            prefix = source.read(4)
+            require(prefix != b"\x28\xb5\x2f\xfd")
+            size = member.size
+            # OCI exports can contain already-compressed layer blobs inside the tar.
+            if prefix.startswith(b"\x1f\x8b"):
+                decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+                size = 0
+                chunk = prefix
+                while chunk:
+                    while chunk:
+                        output = decoder.decompress(chunk, min(1024 ** 2, maximum - size + 1))
+                        size += len(output)
+                        require(size <= maximum)
+                        chunk = decoder.unconsumed_tail
+                        if decoder.eof:
+                            require(not decoder.unused_data and not chunk)
+                            break
+                    chunk = source.read(1024 ** 2)
+                    require(not decoder.eof or not chunk)
+                require(decoder.eof)
+            expanded += max(member.size, size)
+            require(expanded <= maximum)
+    return {"outer_payload_bytes": outer, "expanded_payload_bytes": expanded}
+
+
+def upload_budget(directory, release, provider, source_archive, ai=False):
+    manifest = read_bundle(directory, release, provider, ai)
+    private_file(source_archive, 128 * 1024 ** 2)
+    images = archive_budget(directory / ARCHIVE)
+    source = archive_budget(source_archive, 256 * 1024 ** 2)
+    value = {"format": "etf-upload-budget-v1", "release_sha": release,
+        "image_archive_bytes": manifest["archive_bytes"], "image_archive_sha256": manifest["archive_sha256"],
+        "image_content_bytes": images["outer_payload_bytes"], "image_expanded_bytes": images["expanded_payload_bytes"],
+        "source_archive_bytes": source_archive.stat().st_size, "source_archive_sha256": file_hash(source_archive),
+        "source_expanded_bytes": source["expanded_payload_bytes"]}
+    return {"status": "upload_budget_measured_without_extraction", "budget": value,
+            "budget_base64": base64.b64encode(canonical(value).encode()).decode()}
+
+
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser()
-    parser.add_argument("operation", choices=("build", "pack", "load", "verify", "check"))
+    parser.add_argument("operation", choices=("build", "pack", "load", "verify", "check", "budget"))
     parser.add_argument("--release", required=True)
     parser.add_argument("--directory", required=True, type=Path)
     parser.add_argument("--market-provider", choices=(0, 1), type=int, default=0)
     parser.add_argument("--ai-explanation", choices=(0, 1), type=int, default=0)
+    parser.add_argument("--source-archive", type=Path)
     args = parser.parse_args()
     provider = bool(args.market_provider)
     ai = bool(args.ai_explanation)
@@ -234,7 +288,10 @@ def main():
         for name, dockerfile in image_specs(args.release, provider, ai):
             subprocess.run(["docker", "build", "--pull", "--platform", "linux/amd64", "--build-arg", "RELEASE_SHA=" + args.release,
                             "--file", dockerfile, "--tag", name, "."], cwd=root, check=True, timeout=1800)
-    if args.operation in ("build", "pack"):
+    if args.operation == "budget":
+        require(args.source_archive is not None and args.source_archive.is_absolute())
+        result = upload_budget(args.directory, args.release, provider, args.source_archive, ai)
+    elif args.operation in ("build", "pack"):
         result = package(args.directory, args.release, provider, ai)
     elif args.operation == "check":
         manifest = read_bundle(args.directory, args.release, provider, ai)
@@ -247,6 +304,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (OSError, EOFError, RecursionError, ValueError, KeyError, TypeError, tarfile.TarError, subprocess.SubprocessError):
+    except (OSError, EOFError, RecursionError, ValueError, KeyError, TypeError, tarfile.TarError, zlib.error, subprocess.SubprocessError):
         print("RELEASE_IMAGE_BUNDLE_FAILED", file=sys.stderr)
         raise SystemExit(1)

@@ -73,6 +73,50 @@ class BundleTests(unittest.TestCase):
     def manifest(self, value):
         self.write(self.directory / bundle.MANIFEST, (bundle.canonical(value) + "\n").encode())
 
+    def test_nested_compressed_layer_budget_counts_expansion_without_extraction(self):
+        path = self.directory / 'nested.tar.gz'
+        raw = gzip.compress(b'x' * 200000, mtime=0)
+        with tarfile.open(path, 'w:gz') as archive:
+            for name, value in [('blobs/layer', raw), ('config.json', b'{}')]:
+                member = tarfile.TarInfo(name); member.size = len(value)
+                archive.addfile(member, io.BytesIO(value))
+        result = bundle.archive_budget(path)
+        self.assertEqual(result, {'outer_payload_bytes': len(raw) + 2, 'expanded_payload_bytes': 200002})
+        self.assertFalse((self.directory / 'blobs').exists())
+        with self.assertRaises(ValueError): bundle.archive_budget(path, maximum=100000)
+
+    def test_invalid_nested_compression_and_links_cannot_create_an_upload_budget(self):
+        path = self.directory / 'invalid.tar.gz'
+        for raw in (b'\x1f\x8bbroken', b'\x28\xb5\x2f\xfdunsupported', gzip.compress(b'payload')[:-4], gzip.compress(b'a') + gzip.compress(b'b')):
+            with tarfile.open(path, 'w:gz') as archive:
+                member = tarfile.TarInfo('layer'); member.size = len(raw)
+                archive.addfile(member, io.BytesIO(raw))
+            with self.assertRaises((ValueError, bundle.zlib.error)): bundle.archive_budget(path)
+        with tarfile.open(path, 'w:gz') as archive:
+            member = tarfile.TarInfo('link'); member.type = tarfile.SYMTYPE; member.linkname = '/never-read'
+            archive.addfile(member)
+        with self.assertRaises(ValueError): bundle.archive_budget(path)
+
+    def test_upload_budget_binds_both_archives_without_daemon_or_filesystem_mutation(self):
+        manifest = self.make()
+        source = self.directory / 'source.tar.gz'
+        with tarfile.open(source, 'w:gz') as archive:
+            member = tarfile.TarInfo('source.txt'); member.size = 3
+            archive.addfile(member, io.BytesIO(b'abc'))
+        source.chmod(0o600)
+        before = {p.name: bundle.file_hash(p) for p in self.directory.iterdir()}
+        with patch.object(bundle, 'docker') as daemon:
+            report = bundle.upload_budget(self.directory, SHA, False, source)
+        daemon.assert_not_called()
+        value = report['budget']
+        self.assertEqual(value['image_archive_sha256'], manifest['archive_sha256'])
+        self.assertEqual(value['source_archive_sha256'], bundle.file_hash(source))
+        self.assertEqual(value['source_expanded_bytes'], 3)
+        self.assertEqual(json.loads(bundle.base64.b64decode(report['budget_base64'])), value)
+        self.assertEqual(before, {p.name: bundle.file_hash(p) for p in self.directory.iterdir()})
+        source.chmod(0o644)
+        with self.assertRaises(ValueError): bundle.upload_budget(self.directory, SHA, False, source)
+
     def test_strict_inventory_hash_and_optional_provider(self):
         for provider in (False, True):
             value = self.make(provider)

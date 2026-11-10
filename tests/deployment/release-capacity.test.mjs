@@ -10,7 +10,7 @@ const prelude = `
 import importlib.util,hashlib,pathlib,sqlite3,tempfile,types
 spec=importlib.util.spec_from_file_location('capacity', 'scripts/check-release-capacity.py')
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-temporary=tempfile.TemporaryDirectory();base=pathlib.Path(temporary.name)
+temporary=tempfile.TemporaryDirectory();base=pathlib.Path(temporary.name).resolve()
 data=base/'data';backup=base/'backup';restore=base/'restore'
 for folder in (data,backup,restore):folder.mkdir()
 with sqlite3.connect(data/'etf-workbench.db') as db:
@@ -87,4 +87,58 @@ test('release checks capacity after image building and again before stopping exi
   assert.ok(source.indexOf('build --pull') < first && first < source.indexOf('pre-stop-backup.json'));
   assert.ok(source.indexOf('pre-stop-backup.json') < second && second < source.indexOf('writers_stopped=1', second));
   assert.doesNotMatch(source, /(?:builder|buildx|image|system|container|volume) prune/);
+});
+
+const uploadPrelude = `
+incoming=base/'incoming';releases=base/'releases';docker=base/'docker'
+for folder in (incoming,releases,docker):folder.mkdir()
+budget={'format':'etf-upload-budget-v1','release_sha':'a'*40,'image_archive_bytes':1000,
+ 'image_archive_sha256':'b'*64,'image_content_bytes':2000,'image_expanded_bytes':5000,
+ 'source_archive_bytes':123,'source_archive_sha256':'c'*64,'source_expanded_bytes':789}
+paths=(data,backup,restore,incoming,releases,docker)
+`;
+test('before-upload peak includes transport, source, nested layer expansion and the unchanged full recovery reserve', () => python(uploadPrelude + `
+payload=module.payload_bytes(data)
+transfer=1123+2*1024**2;source=789+1024**2;retained=7000+64*1024**2
+required=module.HEADROOM_BYTES+transfer+source+retained+max(5000,6*payload)
+run=lambda free:module.check_upload_capacity(*paths,budget,usage=lambda unused:types.SimpleNamespace(free=free),device=lambda unused:1)
+report=run(required)
+assert report['status']=='sufficient' and report['stage']=='before_upload' and not report['cleanup_performed']
+assert len(report['volumes'])==1 and report['volumes'][0]['required_bytes']==required
+assert report['volumes'][0]['backup_restore_bytes']==required
+assert run(required-1)['status']=='insufficient'
+assert list(incoming.iterdir())==[] and list(backup.iterdir())==[] and list(docker.iterdir())==[]
+# When import is the larger phase, do not add future backup space to a temporary copy that is already gone.
+budget['image_expanded_bytes']=10**8
+report=module.check_upload_capacity(*paths,budget,usage=lambda unused:types.SimpleNamespace(free=10**12),device=lambda unused:1)
+row=report['volumes'][0];assert row['required_bytes']==row['image_import_bytes']>row['backup_restore_bytes']
+`));
+test('upload, Docker and restore devices cannot borrow another device capacity, and invalid budgets fail closed', () => python(uploadPrelude + `
+devices={incoming:1,releases:2,docker:3,backup:4,restore:5}
+report=module.check_upload_capacity(*paths,budget,usage=lambda unused:types.SimpleNamespace(free=10**12),device=lambda path:devices[path])
+assert len(report['volumes'])==5
+for blocked in devices:
+ result=module.check_upload_capacity(*paths,budget,usage=lambda path:types.SimpleNamespace(free=0 if path==blocked else 10**12),device=lambda path:devices[path])
+ assert result['status']=='insufficient'
+for field,value in [('image_expanded_bytes',True),('image_expanded_bytes',1999),('image_archive_bytes',0),('source_expanded_bytes',2**40),('image_archive_sha256','bad'),('extra',1)]:
+ invalid={**budget,field:value}
+ try:module.check_upload_capacity(*paths,invalid)
+ except ValueError:pass
+ else:raise AssertionError('invalid budget accepted')
+(base/'alias').symlink_to(docker,target_is_directory=True)
+try:module.check_upload_capacity(data,backup,restore,incoming,releases,base/'alias',budget)
+except ValueError:pass
+else:raise AssertionError('aliased Docker storage accepted')
+`));
+test('protected workflow measures and checks exact upload before any remote staging while retaining late gates and budgets', () => {
+  const source = readFileSync(join(root, '.github/workflows/deploy.yml'), 'utf8');
+  const measure = source.indexOf('release-image-bundle.py budget');
+  const check = source.indexOf('python3 - --pre-upload-root');
+  const create = source.indexOf('mkdir -p', check);
+  assert.ok(measure > source.indexOf('sha256sum release.tar.gz'));
+  assert.ok(measure < check && check < create && create < source.indexOf('scp -o', create));
+  assert.match(source, /< scripts\/check-release-capacity\.py/);
+  assert.match(source, /timeout-minutes: 75/);
+  assert.match(source, /environment: production/);
+  assert.doesNotMatch(source, /(?:image|builder|system|volume) prune/);
 });
